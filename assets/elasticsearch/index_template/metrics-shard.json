@@ -1,0 +1,112 @@
+{
+    "index_patterns": [
+        "metrics-shard-esdiag*"
+    ],
+    "composed_of": [
+        "esdiag@mappings",
+        "esdiag@metadata",
+        "esdiag@settings"
+    ],
+    "template": {
+        "mappings": {
+            "numeric_detection": false,
+            "dynamic": true,
+            "properties": {
+                "index": {
+                    "type": "object",
+                    "properties": {
+                        "creation_date_string": {
+                            "format": "strict_date_optional_time||epoch_millis",
+                            "type": "date"
+                        },
+                        "refresh_interval": {
+                            "type": "keyword"
+                        },
+                        "provided_name": {
+                            "type": "keyword"
+                        },
+                        "creation_date": {
+                            "format": "epoch_millis",
+                            "type": "date"
+                        },
+                        "priority": {
+                            "type": "integer"
+                        },
+                        "number_of_replicas": {
+                            "type": "integer"
+                        },
+                        "uuid": {
+                            "type": "keyword"
+                        },
+                        "version": {
+                            "type": "object",
+                            "properties": {
+                                "created_string": {
+                                    "type": "keyword"
+                                },
+                                "created": {
+                                    "type": "keyword"
+                                }
+                            }
+                        },
+                        "lifecycle": {
+                            "type": "object",
+                            "properties": {
+                                "rollover_alias": {
+                                    "type": "keyword"
+                                },
+                                "name": {
+                                    "type": "keyword"
+                                },
+                                "indexing_complete": {
+                                    "type": "boolean"
+                                }
+                            }
+                        },
+                        "routing": {
+                            "type": "object",
+                            "properties": {
+                                "allocation": {
+                                    "type": "object",
+                                    "properties": {
+                                        "include": {
+                                            "type": "object",
+                                            "properties": {
+                                                "_tier_preference": {
+                                                    "type": "keyword"
+                                                }
+                                            }
+                                        },
+                                        "total_shards_per_node": {
+                                            "type": "integer"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "number_of_shards": {
+                            "type": "integer"
+                        },
+                        "max_docvalue_fields_search": {
+                            "type": "integer"
+                        },
+                        "name": {
+                            "type": "keyword"
+                        },
+                        "default_pipeline": {
+                            "type": "keyword"
+                        },
+                        "age": {
+                            "type": "long"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "data_stream": {
+        "hidden": false,
+        "allow_custom_routing": false
+    },
+    "allow_auto_create": true
+}

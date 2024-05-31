@@ -1,0 +1,26 @@
+{
+    "version": 1,
+    "template": {
+        "settings": {
+            "index": {
+                "lifecycle": {
+                    "name": "metrics"
+                },
+                "mapping": {
+                    "total_fields": {
+                        "ignore_dynamic_beyond_limit": "true"
+                    }
+                },
+                "query": {
+                    "default_field": [
+                        "*.name"
+                    ]
+                }
+            }
+        }
+    },
+    "_meta": {
+        "managed": false,
+        "description": "Default settings for the esdiag index templates"
+    }
+}

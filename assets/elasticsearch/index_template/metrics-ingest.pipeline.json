@@ -1,0 +1,16 @@
+{
+    "index_patterns": [
+        "metrics-ingest.pipeline-esdiag*"
+    ],
+    "composed_of": [
+        "esdiag@mappings",
+        "esdiag@metadata",
+        "esdiag@settings"
+    ],
+    "template": {},
+    "data_stream": {
+        "hidden": false,
+        "allow_custom_routing": false
+    },
+    "allow_auto_create": true
+}

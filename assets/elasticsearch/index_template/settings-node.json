@@ -1,0 +1,57 @@
+{
+    "index_patterns": [
+        "settings-node-esdiag*"
+    ],
+    "composed_of": [
+        "esdiag@mappings",
+        "esdiag@metadata",
+        "esdiag@settings"
+    ],
+    "priority": 100,
+    "template": {
+        "mappings": {
+            "numeric_detection": false,
+            "dynamic": true,
+            "properties": {
+                "jvm.version": {
+                    "type": "keyword"
+                },
+                "node.ip": {
+                    "type": "ip"
+                },
+                "ingest.processors": {
+                    "eager_global_ordinals": false,
+                    "index": true,
+                    "type": "flattened",
+                    "split_queries_on_whitespace": false,
+                    "index_options": "docs",
+                    "doc_values": true
+                },
+                "diagnostic.uid": {
+                    "type": "keyword"
+                },
+                "plugins": {
+                    "eager_global_ordinals": false,
+                    "index": true,
+                    "type": "flattened",
+                    "split_queries_on_whitespace": false,
+                    "index_options": "docs",
+                    "doc_values": true
+                },
+                "modules": {
+                    "eager_global_ordinals": false,
+                    "index": true,
+                    "type": "flattened",
+                    "split_queries_on_whitespace": false,
+                    "index_options": "docs",
+                    "doc_values": true
+                }
+            }
+        }
+    },
+    "data_stream": {
+        "hidden": false,
+        "allow_custom_routing": false
+    },
+    "allow_auto_create": true
+}

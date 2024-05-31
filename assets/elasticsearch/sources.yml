@@ -1,0 +1,579 @@
+# The new settings format:
+# At the top level the label descring the query that will also be used as the
+#   file name for its output.
+#   Below the query label are the following attributes:
+#     * extension - the file extension to be used for output. Optional, defaults to .json.
+#     * subdir - some api's are now grouped in a subdirectory of the output directory to lessen clutter. Optional, defaults to root dir.
+#     * retry - whether if a query fails it will be retried for the configured number of attempts. Optional, defaults to false.
+#     * versions - one or more attributes of the format "version rule: "query string". Each set of version/query key pairs
+#       should evaluate to exactly one that is appropriate for the version of the server being queried. Therefor rules should
+#       be structured in such a way that only a valid query can be executed against a given version. Required.
+#   NPM mode is the only one used: https://github.com/vdurmont/semver4j
+#   NPM Versioning rules are documented here: https://github.com/npm/node-semver
+#
+#   Note to those adding entries: within each group, cat API's, json API's, and commercial, they are in alphabetical order.
+#   Please adhere to this convention when submitting pull requests.
+
+## cat API's
+
+cat_aliases:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0 < 5.1.1": "/_cat/aliases?v"
+    ">= 5.1.1": "/_cat/aliases?v&s=alias,index"
+
+cat_allocation:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0": "/_cat/allocation?v"
+
+cat_count:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0": "/_cat/count"
+
+cat_fielddata:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0": "/_cat/fielddata?v"
+
+cat_health:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0": "/_cat/health?v"
+
+cat_indices:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0 < 5.1.1": "/_cat/indices?v"
+    ">= 5.1.1 < 6.0.0": "/_cat/indices?v&s=index"
+    ">= 6.0.0 < 7.7.0": "/_cat/indices?v&s=index&h=health,status,index,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,sth"
+    ">= 7.7.0": "/_cat/indices?v&s=index&h=health,status,index,uuid,pri,rep,docs.count,docs.deleted,store.size,pri.store.size,sth&expand_wildcards=all"
+
+cat_master:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0": "/_cat/master"
+
+cat_nodeattrs:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 2.0.0": "/_cat/nodeattrs?v&h=node,id,pid,host,ip,port,attr,value"
+
+cat_nodes:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0 < 6.0.0": "/_cat/nodes?v&h=n,nodeId,m,i,r,d,hp,rp,cpu,load_1m,load_5m,load_15m,"
+    ">= 6.0.0": "/_cat/nodes?v&h=n,nodeId,i,v,r,m,d,dup,hp,cpu,load_1m,load_5m,load_15m,iic,sfc,sqc,scc&s=n"
+
+cat_pending_tasks:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0": "/_cat/pending_tasks?v"
+
+cat_recovery:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0 < 7.7.0": "/_cat/recovery?v"
+    ">= 7.7.0": "/_cat/recovery?v&expand_wildcards=all"
+
+cat_repositories:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 2.0.0": "/_cat/repositories?v"
+
+cat_segments:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0 < 5.1.1": "/_cat/segments?v"
+    ">= 5.1.1 < 7.7.0": "/_cat/segments?v&s=index"
+    ">= 7.7.0": "/_cat/segments/*,.*?v&s=index"
+
+cat_shards:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0 < 5.1.1": "/_cat/shards?v"
+    ">= 5.1.1": "/_cat/shards?v&s=index"
+
+#cat_snapshots:
+#  extension: ".txt"
+#  subdir: "cat"
+#  versions:
+#    ">= 2.0.0": "/_cat/snapshots"
+
+cat_templates:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 7.8.0": "/_cat/templates?v"
+
+cat_thread_pool:
+  extension: ".txt"
+  subdir: "cat"
+  versions:
+    ">= 0.9.0": "/_cat/thread_pool?v"
+
+## Non-cat .txt API
+nodes_hot_threads:
+  extension: ".txt"
+  retry: true
+  versions:
+    "> 0.9.0": "/_nodes/hot_threads?threads=10000"
+
+## Common JSON API's
+alias:
+  versions:
+    ">= 0.9.0": "/_alias?human"
+
+allocation:
+  versions:
+    ">= 0.9.0": "/_cat/allocation?v&format=json"
+  showErrors: false
+
+allocation_explain:
+  tags: light
+  versions:
+    ">= 5.0.0": "/_cluster/allocation/explain"
+  showErrors: false
+
+allocation_explain_disk:
+  versions:
+    ">= 5.0.0": "/_cluster/allocation/explain?include_disk_info=true"
+
+component_templates:
+  retry: true
+  versions:
+    ">= 7.8.0": "/_component_template"
+
+count:
+  versions:
+    ">= 2.0.0": "/_count"
+
+cluster_health:
+  versions:
+    ">= 0.9.0": "/_cluster/health"
+
+cluster_pending_tasks:
+  versions:
+    ">= 0.9.0": "/_cluster/pending_tasks?human"
+
+cluster_settings:
+  versions:
+    ">= 0.9.0": "/_cluster/settings?flat_settings"
+
+cluster_settings_defaults:
+  tags: light
+  versions:
+    ">= 6.4.0": "/_cluster/settings?include_defaults&flat_settings"
+
+cluster_state:
+  retry: true
+  versions:
+    ">= 0.9.0": "/_cluster/state?human"
+
+cluster_stats:
+  tags: light
+  versions:
+    ">= 0.9.0": "/_cluster/stats?human"
+
+dangling_indices:
+  versions:
+    ">= 7.9.0": "/_dangling?human"
+
+fielddata:
+  versions:
+    ">= 0.9.0": "/_cat/fielddata?format=json&bytes"
+
+fielddata_stats:
+  versions:
+    ">= 0.9.0 < 5.0.0": "/_nodes/stats/indices/fielddata?fields=*"
+    ">= 5.0.0": "/_nodes/stats/indices/fielddata?level=shards&fields=*"
+
+geoip_stats:
+  versions:
+    ">= 7.13.0": "/_ingest/geoip/stats"
+
+index_templates:
+  tags: light
+  retry: true
+  versions:
+    ">= 7.8.0": "/_index_template"
+
+indices:
+  versions:
+    ">= 0.9.0 < 5.1.1": "/_cat/indices?format=json&bytes=b&h=index,shard,prirep,state,docs,store,id,node"
+    ">= 7.0.0": "/_cat/shards?format=json&bytes=b&s=index&h=index,shard,prirep,state,docs,store,id,node,se,sm,fm,fe,ft,iiti,iito,iitf,idto,idti,ftt,ua,ud,ur"
+
+indices_stats:
+  retry: true
+  versions:
+    ">= 0.9.0 < 7.7.0": "/_stats?level=shards&human"
+    ">= 7.7.0": "/_stats?level=shards&human&expand_wildcards=all"
+
+internal_health:
+  tags: light
+  retry: true
+  versions:
+    ">= 8.2.0 < 8.3.0": "/_internal/_health"
+    ">= 8.3.0 < 8.3.0": "/_internal/_health?explain"
+    ">= 8.6.0 < 8.7.0": "/_internal/_health"
+    ">=8.7.0": "/_health_report"
+
+internal_desired_balance:
+  retry: true
+  versions:
+    ">= 8.6.0": "/_internal/desired_balance"
+
+licenses:
+  versions:
+    ">= 1.0.0 < 2.0.0": "/_licenses"
+    ">= 2.0.0 < 7.6.0": "/_license"
+    ">= 7.6.0 < 8.0.0": "/_license?accept_enterprise=true"
+    ">= 8.0.0": "/_license"
+
+mapping:
+  tags: light
+  versions:
+    ">= 0.9.0 < 7.7.0": "/_mapping"
+    ">= 7.7.0": "/_mapping?expand_wildcards=all"
+
+master:
+  versions:
+    ">= 0.9.0": "/_cat/master?format=json"
+
+nodes:
+  tags: light
+  retry: true
+  versions:
+    ">= 0.9.0": "/_nodes?human"
+
+nodes_short:
+  versions:
+    ">= 0.9.0": "/_cat/nodes?format=json&v&full_id&h=name,id,master,ip,role"
+
+nodes_stats:
+  tags: light
+  retry: true
+  versions:
+    ">= 0.9.0": "/_nodes/stats?human"
+
+nodes_usage:
+  versions:
+    ">= 6.0.0": "/_nodes/usage"
+
+pipelines:
+  tags: light
+  versions:
+    ">= 5.0.0": "/_ingest/pipeline/*?human"
+
+plugins:
+  versions:
+    ">= 0.9.0": "/_cat/plugins?format=json"
+
+recovery:
+  versions:
+    ">= 0.9.0": "/_recovery?human&detailed=true"
+
+remote_cluster_info:
+  versions:
+    ">= 6.0.0": "/_remote/info"
+
+repositories:
+  tags: light
+  versions:
+    ">= 2.0.0": "/_snapshot"
+
+segments:
+  retry: true
+  versions:
+    ">= 0.9.0": "/_segments?human"
+
+settings:
+  tags: light
+  retry: true
+  versions:
+    ">= 0.9.0 < 7.7.0": "/_settings?human"
+    ">= 7.7.0": "/_settings?human&expand_wildcards=all"
+
+shard_stores:
+  versions:
+    ">=2.0.0": "/_shard_stores"
+
+shards:
+  tags: light
+  retry: true
+  versions:
+    ">=0.9.0": "/_cat/shards?format=json&bytes=b"
+
+snapshot:
+  versions:
+    ">=7.15.0": "/_snapshot/*/*?verbose=false"
+
+ssl_certs:
+  tags: light
+  versions:
+    ">= 6.2.0 < 7.0.0": "/_xpack/ssl/certificates"
+    ">= 7.0.0": "/_ssl/certificates"
+
+tasks:
+  tags: light
+  versions:
+    ">=2.0.0": "/_tasks?human&detailed=true"
+
+templates:
+  tags: light
+  versions:
+    ">= 0.9.0": "/_template"
+
+version:
+  retry: true
+  versions:
+    ">= 0.9.0": "/"
+
+## Commercial Features
+autoscaling_capacity:
+  subdir: "commercial"
+  versions:
+    ">= 7.11.0": "/_autoscaling/capacity"
+
+ccr_autofollow_patterns:
+  subdir: "commercial"
+  versions:
+    ">= 6.5.0": "/_ccr/auto_follow"
+
+ccr_follower_info:
+  subdir: "commercial"
+  versions:
+    ">= 6.7.0": "/_all/_ccr/info"
+
+ccr_stats:
+  subdir: "commercial"
+  versions:
+    ">= 6.5.0": "/_ccr/stats"
+
+enrich_policies:
+  subdir: "commercial"
+  versions:
+    ">= 7.5.0": "/_enrich/policy"
+
+enrich_stats:
+  subdir: "commercial"
+  versions:
+    ">= 7.5.0": "/_enrich/_stats"
+
+ilm_explain:
+  tags: light
+  subdir: "commercial"
+  versions:
+    ">= 6.6.0 < 7.7.0": "/*/_ilm/explain?human"
+    ">= 7.7.0": "/*/_ilm/explain?human&expand_wildcards=all"
+
+ilm_explain_only_errors:
+  subdir: "commercial"
+  versions:
+    ">= 7.4.0 < 7.7.0": "/*/_ilm/explain?only_errors=true&human"
+    ">= 7.7.0": "/*/_ilm/explain?only_errors=true&human&expand_wildcards=all"
+
+ilm_policies:
+  tags: light
+  subdir: "commercial"
+  versions:
+    ">= 6.6.0": "/_ilm/policy?human"
+
+ilm_status:
+  tags: light
+  subdir: "commercial"
+  versions:
+    ">= 6.6.0": "/_ilm/status"
+
+logstash_pipeline:
+  subdir: "commercial"
+  versions:
+    ">= 7.12.0": "/_logstash/pipeline"
+
+ml_anomaly_detectors:
+  subdir: "commercial"
+  versions:
+    ">= 5.0.0 < 7.0.0": "/_xpack/ml/anomaly_detectors"
+    ">= 7.0.0": "/_ml/anomaly_detectors"
+
+ml_datafeeds:
+  subdir: "commercial"
+  versions:
+    ">= 5.0.0 < 7.0.0": "/_xpack/ml/datafeeds"
+    ">= 7.0.0": "/_ml/datafeeds"
+
+ml_datafeeds_stats:
+  subdir: "commercial"
+  versions:
+    ">= 7.4.0": "/_ml/datafeeds/_stats"
+
+ml_dataframe:
+  subdir: "commercial"
+  versions:
+    ">= 7.3.0": "/_ml/data_frame/analytics"
+
+ml_dataframe_stats:
+  subdir: "commercial"
+  versions:
+    ">= 7.3.0": "/_ml/data_frame/analytics/_stats"
+
+ml_info:
+  subdir: "commercial"
+  versions:
+    ">= 6.3.0 < 7.0.0": "/_xpack/ml/info"
+    ">= 7.0.0": "/_ml/info"
+
+ml_stats:
+  subdir: "commercial"
+  versions:
+    ">= 5.0.0 < 7.0.0": "/_xpack/ml/anomaly_detectors/_stats"
+    ">= 7.0.0": "/_ml/anomaly_detectors/_stats"
+
+ml_trained_models:
+  subdir: "commercial"
+  versions:
+    ">= 7.10.0": "/_ml/trained_models"
+
+ml_trained_models_stats:
+  subdir: "commercial"
+  versions:
+    ">= 7.10.0": "/_ml/trained_models/_stats"
+
+nodes_shutdown_status:
+  tags: light
+  subdir: "commercial"
+  versions:
+    ">= 7.15.0": "/_nodes/shutdown"
+
+profiling_status:
+  tags: light
+  subdir: "commercial"
+  versions:
+    ">= 8.9.0": "/_profiling/status"
+
+rollup_jobs:
+  subdir: "commercial"
+  versions:
+    ">= 6.3.0 < 7.0.0": "/_xpack/rollup/job/_all"
+    ">= 7.0.0": "/_rollup/job/_all"
+
+rollup_caps:
+  subdir: "commercial"
+  versions:
+    # This API was introduced in 6.3.0 but may be harmful to clusters prior to
+    # 8.10.0, see https://github.com/elastic/elasticsearch/issues/92179. If the
+    # fix is backported in future then enable this API on 7.17.x too.
+    ">= 8.10.0": "/_rollup/data/_all"
+
+rollup_index_caps:
+  subdir: "commercial"
+  versions:
+    # This API was introduced in 6.5.0 but may be harmful to clusters prior to
+    # 8.10.0, see https://github.com/elastic/elasticsearch/issues/92179. If the
+    # fix is backported in future then enable this API on 7.17.x too.
+    ">= 8.10.0": "/*/_rollup/data"
+
+searchable_snapshots_cache_stats:
+  subdir: "commercial"
+  versions:
+    ">= 7.13.0": "/_searchable_snapshots/cache/stats?human"
+
+security_priv:
+  subdir: "commercial"
+  versions:
+    ">= 6.5.0 < 7.0.0": "/_xpack/security/privilege"
+    ">= 7.0.0": "/_security/privilege"
+
+security_roles:
+  subdir: "commercial"
+  versions:
+    ">= 2.0.0 < 5.0.0": "/_shield/role"
+    ">= 5.0.0 < 7.0.0": "/_xpack/security/role"
+    ">= 7.0.0": "/_security/role"
+
+security_role_mappings:
+  subdir: "commercial"
+  versions:
+    ">= 5.0.0 < 7.0.0": "/_xpack/security/role_mapping"
+    ">= 7.0.0": "/_security/role_mapping"
+
+security_users:
+  subdir: "commercial"
+  versions:
+    ">= 2.0.0 < 5.0.0": "/_shield/user"
+    ">= 5.0.0 < 7.0.0": "/_xpack/security/user"
+    ">= 7.0.0": "/_security/user"
+
+slm_policies:
+  tags: light
+  subdir: "commercial"
+  versions:
+    ">= 7.4.0": "/_slm/policy?human"
+
+slm_stats:
+  subdir: "commercial"
+  versions:
+    ">= 7.5.0": "/_slm/stats"
+
+slm_status:
+  tags: light
+  subdir: "commercial"
+  versions:
+    ">= 7.6.0": "/_slm/status"
+
+transform:
+  subdir: "commercial"
+  versions:
+    ">= 7.2.0 < 7.5.0": "/_data_frame/transforms"
+    ">= 7.5.0": "/_transform"
+
+transform_stats:
+  subdir: "commercial"
+  versions:
+    ">= 7.2.0 < 7.5.0": "/_data_frame/transforms/_stats"
+    ">= 7.5.0": "/_transform/_stats"
+
+transform_basic_stats:
+  subdir: "commercial"
+  versions:
+    ">= 8.13.0": "/_transform/_stats?basic=true"
+
+watcher_stats:
+  subdir: "commercial"
+  versions:
+    ">= 1.6.0 < 5.0.0": "/_watcher/stats/_all"
+    ">= 5.0.0 < 7.0.0": "/_xpack/watcher/stats/_all"
+    ">= 7.0.0": "/_watcher/stats/_all"
+
+watcher_stack:
+  subdir: "commercial"
+  versions:
+    ">= 1.6.0 < 5.0.0": "/_watcher/stats?emit_stacktraces=true"
+    ">= 5.0.0 < 7.0.0": "/_xpack/watcher/stats?emit_stacktraces=true"
+    ">= 7.0.0": "/_watcher/stats?emit_stacktraces=true"
+
+xpack:
+  subdir: "commercial"
+  versions:
+    ">= 5.0.0": "/_xpack/usage?human"
+
+data_stream:
+  subdir: "commercial"
+  versions:
+    ">= 7.9.0 < 7.11.0": "/_data_stream"
+    ">= 7.11.0": "/_data_stream?expand_wildcards=all"

@@ -1,0 +1,17 @@
+{
+    "index_patterns": [
+        "settings-index-esdiag*"
+    ],
+    "composed_of": [
+        "esdiag@mappings",
+        "esdiag@metadata",
+        "esdiag@settings"
+    ],
+    "priority": 100,
+    "template": {},
+    "data_stream": {
+        "hidden": false,
+        "allow_custom_routing": false
+    },
+    "allow_auto_create": true
+}

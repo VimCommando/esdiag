@@ -1,0 +1,106 @@
+{
+    "index_patterns": [
+        "metrics-searchable_snapshot-esdiag*"
+    ],
+    "composed_of": [
+        "esdiag@mappings",
+        "esdiag@metadata",
+        "esdiag@settings"
+    ],
+    "template": {
+        "mappings": {
+            "dynamic": true,
+            "dynamic_templates": [
+                {
+                    "named_timestamps": {
+                        "mapping": {
+                            "type": "date"
+                        },
+                        "match_mapping_type": "long",
+                        "match": "*timestamp"
+                    }
+                }
+            ],
+            "properties": {
+                "index": {
+                    "type": "keyword"
+                },
+                "data_stream": {
+                    "type": "keyword"
+                },
+                "file_ext": {
+                    "type": "keyword"
+                },
+                "num_files": {
+                    "type": "long"
+                },
+                "open_count": {
+                    "type": "long"
+                },
+                "close_count": {
+                    "type": "long"
+                },
+                "size": {
+                    "type": "object"
+                },
+                "contiguous_bytes_read": {
+                    "type": "object"
+                },
+                "non_contiguous_bytes_read": {
+                    "type": "object"
+                },
+                "cached_bytes_read": {
+                    "type": "object"
+                },
+                "index_cache_bytes_read": {
+                    "type": "object"
+                },
+                "cached_bytes_written": {
+                    "type": "object"
+                },
+                "direct_bytes_read": {
+                    "type": "object"
+                },
+                "optimized_bytes_read": {
+                    "type": "object"
+                },
+                "forward_seeks": {
+                    "type": "object",
+                    "properties": {
+                        "small": {
+                            "type": "object"
+                        },
+                        "large": {
+                            "type": "object"
+                        }
+                    }
+                },
+                "backward_seeks": {
+                    "type": "object",
+                    "properties": {
+                        "small": {
+                            "type": "object"
+                        },
+                        "large": {
+                            "type": "object"
+                        }
+                    }
+                },
+                "blob_store_bytes_requested": {
+                    "type": "object"
+                },
+                "lucene_bytes_read": {
+                    "type": "object"
+                },
+                "current_index_cache_fills": {
+                    "type": "long"
+                }
+            }
+        }
+    },
+    "data_stream": {
+        "hidden": false,
+        "allow_custom_routing": false
+    },
+    "allow_auto_create": true
+}

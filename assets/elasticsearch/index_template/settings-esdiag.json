@@ -1,0 +1,32 @@
+{
+    "index_patterns": [
+        "settings-*-esdiag*"
+    ],
+    "composed_of": [
+        "esdiag@mappings",
+        "esdiag@metadata",
+        "esdiag@settings"
+    ],
+    "template": {
+        "mappings": {
+            "_routing": {
+                "required": false
+            },
+            "date_detection": true,
+            "numeric_detection": false,
+            "dynamic_date_formats": [
+                "strict_date_optional_time",
+                "yyyy/MM/dd HH:mm:ss Z||yyyy/MM/dd Z"
+            ],
+            "dynamic": true
+        }
+    },
+    "_meta": {
+        "description": "Settings or esdiag data streams"
+    },
+    "data_stream": {
+        "hidden": false,
+        "allow_custom_routing": false
+    },
+    "allow_auto_create": true
+}

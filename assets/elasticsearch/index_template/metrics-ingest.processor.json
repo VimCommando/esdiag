@@ -1,0 +1,50 @@
+{
+    "index_patterns": [
+        "metrics-ingest.processor-esdiag*"
+    ],
+    "composed_of": [
+        "esdiag@mappings",
+        "esdiag@metadata",
+        "esdiag@settings"
+    ],
+    "template": {
+        "mappings": {
+            "numeric_detection": false,
+            "dynamic": true,
+            "properties": {
+                "pipeline": {
+                    "type": "keyword"
+                },
+                "current": {
+                    "type": "long"
+                },
+                "time_in_millis": {
+                    "type": "long"
+                },
+                "count": {
+                    "type": "long"
+                },
+                "failed": {
+                    "type": "long"
+                },
+                "time": {
+                    "enabled": false
+                },
+                "type": {
+                    "type": "keyword"
+                },
+                "processor": {
+                    "type": "keyword"
+                },
+                "order": {
+                    "type": "integer"
+                }
+            }
+        }
+    },
+    "data_stream": {
+        "hidden": false,
+        "allow_custom_routing": false
+    },
+    "allow_auto_create": true
+}

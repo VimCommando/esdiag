@@ -1,0 +1,34 @@
+{
+    "index_patterns": [
+        "metirics-index-esdiag*"
+    ],
+    "composed_of": [
+        "esdiag@metadata",
+        "esdiag@mappings",
+        "esdiag@settings"
+    ],
+    "template": {
+        "mappings": {
+            "numeric_detection": false,
+            "dynamic": true,
+            "properties": {
+                "diagnostic.uuid": {
+                    "type": "keyword"
+                },
+                "retention_leases.leases": {
+                    "eager_global_ordinals": false,
+                    "index": true,
+                    "type": "flattened",
+                    "split_queries_on_whitespace": false,
+                    "index_options": "docs",
+                    "doc_values": true
+                }
+            }
+        }
+    },
+    "data_stream": {
+        "hidden": false,
+        "allow_custom_routing": false
+    },
+    "allow_auto_create": true
+}
