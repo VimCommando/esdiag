@@ -14,7 +14,7 @@ use log;
 use output::Output;
 use processor::Processor;
 use serde_json::Value;
-use std::{collections::HashMap, panic, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, env, panic, path::PathBuf, str::FromStr, sync::Arc};
 use uri::Uri;
 use url::Url;
 
@@ -215,9 +215,16 @@ async fn import_diagnostics(manifest: Manifest, input: Input, output: Output) {
 
     let processor = Processor::new(&manifest, &metadata_raw);
 
-    let metafile = PathBuf::from("metadata.ndjson");
-    for (input, data) in processor.metadata.to_hashmap() {
-        output.save_to_file(input, data, &metafile);
+    // If in debug mode, save metadata to file
+    if cfg!(debug_assertions) {
+        let metafile = match env::var("HOME") {
+            Ok(home) => PathBuf::from(home).join(".esdiag").join("metadata.ndjson"),
+            Err(_) => panic!("ERROR: No home directory found"),
+        };
+        log::info!("Writing metadata to file {}", &metafile.to_str().unwrap());
+        for (input, data) in processor.metadata.to_hashmap() {
+            output.save_to_file(input, data, &metafile);
+        }
     }
 
     let data_sets = input.data_sets.clone();
