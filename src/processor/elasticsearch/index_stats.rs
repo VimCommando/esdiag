@@ -68,11 +68,13 @@ pub async fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
             let shard_stats: Vec<_> = index_stats.shards.clone().into_iter().collect();
             index_stats.shards.clear();
             let data_stream = metadata
-                .data_stream_lookup
+                .lookup
+                .data_stream
                 .by_index(index.as_str())
                 .unwrap_or(Value::Null);
             let alias = metadata
-                .alias_lookup
+                .lookup
+                .alias
                 .by_index(index.as_str())
                 .unwrap_or(Value::Null);
             let mut docs: Vec<_> = shard_stats
@@ -96,7 +98,7 @@ pub async fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
                         .map(|shard_stats| {
                             let mut doc = json!({
                                 "shard":shard_stats,
-                                "node": metadata.node_lookup.by_id(
+                                "node": metadata.lookup.node.by_id(
                                     shard_stats["routing"]["node"].as_str().unwrap_or("")
                                 ).unwrap_or(Value::Null),
                             });
