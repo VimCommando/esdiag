@@ -48,7 +48,9 @@ impl Lookup {
     pub fn by_id(&self, id: &str) -> Option<Value> {
         match self {
             Lookup::NodeLookup(lookup) => match lookup.by_id.get(id) {
-                Some(index) => Some(serde_json::to_value(&lookup.nodes[*index]).unwrap()),
+                Some(index) => {
+                    Some(serde_json::to_value(&lookup.nodes[*index]).expect("Failed to parse node"))
+                }
                 None => None,
             },
             _ => None,
@@ -58,7 +60,7 @@ impl Lookup {
     pub fn by_index(&self, index: &str) -> Option<Value> {
         match self {
             Lookup::AliasLookup(lookup) => match lookup.by_index.get(index) {
-                Some(alias) => Some(serde_json::to_value(alias).unwrap()),
+                Some(alias) => Some(serde_json::to_value(alias).expect("Failed to parse alias")),
                 None => None,
             },
             Lookup::DataStreamLookup(lookup) => match lookup.by_index.get(index) {

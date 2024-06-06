@@ -47,11 +47,17 @@ impl Output {
         match response.status_code().is_success() {
             true => {
                 log::info!("Elasticsearch connection: {}", &response.status_code());
-                Ok(response.json::<Value>().await.unwrap())
+                Ok(response
+                    .json::<Value>()
+                    .await
+                    .expect("Failed to parse response"))
             }
             false => {
                 log::error!("Elasticsearch connection: {}", response.status_code());
-                Err(response.json::<Value>().await.unwrap())
+                Err(response
+                    .json::<Value>()
+                    .await
+                    .expect("Failed to parse response"))
             }
         }
     }
@@ -121,7 +127,11 @@ impl fmt::Display for Target {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Target::Elasticsearch(_) => write!(f, "elasticsearch"),
-            Target::File(filename) => write!(f, "{}", filename.to_str().unwrap()),
+            Target::File(filename) => write!(
+                f,
+                "{}",
+                filename.to_str().expect("Failed to get filename as str")
+            ),
             Target::Stdout => write!(f, "stdout"),
         }
     }

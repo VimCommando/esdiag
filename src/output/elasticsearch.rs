@@ -88,7 +88,9 @@ impl ElasticsearchClient {
                 TransportBuilder::new(connection_pool)
                     .header(
                         headers::AUTHORIZATION,
-                        format!("ApiKey {}", apikey).parse().unwrap(),
+                        format!("ApiKey {}", apikey)
+                            .parse()
+                            .expect("Failed to parse apikey"),
                     )
                     .build()
                     .ok()
@@ -98,7 +100,9 @@ impl ElasticsearchClient {
                 TransportBuilder::new(connection_pool)
                     .header(
                         headers::AUTHORIZATION,
-                        format!("ApiKey {}", apikey).parse().unwrap(),
+                        format!("ApiKey {}", apikey)
+                            .parse()
+                            .expect("Failed to parse apikey"),
                     )
                     .build()
                     .ok()

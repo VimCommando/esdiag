@@ -92,8 +92,6 @@ pub async fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
                 }
             });
 
-            //for (peer_node_id, adaptive_selection) in node["adaptive_selection"].as_object().unwrap() {
-
             let adaptive_selections: Vec<_> = match node["adaptive_selection"].as_object() {
                 Some(data) => data
                     .into_iter()
@@ -135,7 +133,10 @@ pub async fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
                 }
             });
             let ingest_role: Value = Value::from("ingest");
-            let is_ingest = node["roles"].as_array().unwrap().contains(&ingest_role);
+            let is_ingest = node["roles"]
+                .as_array()
+                .expect("Failed get node.roles array")
+                .contains(&ingest_role);
 
             let pipelines: Vec<_> = if is_ingest {
                 match node["ingest"]["pipelines"].as_object() {

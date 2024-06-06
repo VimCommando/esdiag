@@ -27,14 +27,17 @@ fn divide_values(base: &Value, divisor: &Value) -> i64 {
 }
 
 pub async fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
-    let mut indices: HashMap<String, IndexStats> =
-        match from_value(data.get_mut("indices").unwrap().take()) {
-            Ok(data) => data,
-            Err(e) => {
-                log::warn!("Failed to deserialize index_stats: {}", e);
-                return Vec::<Value>::new();
-            }
-        };
+    let mut indices: HashMap<String, IndexStats> = match from_value(
+        data.get_mut("indices")
+            .expect("Failed to get indices")
+            .take(),
+    ) {
+        Ok(data) => data,
+        Err(e) => {
+            log::warn!("Failed to deserialize index_stats: {}", e);
+            return Vec::<Value>::new();
+        }
+    };
     log::debug!("index_stats indices: {}", indices.len());
 
     let data_stream_shard_patch = json!({
@@ -93,7 +96,7 @@ pub async fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
                     merge(&mut shard_doc, &json!({"shard": { "number": shard_id, }}));
                     let shard_docs: Vec<Value> = shard_stats
                         .as_array()
-                        .unwrap()
+                        .expect("Failed to get shard_stats array")
                         .iter()
                         .map(|shard_stats| {
                             let mut doc = json!({

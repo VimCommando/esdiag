@@ -198,7 +198,9 @@ impl Host {
                     .default_headers(
                         std::iter::once((
                             reqwest::header::AUTHORIZATION,
-                            format!("ApiKey {}", apikey).parse().unwrap(),
+                            format!("ApiKey {}", apikey)
+                                .parse()
+                                .expect("Failed to parse apikey"),
                         ))
                         .collect(),
                     )

@@ -7,7 +7,7 @@ pub fn write_ndjson<'a>(input: &str, value: Value, filename: &PathBuf) -> std::i
         .create(true)
         .append(true)
         .open(filename)?;
-    let body = serde_json::to_string(&value).unwrap();
+    let body = serde_json::to_string(&value).expect("Failed to serialize value");
     file.write_all(body.as_bytes())?;
     file.write_all(b"\n")?;
     log::info!("{}: appended {input}", filename.display());

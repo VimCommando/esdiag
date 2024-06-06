@@ -190,7 +190,10 @@ async fn main() {
                 match host.save(name.to_string()) {
                     Ok(_) => {
                         let hosts_file = host::get_hosts_path();
-                        log::info!("Host '{name}' saved to {}", hosts_file.to_str().unwrap());
+                        log::info!(
+                            "Host '{name}' saved to {}",
+                            hosts_file.to_str().expect("Failed to get hosts file path")
+                        );
                     }
                     Err(e) => log::error!("Failed to save host configuration: {}", e),
                 }

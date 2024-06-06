@@ -36,7 +36,7 @@ impl NodeLookup {
     pub fn from_value(nodes: Value) -> NodeLookup {
         let mut node_lookup = NodeLookup::new();
 
-        for (id, data) in nodes["nodes"].as_object().unwrap() {
+        for (id, data) in nodes["nodes"].as_object().expect("Failed to get nodes") {
             let node = NodeData {
                 attributes: data["attributes"].clone(),
                 host: data["host"].as_str().unwrap().to_string(),

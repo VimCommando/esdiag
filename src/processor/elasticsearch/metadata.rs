@@ -55,7 +55,10 @@ impl Metadata {
         let diagnostic = DiagnosticMetadata {
             collection_date: manifest.collection_date.clone(),
             inputs: manifest.diagnostic_inputs.clone(),
-            node: version["name"].as_str().unwrap().to_string(),
+            node: version["name"]
+                .as_str()
+                .expect("Failed to get version.name")
+                .to_string(),
             runner: manifest.runner.clone(),
             uuid: Uuid::new_v4().to_string(),
             version: manifest
@@ -67,7 +70,10 @@ impl Metadata {
         Metadata {
             cluster,
             diagnostic,
-            version: version["version"]["number"].as_str().unwrap().to_string(),
+            version: version["version"]["number"]
+                .as_str()
+                .expect("Failed to get version.number")
+                .to_string(),
             lookup: Lookups {
                 alias: Lookup::new(Elasticsearch(Alias), metadata["alias"].clone()),
                 data_stream: Lookup::new(

@@ -20,7 +20,7 @@ pub async fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
     });
 
     let collection_date = DateTime::parse_from_rfc3339(&metadata.diagnostic.collection_date)
-        .unwrap()
+        .expect("Failed to parse collection_date")
         .timestamp_millis();
     let index_settings: Vec<Value> = indices
         .par_iter()
