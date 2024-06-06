@@ -224,7 +224,6 @@ async fn import_diagnostics(manifest: Manifest, input: Input, output: Output) {
     if log::log_enabled!(log::Level::Debug) {
         for (input, data) in processor.metadata.to_hashmap() {
             file::write_ndjson_if_debug(&input, data, "metadata.ndjson").ok();
-            //output.save_to_file(input, data, &metafile);
         }
     }
 

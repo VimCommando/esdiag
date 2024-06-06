@@ -49,21 +49,3 @@ impl Processor {
         }
     }
 }
-
-//
-//    pub fn enrich(&self, dataset: &DataSet, data: Value) -> serde_json::Value {
-//        match &source {
-//            EsDataSet::Elasticsearch(_, source) => match source {
-//                EsDataSet::ClusterSettings => return cluster_settings::enrich(&metadata, data),
-//                elasticsearch::EsDataSet::IndexSettings => {
-//                    return index_settings::enrich(&metadata, data)
-//                }
-//                elasticsearch::EsDataSet::IndicesStats => {
-//                    return indices_stats::enrich(&metadata, data)
-//                }
-//                elasticsearch::EsDataSet::Nodes => return nodes::enrich(&metadata, data),
-//                elasticsearch::EsDataSet::Tasks => return tasks::enrich(&metadata, data),
-//            },
-//            EsDataSet::Lookup(lookup) => serde_json::Value::Null,
-//        }
-//    }
