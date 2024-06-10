@@ -5,6 +5,7 @@ pub mod lookup;
 pub mod metadata;
 pub mod nodes;
 pub mod nodes_stats;
+pub mod searchable_snapshots_stats;
 pub mod tasks;
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,7 @@ pub enum EsDataSet {
     IndexSettings,
     IndexStats,
     NodesStats,
+    SharedCacheStats,
     Tasks,
 }
 
@@ -34,6 +36,7 @@ impl ToString for EsDataSet {
             EsDataSet::IndexSettings => "settings".to_string(),
             EsDataSet::IndexStats => "indices_stats".to_string(),
             EsDataSet::NodesStats => "nodes_stats".to_string(),
+            EsDataSet::SharedCacheStats => "searchable_snapshots_cache_stats".to_string(),
             EsDataSet::Tasks => "tasks".to_string(),
         }
     }

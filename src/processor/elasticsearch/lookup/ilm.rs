@@ -67,6 +67,7 @@ impl From<String> for Lookup<IlmData> {
                 ilm_data,
             )
         }
+        log::debug!("lookup_ilm entries: {}", lookup_ilm.entries.len());
         lookup_ilm
     }
 }

@@ -14,6 +14,7 @@ impl Elasticsearch {
             DataSet::Elasticsearch(Version),
             DataSet::Elasticsearch(DataStreams),
             DataSet::Elasticsearch(IlmExplain),
+            DataSet::Elasticsearch(SharedCacheStats),
         ]);
         let lookup_sets: Vec<DataSet> = Vec::from([
             DataSet::Elasticsearch(Nodes),

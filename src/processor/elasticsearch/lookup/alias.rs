@@ -48,6 +48,7 @@ impl From<String> for Lookup<AliasData> {
                 );
             }
         }
+        log::debug!("lookup_alias entries: {}", lookup_alias.entries.len());
         lookup_alias
     }
 }

@@ -3,6 +3,7 @@ pub mod data_stream;
 pub mod ilm;
 pub mod index;
 pub mod node;
+pub mod shared_cache;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;

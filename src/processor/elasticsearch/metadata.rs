@@ -1,6 +1,6 @@
 use super::lookup::{
     alias::AliasData, data_stream::DataStreamData, ilm::IlmData, index::IndexData, node::NodeData,
-    Lookup,
+    shared_cache::SharedCacheStats, Lookup,
 };
 use crate::input::manifest::Manifest;
 use chrono::DateTime;
@@ -26,6 +26,7 @@ pub struct Lookups {
     pub index: Lookup<IndexData>,
     pub node: Lookup<NodeData>,
     pub ilm: Lookup<IlmData>,
+    pub shared_cache: Lookup<SharedCacheStats>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -91,6 +92,9 @@ impl Metadata {
                 index: Lookup::<IndexData>::new(),
                 ilm: Lookup::<IlmData>::from(metadata["ilm_explain"].clone()),
                 node: Lookup::<NodeData>::new(),
+                shared_cache: Lookup::<SharedCacheStats>::from(
+                    metadata["searchable_snapshots_cache_stats"].clone(),
+                ),
             },
         }
     }
@@ -108,6 +112,10 @@ impl Metadata {
             ("index_lookup".to_string(), self.lookup.index.to_value()),
             ("ilm_lookup".to_string(), self.lookup.ilm.to_value()),
             ("node_lookup".to_string(), self.lookup.node.to_value()),
+            (
+                "shared_cache_lookup".to_string(),
+                self.lookup.shared_cache.to_value(),
+            ),
         ]);
         hashmap
     }

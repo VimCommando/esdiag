@@ -214,7 +214,6 @@ pub async fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
                 }
             });
 
-            //for recording in node["discovery"]["cluster_applier_stats"]["recordings"]
             let recordings: Vec<_> =
                 match node["discovery"]["cluster_applier_stats"]["recordings"].as_array() {
                     Some(data) => data
@@ -242,7 +241,7 @@ pub async fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
                 "node": node,
             });
 
-            // Remove extracted datasets
+            // Remove extracted datasets, add enriched datasets
             let omit_patch = json!({
                 "node" : {
                     "http": { "clients": null },
@@ -250,6 +249,7 @@ pub async fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
                     "ingest": { "pipelines": null },
                     "discovery": { "cluster_applier_stats": null },
                     "transport": { "actions": null },
+                    "shared_cache": metadata.lookup.shared_cache.by_id(node_id.as_str()),
                 }
             });
 

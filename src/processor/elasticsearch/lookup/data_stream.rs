@@ -53,6 +53,10 @@ impl From<String> for Lookup<DataStreamData> {
             };
             lookup_data_stream.insert(ids, data_stream);
         }
+        log::debug!(
+            "lookup_data_stream entries: {}",
+            lookup_data_stream.entries.len(),
+        );
         lookup_data_stream
     }
 }
