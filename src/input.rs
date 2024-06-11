@@ -177,24 +177,28 @@ impl Input {
     }
 
     pub fn load_value(&self, dataset: &DataSet) -> Value {
-        let key = dataset.to_string();
-        let source = match self.sources.get(&key) {
+        let name = dataset.to_string();
+        let source = match self.sources.get(&name) {
             Some(source) => source,
-            None => panic!("ERROR: Source not found for {key}"),
+            None => panic!("ERROR: Source not found for {name}"),
         };
         match &self.uri {
-            Uri::Directory(dir) => match file::parse_json(&source.with_dir(&key, dir)) {
+            Uri::Directory(dir) => match file::parse_json(&source.with_dir(&name, dir)) {
                 Ok(json) => json,
-                Err(_) => match file::read_first_line(&source.with_dir(&key, dir)) {
+                Err(_) => match file::read_first_line(&source.with_dir(&name, dir)) {
                     Ok(line) => {
                         log::error!(
                             "Failed to parse {}, contains: \"{}\"",
-                            source.with_dir(&key, dir).to_str().unwrap(),
+                            source.with_dir(&name, dir).to_str().unwrap(),
                             &line
                         );
                         panic!("File did not have valid json");
                     }
-                    Err(e) => panic!("Failed to read file - {}", e),
+                    Err(e) => {
+                        log::debug!("Error reading file '{:?}'", e);
+                        log::warn!("Failed to read file '{}'", name);
+                        Value::Null
+                    }
                 },
             },
             _ => {
@@ -203,16 +207,19 @@ impl Input {
         }
     }
 
-    pub fn load_string(&self, dataset: &DataSet) -> String {
-        let key = dataset.to_string();
-        let source = match self.sources.get(&key) {
+    pub fn load_string(&self, dataset: &DataSet) -> Option<String> {
+        let name = dataset.to_string();
+        let source = match self.sources.get(&name) {
             Some(source) => source,
-            None => panic!("ERROR: Source not found for {key}"),
+            None => panic!("ERROR: Source not found for {name}"),
         };
         match &self.uri {
-            Uri::Directory(dir) => match file::read_string(&source.with_dir(&key, dir)) {
-                Ok(line) => line,
-                Err(e) => panic!("Failed to read file - {}", e),
+            Uri::Directory(dir) => match file::read_string(&source.with_dir(&name, dir)) {
+                Ok(line) => Some(line),
+                Err(e) => {
+                    log::debug!("Error reading file '{:?}'", e);
+                    None
+                }
             },
             _ => {
                 unimplemented!("Input type no implemented!");

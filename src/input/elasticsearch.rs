@@ -19,6 +19,7 @@ impl Elasticsearch {
         let lookup_sets: Vec<DataSet> = Vec::from([
             DataSet::Elasticsearch(Nodes),
             DataSet::Elasticsearch(IndexSettings),
+            DataSet::Elasticsearch(SearchableSnapshotStats),
         ]);
         let data_sets: Vec<DataSet> = Vec::from([
             DataSet::Elasticsearch(ClusterSettings),

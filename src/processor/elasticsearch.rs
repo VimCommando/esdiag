@@ -21,6 +21,7 @@ pub enum EsDataSet {
     IndexStats,
     NodesStats,
     SharedCacheStats,
+    SearchableSnapshotStats,
     Tasks,
 }
 
@@ -37,6 +38,7 @@ impl ToString for EsDataSet {
             EsDataSet::IndexStats => "indices_stats".to_string(),
             EsDataSet::NodesStats => "nodes_stats".to_string(),
             EsDataSet::SharedCacheStats => "searchable_snapshots_cache_stats".to_string(),
+            EsDataSet::SearchableSnapshotStats => "searchable_snapshots_stats".to_string(),
             EsDataSet::Tasks => "tasks".to_string(),
         }
     }

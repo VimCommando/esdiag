@@ -216,14 +216,31 @@ async fn import_diagnostics(manifest: Manifest, input: Input, output: Output) {
         .dataset
         .metadata
         .iter()
-        .map(|dataset| (dataset.to_string(), input.load_string(dataset)))
+        .filter_map(|dataset| match input.load_string(dataset) {
+            Some(data) => Some((dataset.to_string(), data)),
+            None => {
+                log::warn!("Failed to load metadata for {}", dataset.to_string());
+                None
+            }
+        })
         .collect();
+
+    log::debug!("metadata_raw: {:?}", metadata_raw.keys());
 
     let mut processor = Processor::new(&manifest, &metadata_raw);
 
     for lookup in &input.dataset.lookup {
-        let data = input.load_string(&lookup);
-        processor.enrich_lookup(&lookup, data).await;
+        let data = match input.load_string(&lookup) {
+            Some(data) => data,
+            None => {
+                log::warn!("Failed to load lookup data for {}", lookup.to_string());
+                continue;
+            }
+        };
+        match processor.enrich_lookup(&lookup, data).await {
+            Some(docs) => output.send(docs).await,
+            None => log::debug!("No docs for lookup {}", lookup.to_string()),
+        }
     }
 
     // If debug logging, save metadata to file

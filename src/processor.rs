@@ -26,6 +26,9 @@ impl Processor {
                 EsDataSet::IndexSettings => Some(
                     elasticsearch::index_settings::enrich_lookup(&mut self.metadata, data).await,
                 ),
+                EsDataSet::SearchableSnapshotStats => Some(
+                    elasticsearch::searchable_snapshots_stats::enrich(&self.metadata, data).await,
+                ),
                 _ => None,
             },
             DataSet::Kibana(kb_dataset) => match kb_dataset {
