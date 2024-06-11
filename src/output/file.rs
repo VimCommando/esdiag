@@ -2,11 +2,7 @@ use serde_json::Value;
 use std::{env, fs::OpenOptions, io::Write, path::PathBuf};
 
 pub fn write_ndjson<'a>(input: &str, value: Value, filename: &PathBuf) -> std::io::Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .append(true)
-        .open(filename)?;
+    let mut file = OpenOptions::new().write(true).create(true).open(filename)?;
     let body = serde_json::to_string(&value).expect("Failed to serialize value");
     file.write_all(body.as_bytes())?;
     file.write_all(b"\n")?;
@@ -26,7 +22,7 @@ pub fn write_ndjson_if_debug<'a>(input: &str, value: Value, filename: &str) -> s
     }
 }
 
-pub fn write_bulk_docs<'a>(docs: Vec<Value>, filename: &PathBuf) -> std::io::Result<()> {
+pub fn append_bulk_docs<'a>(docs: Vec<Value>, filename: &PathBuf) -> std::io::Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)

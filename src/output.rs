@@ -111,7 +111,7 @@ impl Output {
             Target::Stdout => {
                 stdout::print_docs(docs);
             }
-            Target::File(filename) => match file::write_bulk_docs(docs, &filename) {
+            Target::File(filename) => match file::append_bulk_docs(docs, &filename) {
                 Ok(_) => (),
                 Err(e) => panic!("ERROR: Failed to write to file - {}", e),
             },
