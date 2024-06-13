@@ -1,5 +1,6 @@
 use super::metadata::Metadata;
 use crate::processor::elasticsearch::lookup::index::IndexData;
+use async_std::fs::write;
 use json_patch::merge;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -94,6 +95,11 @@ pub fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
                 },
                 None => None,
             };
+            let write_window_sec = match (since_creation, since_rollover) {
+                (Some(creation), Some(rollover)) => (creation - rollover) / 1000,
+                _ => 0,
+            };
+
             let mut docs: Vec<_> = shard_stats
                 .par_iter()
                 .flat_map(|(shard_id, shard_stats)| {
@@ -108,6 +114,7 @@ pub fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
                             "since_rollover": since_rollover,
                             "indexing_complete": index_data.indexing_complete,
                             "creation_date": index_data.creation_date,
+                            "write_window_sec": write_window_sec,
                         },
                     });
 
@@ -125,18 +132,29 @@ pub fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
                             let index_total = &shard_stats["indexing"]["index_total"]
                                 .as_i64()
                                 .expect("Failed to get index_total");
-                            let duration = match since_creation {
-                                Some(millis) => millis / 1000,
-                                None => 1,
+                            let total_size = &shard_stats["store"]["size_in_bytes"]
+                                .as_i64()
+                                .expect("Failed to get store.size_in_bytes");
+
+                            let avg_docs_sec = match write_window_sec {
+                                0 => 0,
+                                x => index_total / x,
                             };
-                            let avg_docs_sec = index_total / duration;
-                            let avg_cpu_millis = index_time_in_millis / duration;
+                            let avg_cpu_millis = match write_window_sec {
+                                0 => 0,
+                                x => index_time_in_millis / x,
+                            };
+                            let avg_mb_sec: f64 = match write_window_sec {
+                                0 => 0.0,
+                                x => (*total_size as f64 / 1_048_576.0) / (x as f64),
+                            };
 
                             let indexing_patch = json!({
                                 "shard": {
                                     "indexing": {
                                         "avg_docs_sec": avg_docs_sec,
                                         "avg_cpu_millis": avg_cpu_millis,
+                                        "avg_mb_sec": avg_mb_sec,
                                     }
                                 }
                             });
@@ -156,10 +174,36 @@ pub fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
                 })
                 .collect();
 
-            let indexing_patch = json!({
+            let bytes_per_day_pri = match write_window_sec {
+                0 => 0,
+                x => {
+                    (index_stats.primaries["store"]["size_in_bytes"]
+                        .as_i64()
+                        .expect("Failed to get primaries.store.size_in_bytes")
+                        * 86_400)
+                        / x
+                }
+            };
+
+            let bytes_per_day_total = match write_window_sec {
+                0 => 0,
+                x => {
+                    (index_stats.total["store"]["size_in_bytes"]
+                        .as_i64()
+                        .expect("Failed to get total.store.size_in_bytes")
+                        * 86_400)
+                        / x
+                }
+            };
+
+            let index_patch = json!({
                 "index": {
+                    "alias": alias,
+                    "data_stream": data_stream,
+                    "name": index,
                     "primaries": {
                         "indexing": {
+                            "est_bytes_per_day": bytes_per_day_pri,
                             "index_time_per_shard_in_millis": divide_values(
                                 &index_stats.primaries["indexing"]["index_time_in_millis"],
                                 &index_stats.primaries["shard_stats"]["total_count"],
@@ -168,6 +212,7 @@ pub fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
                     },
                     "total": {
                         "indexing": {
+                            "est_bytes_per_day": bytes_per_day_total,
                             "index_time_per_shard_in_millis": divide_values(
                                 &index_stats.total["indexing"]["index_time_in_millis"],
                                 &index_stats.total["shard_stats"]["total_count"],
@@ -179,17 +224,7 @@ pub fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
 
             let mut doc = json!({"index": index_stats});
             merge(&mut doc, &data_stream_index_patch);
-            merge(&mut doc, &indexing_patch);
-            merge(
-                &mut doc,
-                &json!({
-                    "index": {
-                        "alias": alias,
-                        "data_stream": data_stream,
-                        "name": index,
-                    }
-                }),
-            );
+            merge(&mut doc, &index_patch);
             docs.insert(0, doc);
             docs
         })
