@@ -172,15 +172,16 @@ impl ElasticsearchClient {
             docs[0]["data_stream"]["dataset"].as_str().unwrap(),
             docs[0]["data_stream"]["namespace"].as_str().unwrap()
         );
-        let bulk_op = |doc| BulkOperation::create(doc).pipeline("esdiag").into();
 
         while docs.len() > 0 {
             let mut ops: Vec<BulkOperation<Value>> = Vec::new();
-            let batch_size = match docs.len() {
-                n if n > BULK_SIZE => BULK_SIZE,
-                n => n,
-            };
-            (1..batch_size).map(|_| docs.pop().map(|doc| ops.push(bulk_op(doc))));
+            for _ in 0..10_000 {
+                let doc = match docs.pop() {
+                    Some(doc) => doc,
+                    None => break,
+                };
+                ops.push(BulkOperation::create(doc).pipeline("esdiag").into());
+            }
             self.bulk_index_batch(&index, ops).await?;
         }
 
