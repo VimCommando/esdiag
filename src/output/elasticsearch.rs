@@ -13,6 +13,8 @@ use elasticsearch::{
 use serde_json::Value;
 use url::Url;
 
+const BULK_SIZE: usize = 10_000;
+
 #[derive(Debug)]
 pub struct ElasticsearchClient {
     client: Elasticsearch,
@@ -163,37 +165,33 @@ impl ElasticsearchClient {
             .await
     }
 
-    pub async fn bulk_index(
-        &self,
-        mut docs: Vec<Value>,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    pub async fn bulk_index(&self, mut docs: Vec<Value>) -> std::io::Result<usize> {
         let index = format!(
             "{}-{}-{}",
             docs[0]["data_stream"]["type"].as_str().unwrap(),
             docs[0]["data_stream"]["dataset"].as_str().unwrap(),
             docs[0]["data_stream"]["namespace"].as_str().unwrap()
         );
+        let bulk_op = |doc| BulkOperation::create(doc).pipeline("esdiag").into();
 
         while docs.len() > 0 {
             let mut ops: Vec<BulkOperation<Value>> = Vec::new();
-            for _ in 0..10_000 {
-                let doc = match docs.pop() {
-                    Some(doc) => doc,
-                    None => break,
-                };
-                ops.push(BulkOperation::create(doc).pipeline("esdiag").into());
-            }
+            let batch_size = match docs.len() {
+                n if n > BULK_SIZE => BULK_SIZE,
+                n => n,
+            };
+            (1..batch_size).map(|_| docs.pop().map(|doc| ops.push(bulk_op(doc))));
             self.bulk_index_batch(&index, ops).await?;
         }
 
-        Ok("Indexed documents".to_string())
+        Ok(docs.len())
     }
 
     async fn bulk_index_batch(
         &self,
         index: &str,
         ops: Vec<BulkOperation<Value>>,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> std::io::Result<usize> {
         // Index the batch
         let batch_size = &ops.len();
         match self
@@ -216,7 +214,7 @@ impl ElasticsearchClient {
                             log::error!("Failed to parse response: {:?}", &e);
                         }
                     };
-                    Ok(status)
+                    Ok(*batch_size)
                 } else {
                     log::error!("Failed to index document to {}: {:?}", index, response);
                     let status = response.status_code().to_string().clone();
@@ -229,15 +227,15 @@ impl ElasticsearchClient {
                         }
                     };
                     log::error!("{:?}", body);
-                    Ok(status)
+                    Ok(*batch_size)
                 }
             }
             Err(e) => {
                 log::error!("Failed to index document to {}: {:?}", index, e);
-                Err(Box::new(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     format!("Failed to index document into {index}"),
-                )))
+                ))
             }
         }
     }
