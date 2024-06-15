@@ -71,7 +71,6 @@ impl ElasticsearchClient {
         // Create a transport builder with the connection pool
         let transport = match TransportBuilder::new(connection_pool)
             .auth(Credentials::Basic(username, password))
-            .header(headers::ACCEPT_ENCODING, "gzip".parse().unwrap())
             .build()
         {
             Ok(transport) => transport,
@@ -94,7 +93,6 @@ impl ElasticsearchClient {
                 log::debug!("Cloud ID provided, but not used: {_cloud_id}");
                 let connection_pool = SingleNodeConnectionPool::new(url);
                 TransportBuilder::new(connection_pool)
-                    .header(headers::ACCEPT_ENCODING, "gzip".parse().unwrap())
                     .header(
                         headers::AUTHORIZATION,
                         format!("ApiKey {}", apikey)
@@ -211,7 +209,7 @@ impl ElasticsearchClient {
         let mut total_count = 0;
         for result in results {
             match result {
-                Ok(count) => total_count += count.unwrap(),
+                Ok(count) => total_count += count.unwrap_or(0),
                 Err(e) => {
                     log::error!("Failed to process bulk index result: {:?}", e);
                 }
