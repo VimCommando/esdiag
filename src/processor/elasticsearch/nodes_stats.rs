@@ -17,9 +17,9 @@ pub fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
     };
     log::debug!("nodes: {}", nodes.len());
 
-    let nodes_stats: Vec<Value> = nodes
+    let node_stats_docs: Vec<Value> = nodes
         .par_iter()
-        .flat_map(|(node_id, node)| {
+        .flat_map(|(node_id, node_stats)| {
             let node_doc = json!(NodeStatsDoc {
                 metadata: metadata.clone(),
                 data_stream: DataStream::from("metrics-node-esdiag"),
@@ -31,7 +31,7 @@ pub fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
                 "data_stream": DataStream::from("metrics-node.transport.actions-esdiag"),
             });
 
-            let transport_actions: Vec<_> = match node["transport"]["actions"].as_object() {
+            let transport_actions: Vec<_> = match node_stats["transport"]["actions"].as_object() {
                 Some(data) => data
                     .into_iter()
                     .collect::<Vec<_>>()
@@ -66,7 +66,7 @@ pub fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
                 "data_stream": DataStream::from("metrics-node.http.clients-esdiag"),
             });
 
-            let clients: Vec<_> = match node["http"]["clients"].as_array() {
+            let clients: Vec<_> = match node_stats["http"]["clients"].as_array() {
                 Some(data) => data
                     .into_iter()
                     .collect::<Vec<_>>()
@@ -87,7 +87,7 @@ pub fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
                 "data_stream": DataStream::from("metrics-node.adaptive_selection-esdiag"),
             });
 
-            let adaptive_selections: Vec<_> = match node["adaptive_selection"].as_object() {
+            let adaptive_selections: Vec<_> = match node_stats["adaptive_selection"].as_object() {
                 Some(data) => data
                     .into_iter()
                     .collect::<Vec<_>>()
@@ -99,7 +99,7 @@ pub fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
 
                         let peer_node_patch = json!({
                             "adaptive_selection": {
-                                "node": lookup.node.by_id(peer_node_id.as_str()),
+                                "node": lookup.node.by_id(&peer_node_id),
                             },
                         });
 
@@ -121,13 +121,13 @@ pub fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
                 "data_stream": DataStream::from("metrics-ingest.pipeline-esdiag"),
             });
             let ingest_role: Value = Value::from("ingest");
-            let is_ingest = node["roles"]
+            let is_ingest = node_stats["roles"]
                 .as_array()
                 .expect("Failed get node.roles array")
                 .contains(&ingest_role);
 
             let pipelines: Vec<_> = if is_ingest {
-                match node["ingest"]["pipelines"].as_object() {
+                match node_stats["ingest"]["pipelines"].as_object() {
                     Some(data) => data
                         .into_iter()
                         .collect::<Vec<_>>()
@@ -200,7 +200,7 @@ pub fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
             });
 
             let recordings: Vec<_> =
-                match node["discovery"]["cluster_applier_stats"]["recordings"].as_array() {
+                match node_stats["discovery"]["cluster_applier_stats"]["recordings"].as_array() {
                     Some(data) => data
                         .par_iter()
                         .map(|recording| {
@@ -218,23 +218,26 @@ pub fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
             log::trace!("recordings: {}", recordings.len());
 
             // Final node_stats document
-            let mut doc = json!(node_doc);
+            let mut doc = json!({
+                "node": &node_stats,
+                "shared_cache": lookup.shared_cache.by_id(node_id.as_str()),
+            });
 
             // Remove extracted datasets, add enriched datasets
             let omit_patch = json!({
                 "node" : {
-                    "http": { "clients": null },
+                    "http": { "clients": null, "routes": null },
                     "adaptive_selection" : null,
                     "ingest": { "pipelines": null },
                     "discovery": { "cluster_applier_stats": null },
                     "transport": { "actions": null },
-                    "shared_cache": lookup.shared_cache.by_id(node_id.as_str()),
                 }
             });
 
-            merge(&mut doc, &omit_patch);
             merge(&mut doc, &node_doc);
+            merge(&mut doc, &omit_patch);
 
+            // Start a vec with the top-level node_stats doc
             let mut docs: Vec<Value> = vec![doc];
             docs.extend(adaptive_selections);
             docs.extend(clients);
@@ -246,8 +249,8 @@ pub fn enrich(metadata: &Metadata, data: Value) -> Vec<Value> {
         })
         .collect();
 
-    log::debug!("node_stats docs: {}", nodes_stats.len());
-    nodes_stats
+    log::debug!("node_stats docs: {}", node_stats_docs.len());
+    node_stats_docs
 }
 
 // Serializing data structures
