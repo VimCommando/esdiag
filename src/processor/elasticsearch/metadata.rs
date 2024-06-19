@@ -167,9 +167,9 @@ impl From<&str> for DataStream {
     fn from(name: &str) -> Self {
         let terms: Vec<&str> = name.split('-').collect();
         DataStream {
-            dataset: terms[0].to_string(),
-            namespace: terms[1].to_string(),
-            r#type: terms[2].to_string(),
+            r#type: terms[0].to_string(),
+            dataset: terms[1].to_string(),
+            namespace: terms[2].to_string(),
         }
     }
 }
