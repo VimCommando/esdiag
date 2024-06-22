@@ -7,7 +7,14 @@ const DEFAULT: &str = "default";
 const PERSISTENT: &str = "persistent";
 const TRANSIENT: &str = "transient";
 
-pub fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
+pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
+    let mut data = match serde_json::from_str::<Value>(&data) {
+        Ok(data) => data,
+        Err(e) => {
+            log::error!("Failed to deserialize cluster_settings: {}", e);
+            return Vec::new();
+        }
+    };
     let metadata = &metadata.as_doc;
     let scopes: Vec<_> = vec![
         (DEFAULT, data["defaults"].take()),

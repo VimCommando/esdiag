@@ -26,21 +26,12 @@ impl Processor {
                     &mut self.metadata,
                     data,
                 )),
-                EsDataSet::SearchableSnapshotStats => Some(
-                    elasticsearch::searchable_snapshots_stats::enrich(&self.metadata, data),
-                ),
                 _ => None,
             },
-            //DataSet::Kibana(kb_dataset) => match kb_dataset {
-            //    _ => unimplemented!("Kibana"),
-            //},
-            //DataSet::Logstash(ls_dataset) => match ls_dataset {
-            //    _ => unimplemented!("Logstash"),
-            //},
         }
     }
 
-    pub fn enrich(&self, dataset: &DataSet, data: Value) -> Vec<Value> {
+    pub fn enrich(&self, dataset: &DataSet, data: String) -> Vec<Value> {
         let empty = Vec::<Value>::new();
         match dataset {
             DataSet::Elasticsearch(es_dataset) => match es_dataset {
@@ -50,14 +41,11 @@ impl Processor {
                 EsDataSet::IndexStats => elasticsearch::index_stats::enrich(&self.metadata, data),
                 EsDataSet::NodesStats => elasticsearch::nodes_stats::enrich(&self.metadata, data),
                 EsDataSet::Tasks => elasticsearch::tasks::enrich(&self.metadata, data),
+                EsDataSet::SearchableSnapshotStats => {
+                    elasticsearch::searchable_snapshots_stats::enrich(&self.metadata, data)
+                }
                 _ => empty,
             },
-            //DataSet::Kibana(kb_dataset) => match kb_dataset {
-            //    _ => unimplemented!("Kibana"),
-            //},
-            //DataSet::Logstash(ls_dataset) => match ls_dataset {
-            //    _ => unimplemented!("Logstash"),
-            //},
         }
     }
 }

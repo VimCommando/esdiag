@@ -6,7 +6,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_value, json, Map, Value};
 use std::collections::HashMap;
 
-pub fn enrich(metadata: &Metadata, mut data: Value) -> Vec<Value> {
+pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
+    let mut data = match serde_json::from_str::<Value>(&data) {
+        Ok(data) => data,
+        Err(e) => {
+            log::warn!("Failed to deserialize index_stats: {}", e);
+            return Vec::<Value>::new();
+        }
+    };
     let lookup = &metadata.lookup;
     let metadata = &metadata.as_doc;
     let mut indices: HashMap<String, IndexStats> = match from_value(

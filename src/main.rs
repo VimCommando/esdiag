@@ -12,7 +12,6 @@ use input::Input;
 use log;
 use output::Output;
 use processor::Processor;
-use serde_json::Value;
 use std::{collections::HashMap, panic, str::FromStr, sync::Arc};
 use tokio::task;
 use uri::Uri;
@@ -285,9 +284,12 @@ async fn import_diagnostics(input: Input, output: Output) {
         let output: Arc<Output> = Arc::clone(&output);
 
         let future = task::spawn(async move {
-            let data = task::spawn_blocking(move || {
-                let value: Value = input.load_value(&data_set);
-                processor.enrich(&data_set, value)
+            let data = task::spawn_blocking(move || match input.load_string(&data_set) {
+                Some(string) => processor.enrich(&data_set, string),
+                None => {
+                    log::warn!("Failed to load data for {}", data_set.to_string());
+                    Vec::new()
+                }
             })
             .await
             .unwrap_or_else(|e| {
