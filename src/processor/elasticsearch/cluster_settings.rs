@@ -27,18 +27,8 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 
     let cluster_settings: Vec<Value> = scopes.into_iter().map(|(priority, settings)| {
         let cluster_patch = json!({
-            "transport.type": null,
-            "transport.type.default": null,
-            "transport": {
-                "type.current": settings.get("transport.type").take(),
-                "type.default": settings.get("transport.type.default").take(),
-            },
-            "http.type": null,
-            "http.type.default": null,
-            "http": {
-                "type.current": settings.get("http.type").take(),
-                "type.default": settings.get("http.type.default").take(),
-            },
+            "cluster.max_shards_per_node.frozen": null,
+            "cluster.max_shards_per_node": null,
             "cluster" : {
                 "max_shards_per_node_frozen": settings.get("cluster.max_shards_per_node.frozen").take(),
                 "max_shards_per_node": settings.get("cluster.max_shards_per_node").take(),
@@ -60,7 +50,21 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 
                     }
                 }
-            }
+            },
+            "http.type": null,
+            "http.type.default": null,
+            "http": {
+                "type.current": settings.get("http.type").take(),
+                "type.default": settings.get("http.type.default").take(),
+            },
+            "thread_pool.estimated_time_interval.warn_threshold": null,
+            "transport.type": null,
+            "transport.type.default": null,
+            "transport": {
+                "type.current": settings.get("transport.type").take(),
+                "type.default": settings.get("transport.type.default").take(),
+            },
+            "xpack.searchable.snapshot.shared_cache.size.max_headroom": null,
         });
         let mut cluster_settings_doc = cluster_settings_doc.clone().with(priority, settings);
         merge(&mut cluster_settings_doc.cluster, &cluster_patch);

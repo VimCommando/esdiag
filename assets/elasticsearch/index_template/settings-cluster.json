@@ -150,6 +150,13 @@
               "type": "keyword"
             }
           }
+        },
+        "node.bandwidth.recovery.operator": {
+          "type": "object",
+          "subobjects": false
+        },
+        "xpack.searchable.snapshot.shared_cache.size": {
+          "type": "long"
         }
       }
     }
