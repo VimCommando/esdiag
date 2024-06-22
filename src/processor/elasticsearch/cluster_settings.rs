@@ -27,6 +27,18 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 
     let cluster_settings: Vec<Value> = scopes.into_iter().map(|(priority, settings)| {
         let cluster_patch = json!({
+            "transport.type": null,
+            "transport.type.default": null,
+            "transport": {
+                "type.current": settings.get("transport.type").take(),
+                "type.default": settings.get("transport.type.default").take(),
+            },
+            "http.type": null,
+            "http.type.default": null,
+            "http": {
+                "type.current": settings.get("http.type").take(),
+                "type.default": settings.get("http.type.default").take(),
+            },
             "cluster" : {
                 "max_shards_per_node_frozen": settings.get("cluster.max_shards_per_node.frozen").take(),
                 "max_shards_per_node": settings.get("cluster.max_shards_per_node").take(),
@@ -68,6 +80,7 @@ struct ClusterSettingsDoc {
     metadata: MetadataDoc,
     data_stream: DataStream,
     priority: &'static str,
+    #[serde(flatten)]
     cluster: Value,
 }
 
