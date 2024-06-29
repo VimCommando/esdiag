@@ -166,7 +166,7 @@ async fn main() {
                         }
                     }
                 }
-                Uri::File(file) => match input::file::read_from_archive(&file, "manifest.json") {
+                Uri::File(file) => match input::archive::read_string(&file, "manifest.json") {
                     Ok(manifest) => {
                         serde_json::from_str(&manifest).expect("Failed to parse manifest.json file")
                     }

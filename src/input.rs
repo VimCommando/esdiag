@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod elasticsearch;
 pub mod file;
 pub mod kibana;
@@ -237,15 +238,13 @@ impl Input {
                     None
                 }
             },
-            Uri::File(archive) => {
-                match file::read_from_archive(archive, &source.as_path_string(&name)) {
-                    Ok(string) => Some(string),
-                    Err(e) => {
-                        log::debug!("Error reading file '{:?}'", e);
-                        None
-                    }
+            Uri::File(file) => match archive::read_string(file, &source.as_path_string(&name)) {
+                Ok(string) => Some(string),
+                Err(e) => {
+                    log::debug!("Error reading file '{:?}'", e);
+                    None
                 }
-            }
+            },
             _ => {
                 unimplemented!("Input type no implemented!");
             }
