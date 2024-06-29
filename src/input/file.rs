@@ -1,8 +1,6 @@
-use super::manifest::Manifest;
 use super::{Product, Source};
 use crate::output::Target;
 use crate::setup::Asset;
-use core::panic;
 use include_dir::{include_dir, Dir};
 use serde_yaml;
 use std::collections::HashMap;
@@ -27,40 +25,31 @@ pub fn read_string(file_path: &PathBuf) -> Result<String, Box<dyn std::error::Er
     Ok(string)
 }
 
-pub fn parse_manifest(dir: &PathBuf) -> Result<Manifest, Box<dyn std::error::Error>> {
-    let file_path = dir.as_path().join("manifest.json");
-    let manifest = match File::open(&file_path) {
-        Ok(file) => {
-            log::debug!("Parsing manifest.json {:?}", &file_path);
-            let reader = BufReader::new(file);
-            match serde_json::from_reader(reader) {
-                Ok(manifest) => manifest,
-                Err(e) => {
-                    panic!("ERROR: Failed to parse manifest.json file - {}", e);
-                }
-            }
+pub fn read_from_archive(
+    archive_path: &PathBuf,
+    filename: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let zipfile = File::open(archive_path)?;
+    let mut archive = zip::ZipArchive::new(zipfile)?;
+    let file_path = {
+        let mut path = PathBuf::from(archive.by_index(0)?.name().to_string());
+        while path.extension() != None {
+            path.pop();
         }
-        Err(_) => {
-            log::warn!("Failed to parse manifest.json file, falling back to version.json");
-            let file_path = dir.as_path().join("version.json");
-            log::debug!("Parsing version.json {:?}", &file_path);
-            let version = match File::open(&file_path) {
-                Ok(file) => {
-                    let reader = BufReader::new(file);
-                    match serde_json::from_reader(reader) {
-                        Ok(version) => version,
-                        Err(e) => {
-                            panic!("ERROR: Failed to parse version.json file - {}", e);
-                        }
-                    }
-                }
-                Err(e) => panic!("ERROR: No version.json file - {}", e),
-            };
-            let date = std::fs::metadata(&file_path)?.created()?;
-            Manifest::from_es_version(version, date)
-        }
+        path.push(filename);
+        path.to_str()
+            .expect("Archive PathBuf to string failed")
+            .to_string()
     };
-    Ok(manifest)
+    log::debug!("Reading {} from archive {:?}", file_path, archive_path);
+    let file = archive.by_name(&file_path)?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut string = String::new();
+    while let Some(line) = lines.next() {
+        string.push_str(&line?);
+    }
+    Ok(string)
 }
 
 pub fn parse_sources_yml(
