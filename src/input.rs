@@ -9,7 +9,7 @@ use crate::uri::Uri;
 use manifest::Manifest;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt, path::PathBuf, str::FromStr};
+use std::{collections::HashMap, fmt, str::FromStr};
 
 pub trait Application {
     fn get_data_sets(&self) -> Vec<DataSet>;
@@ -81,21 +81,6 @@ pub struct Source {
 }
 
 impl Source {
-    pub fn with_dir(&self, name: &str, dir: &PathBuf) -> PathBuf {
-        let mut path: PathBuf = PathBuf::new();
-        path.push(&dir);
-        match &self.subdir {
-            Some(subdir) => path.push(subdir),
-            None => (),
-        }
-        let filename = match &self.extension {
-            Some(extension) => format!("{}{}", name, extension),
-            None => format!("{}.json", name),
-        };
-        path.push(filename);
-        path
-    }
-
     fn as_path_string(&self, name: &str) -> String {
         let mut string = String::new();
         match self.subdir {
@@ -231,13 +216,15 @@ impl Input {
             None => panic!("ERROR: Source not found for {name}"),
         };
         match &self.uri {
-            Uri::Directory(dir) => match file::read_string(&source.with_dir(&name, dir)) {
-                Ok(string) => Some(string),
-                Err(e) => {
-                    log::debug!("Error reading file '{:?}'", e);
-                    None
+            Uri::Directory(dir) => {
+                match file::read_string(&dir.with_file_name(&source.as_path_string(&name))) {
+                    Ok(string) => Some(string),
+                    Err(e) => {
+                        log::debug!("Error reading file '{:?}'", e);
+                        None
+                    }
                 }
-            },
+            }
             Uri::File(file) => match archive::read_string(file, &source.as_path_string(&name)) {
                 Ok(string) => Some(string),
                 Err(e) => {

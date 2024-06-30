@@ -72,7 +72,10 @@ pub fn classify(uri: &str) -> Result<Uri, std::io::Error> {
                 false => log::debug!("Not a directory {uri}"),
                 true => {
                     log::debug!("Directory {uri}");
-                    return Ok(Uri::Directory(PathBuf::from_str(&uri).unwrap()));
+                    let mut path_buf = PathBuf::from_str(&uri).unwrap();
+                    // Push manifest.json so we can later replace with `.with_file_name()`
+                    path_buf.push("manifest.json");
+                    return Ok(Uri::Directory(path_buf));
                 }
             }
             match path.is_file() {

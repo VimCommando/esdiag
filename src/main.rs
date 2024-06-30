@@ -141,8 +141,7 @@ async fn main() {
 
             let manifest: Manifest = match &input_uri {
                 Uri::Directory(dir) => {
-                    let manifest =
-                        input::file::read_string(&dir.with_file_name("manifest.json")).ok();
+                    let manifest = input::file::read_string(&dir).ok();
                     match manifest {
                         Some(manifest) => serde_json::from_str(&manifest)
                             .expect("Failed to parse manifest.json file"),
