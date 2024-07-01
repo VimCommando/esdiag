@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod eck;
 pub mod elasticsearch;
 pub mod file;
 pub mod kibana;
@@ -38,17 +39,25 @@ impl ToString for DataSet {
 
 #[derive(Debug, PartialEq, Hash, Clone, Eq, Serialize, Deserialize)]
 pub enum Product {
+    Agent,
+    ECE,
+    ECK,
     Elasticsearch,
     Kibana,
     Logstash,
+    Unknown,
 }
 
 impl fmt::Display for Product {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Agent => write!(fmt, "Agent"),
+            Self::ECE => write!(fmt, "ECE"),
+            Self::ECK => write!(fmt, "ECK"),
             Self::Elasticsearch => write!(fmt, "Elasticsearch"),
             Self::Kibana => write!(fmt, "Kibana"),
             Self::Logstash => write!(fmt, "Logstash"),
+            Self::Unknown => write!(fmt, "Unknown"),
         }
     }
 }
@@ -57,6 +66,9 @@ impl FromStr for Product {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "agent" => Ok(Self::Agent),
+            "ece" => Ok(Self::ECE),
+            "eck" => Ok(Self::ECK),
             "es" | "elasticsearch" => Ok(Self::Elasticsearch),
             "kb" | "kibana" => Ok(Self::Kibana),
             "ls" | "logstash" => Ok(Self::Logstash),
@@ -67,7 +79,7 @@ impl FromStr for Product {
 
 impl Default for Product {
     fn default() -> Self {
-        Self::Elasticsearch
+        Self::Unknown
     }
 }
 
@@ -181,19 +193,26 @@ pub struct Input {
 impl Input {
     pub fn new(uri: Uri, manifest: Manifest) -> Self {
         let application = match &manifest.product {
+            Product::Agent => todo!("Elastic Agent"),
+            Product::ECE => todo!("Elasitc Cloud Enterprise (ECE)"),
+            Product::ECK => eck::ElasticCloudKubernetes::new(),
             Product::Elasticsearch => elasticsearch::Elasticsearch::new(),
             Product::Kibana => kibana::Kibana::new(),
             Product::Logstash => logstash::Logstash::new(),
+            Product::Unknown => panic!("Cannot import an unknown product!"),
         };
         let sources = match file::parse_sources_yml(&manifest.product) {
             Ok(sources) => sources,
-            Err(e) => panic!("ERROR: Failed to parse sources file - {}", e),
+            Err(e) => panic!("Error parsing sources file: {}", e),
         };
-        let version = Version::new(
-            manifest.product_version.major,
-            manifest.product_version.minor,
-            manifest.product_version.patch,
-        );
+        let version = match &manifest.product_version {
+            Some(product_version) => Version::new(
+                product_version.major,
+                product_version.minor,
+                product_version.patch,
+            ),
+            None => Version::new(0, 0, 0),
+        };
 
         Self {
             product: manifest.product.clone(),

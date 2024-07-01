@@ -84,7 +84,7 @@ pub fn parse_sources_yml(
         Product::Elasticsearch => ASSETS_DIR
             .get_file(ELASTICSEARCH_SOURCES)
             .ok_or(format!("Error reading {ELASTICSEARCH_SOURCES}"))?,
-        _ => return Err("Application not implemented".into()),
+        _ => return Err(format!("{} not yet implemented", product).into()),
     };
     let sources = serde_yaml::from_slice(file.contents())?;
     Ok(sources)
