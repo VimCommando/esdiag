@@ -9,6 +9,8 @@ pub struct NodeData {
     pub id: String,
     pub ip: String,
     pub name: String,
+    pub os: Value,
+    pub role: String,
     pub roles: Vec<String>,
     pub version: String,
 }
