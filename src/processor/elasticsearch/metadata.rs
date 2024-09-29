@@ -1,8 +1,7 @@
 use super::lookup::{
-    alias::AliasDoc, ilm::IlmData, index::IndexData, node::NodeData,
-    shared_cache::SharedCacheStats, Lookup,
+    ilm::IlmData, index::IndexData, node::NodeData, shared_cache::SharedCacheStats, Lookup,
 };
-use crate::data::elasticsearch::{Cluster, DataStream};
+use crate::data::elasticsearch::{Alias, Cluster, DataStream};
 use crate::input::manifest::Manifest;
 use chrono::DateTime;
 use serde::Serialize;
@@ -67,7 +66,7 @@ impl Metadata {
             diagnostic,
             version,
             lookup: Lookups {
-                alias: Lookup::<AliasDoc>::from(metadata["alias"].clone()),
+                alias: Lookup::<Alias>::from(metadata["alias"].clone()),
                 data_stream: match metadata.get("data_stream").clone() {
                     Some(data_stream) => Lookup::<DataStream>::from(data_stream),
                     None => Lookup::<DataStream>::new(),
@@ -86,7 +85,7 @@ impl Metadata {
 
 #[derive(Clone, Serialize)]
 pub struct Lookups {
-    pub alias: Lookup<AliasDoc>,
+    pub alias: Lookup<Alias>,
     pub data_stream: Lookup<DataStream>,
     pub index: Lookup<IndexData>,
     pub node: Lookup<NodeData>,

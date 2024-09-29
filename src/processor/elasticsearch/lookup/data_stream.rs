@@ -1,6 +1,5 @@
 use super::Lookup;
 use crate::data::elasticsearch::{DataStream, DataStreams, Indices};
-use serde::{Deserialize, Serialize};
 
 impl From<&String> for Lookup<DataStream> {
     fn from(string: &String) -> Self {
@@ -32,18 +31,4 @@ impl From<DataStreams> for Lookup<DataStream> {
         log::debug!("lookup data_stream entries: {}", lookup.len(),);
         lookup
     }
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct TimestampField {
-    name: String,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct Index {
-    index_name: String,
-    index_uuid: String,
-    prefer_ilm: Option<bool>,
-    ilm_policy: Option<String>,
-    managed_by: Option<String>,
 }
