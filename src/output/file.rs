@@ -1,4 +1,5 @@
 use crate::env;
+use serde::Serialize;
 use serde_json::Value;
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
@@ -144,4 +145,22 @@ pub fn append_bulk_docs<'a>(docs: Vec<Value>, filename: &PathBuf) -> std::io::Re
         file.write_all(b"\n")?;
     }
     Ok(len)
+}
+
+pub fn debug_save<T: Serialize>(filename: &str, content: &T) -> std::io::Result<()> {
+    if !log::log_enabled!(log::Level::Debug) {
+        return Ok(());
+    }
+    let home_file = PathBuf::from(env::get_string("HOME")?)
+        .join(env::get_string("ESDIAG_HOME")?)
+        .join(filename);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(home_file)?;
+    let body = serde_json::to_string(&content)?;
+    file.write_all(body.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(())
 }

@@ -1,3 +1,4 @@
+mod data;
 mod env;
 mod host;
 mod input;
@@ -6,21 +7,19 @@ mod processor;
 mod setup;
 mod uri;
 
+use crate::output::file;
 use clap::{Parser, Subcommand};
+use color_eyre::Result;
 use env::LOG_LEVEL;
-use futures::future::join_all;
-use futures::stream::FuturesUnordered;
+use futures::{future::join_all, stream::FuturesUnordered};
 use host::Host;
 use input::{manifest::Manifest, Input};
-use log;
 use output::Output;
 use processor::Processor;
 use std::{collections::HashMap, panic, str::FromStr, sync::Arc};
 use tokio::task;
 use uri::Uri;
 use url::Url;
-
-use crate::output::file;
 
 // Define command line arguments
 #[derive(Parser)]
@@ -145,7 +144,9 @@ async fn main() {
             let manifest = Manifest::from_uri(&input_uri).expect("Failed to parse manifest");
             let input = Input::new(input_uri, manifest);
             let output = Output::from_uri(output_uri);
-            import_diagnostics(input, output).await;
+            import_diagnostics(input, output)
+                .await
+                .expect("Failed to import diagnostics");
         }
         Commands::Host {
             name,
@@ -213,7 +214,7 @@ async fn main() {
         }
         Commands::Setup { host } => {
             log::info!("Setting up Elasticsearch assets in {host}");
-            let host = Host::from_str(host).unwrap();
+            let host = Host::from_str(host).expect("Failed to parse host for setup");
             let output = Output::from_host(host);
             match setup::assets(output).await {
                 Ok(_) => log::info!("Assets setup complete"),
@@ -223,7 +224,7 @@ async fn main() {
     }
 }
 
-async fn import_diagnostics(input: Input, output: Output) {
+async fn import_diagnostics(input: Input, output: Output) -> Result<()> {
     let metadata_content: HashMap<String, String> = input
         .dataset
         .metadata
@@ -275,12 +276,7 @@ async fn import_diagnostics(input: Input, output: Output) {
     }
 
     // If debug logging, save metadata to file
-    if log::log_enabled!(log::Level::Debug) {
-        for (input, data) in processor.metadata.to_hashmap() {
-            file::write_ndjson_if_debug(data, "metadata.ndjson", true).ok();
-            log::info!("metadata.json - added {}", input);
-        }
-    }
+    file::debug_save("metadata.json", &processor.metadata)?;
 
     let data_sets = input.dataset.data.clone();
     let processor = Arc::new(processor);
@@ -326,4 +322,5 @@ async fn import_diagnostics(input: Input, output: Output) {
         input.dataset.len(),
         &processor.metadata.diagnostic.uuid
     );
+    Ok(())
 }
