@@ -1,4 +1,4 @@
-use super::metadata::{DataStream, Metadata, MetadataDoc};
+use super::metadata::{DataStreamName, Metadata, MetadataDoc};
 use rayon::prelude::*;
 use serde::{self, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -16,7 +16,7 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 
     let searchable_snapshot_doc = SearchableSnapshotStatsDoc::new(
         metadata.as_doc.clone(),
-        DataStream::from("metrics-searchable_snapshot-esdiag"),
+        DataStreamName::from("metrics-searchable_snapshot-esdiag"),
     );
 
     let searchable_snapshot_stats: Vec<Value> = indices
@@ -48,7 +48,7 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 pub struct SearchableSnapshotStatsDoc {
     #[serde(flatten)]
     metadata: MetadataDoc,
-    data_stream: DataStream,
+    data_stream: DataStreamName,
     index: Option<IndexName>,
     searchable_snapshot: Value,
 }
@@ -59,7 +59,7 @@ pub struct IndexName {
 }
 
 impl SearchableSnapshotStatsDoc {
-    pub fn new(metadata: MetadataDoc, data_stream: DataStream) -> Self {
+    pub fn new(metadata: MetadataDoc, data_stream: DataStreamName) -> Self {
         SearchableSnapshotStatsDoc {
             data_stream,
             index: None,

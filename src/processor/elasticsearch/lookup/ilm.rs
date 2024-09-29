@@ -1,4 +1,4 @@
-use super::{Lookup, LookupDisplay};
+use super::Lookup;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -32,12 +32,6 @@ impl From<String> for Lookup<IlmData> {
 
         log::debug!("lookup_ilm entries: {}", lookup_ilm.entries.len());
         lookup_ilm
-    }
-}
-
-impl LookupDisplay for IlmData {
-    fn display() -> &'static str {
-        "ilm_data"
     }
 }
 

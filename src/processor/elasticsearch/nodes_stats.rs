@@ -1,5 +1,5 @@
 use super::lookup::node::NodeData;
-use super::metadata::{DataStream, Metadata, MetadataDoc};
+use super::metadata::{DataStreamName, Metadata, MetadataDoc};
 use json_patch::merge;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -29,13 +29,13 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
         .flat_map(|(node_id, node_stats)| {
             let node_doc = json!(NodeStatsDoc {
                 metadata: metadata.clone(),
-                data_stream: DataStream::from("metrics-node-esdiag"),
+                data_stream: DataStreamName::from("metrics-node-esdiag"),
                 node: lookup.node.by_id(node_id.as_str()).cloned(),
             });
 
             // Extract transport.actions
             let data_stream_transport = json!({
-                "data_stream": DataStream::from("metrics-node.transport.actions-esdiag"),
+                "data_stream": DataStreamName::from("metrics-node.transport.actions-esdiag"),
             });
 
             let transport_actions: Vec<_> = match node_stats["transport"]["actions"].as_object() {
@@ -70,7 +70,7 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 
             // Extract http.clients
             let data_stream_http = json!({
-                "data_stream": DataStream::from("metrics-node.http.clients-esdiag"),
+                "data_stream": DataStreamName::from("metrics-node.http.clients-esdiag"),
             });
 
             let clients: Vec<_> = match node_stats["http"]["clients"].as_array() {
@@ -91,7 +91,7 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 
             // Extract adaptive_selection
             let data_stream_adaptive = json!({
-                "data_stream": DataStream::from("metrics-node.adaptive_selection-esdiag"),
+                "data_stream": DataStreamName::from("metrics-node.adaptive_selection-esdiag"),
             });
 
             let adaptive_selections: Vec<_> = match node_stats["adaptive_selection"].as_object() {
@@ -122,10 +122,10 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 
             // Extract ingest.pipelines and ingest.processors
             let data_stream_processor = json!({
-                "data_stream": DataStream::from("metrics-ingest.processor-esdiag"),
+                "data_stream": DataStreamName::from("metrics-ingest.processor-esdiag"),
             });
             let data_stream_pipeline = json!({
-                "data_stream": DataStream::from("metrics-ingest.pipeline-esdiag"),
+                "data_stream": DataStreamName::from("metrics-ingest.pipeline-esdiag"),
             });
             let ingest_role: Value = Value::from("ingest");
             let is_ingest = node_stats["roles"]
@@ -203,7 +203,7 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 
             // Extract discovery.cluster_applier_stats.recordings dataset
             let data_stream_cluster_applier = json!({
-                "data_stream": DataStream::from("metrics-node.discovery.cluster_applier-esdiag"),
+                "data_stream": DataStreamName::from("metrics-node.discovery.cluster_applier-esdiag"),
             });
 
             let recordings: Vec<_> =
@@ -266,6 +266,6 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 struct NodeStatsDoc {
     #[serde(flatten)]
     metadata: MetadataDoc,
-    data_stream: DataStream,
+    data_stream: DataStreamName,
     node: Option<NodeData>,
 }

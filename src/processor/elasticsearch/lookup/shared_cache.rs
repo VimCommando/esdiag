@@ -1,4 +1,4 @@
-use super::{Lookup, LookupDisplay};
+use super::Lookup;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -28,12 +28,6 @@ impl From<&String> for Lookup<SharedCacheStats> {
             lookup_shared_cache.entries.len(),
         );
         lookup_shared_cache
-    }
-}
-
-impl LookupDisplay for SharedCacheStats {
-    fn display() -> &'static str {
-        "shared_cache_stats"
     }
 }
 

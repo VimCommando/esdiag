@@ -1,4 +1,3 @@
-use super::LookupDisplay;
 use serde::Serialize;
 
 #[derive(Clone, Serialize)]
@@ -33,11 +32,5 @@ impl Default for IndexData {
 impl AsRef<IndexData> for IndexData {
     fn as_ref(&self) -> &IndexData {
         self
-    }
-}
-
-impl LookupDisplay for IndexData {
-    fn display() -> &'static str {
-        "index_data"
     }
 }

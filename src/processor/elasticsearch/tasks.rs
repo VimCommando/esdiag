@@ -1,5 +1,5 @@
 use super::lookup::node::NodeData;
-use super::metadata::{DataStream, Metadata, MetadataDoc};
+use super::metadata::{DataStreamName, Metadata, MetadataDoc};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -17,7 +17,10 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
     let metadata = &metadata.as_doc;
     let nodes: Vec<(_, _)> = data.nodes.into_iter().collect();
 
-    let task_doc = TaskDoc::new(metadata.clone(), DataStream::from("metrics-task-esdiag"));
+    let task_doc = TaskDoc::new(
+        metadata.clone(),
+        DataStreamName::from("metrics-task-esdiag"),
+    );
 
     let tasks: Vec<Value> = nodes
         .into_par_iter()
@@ -45,13 +48,13 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 pub struct TaskDoc {
     #[serde(flatten)]
     metadata: MetadataDoc,
-    data_stream: DataStream,
+    data_stream: DataStreamName,
     node: Option<NodeData>,
     task: Option<TaskData>,
 }
 
 impl TaskDoc {
-    pub fn new(metadata: MetadataDoc, data_stream: DataStream) -> Self {
+    pub fn new(metadata: MetadataDoc, data_stream: DataStreamName) -> Self {
         TaskDoc {
             data_stream,
             metadata,

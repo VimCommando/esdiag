@@ -1,4 +1,4 @@
-use super::metadata::{DataStream, Metadata, MetadataDoc};
+use super::metadata::{DataStreamName, Metadata, MetadataDoc};
 use json_patch::merge;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -22,7 +22,7 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
         (PERSISTENT, data["persistent"].take()),
     ];
     log::debug!("cluster_settings scopes: {}", scopes.len());
-    let data_stream = DataStream::from("settings-cluster-esdiag");
+    let data_stream = DataStreamName::from("settings-cluster-esdiag");
     let cluster_settings_doc = ClusterSettingsDoc::new(metadata.clone(), data_stream);
 
     let cluster_settings: Vec<Value> = scopes.into_iter().map(|(priority, settings)| {
@@ -82,14 +82,14 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 struct ClusterSettingsDoc {
     #[serde(flatten)]
     metadata: MetadataDoc,
-    data_stream: DataStream,
+    data_stream: DataStreamName,
     priority: &'static str,
     #[serde(flatten)]
     cluster: Value,
 }
 
 impl ClusterSettingsDoc {
-    pub fn new(metadata: MetadataDoc, data_stream: DataStream) -> Self {
+    pub fn new(metadata: MetadataDoc, data_stream: DataStreamName) -> Self {
         ClusterSettingsDoc {
             data_stream,
             metadata,

@@ -1,4 +1,4 @@
-use super::{Lookup, LookupDisplay};
+use super::Lookup;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -16,12 +16,6 @@ impl AliasDoc {
             is_hidden: data.is_hidden.unwrap_or(false),
             is_write_index: data.is_write_index.unwrap_or(false),
         }
-    }
-}
-
-impl LookupDisplay for AliasDoc {
-    fn display() -> &'static str {
-        "alias_doc"
     }
 }
 

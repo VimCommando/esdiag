@@ -1,117 +1,42 @@
-use super::{Lookup, LookupDisplay};
+use super::Lookup;
+use crate::data::elasticsearch::{DataStream, DataStreams, Indices};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Serialize)]
-pub struct DataStreamDoc {
-    allow_custom_routing: Option<bool>,
-    generation: u64,
-    hidden: Option<bool>,
-    ilm_policy: Option<String>,
-    is_write_index: Option<bool>,
-    name: String,
-    next_generation_managed_by: Option<String>,
-    prefer_ilm: Option<bool>,
-    replicated: Option<bool>,
-    rollover_on_write: Option<bool>,
-    status: String,
-    system: Option<bool>,
-    template: String,
-    timestamp_field: TimestampField,
-}
-
-impl DataStreamDoc {
-    pub fn is_write_index(&self) -> bool {
-        match self.is_write_index {
-            Some(value) => value,
-            None => false,
-        }
-    }
-
-    pub fn set_write_index(&mut self, value: bool) {
-        self.is_write_index = Some(value);
-    }
-}
-
-impl From<&DataStreamData> for DataStreamDoc {
-    fn from(data_stream: &DataStreamData) -> Self {
-        Self {
-            allow_custom_routing: data_stream.allow_custom_routing,
-            generation: data_stream.generation,
-            hidden: data_stream.hidden,
-            ilm_policy: data_stream.ilm_policy.clone(),
-            is_write_index: None,
-            name: data_stream.name.clone(),
-            next_generation_managed_by: data_stream.next_generation_managed_by.clone(),
-            prefer_ilm: data_stream.prefer_ilm,
-            replicated: data_stream.replicated,
-            rollover_on_write: data_stream.rollover_on_write,
-            status: data_stream.status.clone(),
-            system: data_stream.system.clone(),
-            template: data_stream.template.clone(),
-            timestamp_field: data_stream.timestamp_field.clone(),
-        }
-    }
-}
-
-impl LookupDisplay for DataStreamDoc {
-    fn display() -> &'static str {
-        "data_stream_doc"
-    }
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct DataStreamData {
-    allow_custom_routing: Option<bool>,
-    generation: u64,
-    hidden: Option<bool>,
-    ilm_policy: Option<String>,
-    indices: Vec<Index>,
-    name: String,
-    next_generation_managed_by: Option<String>,
-    prefer_ilm: Option<bool>,
-    replicated: Option<bool>,
-    rollover_on_write: Option<bool>,
-    status: String,
-    system: Option<bool>,
-    template: String,
-    timestamp_field: TimestampField,
-}
-
-impl From<&String> for Lookup<DataStreamDoc> {
+impl From<&String> for Lookup<DataStream> {
     fn from(string: &String) -> Self {
-        let data_streams: DataStreamWrapper =
+        let data_streams: DataStreams =
             serde_json::from_str(&string).expect("Failed to parse DataStreamData");
-        let mut lookup_data_stream: Lookup<DataStreamDoc> = Lookup::new();
+        Lookup::<DataStream>::from(data_streams)
+    }
+}
 
-        for data_stream in data_streams.data_streams {
-            let mut data_stream_doc = DataStreamDoc::from(&data_stream);
-            let index_count = data_stream.indices.len() - 1;
-            let indices: Vec<_> = data_stream.indices.into_iter().enumerate().collect();
+impl From<DataStreams> for Lookup<DataStream> {
+    fn from(mut data_streams: DataStreams) -> Self {
+        let mut lookup = Lookup::<DataStream>::new();
+        data_streams
+            .data_streams
+            .drain(..)
+            .enumerate()
+            .for_each(|(i, mut data_stream)| {
+                let name = data_stream.name.clone();
+                let indices: Indices = data_stream.indices.drain(..).collect();
+                let index_count = indices.len() - 1;
+                data_stream.set_write_index(i == index_count);
+                lookup.add(data_stream).with_name(&name);
+                // Each data stream can have multiple indices
+                indices.iter().for_each(|index| {
+                    lookup.with_id(&index.index_name.clone());
+                });
+            });
 
-            for (i, index) in indices {
-                data_stream_doc.set_write_index(i == index_count);
-                lookup_data_stream
-                    .add(data_stream_doc.clone())
-                    .with_id(&index.index_uuid)
-                    .with_name(&index.index_name);
-            }
-        }
-        log::debug!(
-            "lookup_data_stream entries: {}",
-            lookup_data_stream.entries.len(),
-        );
-        lookup_data_stream
+        log::debug!("lookup data_stream entries: {}", lookup.len(),);
+        lookup
     }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct TimestampField {
     name: String,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-struct DataStreamWrapper {
-    data_streams: Vec<DataStreamData>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]

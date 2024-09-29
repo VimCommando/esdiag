@@ -1,9 +1,11 @@
-use super::lookup::node::NodeData;
-use super::metadata::{DataStream, Metadata, MetadataDoc};
+use super::{
+    lookup::node::NodeData,
+    metadata::{DataStreamName, Metadata, MetadataDoc},
+};
+use crate::data::elasticsearch::{Node, Nodes};
 use json_patch::merge;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 pub fn enrich_lookup(metadata: &mut Metadata, data: String) -> Vec<Value> {
     let lookup = &mut metadata.lookup;
@@ -17,7 +19,7 @@ pub fn enrich_lookup(metadata: &mut Metadata, data: String) -> Vec<Value> {
 
     let node_doc = NodeDoc::new(
         metadata.as_doc.clone(),
-        DataStream::from("settings-node-esdiag"),
+        DataStreamName::from("settings-node-esdiag"),
     );
 
     log::debug!("nodes: {}", nodes_data.nodes.len());
@@ -28,7 +30,7 @@ pub fn enrich_lookup(metadata: &mut Metadata, data: String) -> Vec<Value> {
         .map(|(node_id, node)| {
             let role = abbreviate_roles(node.roles.clone());
             let name = rename_node_with_role(&node.name, &role);
-            let node_data = node.as_node_data(&node_id);
+            let node_data = NodeData::from(&node).with_id(&node_id);
             lookup
                 .node
                 .add(node_data.rename(&name).with_role(&role))
@@ -125,12 +127,12 @@ fn abbreviate_roles(role_list: Vec<String>) -> String {
 struct NodeDoc {
     #[serde(flatten)]
     metadata: MetadataDoc,
-    data_stream: DataStream,
+    data_stream: DataStreamName,
     node: Option<Node>,
 }
 
 impl NodeDoc {
-    pub fn new(metadata: MetadataDoc, data_stream: DataStream) -> Self {
+    pub fn new(metadata: MetadataDoc, data_stream: DataStreamName) -> Self {
         NodeDoc {
             data_stream,
             metadata,
@@ -142,66 +144,4 @@ impl NodeDoc {
         self.node = Some(node);
         self
     }
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct Node {
-    aggregations: Value,
-    attributes: Value,
-    build_flavor: String,
-    build_hash: String,
-    build_type: String,
-    component_version: Option<ComponentVersion>,
-    host: String,
-    http: Value,
-    index_version: Option<i64>,
-    ingest: Value,
-    ip: String,
-    jvm: Value,
-    modules: Value,
-    name: String,
-    os: Value,
-    plugins: Value,
-    process: Value,
-    role: Option<String>,
-    roles: Vec<String>,
-    settings: Value,
-    thread_pool: Value,
-    total_indexing_buffer: Value,
-    total_indexing_buffer_in_bytes: Value,
-    transport: Value,
-    transport_address: String,
-    transport_version: Option<i64>,
-    version: semver::Version,
-}
-
-impl Node {
-    pub fn as_node_data(&self, id: &String) -> NodeData {
-        NodeData {
-            attributes: self.attributes.clone(),
-            host: self.host.clone(),
-            id: id.clone(),
-            ip: self.ip.clone(),
-            name: self.name.clone(),
-            os: self.os.clone(),
-            role: self.role.clone().unwrap_or_default(),
-            roles: self.roles.clone(),
-            version: self.version.to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-struct ComponentVersion {
-    ml_config_version: i64,
-    transform_config_version: i64,
-}
-
-// Deserializing data structures
-
-#[derive(Deserialize)]
-struct Nodes {
-    _nodes: Value,
-    //cluster_name: String,
-    nodes: HashMap<String, Node>,
 }
