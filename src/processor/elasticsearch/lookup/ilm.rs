@@ -1,66 +1,22 @@
 use super::Lookup;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::data::elasticsearch::{IlmExplain, IlmStats};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IlmData {
-    pub index: String,
-    pub managed: bool,
-    pub policy: Option<String>,
-    pub index_creation_date_millis: Option<i64>,
-    pub lifecycle_date_millis: Option<i64>,
-    pub phase: Option<String>,
-    pub phase_time_millis: Option<i64>,
-    pub action: Option<String>,
-    pub action_time_millis: Option<i64>,
-    pub step: Option<String>,
-    pub step_time_millis: Option<i64>,
-    pub repository_name: Option<String>,
-    pub snapshot_name: Option<String>,
-    pub phase_execution: Option<PhaseExecution>,
-}
-
-impl From<String> for Lookup<IlmData> {
+impl From<String> for Lookup<IlmStats> {
     fn from(string: String) -> Self {
         let ilm_explain: IlmExplain =
             serde_json::from_str(&string).expect("Failed to deserialize ilm_explain");
-
-        let mut lookup_ilm: Lookup<IlmData> = Lookup::new();
-        for (index, ilm_data) in ilm_explain.indices {
-            lookup_ilm.add(ilm_data).with_name(&index);
-        }
-
-        log::debug!("lookup_ilm entries: {}", lookup_ilm.entries.len());
-        lookup_ilm
+        Lookup::<IlmStats>::from(ilm_explain)
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Actions {
-    searchable_snapshot: Option<SearchableSnapshot>,
-}
+impl From<IlmExplain> for Lookup<IlmStats> {
+    fn from(mut ilm_explain: IlmExplain) -> Self {
+        let mut lookup: Lookup<IlmStats> = Lookup::new();
+        ilm_explain.indices.drain().for_each(|(index, ilm_stats)| {
+            lookup.add(ilm_stats).with_name(&index);
+        });
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct IlmExplain {
-    indices: HashMap<String, IlmData>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PhaseDefinition {
-    min_age: String,
-    actions: Actions,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PhaseExecution {
-    policy: String,
-    phase_definition: Option<PhaseDefinition>,
-    version: i32,
-    modified_date_in_millis: i64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct SearchableSnapshot {
-    snapshot_repository: String,
-    force_merge_index: bool,
+        log::debug!("lookup_ilm entries: {}", lookup.entries.len());
+        lookup
+    }
 }

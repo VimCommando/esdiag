@@ -1,7 +1,5 @@
-use super::lookup::{
-    ilm::IlmData, index::IndexData, node::NodeData, shared_cache::SharedCacheStats, Lookup,
-};
-use crate::data::elasticsearch::{Alias, Cluster, DataStream};
+use super::lookup::{index::IndexData, node::NodeData, shared_cache::SharedCacheStats, Lookup};
+use crate::data::elasticsearch::{Alias, Cluster, DataStream, IlmStats};
 use crate::input::manifest::Manifest;
 use chrono::DateTime;
 use serde::Serialize;
@@ -72,7 +70,7 @@ impl Metadata {
                     None => Lookup::<DataStream>::new(),
                 },
                 index: Lookup::<IndexData>::new(),
-                ilm: Lookup::<IlmData>::from(metadata["ilm_explain"].clone()),
+                ilm: Lookup::<IlmStats>::from(metadata["ilm_explain"].clone()),
                 node: Lookup::<NodeData>::new(),
                 shared_cache: match metadata.get("searchable_snapshots_cache_stats").clone() {
                     Some(cache) => Lookup::<SharedCacheStats>::from(cache),
@@ -89,7 +87,7 @@ pub struct Lookups {
     pub data_stream: Lookup<DataStream>,
     pub index: Lookup<IndexData>,
     pub node: Lookup<NodeData>,
-    pub ilm: Lookup<IlmData>,
+    pub ilm: Lookup<IlmStats>,
     pub shared_cache: Lookup<SharedCacheStats>,
 }
 
