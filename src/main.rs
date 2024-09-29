@@ -1,12 +1,12 @@
 use clap::{Parser, Subcommand};
 use color_eyre::Result;
 use esdiag::{
+    data::diagnostic::Manifest,
     env::LOG_LEVEL,
+    exporter::{self, Output},
     host::Host,
-    input::{manifest::Manifest, Input},
-    output::file,
-    output::Output,
     processor::Processor,
+    receiver::Input,
     setup,
     uri::Uri,
 };
@@ -270,7 +270,7 @@ async fn import_diagnostics(input: Input, output: Output) -> Result<()> {
     }
 
     // If debug logging, save metadata to file
-    file::debug_save("metadata.json", &processor.metadata)?;
+    exporter::file::debug_save("metadata.json", &processor.metadata)?;
 
     let data_sets = input.dataset.data.clone();
     let processor = Arc::new(processor);

@@ -1,9 +1,8 @@
 /// Processors for Elasticsearch diagnostics
 pub mod elasticsearch;
 
-use crate::input::{manifest::Manifest, DataSet};
+use crate::data::diagnostic::{elasticsearch::EsDataSet, DataSet, Manifest};
 use elasticsearch::metadata::Metadata;
-use elasticsearch::EsDataSet;
 use serde_json::Value;
 use std::collections::HashMap;
 

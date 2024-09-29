@@ -6,8 +6,8 @@ pub mod file;
 /// Write `ndjson` to std out
 pub mod stdout;
 
+use crate::data::diagnostic::Product;
 use crate::host::Host;
-use crate::input::Product;
 use crate::uri::Uri;
 use elasticsearch::ElasticsearchClient;
 use serde_json::Value;

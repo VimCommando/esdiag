@@ -1,6 +1,8 @@
-use super::Product;
-use crate::processor::elasticsearch::{EsVersion, EsVersionDetails};
-use crate::{input, uri::Uri};
+use super::{
+    elasticsearch::{EsVersion, EsVersionDetails},
+    Product,
+};
+use crate::{receiver, uri::Uri};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -55,14 +57,14 @@ impl Manifest {
     /// Loads a manifest from a URI
     pub fn from_uri(input_uri: &Uri) -> Result<Manifest, Box<dyn std::error::Error>> {
         let manifest: Manifest = match &input_uri {
-            Uri::Directory(dir) => match input::file::read_string(&dir) {
+            Uri::Directory(dir) => match receiver::file::read_string(&dir) {
                 Ok(string) => serde_json::from_str::<Manifest>(&string)?.with_diag_type(),
                 Err(e) => {
                     log::warn!(
                         "Failed to read manifest.json file, falling back to version.json: {e}"
                     );
                     let file_path = &dir.with_file_name("version.json");
-                    let string = input::file::read_string(&file_path)?;
+                    let string = receiver::file::read_string(&file_path)?;
                     let date = std::fs::metadata(&file_path)?.created()?;
                     log::debug!("Got metadata for directory: {:?}", &date);
                     let version =
@@ -70,13 +72,13 @@ impl Manifest {
                     Manifest::from_es_version(version, date)
                 }
             },
-            Uri::File(file) => match input::archive::read_string(&file, "manifest.json") {
+            Uri::File(file) => match receiver::archive::read_string(&file, "manifest.json") {
                 Ok(string) => serde_json::from_str::<Manifest>(&string)?.with_diag_type(),
                 Err(e) => {
                     log::warn!(
                         "Failed to parse manifest.json file, falling back to version.json: {e}"
                     );
-                    let string = input::archive::read_string(&file, "version.json")?;
+                    let string = receiver::archive::read_string(&file, "version.json")?;
                     let version =
                         serde_json::from_str(&string).expect("Failed to parse version.json file");
                     let date = std::fs::metadata(&file)?.created()?;

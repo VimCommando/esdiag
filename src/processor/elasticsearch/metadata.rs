@@ -1,6 +1,8 @@
 use super::lookup::{index::IndexData, node::NodeData, Lookup};
-use crate::data::elasticsearch::{Alias, Cluster, DataStream, IlmStats, SharedCacheStats};
-use crate::input::manifest::Manifest;
+use crate::data::{
+    diagnostic::Manifest,
+    elasticsearch::{Alias, Cluster, DataStream, IlmStats, SharedCacheStats},
+};
 use chrono::DateTime;
 use serde::Serialize;
 use std::collections::HashMap;

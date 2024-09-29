@@ -1,4 +1,4 @@
-use crate::input::Product;
+use crate::data::diagnostic::Product;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_yaml;

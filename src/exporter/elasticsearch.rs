@@ -1,5 +1,5 @@
 use crate::env;
-use crate::{host::Host, output::file};
+use crate::{exporter::file, host::Host};
 use elasticsearch::cert::CertificateValidation;
 use elasticsearch::{
     auth::Credentials,

@@ -1,5 +1,5 @@
-use crate::input::file;
-use crate::output::{Output, Target};
+use crate::exporter::{Output, Target};
+use crate::receiver::file;
 use serde::Deserialize;
 use serde_json::{from_slice, Value};
 use std::path::PathBuf;

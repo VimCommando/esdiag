@@ -1,89 +1,14 @@
 /// Read from a `.zip` archive file
 pub mod archive;
-pub mod eck;
-pub mod elasticsearch;
 /// Read from a directory the local file system
 pub mod file;
-pub mod kibana;
-pub mod logstash;
-pub mod manifest;
-use crate::processor::elasticsearch::EsDataSet;
+use crate::data::diagnostic::{
+    DataSet, ElasticCloudKubernetes, Elasticsearch, Kibana, Logstash, Manifest, Product,
+};
 use crate::uri::Uri;
-use manifest::Manifest;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt, str::FromStr};
-
-pub trait Application {
-    fn get_data_sets(&self) -> Vec<DataSet>;
-    fn get_lookup_sets(&self) -> Vec<DataSet>;
-    fn get_metadata_sets(&self) -> Vec<DataSet>;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DataSet {
-    Elasticsearch(EsDataSet),
-    //Kibana(KbDataSet),
-    //Logstash(LsDataSet),
-}
-
-impl ToString for DataSet {
-    fn to_string(&self) -> String {
-        match self {
-            DataSet::Elasticsearch(data_set) => data_set.to_string(),
-            //DataSet::Kibana(data_set) => data_set.to_string(),
-            //DataSet::Logstash(data_set) => data_set.to_string(),
-        }
-    }
-}
-
-// Product enum to hold the Elasticsearch, Kibana, or Logstash product
-
-#[derive(Debug, PartialEq, Hash, Clone, Eq, Serialize, Deserialize)]
-pub enum Product {
-    Agent,
-    ECE,
-    ECK,
-    Elasticsearch,
-    Kibana,
-    Logstash,
-    Unknown,
-}
-
-impl fmt::Display for Product {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Agent => write!(fmt, "Agent"),
-            Self::ECE => write!(fmt, "ECE"),
-            Self::ECK => write!(fmt, "ECK"),
-            Self::Elasticsearch => write!(fmt, "Elasticsearch"),
-            Self::Kibana => write!(fmt, "Kibana"),
-            Self::Logstash => write!(fmt, "Logstash"),
-            Self::Unknown => write!(fmt, "Unknown"),
-        }
-    }
-}
-
-impl FromStr for Product {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "agent" => Ok(Self::Agent),
-            "ece" => Ok(Self::ECE),
-            "eck" => Ok(Self::ECK),
-            "es" | "elasticsearch" => Ok(Self::Elasticsearch),
-            "kb" | "kibana" => Ok(Self::Kibana),
-            "ls" | "logstash" => Ok(Self::Logstash),
-            _ => Err(()),
-        }
-    }
-}
-
-impl Default for Product {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
+use std::{collections::HashMap, fmt};
 
 // Source struct to hold the name, extension, subdir, and versions of the source
 
@@ -197,10 +122,10 @@ impl Input {
         let application = match &manifest.product {
             Product::Agent => todo!("Elastic Agent"),
             Product::ECE => todo!("Elasitc Cloud Enterprise (ECE)"),
-            Product::ECK => eck::ElasticCloudKubernetes::new(),
-            Product::Elasticsearch => elasticsearch::Elasticsearch::new(),
-            Product::Kibana => kibana::Kibana::new(),
-            Product::Logstash => logstash::Logstash::new(),
+            Product::ECK => ElasticCloudKubernetes::new(),
+            Product::Elasticsearch => Elasticsearch::new(),
+            Product::Kibana => Kibana::new(),
+            Product::Logstash => Logstash::new(),
             Product::Unknown => panic!("Cannot import an unknown product!"),
         };
         let sources = match file::parse_sources_yml(&manifest.product) {

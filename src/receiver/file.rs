@@ -1,5 +1,6 @@
-use super::{Product, Source};
-use crate::output::Target;
+use super::Source;
+use crate::data::diagnostic::Product;
+use crate::exporter::Target;
 use crate::setup::Asset;
 use include_dir::{include_dir, Dir};
 use serde_yaml;
