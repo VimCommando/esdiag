@@ -1,10 +1,9 @@
 use super::Source;
-use crate::data::diagnostic::Product;
-use crate::exporter::Target;
-use crate::setup::Asset;
+use crate::{data::diagnostic::Product, exporter::Exporter, setup::Asset};
+use color_eyre::eyre::{eyre, Result};
 use include_dir::{include_dir, Dir};
 use serde_yaml;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -42,7 +41,7 @@ pub static ELASTICSEARCH_SOURCES: &str = "elasticsearch/sources.yml";
 /// }
 /// ```
 
-pub fn read_string(file_path: &PathBuf) -> Result<String, Box<dyn std::error::Error>> {
+pub fn read_string(file_path: &PathBuf) -> Result<String> {
     log::debug!("Reading file: {:?}", file_path);
     let file = File::open(file_path)?;
     let read_lines = BufReader::new(file).lines();
@@ -77,15 +76,13 @@ pub fn read_string(file_path: &PathBuf) -> Result<String, Box<dyn std::error::Er
 /// }
 /// ```
 
-pub fn parse_sources_yml(
-    product: &Product,
-) -> Result<HashMap<String, Source>, Box<dyn std::error::Error>> {
+pub fn parse_sources_yml(product: &Product) -> Result<BTreeMap<String, Source>> {
     log::debug!("Parsing sources.yml");
     let file = match product {
         Product::Elasticsearch => ASSETS_DIR
             .get_file(ELASTICSEARCH_SOURCES)
-            .ok_or(format!("Error reading {ELASTICSEARCH_SOURCES}"))?,
-        _ => return Err(format!("{} not yet implemented", product).into()),
+            .ok_or(eyre!("Error reading {ELASTICSEARCH_SOURCES}"))?,
+        _ => return Err(eyre!("{} not yet implemented", product)),
     };
     let sources = serde_yaml::from_slice(file.contents())?;
     Ok(sources)
@@ -118,12 +115,12 @@ pub fn parse_sources_yml(
 /// }
 /// ```
 
-pub fn parse_assets_yml(target: &Target) -> Result<Vec<Asset>, Box<dyn std::error::Error>> {
-    let file = match target {
-        Target::Elasticsearch(_) => ASSETS_DIR
+pub fn parse_assets_yml(exporter: &Exporter) -> Result<Vec<Asset>> {
+    let file = match exporter {
+        Exporter::Elasticsearch(_) => ASSETS_DIR
             .get_file(ELASTICSEARCH_ASSETS)
-            .ok_or(format!("Error reading {ELASTICSEARCH_ASSETS}"))?,
-        _ => return Err("Application not implemented".into()),
+            .ok_or(eyre!("Error reading {ELASTICSEARCH_ASSETS}"))?,
+        _ => return Err(eyre!("Application not implemented")),
     };
     let assets = serde_yaml::from_slice(file.contents())?;
     Ok(assets)

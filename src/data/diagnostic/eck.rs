@@ -1,4 +1,4 @@
-use super::{Application, DataSet};
+use super::{DataFamilies, DataSet};
 
 pub struct ElasticCloudKubernetes {
     data_sets: Vec<DataSet>,
@@ -7,7 +7,7 @@ pub struct ElasticCloudKubernetes {
 }
 
 impl ElasticCloudKubernetes {
-    pub fn new() -> Box<dyn Application> {
+    pub fn new() -> Box<dyn DataFamilies> {
         Box::new(Self {
             data_sets: Vec::new(),
             lookup_sets: Vec::new(),
@@ -16,7 +16,7 @@ impl ElasticCloudKubernetes {
     }
 }
 
-impl Application for ElasticCloudKubernetes {
+impl DataFamilies for ElasticCloudKubernetes {
     fn get_data_sets(&self) -> Vec<DataSet> {
         self.data_sets.clone()
     }

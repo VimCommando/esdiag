@@ -1,11 +1,23 @@
-use super::Processor;
-use crate::exporter::{self, Output};
-use crate::receiver::Input;
+//use super::Processor;
+use super::lookup::LookupTable;
+use crate::{data::diagnostic::Manifest, exporter::Exporter, receiver::Receiver};
 use color_eyre::Result;
-use futures::{future::join_all, stream::FuturesUnordered};
-use std::{collections::HashMap, sync::Arc};
-use tokio::task;
+use std::boxed::Box;
+use std::sync::Arc;
 
+pub trait DiagnosticProcessor {
+    #[allow(async_fn_in_trait)]
+    async fn new(manifest: Manifest, receiver: Receiver, exporter: Exporter) -> Result<Box<Self>>;
+    #[allow(async_fn_in_trait)]
+    async fn start_exporter(&self) -> Result<()>;
+    fn get_lookup(&self, key: &str) -> Option<Arc<dyn LookupTable>>;
+    #[allow(async_fn_in_trait)]
+    async fn process_queue(&self) -> usize;
+    #[allow(async_fn_in_trait)]
+    async fn run(self) -> Result<usize>;
+}
+
+/*
 pub async fn import(input: Input, output: Output) -> Result<()> {
     let metadata_content: HashMap<String, String> = input
         .dataset
@@ -106,3 +118,4 @@ pub async fn import(input: Input, output: Output) -> Result<()> {
     );
     Ok(())
 }
+*/

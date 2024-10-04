@@ -5,51 +5,33 @@ pub mod elasticsearch;
 /// Lookup processors
 pub mod lookup;
 
-use crate::data::diagnostic::{elasticsearch::EsDataSet, DataSet, Manifest};
-use elasticsearch::metadata::Metadata;
-use serde_json::Value;
-use std::collections::HashMap;
+use crate::{
+    data::diagnostic::{Manifest, Product},
+    exporter::Exporter,
+    receiver::Receiver,
+};
+use color_eyre::eyre::{eyre, Result};
+use diagnostic::DiagnosticProcessor;
+use elasticsearch::ElasticsearchDiagnostic;
 
-pub struct Processor {
-    pub metadata: Metadata,
+pub async fn process(receiver: Receiver, exporter: Exporter) -> Result<()> {
+    let manifest = receiver.get::<Manifest>().await?;
+    let diagnostic_processor: Box<_> = match manifest.product {
+        Product::Elasticsearch => {
+            ElasticsearchDiagnostic::new(manifest, receiver, exporter).await?
+        }
+        _ => return Err(eyre!("Unsupported product or diagnostic bundle")),
+    };
+
+    diagnostic_processor.run().await?;
+    Ok(())
 }
 
-impl Processor {
-    pub fn new(manifest: &Manifest, metadata_content: HashMap<String, String>) -> Self {
-        Processor {
-            metadata: Metadata::new(manifest, metadata_content),
-        }
-    }
-    pub fn enrich_lookup(&mut self, dataset: &DataSet, data: String) -> Option<Vec<Value>> {
-        match dataset {
-            DataSet::Elasticsearch(es_dataset) => match es_dataset {
-                EsDataSet::Nodes => Some(elasticsearch::nodes::enrich_lookup(
-                    &mut self.metadata,
-                    data,
-                )),
-                EsDataSet::IndexSettings => Some(elasticsearch::index_settings::enrich_lookup(
-                    &mut self.metadata,
-                    data,
-                )),
-                _ => None,
-            },
-        }
-    }
+pub trait DataProcessor {
+    #[allow(async_fn_in_trait)]
+    async fn process(&self) -> (String, Vec<serde_json::Value>);
+}
 
-    pub fn enrich(&self, dataset: &DataSet, data: String) -> Vec<Value> {
-        match dataset {
-            DataSet::Elasticsearch(es_dataset) => match es_dataset {
-                EsDataSet::ClusterSettings => {
-                    elasticsearch::cluster_settings::enrich(&self.metadata, data)
-                }
-                EsDataSet::IndexStats => elasticsearch::index_stats::enrich(&self.metadata, data),
-                EsDataSet::NodesStats => elasticsearch::nodes_stats::enrich(&self.metadata, data),
-                EsDataSet::Tasks => elasticsearch::tasks::enrich(&self.metadata, data),
-                EsDataSet::SearchableSnapshotStats => {
-                    elasticsearch::searchable_snapshots_stats::enrich(&self.metadata, data)
-                }
-                _ => Vec::<Value>::new(),
-            },
-        }
-    }
+pub trait Metadata {
+    fn as_meta_doc(&self) -> serde_json::Value;
 }

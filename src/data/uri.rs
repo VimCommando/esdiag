@@ -1,10 +1,11 @@
-use crate::host::Host;
+use crate::client::Host;
+use color_eyre::eyre::Result;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use url::Url;
 
 /// Represents various types of URIs classified by the system.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Uri {
     /// Represents a host saved in the hosts.yml
     Host(Host),
@@ -55,7 +56,7 @@ pub enum Uri {
 /// ```
 
 impl Uri {
-    pub fn parse(uri: &str) -> Result<Self, std::io::Error> {
+    pub fn parse(uri: &str) -> Result<Self> {
         match uri {
             "-" => Ok(Uri::Stream),
             _ => {
@@ -73,24 +74,16 @@ impl Uri {
                     false => log::debug!("Not a directory {uri}"),
                     true => {
                         log::debug!("Directory {uri}");
-                        let mut path_buf = PathBuf::from_str(&uri).unwrap();
-                        // Push manifest.json so we can later replace with `.with_file_name()`
-                        path_buf.push("manifest.json");
+                        let path_buf = PathBuf::from_str(&uri).unwrap();
                         return Ok(Uri::Directory(path_buf));
                     }
                 }
                 match path.is_file() {
-                    false => log::debug!("Not a file {uri}"),
-                    true => return Ok(Uri::File(PathBuf::from_str(&uri).unwrap())),
-                }
-                match std::fs::File::create(&uri) {
-                    Ok(_) => {
-                        log::info!("No existing output target, created file {uri}");
-                        Ok(Uri::File(
-                            PathBuf::from_str(&uri).expect("Failed to create file"),
-                        ))
+                    false => {
+                        log::debug!("File does not exist: {uri}");
+                        return Ok(Uri::File(PathBuf::from_str(&uri).unwrap()));
                     }
-                    Err(e) => return Err(e),
+                    true => return Ok(Uri::File(PathBuf::from_str(&uri).unwrap())),
                 }
             }
         }

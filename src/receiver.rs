@@ -1,75 +1,79 @@
 /// Read from a `.zip` archive file
 pub mod archive;
-/// Read from a directory the local file system
+/// Read from a direcotry in the local file system
+pub mod directory;
+/// Request API calls from Elasticsearch
+pub mod elasticsearch;
+/// Read from a file the local file system
 pub mod file;
+
 use crate::data::diagnostic::{
+    data_source::{DataSource, Source},
     DataSet, ElasticCloudKubernetes, Elasticsearch, Kibana, Logstash, Manifest, Product,
 };
-use crate::uri::Uri;
+use crate::data::Uri;
+use archive::ArchiveReceiver;
+use color_eyre::eyre::{eyre, Result};
+use directory::DirectoryReceiver;
+use elasticsearch::ElasticsearchReceiver;
 use semver::Version;
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt};
+use serde::de::DeserializeOwned;
+use std::collections::BTreeMap;
 
-// Source struct to hold the name, extension, subdir, and versions of the source
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
-pub struct Source {
-    pub extension: Option<String>,
-    pub subdir: Option<String>,
-    pub versions: HashMap<String, String>,
+trait Receive {
+    #[allow(dead_code)]
+    async fn is_connected(&self) -> bool;
+    async fn get<T>(&self) -> Result<T>
+    where
+        T: DataSource + DeserializeOwned;
 }
 
-impl Source {
-    fn as_path_string(&self, name: &str) -> String {
-        let mut string = String::new();
-        match self.subdir {
-            Some(ref subdir) => {
-                string.push_str(subdir);
-                string.push_str("/");
+pub enum Receiver {
+    Archive(ArchiveReceiver),
+    Directory(DirectoryReceiver),
+    Elasticsearch(ElasticsearchReceiver),
+}
+
+impl Receiver {
+    pub async fn get<T>(&self) -> Result<T>
+    where
+        T: DataSource + DeserializeOwned,
+    {
+        match self {
+            Receiver::Archive(archive_receiver) => archive_receiver.get::<T>().await,
+            Receiver::Directory(directory_receiver) => directory_receiver.get::<T>().await,
+            Receiver::Elasticsearch(elasticsearch_receiver) => {
+                elasticsearch_receiver.get::<T>().await
             }
-            None => string.push_str(""),
-        }
-        string.push_str(name);
-        match self.extension {
-            Some(ref extension) => string.push_str(extension),
-            None => string.push_str(".json"),
-        }
-        string
-    }
-
-    //pub fn with_url(
-    //    &self,
-    //    url: &Url,
-    //    version: &Version,
-    //) -> Result<Url, Box<dyn std::error::Error>> {
-    //    for (version_req, path) in self.versions.iter() {
-    //        let version_req: VersionReq = VersionReq::parse(version_req)?;
-    //        if version_req.matches(version) {
-    //            let s: String = url.to_string() + &path;
-    //            return Ok(Url::parse(&s).unwrap());
-    //        }
-    //    }
-    //    Err("ERROR: No matching version found for source".into())
-    //}
-}
-
-impl Default for Source {
-    fn default() -> Self {
-        Self {
-            extension: Some(String::from(".json")),
-            subdir: None,
-            versions: HashMap::new(),
         }
     }
 }
 
-impl fmt::Display for Source {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(fmt, "{}", self)
+impl TryFrom<Uri> for Receiver {
+    type Error = color_eyre::Report;
+    fn try_from(uri: Uri) -> std::result::Result<Self, Self::Error> {
+        match uri {
+            Uri::Directory(_) => Ok(Receiver::Directory(DirectoryReceiver::try_from(uri)?)),
+            Uri::File(_) => Ok(Receiver::Archive(ArchiveReceiver::try_from(uri)?)),
+            Uri::Host(_) => Ok(Receiver::Elasticsearch(ElasticsearchReceiver::try_from(
+                uri,
+            )?)),
+            _ => Err(eyre!("Unsupported URI")),
+        }
     }
 }
 
-// Input struct to hold the product, sources, and version
+impl std::fmt::Display for Receiver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Receiver::Archive(archive_receiver) => write!(f, "file {}", archive_receiver),
+            Receiver::Directory(directory_receiver) => write!(f, "file {}", directory_receiver),
+            Receiver::Elasticsearch(elasticsearch_receiver) => {
+                write!(f, "elasticsearch {}", elasticsearch_receiver)
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct InputDataSets {
@@ -77,14 +81,15 @@ pub struct InputDataSets {
     pub lookup: Vec<DataSet>,
     pub metadata: Vec<DataSet>,
 }
+
 impl InputDataSets {
     pub fn len(&self) -> usize {
         &self.data.len() + &self.lookup.len() + &self.metadata.len()
     }
 }
 
-impl fmt::Display for InputDataSets {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for InputDataSets {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             fmt,
             "Data: [{}], Lookup: [{}], Metadata: [{}]",
@@ -107,11 +112,13 @@ impl fmt::Display for InputDataSets {
     }
 }
 
+// Input struct to hold the product, sources, and version
+
 #[derive(Debug)]
 pub struct Input {
     pub dataset: InputDataSets,
     pub product: Product,
-    pub sources: HashMap<String, Source>,
+    pub sources: BTreeMap<String, Source>,
     pub uri: Uri,
     pub version: Option<Version>,
     pub manifest: Manifest,
@@ -155,6 +162,11 @@ impl Input {
         }
     }
 
+    pub fn get_source(&self, dataset: &DataSet) -> Option<&Source> {
+        let name = dataset.to_string();
+        self.sources.get(&name)
+    }
+
     pub fn load_string(&self, dataset: &DataSet) -> Option<String> {
         let name = dataset.to_string();
         let source = match self.sources.get(&name) {
@@ -185,8 +197,8 @@ impl Input {
     }
 }
 
-impl fmt::Display for Input {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Input {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             fmt,
             "Processing {} version {} from {:?}",

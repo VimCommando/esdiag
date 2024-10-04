@@ -1,8 +1,10 @@
 use super::{
+    data_source::DataSource,
     elasticsearch::{EsVersion, EsVersionDetails},
     Product,
 };
-use crate::{receiver, uri::Uri};
+use crate::{data::Uri, receiver};
+use color_eyre::eyre::{eyre, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -165,6 +167,16 @@ impl ProductVersion {
             //build: Some(version.build_flavor),
             r#type: Some(version.build_type),
             stable: true,
+        }
+    }
+}
+
+impl DataSource for Manifest {
+    fn source(uri: &Uri) -> Result<&'static str> {
+        match uri {
+            Uri::Directory(_) => Ok("manifest.json"),
+            Uri::File(_) => Ok("manifest.json"),
+            _ => Err(eyre!("Unsupported source for manifest")),
         }
     }
 }

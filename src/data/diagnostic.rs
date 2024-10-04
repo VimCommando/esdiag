@@ -1,3 +1,5 @@
+/// Trait for receiving data from a source
+pub mod data_source;
 /// Elastic Cloud Kubernetes diagnostic bundle
 pub mod eck;
 /// Elasticsearch diagnostic bundle
@@ -18,7 +20,7 @@ pub use manifest::Manifest;
 use elasticsearch::EsDataSet;
 use serde::{Deserialize, Serialize};
 
-pub trait Application {
+pub trait DataFamilies {
     fn get_data_sets(&self) -> Vec<DataSet>;
     fn get_lookup_sets(&self) -> Vec<DataSet>;
     fn get_metadata_sets(&self) -> Vec<DataSet>;

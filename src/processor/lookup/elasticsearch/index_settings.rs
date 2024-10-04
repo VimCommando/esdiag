@@ -1,3 +1,8 @@
+use super::Lookup;
+use crate::{
+    data::elasticsearch::{IndexSettings, IndicesSettings},
+    processor::lookup::LookupTable,
+};
 use serde::Serialize;
 
 #[derive(Clone, Serialize)]
@@ -34,3 +39,17 @@ impl AsRef<IndexData> for IndexData {
         self
     }
 }
+
+impl From<IndicesSettings> for Lookup<IndexSettings> {
+    fn from(mut indices_settings: IndicesSettings) -> Self {
+        let mut lookup = Lookup::<IndexSettings>::new();
+        indices_settings.drain().for_each(|(name, settings)| {
+            let index = settings.index();
+            let id = index.uuid.clone();
+            lookup.add(index).with_name(&name).with_id(&id);
+        });
+        lookup
+    }
+}
+
+impl LookupTable for Lookup<IndexSettings> {}

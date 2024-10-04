@@ -1,4 +1,4 @@
-use super::{Application, DataSet};
+use super::{DataFamilies, DataSet};
 use serde::{Deserialize, Serialize};
 
 /// Defines the data sets from an Elasticsearch diagnostic
@@ -10,7 +10,7 @@ pub struct Elasticsearch {
 }
 
 impl Elasticsearch {
-    pub fn new() -> Box<dyn Application> {
+    pub fn new() -> Box<dyn DataFamilies> {
         let metadata_sets: Vec<DataSet> = Vec::from([
             DataSet::Elasticsearch(EsDataSet::Alias),
             DataSet::Elasticsearch(EsDataSet::Version),
@@ -38,7 +38,7 @@ impl Elasticsearch {
     }
 }
 
-impl Application for Elasticsearch {
+impl DataFamilies for Elasticsearch {
     fn get_metadata_sets(&self) -> Vec<DataSet> {
         self.metadata_sets.clone()
     }

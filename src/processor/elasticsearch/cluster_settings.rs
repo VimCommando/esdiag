@@ -1,31 +1,59 @@
-use super::metadata::{DataStreamName, Metadata, MetadataDoc};
+use super::{DataProcessor, ElasticsearchDiagnostic, Receiver};
+use crate::{
+    data::elasticsearch::{ClusterSettings, DataStreamName},
+    processor::Metadata,
+};
 use json_patch::merge;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 const DEFAULT: &str = "default";
 const PERSISTENT: &str = "persistent";
 const TRANSIENT: &str = "transient";
 
-pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
-    let mut data = match serde_json::from_str::<Value>(&data) {
-        Ok(data) => data,
-        Err(e) => {
-            log::error!("Failed to deserialize cluster_settings: {}", e);
-            return Vec::new();
-        }
-    };
-    let metadata = &metadata.as_doc;
-    let scopes: Vec<_> = vec![
-        (DEFAULT, data["defaults"].take()),
-        (TRANSIENT, data["transient"].take()),
-        (PERSISTENT, data["persistent"].take()),
-    ];
-    log::debug!("cluster_settings scopes: {}", scopes.len());
-    let data_stream = DataStreamName::from("settings-cluster-esdiag");
-    let cluster_settings_doc = ClusterSettingsDoc::new(metadata.clone(), data_stream);
+pub struct ClusterSettingsProcessor {
+    diagnostic: Arc<ElasticsearchDiagnostic>,
+    receiver: Arc<Receiver>,
+}
 
-    let cluster_settings: Vec<Value> = scopes.into_iter().map(|(priority, settings)| {
+impl ClusterSettingsProcessor {
+    pub fn new(diagnostic: Arc<ElasticsearchDiagnostic>, receiver: Arc<Receiver>) -> Self {
+        ClusterSettingsProcessor {
+            diagnostic,
+            receiver,
+        }
+    }
+}
+
+impl From<Arc<ElasticsearchDiagnostic>> for ClusterSettingsProcessor {
+    fn from(diagnostic: Arc<ElasticsearchDiagnostic>) -> Self {
+        ClusterSettingsProcessor::new(diagnostic.clone(), diagnostic.receiver.clone())
+    }
+}
+
+impl DataProcessor for ClusterSettingsProcessor {
+    async fn process(&self) -> (String, Vec<Value>) {
+        let data_stream = "settings-cluster-esdiag".to_string();
+        let data_stream_name = DataStreamName::from(data_stream.as_str());
+        let metadata = self.diagnostic.metadata.as_meta_doc();
+        let mut data = match self.receiver.get::<ClusterSettings>().await {
+            Ok(data) => data,
+            Err(_) => {
+                log::error!("Failed to process cluster settings");
+                return (data_stream_name.to_string(), Vec::new());
+            }
+        };
+
+        let scopes: Vec<_> = vec![
+            (DEFAULT, data["defaults"].take()),
+            (TRANSIENT, data["transient"].take()),
+            (PERSISTENT, data["persistent"].take()),
+        ];
+        log::debug!("cluster_settings scopes: {}", scopes.len());
+        let cluster_settings_doc = ClusterSettingsDoc::new(metadata.clone(), data_stream_name);
+
+        let cluster_settings: Vec<Value> = scopes.into_iter().map(|(priority, settings)| {
         let cluster_patch = json!({
             "cluster.max_shards_per_node.frozen": null,
             "cluster.max_shards_per_node": null,
@@ -71,9 +99,9 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
         json!(cluster_settings_doc)
     })
     .collect();
-
-    log::debug!("cluster_settings docs: {}", cluster_settings.len());
-    cluster_settings
+        log::debug!("cluster_settings docs: {}", cluster_settings.len());
+        (data_stream, cluster_settings)
+    }
 }
 
 // Serializing data structures
@@ -81,7 +109,7 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 #[derive(Clone, Serialize)]
 struct ClusterSettingsDoc {
     #[serde(flatten)]
-    metadata: MetadataDoc,
+    metadata: Value,
     data_stream: DataStreamName,
     priority: &'static str,
     #[serde(flatten)]
@@ -89,7 +117,7 @@ struct ClusterSettingsDoc {
 }
 
 impl ClusterSettingsDoc {
-    pub fn new(metadata: MetadataDoc, data_stream: DataStreamName) -> Self {
+    pub fn new(metadata: Value, data_stream: DataStreamName) -> Self {
         ClusterSettingsDoc {
             data_stream,
             metadata,

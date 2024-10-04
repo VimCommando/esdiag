@@ -1,5 +1,8 @@
 use super::Lookup;
-use crate::data::elasticsearch::{IlmExplain, IlmStats};
+use crate::{
+    data::elasticsearch::{IlmExplain, IlmStats},
+    processor::lookup::LookupTable,
+};
 
 impl From<String> for Lookup<IlmStats> {
     fn from(string: String) -> Self {
@@ -16,7 +19,9 @@ impl From<IlmExplain> for Lookup<IlmStats> {
             lookup.add(ilm_stats).with_name(&index);
         });
 
-        log::debug!("lookup_ilm entries: {}", lookup.entries.len());
+        log::debug!("lookup_ilm entries: {}", lookup.len());
         lookup
     }
 }
+
+impl LookupTable for Lookup<IlmStats> {}

@@ -1,10 +1,11 @@
 use crate::data::diagnostic::Product;
+use color_eyre::eyre::{eyre, Result};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use std::collections::BTreeMap;
 use std::env;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
@@ -72,16 +73,21 @@ impl Host {
         }
     }
 
-    pub fn save(self, name: String) -> Result<(), std::io::Error> {
+    pub fn get_url(&self) -> Url {
+        match self {
+            Self::ApiKey { url, .. } => url.clone(),
+            Self::Basic { url, .. } => url.clone(),
+            Self::None { url, .. } => url.clone(),
+        }
+    }
+
+    pub fn save(self, name: String) -> Result<String> {
         // parse the ~/.esdiag/hosts.yml file into a HashMap<String, Host>
         let mut hosts = match Host::parse_hosts_yml() {
             Ok(hosts) => hosts,
             Err(e) => {
                 log::error!("Error parsing hosts.yml: {}", e);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Error parsing hosts.yml",
-                ));
+                return Err(eyre!("Error parsing hosts.yml"));
             }
         };
         match self {
@@ -95,16 +101,7 @@ impl Host {
                 hosts.insert(name.clone(), self);
             }
         }
-        match Host::write_hosts_yml(&hosts) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                log::error!("Error writing hosts.yml: {}", e);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Error writing hosts.yml",
-                ));
-            }
-        }
+        Host::write_hosts_yml(&hosts)
     }
 
     pub fn get_known(host: &String) -> Option<Self> {
@@ -243,29 +240,25 @@ impl Host {
     }
 
     /// loads hosts from the resources directory
-    pub fn parse_hosts_yml() -> Result<BTreeMap<String, Host>, Box<dyn std::error::Error>> {
+    pub fn parse_hosts_yml() -> Result<BTreeMap<String, Host>> {
         let path = Host::get_hosts_path();
         log::debug!("Parsing {:?}", path);
-        let hosts = match path.is_file() {
+        match path.is_file() {
             true => {
                 let file = File::open(path)?;
                 let reader = BufReader::new(file);
-                let hosts: Result<BTreeMap<String, Host>, serde_yaml::Error> =
-                    serde_yaml::from_reader(reader);
-                hosts
+                let hosts: BTreeMap<String, Host> = serde_yaml::from_reader(reader)?;
+                Ok(hosts)
             }
             false => {
                 log::info!("No hosts, file creating {:?}", path);
                 File::create(path)?;
                 Ok(BTreeMap::new())
             }
-        };
-        Ok(hosts?)
+        }
     }
 
-    pub fn write_hosts_yml(
-        hosts: &BTreeMap<String, Host>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn write_hosts_yml(hosts: &BTreeMap<String, Host>) -> Result<String> {
         let path = Host::get_hosts_path();
         log::debug!(
             "Writing hosts: {} to {:?}",
@@ -277,15 +270,15 @@ impl Host {
                 .join(", "),
             path
         );
-        let file = File::create(path)?;
+        let file = File::create(&path)?;
         let writer = BufWriter::new(file);
-        let hosts = serde_yaml::to_writer(writer, hosts);
-        Ok(hosts?)
+        serde_yaml::to_writer(writer, hosts)?;
+        Ok(format!("{}", &path.display()))
     }
 }
 
 impl Display for Host {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ApiKey {
                 app, cloud_id, url, ..

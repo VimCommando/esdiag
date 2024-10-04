@@ -1,3 +1,5 @@
+use crate::data::{diagnostic::data_source::DataSource, Uri};
+use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,4 +23,16 @@ pub struct SharedCacheStats {
     pub num_regions: u64,
     pub size_in_bytes: u64,
     pub region_size_in_bytes: u64,
+}
+
+impl DataSource for SearchableSnapshotsCacheStats {
+    fn source(uri: &Uri) -> Result<&'static str> {
+        match uri {
+            Uri::Directory(_) => Ok("commercial/searchable_snapshots_cache_stats.json"),
+            Uri::Host(_) | Uri::Url(_) => Ok("_searchable_snapshots/cache/stats"),
+            _ => Err(eyre!(
+                "Unsupported source for searchable snapshots cache stats"
+            )),
+        }
+    }
 }

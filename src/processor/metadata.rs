@@ -83,16 +83,6 @@ impl Metadata {
     }
 }
 
-#[derive(Clone, Serialize)]
-pub struct Lookups {
-    pub alias: Lookup<Alias>,
-    pub data_stream: Lookup<DataStream>,
-    pub index_settings: Lookup<IndexData>,
-    pub node: Lookup<NodeData>,
-    pub ilm_explain: Lookup<IlmStats>,
-    pub shared_cache: Lookup<SharedCacheStats>,
-}
-
 // Serializing data structures
 
 #[derive(Clone, Serialize)]
@@ -110,22 +100,4 @@ pub struct DiagnosticDoc {
     pub runner: String,
     pub uuid: String,
     pub version: Option<String>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct DataStreamName {
-    dataset: String,
-    namespace: String,
-    r#type: String,
-}
-
-impl From<&str> for DataStreamName {
-    fn from(name: &str) -> Self {
-        let terms: Vec<&str> = name.split('-').collect();
-        DataStreamName {
-            r#type: terms[0].to_string(),
-            dataset: terms[1].to_string(),
-            namespace: terms[2].to_string(),
-        }
-    }
 }

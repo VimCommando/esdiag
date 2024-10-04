@@ -1,3 +1,5 @@
+use crate::data::{diagnostic::data_source::DataSource, Uri};
+use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -47,4 +49,14 @@ pub struct PhaseExecution {
 struct SearchableSnapshot {
     snapshot_repository: String,
     force_merge_index: bool,
+}
+
+impl DataSource for IlmExplain {
+    fn source(uri: &Uri) -> Result<&'static str> {
+        match uri {
+            Uri::Directory(_) => Ok("commercial/ilm_explain.json"),
+            Uri::Host(_) | Uri::Url(_) => Ok("_ilm/explain"),
+            _ => Err(eyre!("Unsuppored source for ILM explain")),
+        }
+    }
 }

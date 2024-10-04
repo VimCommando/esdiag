@@ -1,4 +1,6 @@
 use super::DataStream;
+use crate::data::{diagnostic::data_source::DataSource, Uri};
+use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -44,6 +46,18 @@ pub struct IndexSettings {
     pub name: Option<String>,
 }
 
+impl IndexSettings {
+    /// Returns `true` if indexing_complete is true
+    pub fn indexing_complete(&self) -> Option<bool> {
+        if let Some(lifecycle) = &self.lifecycle {
+            if let Some(Value::String(s)) = lifecycle.get("indexing_complete") {
+                return Some(s == "true");
+            }
+        }
+        None
+    }
+}
+
 fn default_codec() -> String {
     String::from("best_speed")
 }
@@ -85,5 +99,15 @@ where
         _ => Err(serde::de::Error::custom(
             "expected a number or a string representing a number",
         )),
+    }
+}
+
+impl DataSource for IndicesSettings {
+    fn source(uri: &Uri) -> Result<&'static str> {
+        match uri {
+            Uri::Directory(_) => Ok("settings.json"),
+            Uri::Host(_) | Uri::Url(_) => Ok("_all/_settings"),
+            _ => Err(eyre!("Unsuppored source for index settings")),
+        }
     }
 }

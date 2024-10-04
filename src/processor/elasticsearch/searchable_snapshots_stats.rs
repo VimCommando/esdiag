@@ -1,45 +1,77 @@
-use super::metadata::{DataStreamName, Metadata, MetadataDoc};
+use super::{DataProcessor, ElasticsearchDiagnostic, Receiver};
+use crate::{data::elasticsearch::SearchableSnapshotsStats, processor::Metadata};
 use rayon::prelude::*;
-use serde::{self, Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde::Serialize;
+use serde_json::Value;
+use std::sync::Arc;
 
-pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
-    let data = match serde_json::from_str::<Indices>(&data) {
-        Ok(data) => data,
-        Err(e) => {
-            log::error!("Failed to deserialize searchable_snapshots_stats: {}", e);
-            return Vec::new();
+pub struct SearchableSnapshotsStatsProcessor {
+    diagnostic: Arc<ElasticsearchDiagnostic>,
+    receiver: Arc<Receiver>,
+}
+
+impl SearchableSnapshotsStatsProcessor {
+    fn new(diagnostic: Arc<ElasticsearchDiagnostic>, receiver: Arc<Receiver>) -> Self {
+        SearchableSnapshotsStatsProcessor {
+            diagnostic,
+            receiver,
         }
-    };
-    let indices: Vec<_> = data.indices.into_iter().collect();
+    }
+}
 
-    let searchable_snapshot_doc = SearchableSnapshotStatsDoc::new(
-        metadata.as_doc.clone(),
-        DataStreamName::from("metrics-searchable_snapshot-esdiag"),
-    );
+impl From<Arc<ElasticsearchDiagnostic>> for SearchableSnapshotsStatsProcessor {
+    fn from(diagnostic: Arc<ElasticsearchDiagnostic>) -> Self {
+        SearchableSnapshotsStatsProcessor::new(diagnostic.clone(), diagnostic.receiver.clone())
+    }
+}
 
-    let searchable_snapshot_stats: Vec<Value> = indices
-        .par_iter()
-        .flat_map(|(index, index_stats)| {
-            index_stats
-                .total
-                .par_iter()
-                .map(|index_stats| {
-                    json!(searchable_snapshot_doc
-                        .clone()
-                        .with(index.clone(), index_stats.clone()))
-                })
-                .collect::<Vec<Value>>()
-        })
-        .collect();
+impl DataProcessor for SearchableSnapshotsStatsProcessor {
+    async fn process(&self) -> (String, Vec<Value>) {
+        let data_stream = "metrics-searchable_snapshot-esdiag".to_string();
+        let searchable_snapshots_stats_metadata = self
+            .diagnostic
+            .metadata
+            .for_data_stream(&data_stream)
+            .as_meta_doc();
+        let searchable_snapshots_stats = match self.receiver.get::<SearchableSnapshotsStats>().await
+        {
+            Ok(stats) => stats,
+            Err(_) => {
+                log::error!("Failed to deserialize searchable snapshot stats");
+                return (data_stream, Vec::new());
+            }
+        };
 
-    log::debug!(
-        "searchable_snapshot_stats docs: {}",
-        searchable_snapshot_stats.len()
-    );
+        let mut indices: Vec<_> = searchable_snapshots_stats.indices.into_par_iter().collect();
 
-    searchable_snapshot_stats
+        let searchable_snapshot_stats: Vec<Value> = indices
+            .par_drain(..)
+            .flat_map(|(index_name, mut index_stats)| {
+                index_stats
+                    .total
+                    .par_drain(..)
+                    .map(|index_stats| {
+                        serde_json::to_value(SearchableSnapshotStatsDoc {
+                            metadata: searchable_snapshots_stats_metadata.clone(),
+                            index: IndexName {
+                                name: index_name.clone(),
+                            },
+                            searchable_snapshot: serde_json::to_value(index_stats)
+                                .expect("Failed to serialize searchable snapshot stats"),
+                        })
+                        .unwrap_or_default()
+                    })
+                    .collect::<Vec<Value>>()
+            })
+            .collect();
+
+        log::debug!(
+            "searchable_snapshot_stats docs: {}",
+            searchable_snapshot_stats.len()
+        );
+
+        (data_stream, searchable_snapshot_stats)
+    }
 }
 
 // Serializing data structures
@@ -47,43 +79,12 @@ pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
 #[derive(Clone, Serialize)]
 pub struct SearchableSnapshotStatsDoc {
     #[serde(flatten)]
-    metadata: MetadataDoc,
-    data_stream: DataStreamName,
-    index: Option<IndexName>,
+    metadata: Value,
+    index: IndexName,
     searchable_snapshot: Value,
 }
 
 #[derive(Clone, Serialize)]
 pub struct IndexName {
     pub name: String,
-}
-
-impl SearchableSnapshotStatsDoc {
-    pub fn new(metadata: MetadataDoc, data_stream: DataStreamName) -> Self {
-        SearchableSnapshotStatsDoc {
-            data_stream,
-            index: None,
-            metadata,
-            searchable_snapshot: Value::Null,
-        }
-    }
-    pub fn with(mut self, index: String, searchable_snapshot: Value) -> Self {
-        self.index = Some(IndexName {
-            name: index.clone(),
-        });
-        self.searchable_snapshot = searchable_snapshot;
-        self
-    }
-}
-
-// Deserializing data structures
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Total {
-    total: Vec<Value>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Indices {
-    indices: HashMap<String, Total>,
 }

@@ -1,5 +1,5 @@
-use crate::exporter::{Output, Target};
-use crate::receiver::file;
+use crate::{exporter::Exporter, receiver::file};
+use color_eyre::eyre::{eyre, Result};
 use serde::Deserialize;
 use serde_json::{from_slice, Value};
 use std::path::PathBuf;
@@ -14,35 +14,33 @@ pub struct Asset {
     pub suffix: Option<String>,
 }
 
-pub async fn assets(output: Output) -> Result<(), Box<dyn std::error::Error>> {
-    // load asset list from ./assets/{product}/assets.yml
-    let assets = file::parse_assets_yml(&output.target)?;
-    match output.test().await {
-        Ok(body) => log::debug!("Elasticsearch response: {body}"),
-        Err(e) => {
-            log::error!("Elasticsearch connection: FAILED {}", e);
-            std::process::exit(1);
+pub async fn assets(exporter: Exporter) -> Result<()> {
+    match exporter {
+        Exporter::File(_) | Exporter::Stream(_) => {
+            return Err(eyre!("Setup only supports Elasticsearch."))
         }
+        _ => {}
     }
+
+    // load asset list from ./assets/{product}/assets.yml
+    let assets = file::parse_assets_yml(&exporter)?;
 
     for asset in assets {
         log::info!("Processing asset: {}", &asset.name);
         let dir_str = format!(
             "{}/{}",
-            &output.target,
+            &exporter.as_str(),
             &asset.subdir.unwrap_or("".to_string())
         );
         let subdir = PathBuf::from(dir_str);
         let files = match file::ASSETS_DIR.get_dir(&subdir) {
             Some(dir) => dir.files(),
-            None => {
-                return Err("No assets directory found".into());
-            }
+            None => return Err(eyre!("No assets directory found")),
         };
 
         // send assets to Elasticsearch
-        match output.target {
-            Target::Elasticsearch(ref client) => {
+        match exporter {
+            Exporter::Elasticsearch(ref exporter) => {
                 // for each asset, send to Elasticsearch
                 for file in files {
                     log::debug!("file.path: {:?}", &file.path());
@@ -60,8 +58,10 @@ pub async fn assets(output: Output) -> Result<(), Box<dyn std::error::Error>> {
                         &stem,
                         asset.suffix.clone().unwrap_or("".to_string()),
                     );
-                    let response = client.send_asset(&endpoint, &value, &asset.method).await;
-                    match response {
+                    match exporter
+                        .send(&asset.method, &endpoint, value.as_ref())
+                        .await
+                    {
                         Ok(response) => match response.status_code().is_success() {
                             true => {
                                 log::info!(
@@ -77,12 +77,11 @@ pub async fn assets(output: Output) -> Result<(), Box<dyn std::error::Error>> {
                                 log::error!("Asset sent ERROR: {body}");
                             }
                         },
-
                         Err(e) => log::error!("Failed to send asset: {e:?}"),
                     }
                 }
             }
-            _ => log::error!("Output target not supported"),
+            _ => return Err(eyre!("Output target not supported")),
         }
     }
     Ok(())

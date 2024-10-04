@@ -1,5 +1,8 @@
 use super::Lookup;
-use crate::data::elasticsearch::{SearchableSnapshotsCacheStats, SharedCacheStats};
+use crate::{
+    data::elasticsearch::{SearchableSnapshotsCacheStats, SharedCacheStats},
+    processor::lookup::LookupTable,
+};
 
 impl From<&String> for Lookup<SharedCacheStats> {
     fn from(string: &String) -> Self {
@@ -20,7 +23,9 @@ impl From<SearchableSnapshotsCacheStats> for Lookup<SharedCacheStats> {
                 lookup.add(node.shared_cache).with_id(&node_id);
             });
 
-        log::debug!("lookup shared_cache entries: {}", lookup.entries.len(),);
+        log::debug!("lookup shared_cache entries: {}", lookup.len(),);
         lookup
     }
 }
+
+impl LookupTable for Lookup<SharedCacheStats> {}

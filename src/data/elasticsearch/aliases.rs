@@ -1,3 +1,5 @@
+use crate::data::{diagnostic::data_source::DataSource, Uri};
+use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -32,6 +34,16 @@ impl From<AliasSettings> for Alias {
             name: "".to_string(),
             is_hidden: data.is_hidden.unwrap_or(false),
             is_write_index: data.is_write_index.unwrap_or(false),
+        }
+    }
+}
+
+impl DataSource for AliasList {
+    fn source(uri: &Uri) -> Result<&'static str> {
+        match uri {
+            Uri::Directory(_) | Uri::File(_) => Ok("alias.json"),
+            Uri::Host(_) | Uri::Url(_) => Ok("_alias"),
+            _ => Err(eyre!("Unsuppored source for alias")),
         }
     }
 }

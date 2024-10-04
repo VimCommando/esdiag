@@ -1,3 +1,5 @@
+use crate::data::{diagnostic::data_source::DataSource, Uri};
+use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -46,4 +48,14 @@ pub struct Nodes {
     _nodes: Value,
     //cluster_name: String,
     pub nodes: HashMap<String, Node>,
+}
+
+impl DataSource for Nodes {
+    fn source(uri: &Uri) -> Result<&'static str> {
+        match uri {
+            Uri::Directory(_) => Ok("nodes.json"),
+            Uri::Host(_) | Uri::Url(_) => Ok("_nodes"),
+            _ => Err(eyre!("Unsupported source for nodes")),
+        }
+    }
 }

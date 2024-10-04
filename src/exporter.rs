@@ -1,18 +1,69 @@
 extern crate elasticsearch as es_client;
+pub mod elastic;
 /// Export to an Elasticsearch cluster with the `_bulk` API
 pub mod elasticsearch;
 /// Write to an `.ndjson` file
 pub mod file;
 /// Write `ndjson` to std out
-pub mod stdout;
+pub mod stream;
 
-use crate::data::diagnostic::Product;
-use crate::host::Host;
-use crate::uri::Uri;
+use crate::{
+    client::Host,
+    data::{diagnostic::Product, Uri},
+};
+use color_eyre::eyre::{eyre, Result};
+use elastic::ElasticsearchExporter;
 use elasticsearch::ElasticsearchClient;
+use file::FileExporter;
 use serde_json::Value;
 use std::{fmt, path::PathBuf};
+use stream::StreamExporter;
 use url::Url;
+
+pub trait Export {
+    #[allow(async_fn_in_trait)]
+    async fn is_connected(&self) -> bool;
+    #[allow(async_fn_in_trait)]
+    async fn write(&self, index: String, docs: Vec<Value>) -> Result<usize>;
+}
+
+pub enum Exporter {
+    Elasticsearch(ElasticsearchExporter),
+    File(FileExporter),
+    Stream(StreamExporter),
+}
+
+impl Exporter {
+    pub async fn write(&self, index: String, docs: Vec<Value>) -> Result<usize> {
+        match self {
+            Exporter::Elasticsearch(exporter) => exporter.write(index, docs).await,
+            Exporter::File(exporter) => exporter.write(index, docs).await,
+            Exporter::Stream(exporter) => exporter.write(index, docs).await,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Exporter::Elasticsearch(_) => "elasticsearch",
+            Exporter::File(_) => "file",
+            Exporter::Stream(_) => "stream",
+        }
+    }
+}
+
+impl TryFrom<Uri> for Exporter {
+    type Error = color_eyre::Report;
+    fn try_from(uri: Uri) -> std::result::Result<Self, Self::Error> {
+        match uri {
+            Uri::File(file) => Ok(Exporter::File(FileExporter::try_from(file)?)),
+            Uri::Host(host) => Ok(Exporter::Elasticsearch(ElasticsearchExporter::try_from(
+                host,
+            )?)),
+            Uri::Stream => Ok(Exporter::Stream(StreamExporter::new())),
+            _ => Err(eyre!("Unsupported URI")),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum Target {
@@ -103,7 +154,10 @@ impl Output {
 
     pub async fn send(&self, docs: Vec<Value>) -> std::io::Result<usize> {
         match &self.target {
-            Target::Stdout => stdout::print_docs(docs),
+            Target::Stdout => {
+                println!("{}", serde_json::to_string(&docs).unwrap());
+                Ok(docs.len())
+            }
             Target::File(filename) => file::append_bulk_docs(docs, &filename),
             Target::Elasticsearch(client) => client.bulk_index(docs).await,
         }

@@ -1,3 +1,5 @@
+use crate::data::{diagnostic::data_source::DataSource, Uri};
+use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -54,11 +56,36 @@ pub struct Index {
     pub managed_by: Option<String>,
 }
 
-// impl ElasticsearchApi for DataStreams {
-// fn url_path() -> String {
-// "_data_stream".to_string()
-// }
-// fn file_name() -> String {
-// "commercial/data_stream.json".to_string()
-// }
-// }
+impl DataSource for DataStreams {
+    fn source(uri: &Uri) -> Result<&'static str> {
+        match uri {
+            Uri::Directory(_) => Ok("commercial/data_stream.json"),
+            Uri::Host(_) | Uri::Url(_) => Ok("_data_stream"),
+            _ => Err(eyre!("Unsuppored source for data_stream")),
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct DataStreamName {
+    dataset: String,
+    namespace: String,
+    r#type: String,
+}
+
+impl From<&str> for DataStreamName {
+    fn from(name: &str) -> Self {
+        let terms: Vec<&str> = name.split('-').collect();
+        DataStreamName {
+            r#type: terms[0].to_string(),
+            dataset: terms[1].to_string(),
+            namespace: terms[2].to_string(),
+        }
+    }
+}
+
+impl ToString for DataStreamName {
+    fn to_string(&self) -> String {
+        format!("{}-{}-{}", self.r#type, self.dataset, self.namespace)
+    }
+}

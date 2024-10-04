@@ -1,4 +1,4 @@
-use super::{Application, DataSet};
+use super::{DataFamilies, DataSet};
 
 pub struct Kibana {
     data_sets: Vec<DataSet>,
@@ -7,7 +7,7 @@ pub struct Kibana {
 }
 
 impl Kibana {
-    pub fn new() -> Box<dyn Application> {
+    pub fn new() -> Box<dyn DataFamilies> {
         Box::new(Self {
             data_sets: Vec::new(),
             lookup_sets: Vec::new(),
@@ -16,7 +16,7 @@ impl Kibana {
     }
 }
 
-impl Application for Kibana {
+impl DataFamilies for Kibana {
     fn get_data_sets(&self) -> Vec<DataSet> {
         self.data_sets.clone()
     }
@@ -27,5 +27,18 @@ impl Application for Kibana {
 
     fn get_metadata_sets(&self) -> Vec<DataSet> {
         self.metadata_sets.clone()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KbDataSet {
+    Nodes,
+}
+
+impl ToString for KbDataSet {
+    fn to_string(&self) -> String {
+        match self {
+            KbDataSet::Nodes => "nodes".to_string(),
+        }
     }
 }

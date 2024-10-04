@@ -5,7 +5,7 @@ pub mod data_stream;
 /// Lookup for `_ilm/explian`
 pub mod ilm_explain;
 /// Lookup for `_settings`
-pub mod index;
+pub mod index_settings;
 /// Lookup for `_nodes`
 pub mod node;
 /// Lookup for `_searchable_snapshots/cache/stats`

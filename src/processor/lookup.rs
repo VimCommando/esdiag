@@ -4,12 +4,12 @@ pub mod elasticsearch;
 use serde::Serialize;
 use std::collections::HashMap;
 
+pub trait LookupTable {}
+
 /// A lookup table that allows for retrieving by four different keys: host, id, ip, and name
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Lookup<T> {
-    by_host: HashMap<String, usize>,
     by_id: HashMap<String, usize>,
-    by_ip: HashMap<String, usize>,
     by_name: HashMap<String, usize>,
     entries: Vec<T>,
 }
@@ -20,9 +20,7 @@ where
 {
     pub fn new() -> Lookup<T> {
         Lookup {
-            by_host: HashMap::new(),
             by_id: HashMap::new(),
-            by_ip: HashMap::new(),
             by_name: HashMap::new(),
             entries: Vec::new(),
         }

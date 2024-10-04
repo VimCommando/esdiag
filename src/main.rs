@@ -1,9 +1,14 @@
 use clap::{Parser, Subcommand};
+use color_eyre::eyre::{eyre, Result};
 use esdiag::{
-    data::diagnostic::Manifest, env::LOG_LEVEL, exporter::Output, host::Host, processor,
-    receiver::Input, setup, uri::Uri,
+    client::Host,
+    data::{diagnostic::Manifest, Uri},
+    env::LOG_LEVEL,
+    exporter::Exporter,
+    processor::{diagnostic::DiagnosticProcessor, elasticsearch::ElasticsearchDiagnostic},
+    receiver::Receiver,
+    setup,
 };
-use std::{panic, str::FromStr};
 use url::Url;
 
 // Define command line arguments
@@ -82,31 +87,41 @@ enum Commands {
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
-async fn main() {
+async fn main() -> Result<()> {
     let env = env_logger::Env::default().filter_or("LOG_LEVEL", LOG_LEVEL);
     env_logger::Builder::from_env(env)
         .format_timestamp_millis()
-        //.target(env_logger::Target::Stdout)
         .init();
+    color_eyre::install()?;
 
-    panic::set_hook(Box::new(|panic| {
-        // Use the error level to log the panic
+    std::panic::set_hook(Box::new(|panic| {
+        // Log any panics as errors
         log::debug!("{:?}", panic);
         log::error!("{}", panic);
     }));
 
+    match run().await {
+        Ok(cmd) => {
+            log::info!("Completed {cmd} successfully");
+            Ok(())
+        }
+        Err(e) => {
+            log::error!("{}", e);
+            Err(eyre!(e))
+        }
+    }
+}
+
+async fn run() -> Result<&'static str> {
     // use clap to parse command line arguments
     let cli = Cli::parse();
-    log::debug!("{:?}", cli);
 
     match &cli.command {
-        Commands::Collect { host, output } => {
-            unimplemented!(
-                "Collect command not yet implemented! host: {}, output: {}",
-                host,
-                output
-            );
-        }
+        Commands::Collect { host, output } => Err(eyre!(
+            "Collect command not yet implemented! host: {}, output: {}",
+            host,
+            output
+        )),
         Commands::Host {
             name,
             app,
@@ -121,15 +136,9 @@ async fn main() {
         } => {
             log::info!("Configuring host {name}");
             let host = match app.is_some() && url.is_some() {
-                false => match Host::get_known(&name) {
-                    Some(host) => host,
-                    None => {
-                        log::error!(
-                            "Application and URL must be specified for new host configurations"
-                        );
-                        return;
-                    }
-                },
+                false => Host::get_known(&name).ok_or(eyre!(
+                    "Host {name} not found, include `app` and `url` to setup a new host."
+                ))?,
                 true => Host::new(
                     url.clone().unwrap(),
                     app.clone().unwrap(),
@@ -158,52 +167,37 @@ async fn main() {
                 }
             };
 
-            if valid_connection && *save {
-                match host.save(name.to_string()) {
-                    Ok(_) => {
-                        let hosts_file = Host::get_hosts_path();
-                        log::info!(
-                            "Host '{name}' saved to {}",
-                            hosts_file.to_str().expect("Failed to get hosts file path")
-                        );
-                    }
-                    Err(e) => log::error!("Failed to save host configuration: {}", e),
-                }
+            if *save {
+                let hostfile = host.save(name.to_string())?;
+                log::info!("Host {name} successfully saved to {hostfile}");
+            }
+            match valid_connection {
+                true => Ok("host"),
+                false => Err(eyre!("Host connection failed")),
             }
         }
         Commands::Import { target, source } => {
-            let output_uri = match Uri::parse(target) {
-                Ok(uri) => uri,
-                Err(e) => {
-                    log::debug!("Invalid target: {:?}", e);
-                    panic!("Invalid ouput: {}", target);
-                }
-            };
-            let input_uri = match Uri::parse(source) {
-                Ok(uri) => uri,
-                Err(e) => {
-                    log::debug!("Invalid source: {:?}", e);
-                    panic!("Invalid input: {}", source);
-                }
-            };
+            let output_uri = Uri::parse(target)?;
+            let input_uri = Uri::parse(source)?;
             log::info!("input: {}", input_uri);
             log::info!("output: {}", output_uri);
 
-            let manifest = Manifest::from_uri(&input_uri).expect("Failed to parse manifest");
-            let input = Input::new(input_uri, manifest);
-            let output = Output::from_uri(output_uri);
-            processor::diagnostic::import(input, output)
-                .await
-                .expect("Failed to import diagnostics");
+            let receiver = Receiver::try_from(input_uri.clone())?;
+            let exporter = Exporter::try_from(output_uri.clone())?;
+            let manifest = receiver.get::<Manifest>().await?;
+            log::trace!("{}", serde_json::to_string(&manifest).unwrap());
+            let diagnostic_processor =
+                ElasticsearchDiagnostic::new(manifest, receiver, exporter).await?;
+            let doc_count = diagnostic_processor.run().await?;
+            log::info!("Exported {} documents", doc_count);
+            Ok("import")
         }
         Commands::Setup { host } => {
             log::info!("Setting up Elasticsearch assets in {host}");
-            let host = Host::from_str(host).expect("Failed to parse host for setup");
-            let output = Output::from_host(host);
-            match setup::assets(output).await {
-                Ok(_) => log::info!("Assets setup complete"),
-                Err(e) => log::error!("Failed to setup assets: {}", e),
-            };
+            let uri = Uri::parse(host)?;
+            let exporter = Exporter::try_from(uri)?;
+            setup::assets(exporter).await?;
+            Ok("setup")
         }
     }
 }
