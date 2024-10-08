@@ -1,8 +1,14 @@
-use crate::{exporter::Exporter, receiver::file};
+use crate::exporter::Exporter;
 use color_eyre::eyre::{eyre, Result};
+use include_dir::{include_dir, Dir};
 use serde::Deserialize;
 use serde_json::{from_slice, Value};
 use std::path::PathBuf;
+
+// Subdirectory for templates and configs files
+pub static ASSETS_DIR: Dir = include_dir!("assets");
+pub static ELASTICSEARCH_ASSETS: &str = "elasticsearch/assets.yml";
+pub static ELASTICSEARCH_SOURCES: &str = "elasticsearch/sources.yml";
 
 #[derive(Deserialize)]
 pub struct Asset {
@@ -23,7 +29,7 @@ pub async fn assets(exporter: Exporter) -> Result<()> {
     }
 
     // load asset list from ./assets/{product}/assets.yml
-    let assets = file::parse_assets_yml(&exporter)?;
+    let assets = parse_assets_yml(&exporter)?;
 
     for asset in assets {
         log::info!("Processing asset: {}", &asset.name);
@@ -33,7 +39,7 @@ pub async fn assets(exporter: Exporter) -> Result<()> {
             &asset.subdir.unwrap_or("".to_string())
         );
         let subdir = PathBuf::from(dir_str);
-        let files = match file::ASSETS_DIR.get_dir(&subdir) {
+        let files = match ASSETS_DIR.get_dir(&subdir) {
             Some(dir) => dir.files(),
             None => return Err(eyre!("No assets directory found")),
         };
@@ -85,4 +91,15 @@ pub async fn assets(exporter: Exporter) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_assets_yml(exporter: &Exporter) -> Result<Vec<Asset>> {
+    let file = match exporter {
+        Exporter::Elasticsearch(_) => ASSETS_DIR
+            .get_file(ELASTICSEARCH_ASSETS)
+            .ok_or(eyre!("Error reading {ELASTICSEARCH_ASSETS}"))?,
+        _ => return Err(eyre!("Application not implemented")),
+    };
+    let assets = serde_yaml::from_slice(file.contents())?;
+    Ok(assets)
 }

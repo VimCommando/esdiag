@@ -4,13 +4,8 @@ mod archive;
 mod directory;
 /// Request API calls from Elasticsearch
 mod elasticsearch;
-/// Read from a file the local file system (not for diagnostic bundles)
-pub mod file;
 
-use crate::data::diagnostic::{
-    data_source::{DataSource, Source},
-    DataSet,
-};
+use crate::data::diagnostic::{data_source::DataSource, DataSet};
 use crate::data::Uri;
 use archive::ArchiveReceiver;
 use color_eyre::eyre::{eyre, Result};
