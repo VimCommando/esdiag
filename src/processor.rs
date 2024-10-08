@@ -3,7 +3,7 @@ pub mod diagnostic;
 /// Processors for Elasticsearch diagnostics
 pub mod elasticsearch;
 /// Lookup processors
-pub mod lookup;
+mod lookup;
 
 use crate::{
     data::diagnostic::{Manifest, Product},

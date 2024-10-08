@@ -1,16 +1,9 @@
-use crate::env;
-use crate::{client::Host, exporter::file};
-use elasticsearch::cert::CertificateValidation;
+use super::Export;
+use crate::client::{Auth, ElasticsearchBuilder, Host};
+use color_eyre::eyre::{eyre, Result};
 use elasticsearch::{
-    auth::Credentials,
-    http::{
-        headers,
-        request::JsonBody,
-        response::Response,
-        transport::{SingleNodeConnectionPool, TransportBuilder},
-        Method,
-    },
-    BulkOperation, BulkParts, Elasticsearch, Error,
+    http::{headers, request::JsonBody, response::Response, Method},
+    BulkOperation, BulkParts, Elasticsearch,
 };
 use futures::{future::join_all, stream::FuturesUnordered};
 use serde_json::Value;
@@ -18,184 +11,24 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use url::Url;
 
-#[derive(Clone, Debug)]
-pub struct ElasticsearchClient {
+pub struct ElasticsearchExporter {
     client: Elasticsearch,
+    url: Url,
 }
 
-impl ElasticsearchClient {
-    pub fn new(host: Host) -> Self {
-        match host {
-            Host::ApiKey {
-                url,
-                apikey,
-                cloud_id,
-                accept_invalid_certs,
-                ..
-            } => Self::new_apikey(url, apikey, accept_invalid_certs, cloud_id),
-            Host::Basic {
-                url,
-                username,
-                password,
-                cloud_id,
-                accept_invalid_certs,
-                ..
-            } => Self::new_basic(url, username, password, accept_invalid_certs, cloud_id),
-            Host::None { url, .. } => Self::new_none(url),
-        }
+impl ElasticsearchExporter {
+    /// Create a new ElasticsearchExporter from a URL and Auth
+    pub fn new(url: Url, auth: Auth) -> Result<Self> {
+        let client = ElasticsearchBuilder::new(url.clone())
+            .insecure(true)
+            .auth(auth)
+            .build()?;
+
+        Ok(Self { client, url })
     }
 
-    /// Craetes a new Elasticsearch client with no authentication
-
-    fn new_none(url: Url) -> Self {
-        // Create a connection pool with the Elasticsearch server URL
-        let connection_pool = SingleNodeConnectionPool::new(url);
-
-        // Create a transport builder with the connection pool
-        let transport = match TransportBuilder::new(connection_pool).build() {
-            Ok(transport) => transport,
-            Err(why) => {
-                log::error!("Failed to create transport: {:?}", why);
-                std::process::exit(1);
-            }
-        };
-
-        // Create an Elasticsearch client with the transport
-        let client = Elasticsearch::new(transport);
-
-        Self { client }
-    }
-
-    /// Creates a new Elasticsearch client with basic authentication
-
-    fn new_basic(
-        url: Url,
-        username: String,
-        password: String,
-        accept_invalid_certs: Option<bool>,
-        _cloud_id: Option<String>,
-    ) -> Self {
-        // Create a connection pool with the Elasticsearch server URL
-        let connection_pool = SingleNodeConnectionPool::new(url);
-        let cert_validation = match accept_invalid_certs.unwrap_or(false) {
-            true => CertificateValidation::None,
-            false => CertificateValidation::Default,
-        };
-
-        // Create a transport builder with the connection pool
-        let transport = match TransportBuilder::new(connection_pool)
-            .auth(Credentials::Basic(username, password))
-            .cert_validation(cert_validation)
-            .build()
-        {
-            Ok(transport) => transport,
-            Err(why) => {
-                log::error!("Failed to create transport: {:?}", why);
-                std::process::exit(1);
-            }
-        };
-
-        // Create an Elasticsearch client with the transport
-        let client = Elasticsearch::new(transport);
-
-        Self { client }
-    }
-
-    /// Creates a new Elasticsearch client with API key authentication
-
-    fn new_apikey(
-        url: Url,
-        apikey: String,
-        accept_invalid_certs: Option<bool>,
-        cloud_id: Option<String>,
-    ) -> Self {
-        let transport = match cloud_id {
-            Some(_cloud_id) => {
-                // When using cloud_id I couldn't get the apikey to work ¯\_(ツ)_/¯
-                log::debug!("Cloud ID provided, but not used: {_cloud_id}");
-                let connection_pool = SingleNodeConnectionPool::new(url);
-                let cert_validation = match accept_invalid_certs.unwrap_or(false) {
-                    true => CertificateValidation::None,
-                    false => CertificateValidation::Default,
-                };
-                TransportBuilder::new(connection_pool)
-                    .header(
-                        headers::AUTHORIZATION,
-                        format!("ApiKey {}", apikey)
-                            .parse()
-                            .expect("Failed to parse apikey"),
-                    )
-                    .cert_validation(cert_validation)
-                    .build()
-                    .ok()
-            }
-            None => {
-                let connection_pool = SingleNodeConnectionPool::new(url);
-                let cert_validation = match accept_invalid_certs.unwrap_or(false) {
-                    true => CertificateValidation::None,
-                    false => CertificateValidation::Default,
-                };
-                TransportBuilder::new(connection_pool)
-                    .header(headers::ACCEPT_ENCODING, "gzip".parse().unwrap())
-                    .header(
-                        headers::AUTHORIZATION,
-                        format!("ApiKey {}", apikey)
-                            .parse()
-                            .expect("Failed to parse apikey"),
-                    )
-                    .cert_validation(cert_validation)
-                    .build()
-                    .ok()
-            }
-        };
-
-        let client = match transport {
-            Some(transport) => Elasticsearch::new(transport),
-            None => {
-                log::error!("Failed to create Elasticsearch transport");
-                std::process::exit(1);
-            }
-        };
-
-        log::debug!("Elasticsearch client: {:?}", client);
-        Self { client }
-    }
-
-    /// Sends an asset to a specified path using the provided HTTP method and optional JSON value.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - A string slice representing the URL path to which the request should be sent.
-    /// * `value` - An optional reference to a `serde_json::Value` representing the JSON payload to be sent.
-    /// * `method` - A string slice representing the HTTP method to be used (`"POST"`, `"PUT"`, `"DELETE"`, or other values for `"GET"`).
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing an `Response` if the request is successful,
-    /// or an `Error` if an error occurs during the request.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if:
-    /// - The HTTP request fails.
-    /// - The specified method is invalid (it defaults to `"GET"` if not `"POST"`, `"PUT"`, or `"DELETE"`).
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let response = client.send_asset("/path/to/resource", &Some(json!({"key": "value"})), "POST").await;
-    /// match response {
-    ///     Ok(res) => println!("Request successful: {:?}", res),
-    ///     Err(e) => eprintln!("Request failed: {}", e),
-    /// }
-    /// ```
-
-    pub async fn send_asset(
-        &self,
-        path: &str,
-        value: &Option<Value>,
-        method: &str,
-    ) -> Result<Response, Error> {
+    /// Send a request to an arbitrary path on the Elasticsearch client
+    pub async fn send(&self, method: &str, path: &str, value: Option<&Value>) -> Result<Response> {
         let method = match method {
             "POST" => Method::Post,
             "PUT" => Method::Put,
@@ -216,207 +49,137 @@ impl ElasticsearchClient {
                 None,
             )
             .await
+            .map_err(|e| e.into())
+    }
+}
+
+impl TryFrom<Host> for ElasticsearchExporter {
+    type Error = color_eyre::eyre::Report;
+
+    fn try_from(host: Host) -> Result<Self> {
+        let url = host.get_url();
+        let client = Elasticsearch::try_from(host)?;
+        Ok(Self { client, url })
+    }
+}
+
+impl Export for ElasticsearchExporter {
+    async fn write(&self, index: String, mut docs: Vec<Value>) -> Result<usize> {
+        let client = Arc::new(self.client.clone());
+        let workers = 4;
+        let bulk_size = 5000;
+        let semaphore = Arc::new(Semaphore::new(workers));
+
+        let futures = FuturesUnordered::new();
+
+        while !docs.is_empty() {
+            let client = client.clone();
+            let index = index.clone();
+            let batch_size = std::cmp::min(docs.len(), bulk_size);
+            let ops: Vec<BulkOperation<serde_json::Value>> = docs
+                .drain(..batch_size)
+                .map(|doc| BulkOperation::create(doc).pipeline("esdiag").into())
+                .collect();
+            let semaphore = semaphore.clone();
+            let future = async move {
+                let _permit = semaphore.acquire().await;
+                let response = client.bulk(BulkParts::Index(&index)).body(ops).send().await;
+                parse_response(index, response).await
+            };
+
+            futures.push(tokio::spawn(future));
+        }
+        let doc_count = join_all(futures)
+            .await
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter_map(|result| match result {
+                Ok(count) => Some(count),
+                Err(e) => {
+                    log::error!("{}", e);
+                    None
+                }
+            })
+            .sum();
+
+        Ok(doc_count)
     }
 
-    /// Sends a test request to the client's base URL to verify connectivity.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `Response` if the request is successful,
-    /// or an `Error` if an error occurs during the request.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if:
-    /// - The HTTP request fails.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let response = client.test().await;
-    /// match response {
-    ///     Ok(res) => println!("Test request successful: {:?}", res),
-    ///     Err(e) => eprintln!("Test request failed: {}", e),
-    /// }
-    /// ```
-
-    pub async fn test(&self) -> Result<Response, Error> {
-        log::debug!("Testing Elasticsearch client");
-        log::trace!("{:?}", self.client);
-        self.client
+    async fn is_connected(&self) -> bool {
+        let status_code = match self
+            .client
             .send(
-                Method::Get,
+                elasticsearch::http::Method::Get,
                 "",
-                headers::HeaderMap::new(),
+                elasticsearch::http::headers::HeaderMap::new(),
                 Option::<&String>::None,
                 Option::<&String>::None,
                 None,
             )
             .await
-    }
-
-    /// Bulk indexes a collection of documents in parallel using asynchronous tasks.
-    ///
-    /// This function reads documents from the provided `docs` vector, splits them into batches, and
-    /// sends them to an Elasticsearch index in parallel using asynchronous tasks. The number of
-    /// parallel workers and the size of each batch are configurable through environment variables
-    /// `ESDIAG_ES_WORKERS` and `ESDIAG_ES_BULK_SIZE`, respectively.
-    ///
-    /// # Arguments
-    ///
-    /// * `docs` - A vector of `Value` representing the documents to be indexed.
-    ///
-    /// # Returns
-    ///
-    /// This function returns a `Result` containing the total number of documents indexed if successful,
-    /// or an `std::io::Error` if an error occurs during the indexing process.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if it fails to read the environment variables for the number
-    /// of workers or the bulk size, or if there is an error during the bulk indexing process.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if it fails to unwrap the `type`, `dataset`, or `namespace` fields from
-    /// the first document in the `docs` vector.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// let docs: Vec<Value> = ...; // your documents here
-    /// let es_client = ElasticsearchClient::new(...); // initialize your client
-    /// let result = es_client.bulk_index(docs).await;
-    /// match result {
-    ///     Ok(total) => println!("Successfully indexed {} documents", total),
-    ///     Err(e) => eprintln!("Failed to index documents: {}", e),
-    /// }
-    /// ```
-
-    pub async fn bulk_index(&self, mut docs: Vec<Value>) -> std::io::Result<usize> {
-        let workers = env::get_int("ESDIAG_ES_WORKERS")?;
-        let bulk_size = env::get_int("ESDIAG_ES_BULK_SIZE")?;
-        let semaphore = Arc::new(Semaphore::new(workers));
-        let index = format!(
-            "{}-{}-{}",
-            docs[0]["data_stream"]["type"].as_str().unwrap(),
-            docs[0]["data_stream"]["dataset"].as_str().unwrap(),
-            docs[0]["data_stream"]["namespace"].as_str().unwrap()
-        );
-
-        let futures = FuturesUnordered::new();
-
-        // Create batches of operations
-        while !docs.is_empty() {
-            let batch_size = std::cmp::min(docs.len(), bulk_size);
-            // Slice the documents into a batch of operations
-            let mut ops: Vec<BulkOperation<Value>> = Vec::new();
-            for doc in docs.drain(..batch_size) {
-                ops.push(BulkOperation::create(doc).pipeline("esdiag").into());
-            }
-
-            // Setup the future to run the bulk index operation
-            let client = self.clone();
-            let index = index.clone();
-            let semaphore = semaphore.clone();
-            let future = async move {
-                let _permit = semaphore.acquire().await;
-                client.bulk_index_batch(index, ops).await
-            };
-
-            // Spawn the task
-            futures.push(tokio::spawn(future));
-        }
-
-        // Await all futures to complete before returning
-        let results = join_all(futures).await;
-        let mut total_count = 0;
-        for result in results {
-            match result {
-                Ok(count) => total_count += count.unwrap_or(0),
-                Err(e) => {
-                    log::error!("Failed to process bulk index result: {:?}", e);
-                }
-            }
-        }
-        Ok(total_count)
-    }
-
-    async fn bulk_index_batch(
-        &self,
-        index: String,
-        ops: Vec<BulkOperation<Value>>,
-    ) -> std::io::Result<usize> {
-        // Index the batch
-        let batch_size = &ops.len();
-        match self
-            .client
-            .bulk(BulkParts::Index(&index))
-            .body(ops)
-            .send()
-            .await
         {
-            Ok(response) => {
-                if response.status_code().is_success() {
-                    match response.json::<Value>().await {
-                        Ok(json) => {
-                            match json["errors"].as_bool().unwrap_or(false) {
-                                true => {
-                                    let errors = json["items"]
-                                        .as_array()
-                                        .unwrap()
-                                        .iter()
-                                        .filter(|item| {
-                                            item["create"]["status"].as_i64().unwrap_or(0) >= 400
-                                        })
-                                        .map(|item| item["create"].clone())
-                                        .collect::<Vec<Value>>();
-                                    let error_count = errors.len();
-                                    file::write_ndjson_if_debug(
-                                        Value::from(errors),
-                                        "errors.ndjson",
-                                        true,
-                                    )
-                                    .ok();
-                                    log::warn!(
-                                        "{} indexed {} documents with {} errors",
-                                        index,
-                                        batch_size - error_count,
-                                        error_count
-                                    );
-                                }
-                                false => {
-                                    log::info!("{} indexed {} documents", index, batch_size);
-                                }
-                            }
-                            file::write_ndjson_if_debug(json, "responses.ndjson", true).ok();
-                        }
-                        Err(e) => {
-                            log::error!("Failed to parse response: {:?}", &e);
-                        }
-                    };
-                    Ok(*batch_size)
-                } else {
-                    log::error!("Failed to index document to {}: {:?}", index, response);
-                    let body = match response.json::<Value>().await {
-                        Ok(json) => {
-                            log::error!("{:?}", json);
-                        }
-                        Err(e) => {
-                            log::error!("Failed to parse response: {:?}", e);
-                        }
-                    };
-                    log::error!("{:?}", body);
-                    Ok(*batch_size)
-                }
+            Ok(res) => {
+                log::trace!("{:?}", res);
+                res.status_code().as_str().to_string()
             }
             Err(e) => {
-                log::error!("Failed to index document to {}: {:?}", index, e);
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to index document into {index}"),
-                ))
+                log::error!("{e}");
+                "599".to_string()
             }
-        }
+        };
+
+        status_code == "200"
     }
+}
+
+impl std::fmt::Display for ElasticsearchExporter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.url)
+    }
+}
+
+async fn parse_response(
+    index: String,
+    response: Result<Response, elasticsearch::Error>,
+) -> Result<usize> {
+    let response = response?;
+    log::trace!("{:?}", &response);
+    let status_code = response.status_code().as_u16();
+    let body: Value = response.json().await?;
+    let mut items: Vec<Value> = body["items"].as_array().unwrap_or(&Vec::new()).clone();
+    let item_count = items.len();
+
+    let error_items: Vec<Value> = items
+        .drain(..)
+        .filter(|item| match item["create"]["status"].as_u64() {
+            Some(s) => s != 201,
+            None => false,
+        })
+        .collect();
+    let error_count = error_items.len();
+    let doc_count = item_count - error_count;
+
+    match status_code {
+        200 if error_count == 0 => log::info!("{}, wrote {} docs", index, doc_count),
+        200 => log::warn!(
+            "{}, wrote {} docs with {} errors",
+            index,
+            doc_count,
+            error_count
+        ),
+        401 => return Err(eyre!("{} - http 401 unauthorized", index)),
+        403 => return Err(eyre!("{} - http 403 forbidden", index)),
+        404 => return Err(eyre!("{} - http 404 not found", index)),
+        413 => return Err(eyre!("{} - http 413 request too large", index)),
+        429 => return Err(eyre!("{} - http 429 too many requests", index)),
+        500..=599 => return Err(eyre!("{} - server errors: http {}", status_code, index)),
+        _ => log::warn!("unexpected http response: {}", status_code),
+    }
+
+    if log::max_level() >= log::Level::Debug {
+        println!("{}", serde_json::json!({"index":index}));
+        println!("{}", serde_json::json!(error_items));
+    }
+
+    Ok(doc_count)
 }

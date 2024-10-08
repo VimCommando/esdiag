@@ -3,7 +3,7 @@ use crate::data::{diagnostic::data_source::DataSource, Uri};
 use color_eyre::{eyre::eyre, Result};
 use serde::de::DeserializeOwned;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::path::PathBuf;
 
 pub struct ArchiveReceiver {
@@ -14,6 +14,7 @@ pub struct ArchiveReceiver {
 impl TryFrom<Uri> for ArchiveReceiver {
     type Error = color_eyre::eyre::Report;
 
+    /// Create a new ArchiveReceiver from a Uri
     fn try_from(uri: Uri) -> Result<Self> {
         match uri {
             Uri::File(ref path) => match path.is_file() {
@@ -35,6 +36,7 @@ impl TryFrom<Uri> for ArchiveReceiver {
 }
 
 impl Receive for ArchiveReceiver {
+    /// Check if the file is exists on the filesystem
     async fn is_connected(&self) -> bool {
         let is_file = self.path.is_file();
         let filename = self.path.to_str().unwrap_or("");
@@ -42,6 +44,7 @@ impl Receive for ArchiveReceiver {
         is_file
     }
 
+    /// Read the type's file from the filesystem
     async fn get<T>(&self) -> Result<T>
     where
         T: DeserializeOwned + DataSource,
@@ -74,32 +77,4 @@ impl std::fmt::Display for ArchiveReceiver {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.path.display())
     }
-}
-
-// Old implementation
-
-pub fn read_string(
-    archive_path: &PathBuf,
-    filename: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let mut archive = zip::ZipArchive::new(File::open(archive_path)?)?;
-
-    // Use the first file in the archive to determine the path
-    let file_path = {
-        let mut path = PathBuf::from(archive.by_index(0)?.name().to_string());
-        if path.extension() != None {
-            path.pop();
-        }
-        path.push(filename);
-        path.to_str()
-            .expect("Archive PathBuf to string failed")
-            .to_string()
-    };
-
-    // Read lines directly from the compressed file
-    log::debug!("From archive {:?}, file \"{}\"", archive_path, file_path);
-    let file = archive.by_name(&file_path)?;
-    let read_lines = BufReader::new(file).lines();
-    let string = read_lines.filter_map(Result::ok).collect::<String>();
-    Ok(string)
 }

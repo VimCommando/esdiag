@@ -4,50 +4,11 @@ use color_eyre::eyre::{eyre, Result};
 use include_dir::{include_dir, Dir};
 use serde_yaml;
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
 
 // Subdirectory for templates and configs files
 pub static ASSETS_DIR: Dir = include_dir!("assets");
 pub static ELASTICSEARCH_ASSETS: &str = "elasticsearch/assets.yml";
 pub static ELASTICSEARCH_SOURCES: &str = "elasticsearch/sources.yml";
-
-/// Reads the contents of a specified file and returns it as a string.
-///
-/// # Arguments
-///
-/// * `file_path` - A reference to the path of the file to read.
-///
-/// # Returns
-///
-/// A `Result` containing the file contents as a `String` if successful, or a boxed `Error` if an error occurs.
-///
-/// # Errors
-///
-/// This function will return an error if:
-/// - The file cannot be opened.
-/// - There is an issue reading from the file.
-///
-/// # Example
-///
-/// ```rust
-/// use std::path::PathBuf;
-///
-/// let file_path = PathBuf::from("path/to/file.txt");
-/// match read_string(&file_path) {
-///     Ok(contents) => println!("File contents: {}", contents),
-///     Err(e) => eprintln!("Error reading file: {}", e),
-/// }
-/// ```
-
-pub fn read_string(file_path: &PathBuf) -> Result<String> {
-    log::debug!("Reading file: {:?}", file_path);
-    let file = File::open(file_path)?;
-    let read_lines = BufReader::new(file).lines();
-    let string = read_lines.filter_map(Result::ok).collect::<String>();
-    Ok(string)
-}
 
 /// Parses the `sources.yml` file for a given product and returns its contents as a `HashMap`.
 ///

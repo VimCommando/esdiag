@@ -110,6 +110,7 @@ impl From<elasticsearch::Version> for ProductVersion {
 impl TryFrom<elasticsearch::Cluster> for Manifest {
     type Error = color_eyre::eyre::Error;
 
+    /// Create a manifest from a cluster's metadata (`version.json`) file
     fn try_from(cluster: elasticsearch::Cluster) -> Result<Self, Self::Error> {
         Ok(Self {
             diag_type: None,
@@ -123,6 +124,7 @@ impl TryFrom<elasticsearch::Cluster> for Manifest {
         })
     }
 }
+
 impl DataSource for Manifest {
     fn source(uri: &Uri) -> Result<&'static str> {
         match uri {

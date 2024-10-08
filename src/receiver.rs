@@ -1,24 +1,22 @@
 /// Read from a `.zip` archive file
-pub mod archive;
+mod archive;
 /// Read from a direcotry in the local file system
-pub mod directory;
+mod directory;
 /// Request API calls from Elasticsearch
-pub mod elasticsearch;
-/// Read from a file the local file system
+mod elasticsearch;
+/// Read from a file the local file system (not for diagnostic bundles)
 pub mod file;
 
 use crate::data::diagnostic::{
     data_source::{DataSource, Source},
-    DataSet, ElasticCloudKubernetes, Elasticsearch, Kibana, Logstash, Manifest, Product,
+    DataSet,
 };
 use crate::data::Uri;
 use archive::ArchiveReceiver;
 use color_eyre::eyre::{eyre, Result};
 use directory::DirectoryReceiver;
 use elasticsearch::ElasticsearchReceiver;
-use semver::Version;
 use serde::de::DeserializeOwned;
-use std::collections::BTreeMap;
 
 trait Receive {
     #[allow(dead_code)]
@@ -108,103 +106,6 @@ impl std::fmt::Display for InputDataSets {
                 .map(|d| d.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
-        )
-    }
-}
-
-// Input struct to hold the product, sources, and version
-
-#[derive(Debug)]
-pub struct Input {
-    pub dataset: InputDataSets,
-    pub product: Product,
-    pub sources: BTreeMap<String, Source>,
-    pub uri: Uri,
-    pub version: Option<Version>,
-    pub manifest: Manifest,
-}
-
-impl Input {
-    pub fn new(uri: Uri, manifest: Manifest) -> Self {
-        let application = match &manifest.product {
-            Product::Agent => todo!("Elastic Agent"),
-            Product::ECE => todo!("Elasitc Cloud Enterprise (ECE)"),
-            Product::ECK => ElasticCloudKubernetes::new(),
-            Product::Elasticsearch => Elasticsearch::new(),
-            Product::Kibana => Kibana::new(),
-            Product::Logstash => Logstash::new(),
-            Product::Unknown => panic!("Cannot import an unknown product!"),
-        };
-        let sources = match file::parse_sources_yml(&manifest.product) {
-            Ok(sources) => sources,
-            Err(e) => panic!("Error parsing sources file: {}", e),
-        };
-        let version = match &manifest.product_version {
-            Some(product_version) => Version::new(
-                product_version.major,
-                product_version.minor,
-                product_version.patch,
-            ),
-            None => Version::new(0, 0, 0),
-        };
-
-        Self {
-            product: manifest.product.clone(),
-            dataset: InputDataSets {
-                data: application.get_data_sets(),
-                lookup: application.get_lookup_sets(),
-                metadata: application.get_metadata_sets(),
-            },
-            manifest,
-            uri,
-            sources,
-            version: Some(version),
-        }
-    }
-
-    pub fn get_source(&self, dataset: &DataSet) -> Option<&Source> {
-        let name = dataset.to_string();
-        self.sources.get(&name)
-    }
-
-    pub fn load_string(&self, dataset: &DataSet) -> Option<String> {
-        let name = dataset.to_string();
-        let source = match self.sources.get(&name) {
-            Some(source) => source,
-            None => panic!("ERROR: Source not found for {name}"),
-        };
-        match &self.uri {
-            Uri::Directory(dir) => {
-                match file::read_string(&dir.with_file_name(&source.as_path_string(&name))) {
-                    Ok(string) => Some(string),
-                    Err(e) => {
-                        log::debug!("Error reading file '{:?}'", e);
-                        None
-                    }
-                }
-            }
-            Uri::File(file) => match archive::read_string(file, &source.as_path_string(&name)) {
-                Ok(string) => Some(string),
-                Err(e) => {
-                    log::debug!("Error reading file '{:?}'", e);
-                    None
-                }
-            },
-            _ => {
-                unimplemented!("Only Directory and File input types implemented!");
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for Input {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            fmt,
-            "Processing {} version {} from {:?}",
-            self.product,
-            self.version.clone().unwrap(),
-            self.uri,
         )
     }
 }
