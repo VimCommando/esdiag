@@ -9,7 +9,6 @@ pub trait DiagnosticProcessor {
     #[allow(async_fn_in_trait)]
     async fn new(manifest: Manifest, receiver: Receiver, exporter: Exporter) -> Result<Box<Self>>;
     #[allow(async_fn_in_trait)]
-    async fn start_exporter(&self) -> Result<()>;
     fn get_lookup(&self, key: &str) -> Option<Arc<dyn LookupTable>>;
     #[allow(async_fn_in_trait)]
     async fn process_queue(&self) -> usize;

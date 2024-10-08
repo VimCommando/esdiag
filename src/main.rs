@@ -100,6 +100,8 @@ async fn main() -> Result<()> {
         log::error!("{}", panic);
     }));
 
+    clear_last_run_files()?;
+
     match run().await {
         Ok(cmd) => {
             log::info!("Completed {cmd} successfully");
@@ -206,4 +208,18 @@ async fn run() -> Result<&'static str> {
             Ok("setup")
         }
     }
+}
+
+fn clear_last_run_files() -> Result<()> {
+    let last_run = std::path::PathBuf::from(std::env::var("HOME")?).join(".esdiag/last_run");
+    if !last_run.exists() {
+        std::fs::create_dir_all(&last_run)?;
+    }
+    let files = vec!["bulk_errors.ndjson", "diagnostic.json"];
+    for file in files {
+        let file = last_run.join(file);
+        log::debug!("Removing {}", &file.display());
+        let _ = std::fs::remove_file(file);
+    }
+    Ok(())
 }

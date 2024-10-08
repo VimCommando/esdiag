@@ -20,6 +20,7 @@ use super::{
     DataProcessor, Metadata,
 };
 use crate::data::{
+    self,
     diagnostic::Manifest,
     elasticsearch::{
         Alias, AliasList, Cluster, DataStream, DataStreamName, DataStreams, IlmExplain, IlmStats,
@@ -85,10 +86,6 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             _ => None,
         }
     }
-    async fn start_exporter(&self) -> Result<()> {
-        log::debug!("Starting Elasticsearch diagnostic exporter");
-        Ok(())
-    }
 
     async fn process_queue(&self) -> usize {
         let queue = self.queue.clone();
@@ -111,9 +108,8 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
 
     async fn run(self) -> Result<usize> {
         log::debug!("Running Elasticsearch diagnostic processors");
-        // env_logger outputs to stderr, so we can cleanly redirect stdout to a file for debugging
-        if log::max_level() >= log::Level::Trace {
-            println!("{}", serde_json::to_string(&self)?);
+        if log::max_level() >= log::Level::Debug {
+            data::save_file("diagnostic.json", &self)?;
         }
 
         let diagnostic = Arc::new(self);

@@ -1,5 +1,8 @@
 use super::Export;
-use crate::client::{Auth, ElasticsearchBuilder, Host};
+use crate::{
+    client::{Auth, ElasticsearchBuilder, Host},
+    data,
+};
 use color_eyre::eyre::{eyre, Result};
 use elasticsearch::{
     http::{headers, request::JsonBody, response::Response, Method},
@@ -160,9 +163,9 @@ async fn parse_response(
     let doc_count = item_count - error_count;
 
     match status_code {
-        200 if error_count == 0 => log::info!("{}, wrote {} docs", index, doc_count),
+        200 if error_count == 0 => log::info!("{}, created {} docs", index, doc_count),
         200 => log::warn!(
-            "{}, wrote {} docs with {} errors",
+            "{}, created {} docs with {} errors",
             index,
             doc_count,
             error_count
@@ -176,9 +179,11 @@ async fn parse_response(
         _ => log::warn!("unexpected http response: {}", status_code),
     }
 
-    if log::max_level() >= log::Level::Debug {
-        println!("{}", serde_json::json!({"index":index}));
-        println!("{}", serde_json::json!(error_items));
+    if error_count > 0 {
+        data::save_file(
+            "bulk_errors.ndjson",
+            &serde_json::json!({"index":index,"errors": error_items}),
+        )?;
     }
 
     Ok(doc_count)
