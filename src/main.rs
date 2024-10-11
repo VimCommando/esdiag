@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
 
     match run().await {
         Ok(cmd) => {
-            log::info!("Completed {cmd} successfully");
+            log::info!("{cmd} complete");
             Ok(())
         }
         Err(e) => {
@@ -196,8 +196,8 @@ async fn run() -> Result<&'static str> {
             log::trace!("{}", serde_json::to_string(&manifest).unwrap());
             let diagnostic_processor =
                 ElasticsearchDiagnostic::new(manifest, receiver, exporter).await?;
-            let doc_count = diagnostic_processor.run().await?;
-            log::info!("Exported {} documents", doc_count);
+            let (diag_id, doc_count) = diagnostic_processor.run().await?;
+            log::info!("Exported {} documents to diag: {}", doc_count, diag_id);
             Ok("import")
         }
         Commands::Setup { host } => {

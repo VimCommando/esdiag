@@ -106,7 +106,7 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
         doc_count
     }
 
-    async fn run(self) -> Result<usize> {
+    async fn run(self) -> Result<(String, usize)> {
         log::debug!("Running Elasticsearch diagnostic processors");
         if log::max_level() >= log::Level::Debug {
             data::save_file("diagnostic.json", &self)?;
@@ -135,12 +135,14 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
                 diagnostic.process_queue().await
             }))
         }
-
-        Ok(join_all(futures)
+        let doc_count = join_all(futures)
             .await
             .into_iter()
             .filter_map(Result::ok)
-            .sum())
+            .sum();
+        let diag_id = diagnostic.metadata.diagnostic.uuid.clone();
+
+        Ok((diag_id, doc_count))
     }
 }
 

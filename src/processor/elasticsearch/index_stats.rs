@@ -39,7 +39,7 @@ impl DataProcessor for IndexStatsProcessor {
         let mut indices_stats = match self.receiver.get::<IndicesStats>().await {
             Ok(data) => data.indices,
             Err(e) => {
-                log::warn!("Failed to deserialize index_stats: {}", e);
+                log::warn!("{e}");
                 return (data_stream, Vec::<Value>::new());
             }
         };

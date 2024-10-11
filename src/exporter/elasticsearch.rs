@@ -155,7 +155,7 @@ async fn parse_response(
     let error_items: Vec<Value> = items
         .drain(..)
         .filter(|item| match item["create"]["status"].as_u64() {
-            Some(s) => s != 201,
+            Some(status) => status != 201,
             None => false,
         })
         .collect();
@@ -182,7 +182,12 @@ async fn parse_response(
     if error_count > 0 {
         data::save_file(
             "bulk_errors.ndjson",
-            &serde_json::json!({"index":index,"errors": error_items}),
+            &serde_json::json!({
+                "index": index,
+                "doc_count": doc_count,
+                "error_count": error_count,
+                "errors": error_items
+            }),
         )?;
     }
 

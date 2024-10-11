@@ -36,8 +36,8 @@ impl DataProcessor for SearchableSnapshotsStatsProcessor {
         let searchable_snapshots_stats = match self.receiver.get::<SearchableSnapshotsStats>().await
         {
             Ok(stats) => stats,
-            Err(_) => {
-                log::error!("Failed to deserialize searchable snapshot stats");
+            Err(e) => {
+                log::warn!("{e}");
                 return (data_stream, Vec::new());
             }
         };

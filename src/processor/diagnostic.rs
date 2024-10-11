@@ -13,7 +13,7 @@ pub trait DiagnosticProcessor {
     #[allow(async_fn_in_trait)]
     async fn process_queue(&self) -> usize;
     #[allow(async_fn_in_trait)]
-    async fn run(self) -> Result<usize>;
+    async fn run(self) -> Result<(String, usize)>;
 }
 
 /*
