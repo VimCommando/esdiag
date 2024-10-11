@@ -11,6 +11,7 @@ pub struct Cluster {
     #[serde(alias = "cluster_uuid")]
     pub uuid: String,
     pub version: Version,
+    #[serde(skip_serializing)]
     pub tagline: String,
 }
 
