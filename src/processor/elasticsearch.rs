@@ -26,19 +26,20 @@ use super::{
     lookup::{elasticsearch::node::NodeSummary, Lookup, LookupTable},
     DataProcessor, Metadata,
 };
-use crate::data::{
-    self,
-    diagnostic::Manifest,
-    elasticsearch::{
-        Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreamName, DataStreams,
-        IlmExplain, IlmStats, IndexSettings, IndicesSettings, Nodes, SearchableSnapshotsCacheStats,
-        SharedCacheStats,
+use crate::{
+    data::{
+        self,
+        diagnostic::Manifest,
+        elasticsearch::{
+            Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreamName, DataStreams,
+            IlmExplain, IlmStats, IndexSettings, IndicesSettings, Nodes,
+            SearchableSnapshotsCacheStats, SharedCacheStats,
+        },
     },
+    exporter::Exporter,
+    receiver::Receiver,
 };
-use crate::exporter::Exporter;
-use crate::receiver::Receiver;
-use chrono::DateTime;
-use chrono::{SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use color_eyre::eyre::Result;
 use futures::{
     future::{join_all, BoxFuture},

@@ -3,13 +3,15 @@ use color_eyre::eyre::{eyre, Result};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
-use std::collections::BTreeMap;
-use std::env;
-use std::fmt::{Display, Formatter};
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::{
+    collections::BTreeMap,
+    env,
+    fmt::{Display, Formatter},
+    fs::File,
+    io::{BufReader, BufWriter},
+    path::PathBuf,
+    str::FromStr,
+};
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

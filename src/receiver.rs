@@ -5,12 +5,12 @@ mod directory;
 /// Request API calls from Elasticsearch
 mod elasticsearch;
 
-use crate::data::diagnostic::{data_source::DataSource, DataSet};
-use crate::data::Uri;
 use archive::ArchiveReceiver;
-use color_eyre::eyre::{eyre, Result};
 use directory::DirectoryReceiver;
 use elasticsearch::ElasticsearchReceiver;
+
+use crate::data::{diagnostic::data_source::DataSource, Uri};
+use color_eyre::eyre::{eyre, Result};
 use serde::de::DeserializeOwned;
 
 trait Receive {
@@ -77,42 +77,5 @@ impl std::fmt::Display for Receiver {
                 write!(f, "elasticsearch {}", elasticsearch_receiver)
             }
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct InputDataSets {
-    pub data: Vec<DataSet>,
-    pub lookup: Vec<DataSet>,
-    pub metadata: Vec<DataSet>,
-}
-
-impl InputDataSets {
-    pub fn len(&self) -> usize {
-        &self.data.len() + &self.lookup.len() + &self.metadata.len()
-    }
-}
-
-impl std::fmt::Display for InputDataSets {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            fmt,
-            "Data: [{}], Lookup: [{}], Metadata: [{}]",
-            self.data
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.lookup
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.metadata
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
     }
 }

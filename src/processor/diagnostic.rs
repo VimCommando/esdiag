@@ -1,8 +1,7 @@
 use super::lookup::LookupTable;
 use crate::{data::diagnostic::Manifest, exporter::Exporter, receiver::Receiver};
 use color_eyre::Result;
-use std::boxed::Box;
-use std::sync::Arc;
+use std::{boxed::Box, sync::Arc};
 
 pub trait DiagnosticProcessor {
     #[allow(async_fn_in_trait)]

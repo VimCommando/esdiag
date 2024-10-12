@@ -5,14 +5,15 @@ pub mod elasticsearch;
 /// Lookup processors
 mod lookup;
 
+use diagnostic::DiagnosticProcessor;
+use elasticsearch::ElasticsearchDiagnostic;
+
 use crate::{
     data::diagnostic::{Manifest, Product},
     exporter::Exporter,
     receiver::Receiver,
 };
 use color_eyre::eyre::{eyre, Result};
-use diagnostic::DiagnosticProcessor;
-use elasticsearch::ElasticsearchDiagnostic;
 
 pub async fn process(receiver: Receiver, exporter: Exporter) -> Result<()> {
     let manifest = receiver.get::<Manifest>().await?;

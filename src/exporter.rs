@@ -5,12 +5,13 @@ mod file;
 /// Write `ndjson` to std out
 mod stream;
 
-use crate::data::Uri;
-use color_eyre::eyre::{eyre, Result};
 use elasticsearch::ElasticsearchExporter;
 use file::FileExporter;
-use serde_json::Value;
 use stream::StreamExporter;
+
+use crate::data::Uri;
+use color_eyre::eyre::{eyre, Result};
+use serde_json::Value;
 
 trait Export {
     #[allow(dead_code)]

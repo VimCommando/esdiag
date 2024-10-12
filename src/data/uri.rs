@@ -1,7 +1,9 @@
 use crate::client::Host;
 use color_eyre::eyre::Result;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 use url::Url;
 
 /// Represents various types of URIs classified by the system.

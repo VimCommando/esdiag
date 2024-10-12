@@ -1,5 +1,4 @@
-use super::auth::Auth;
-use super::host::Host;
+use super::{auth::Auth, host::Host};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use color_eyre::eyre::Result;
 use elasticsearch::{
