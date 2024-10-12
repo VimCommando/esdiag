@@ -3,7 +3,9 @@ use crate::{data::elasticsearch::NodesStats, processor::Metadata};
 use json_patch::merge;
 use rayon::prelude::*;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+
+static INGEST_ROLE: LazyLock<String> = LazyLock::new(|| String::from("ingest"));
 
 pub struct NodesStatsProcessor {
     diagnostic: Arc<ElasticsearchDiagnostic>,
@@ -141,16 +143,15 @@ impl DataProcessor for NodesStatsProcessor {
                 let ingest_processor_metadata = self
                     .diagnostic
                     .metadata
-                    .for_data_stream("metrics-node.ingest.processor-esdiag")
+                    .for_data_stream("metrics-ingest.processor-esdiag")
                     .as_meta_doc();
                 let ingest_pipeline_metadata = self
                     .diagnostic
                     .metadata
-                    .for_data_stream("metrics-node.ingest.pipeline-esdiag")
+                    .for_data_stream("metrics-ingest.pipeline-esdiag")
                     .as_meta_doc();
 
-                let ingest_role = String::from("ingest");
-                let is_ingest = node_stats.roles.contains(&ingest_role);
+                let is_ingest = node_stats.roles.contains(&*INGEST_ROLE);
 
                 let pipelines: Vec<_> = if is_ingest {
                     match node_stats.ingest["pipelines"].as_object() {
@@ -165,6 +166,7 @@ impl DataProcessor for NodesStatsProcessor {
                                         .enumerate()
                                         .map(|(index, processor)| {
                                             let mut doc = json!({
+                                                "node": lookup_node.by_id(&node_id),
                                                 "ingest": {
                                                     "pipeline": {
                                                         "name": name,
@@ -190,6 +192,7 @@ impl DataProcessor for NodesStatsProcessor {
                                 };
 
                                 let mut doc = json!({
+                                    "node": lookup_node.by_id(&node_id),
                                     "ingest": {
                                         "pipeline": pipeline,
                                     },
