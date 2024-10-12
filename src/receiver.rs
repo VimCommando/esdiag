@@ -21,9 +21,21 @@ trait Receive {
         T: DataSource + DeserializeOwned;
 }
 
+/// The different types of receivers for data input.
+///
+/// This enum encapsulates various implementations of the `Receive` trait,
+/// allowing for flexible handling of different data sources. Each variant
+/// corresponds to a specific method of data retrieval:
+///
+/// - `Archive`: Reads data from a `.zip` archive file.
+/// - `Directory`: Reads data from a directory in the local file system.
+/// - `Elasticsearch`: Requests data via API calls from an Elasticsearch service.
 pub enum Receiver {
+    /// Read from a `.zip` archive file
     Archive(ArchiveReceiver),
+    /// Read from a direcotry in the local file system
     Directory(DirectoryReceiver),
+    /// Request API calls from Elasticsearch
     Elasticsearch(ElasticsearchReceiver),
 }
 

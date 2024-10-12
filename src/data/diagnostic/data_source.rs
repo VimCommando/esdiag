@@ -7,8 +7,6 @@ pub trait DataSource {
     fn source(uri: &Uri) -> Result<&'static str>;
 }
 
-// Source struct to hold the name, extension, subdir, and versions of the source
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
 pub struct Source {
     pub extension: Option<String>,

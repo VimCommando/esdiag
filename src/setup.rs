@@ -20,6 +20,7 @@ pub struct Asset {
     pub suffix: Option<String>,
 }
 
+/// Submit saved assets to the Elasticsearch APIs
 pub async fn assets(exporter: Exporter) -> Result<()> {
     match exporter {
         Exporter::File(_) | Exporter::Stream(_) => {
@@ -93,6 +94,7 @@ pub async fn assets(exporter: Exporter) -> Result<()> {
     Ok(())
 }
 
+/// Parses the assets YAML file for the given exporter. Currently only supports Elasticsearch.
 fn parse_assets_yml(exporter: &Exporter) -> Result<Vec<Asset>> {
     let file = match exporter {
         Exporter::Elasticsearch(_) => ASSETS_DIR

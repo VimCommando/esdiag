@@ -15,6 +15,7 @@ use url::Url;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "auth")]
 pub enum Host {
+    /// A host using API key authentication
     ApiKey {
         accept_invalid_certs: Option<bool>,
         apikey: String,
@@ -23,6 +24,7 @@ pub enum Host {
         cloud_id: Option<String>,
         url: Url,
     },
+    /// A host using basic username/password authentication
     Basic {
         accept_invalid_certs: Option<bool>,
         app: Product,
@@ -32,10 +34,8 @@ pub enum Host {
         url: Url,
         username: String,
     },
-    None {
-        app: Product,
-        url: Url,
-    },
+    /// A host with no authentication
+    None { app: Product, url: Url },
 }
 
 impl Host {

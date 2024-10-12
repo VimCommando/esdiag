@@ -17,7 +17,7 @@ pub use kibana::Kibana;
 pub use logstash::Logstash;
 pub use manifest::Manifest;
 
-use elasticsearch::EsDataSet;
+use elasticsearch::ElasticsearchDataSet;
 use serde::{Deserialize, Serialize};
 
 pub trait DataFamilies {
@@ -28,9 +28,9 @@ pub trait DataFamilies {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataSet {
-    Elasticsearch(EsDataSet),
-    //Kibana(KbDataSet),
-    //Logstash(LsDataSet),
+    Elasticsearch(ElasticsearchDataSet),
+    //Kibana(KibanaDataSet),
+    //Logstash(LogstashDataSet),
 }
 
 impl ToString for DataSet {

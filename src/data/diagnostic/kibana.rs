@@ -31,14 +31,14 @@ impl DataFamilies for Kibana {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum KbDataSet {
+pub enum KibanaDataSet {
     Nodes,
 }
 
-impl ToString for KbDataSet {
+impl ToString for KibanaDataSet {
     fn to_string(&self) -> String {
         match self {
-            KbDataSet::Nodes => "nodes".to_string(),
+            KibanaDataSet::Nodes => "nodes".to_string(),
         }
     }
 }

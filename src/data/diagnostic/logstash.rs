@@ -31,14 +31,14 @@ impl DataFamilies for Logstash {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LsDataSet {
+pub enum LogstashDataSet {
     Nodes,
 }
 
-impl ToString for LsDataSet {
+impl ToString for LogstashDataSet {
     fn to_string(&self) -> String {
         match self {
-            LsDataSet::Nodes => "nodes".to_string(),
+            LogstashDataSet::Nodes => "nodes".to_string(),
         }
     }
 }

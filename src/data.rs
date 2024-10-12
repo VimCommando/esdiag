@@ -13,6 +13,7 @@ use color_eyre::eyre::Result;
 use serde::Serialize;
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
+/// Save an arbitrary serializable object to a file
 pub fn save_file<T: Serialize>(filename: &str, content: &T) -> Result<()> {
     let home_file = PathBuf::from(env::get_string("HOME")?)
         .join(env::get_string("ESDIAG_HOME")?)

@@ -12,16 +12,27 @@ use file::FileExporter;
 use serde_json::Value;
 use stream::StreamExporter;
 
-pub trait Export {
-    #[allow(async_fn_in_trait)]
+trait Export {
+    #[allow(dead_code)]
     async fn is_connected(&self) -> bool;
-    #[allow(async_fn_in_trait)]
     async fn write(&self, index: String, docs: Vec<Value>) -> Result<usize>;
 }
 
+/// The different types of exporters for data output.
+///
+/// This enum encapsulates various implementations of the `Export` trait,
+/// allowing for flexible handling of different data sources. Each variant
+/// corresponds to a specific method of data output:
+///
+/// - `Elasticsearch`: Exports data to an Elasticsearch cluster using the `_bulk` API.
+/// - `File`: Exports data to a `.ndjson` file.
+/// - `Stream`: Exports data to standard output (stdout).
 pub enum Exporter {
+    /// Export to an Elasticsearch cluster with the `_bulk` API
     Elasticsearch(ElasticsearchExporter),
+    /// Export to an `.ndjson` file
     File(FileExporter),
+    /// Export to `stdout`
     Stream(StreamExporter),
 }
 

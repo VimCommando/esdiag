@@ -1,10 +1,18 @@
+/// Processor for the `_cluster/settings` API
 mod cluster_settings;
+/// Processor for the `_settings` API
 mod index_settings;
+/// Processor for the `_stats` API
 mod index_stats;
+/// Processor for the `_nodes` API
 mod nodes;
+/// Processor for the `_nodes/stats` API
 mod nodes_stats;
+/// Processor for the `_searchable_snapshots/stats` API
 mod searchable_snapshots_stats;
+/// Processor for the `_tasks` API
 mod tasks;
+
 use cluster_settings::ClusterSettingsProcessor;
 use index_settings::IndexSettingsProcessor;
 use index_stats::IndexStatsProcessor;
@@ -12,9 +20,6 @@ use nodes::NodesProcessor;
 use nodes_stats::NodesStatsProcessor;
 use searchable_snapshots_stats::SearchableSnapshotsStatsProcessor;
 use tasks::TasksProcessor;
-
-use chrono::{SecondsFormat, TimeZone, Utc};
-use serde_json::Value;
 
 use super::{
     diagnostic::DiagnosticProcessor,
@@ -33,12 +38,14 @@ use crate::data::{
 use crate::exporter::Exporter;
 use crate::receiver::Receiver;
 use chrono::DateTime;
+use chrono::{SecondsFormat, TimeZone, Utc};
 use color_eyre::eyre::Result;
 use futures::{
     future::{join_all, BoxFuture},
     stream::FuturesUnordered,
 };
 use serde::Serialize;
+use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{sync::RwLock, task};
 use uuid::Uuid;

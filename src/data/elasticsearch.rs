@@ -1,26 +1,26 @@
-/// For the `_alias` API
+/// Data types for the `_alias` API
 mod aliases;
-/// For the `_cluster/settings` API
+/// Data types for the `_cluster/settings` API
 mod cluster_settings;
-/// For the `_data_streams` API
+/// Data types for the `_data_streams` API
 mod data_streams;
-/// For the `_ilm/explain` API
+/// Data types the `_ilm/explain` API
 mod ilm_explain;
-/// For the `_settings` API
+/// Data types the `_settings` API
 mod indices_settings;
-/// For the `_stats` API
+/// Data types the `_stats` API
 mod indices_stats;
-/// For the `_nodes` API
+/// Data types the `_nodes` API
 mod nodes;
-/// For the `_nodes/stats` API
+/// Data types the `_nodes/stats` API
 mod nodes_stats;
-/// For the `_searchable_snapshots/cache/stats` API
+/// Data types the `_searchable_snapshots/cache/stats` API
 mod searchable_snapshots_cache_stats;
-/// For the `_searchable_snapshots/stats` API
+/// Data types the `_searchable_snapshots/stats` API
 mod searchable_snapshots_stats;
-/// For the `_tasks` API
+/// Data types the `_tasks` API
 mod tasks;
-/// For the root `/` API
+/// Data types the root `/` API
 mod version;
 
 pub use aliases::*;

@@ -1,4 +1,4 @@
-use super::{data_source::DataSource, elasticsearch::EsVersion, Product};
+use super::{data_source::DataSource, elasticsearch::ElasticsearchVersion, Product};
 use crate::{data::elasticsearch, data::Uri};
 use color_eyre::eyre::{eyre, Result};
 use regex::Regex;
@@ -72,7 +72,7 @@ impl Manifest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Version {
-    Elasticsearch(EsVersion),
+    Elasticsearch(ElasticsearchVersion),
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

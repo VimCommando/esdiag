@@ -3,8 +3,11 @@ use color_eyre::eyre::Result;
 use std::str::FromStr;
 
 pub enum Auth {
+    /// Use an API key authentication via headers
     Apikey(String),
+    /// Use username and password authentication via Basic Auth headers
     Basic(String, String),
+    /// Don't use any authentication
     None,
 }
 
