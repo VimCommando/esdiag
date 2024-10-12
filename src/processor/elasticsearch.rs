@@ -11,8 +11,10 @@ use index_stats::IndexStatsProcessor;
 use nodes::NodesProcessor;
 use nodes_stats::NodesStatsProcessor;
 use searchable_snapshots_stats::SearchableSnapshotsStatsProcessor;
-use serde_json::Value;
 use tasks::TasksProcessor;
+
+use chrono::{SecondsFormat, TimeZone, Utc};
+use serde_json::Value;
 
 use super::{
     diagnostic::DiagnosticProcessor,
@@ -23,8 +25,9 @@ use crate::data::{
     self,
     diagnostic::Manifest,
     elasticsearch::{
-        Alias, AliasList, Cluster, DataStream, DataStreamName, DataStreams, IlmExplain, IlmStats,
-        IndexSettings, IndicesSettings, Nodes, SearchableSnapshotsCacheStats, SharedCacheStats,
+        Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreamName, DataStreams,
+        IlmExplain, IlmStats, IndexSettings, IndicesSettings, Nodes, SearchableSnapshotsCacheStats,
+        SharedCacheStats,
     },
 };
 use crate::exporter::Exporter;
@@ -55,7 +58,9 @@ pub struct ElasticsearchDiagnostic {
 impl DiagnosticProcessor for ElasticsearchDiagnostic {
     async fn new(manifest: Manifest, receiver: Receiver, exporter: Exporter) -> Result<Box<Self>> {
         let cluster = receiver.get::<Cluster>().await?;
-        let metadata = ElasticsearchMetadata::try_new(manifest, cluster)?;
+        let display_name = receiver.get::<ClusterSettings>().await?.get_display_name();
+        let metadata =
+            ElasticsearchMetadata::try_new(manifest, cluster.with_display_name(display_name))?;
 
         let lookups = Lookups {
             alias: Lookup::from(receiver.get::<AliasList>().await?),
@@ -140,7 +145,7 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             .into_iter()
             .filter_map(Result::ok)
             .sum();
-        let diag_id = diagnostic.metadata.diagnostic.uuid.clone();
+        let diag_id = diagnostic.metadata.diagnostic.id.clone();
 
         Ok((diag_id, doc_count))
     }
@@ -210,8 +215,26 @@ impl ElasticsearchMetadata {
             None => "Unknown".to_string(),
         };
 
+        let collection_date_string = Utc
+            .timestamp_millis_opt(collection_date)
+            .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
+            .unwrap();
+
+        // Create a human readable diagnostic ID
+        let name = match &cluster.display_name {
+            Some(name) if &runner == "ess" => {
+                let mut parts = name.split_whitespace().collect::<Vec<&str>>();
+                parts.pop();
+                parts.join("_")
+            }
+            Some(name) => name.replace(" ", "_"),
+            None => cluster.name.replace(" ", "_"),
+        };
+        let id = format!("{}@{}", name, collection_date_string);
+
         let diagnostic = DiagnosticDoc {
             collection_date: collection_date.clone(),
+            id,
             node: cluster.name.clone(),
             runner,
             uuid: Uuid::new_v4().to_string(),
@@ -233,6 +256,7 @@ impl ElasticsearchMetadata {
         })
     }
 }
+
 #[derive(Clone, Serialize)]
 pub struct MetadataDoc {
     #[serde(rename = "@timestamp")]
@@ -253,6 +277,7 @@ pub struct DiagnosticDoc {
     pub collection_date: i64,
     pub node: String,
     pub runner: String,
+    pub id: String,
     pub uuid: String,
     pub version: Option<String>,
 }

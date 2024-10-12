@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Cluster {
+    #[serde(skip_deserializing)]
+    pub display_name: Option<String>,
     #[serde(alias = "name")]
-    pub node_name: String,
+    pub diagnostic_node: String,
     #[serde(alias = "cluster_name")]
     pub name: String,
     #[serde(alias = "cluster_uuid")]
@@ -13,6 +15,15 @@ pub struct Cluster {
     pub version: Version,
     #[serde(skip_serializing)]
     pub tagline: String,
+}
+
+impl Cluster {
+    pub fn with_display_name(self, display_name: Option<String>) -> Self {
+        Self {
+            display_name,
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]

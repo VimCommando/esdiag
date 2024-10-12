@@ -33,7 +33,7 @@ impl Export for FileExporter {
         is_file
     }
 
-    async fn write(&self, _index: String, docs: Vec<Value>) -> Result<usize> {
+    async fn write(&self, index: String, docs: Vec<Value>) -> Result<usize> {
         match &self.path.is_file() {
             false => {
                 log::info!("Creating file {}", &self.path.display());
@@ -43,7 +43,6 @@ impl Export for FileExporter {
                 log::debug!("File {} exists", &self.path.display());
             }
         }
-        log::debug!("Writing docs to file {}", &self.path.display());
         let mut writer = BufWriter::new(&self.file);
         let mut doc_count = 0;
         for doc in docs {
@@ -52,6 +51,7 @@ impl Export for FileExporter {
             doc_count += 1;
         }
         writer.flush()?;
+        log::info!("{}, created {} docs", index, doc_count);
         Ok(doc_count)
     }
 }

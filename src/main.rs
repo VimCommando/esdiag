@@ -197,7 +197,11 @@ async fn run() -> Result<&'static str> {
             let diagnostic_processor =
                 ElasticsearchDiagnostic::new(manifest, receiver, exporter).await?;
             let (diag_id, doc_count) = diagnostic_processor.run().await?;
-            log::info!("Exported {} documents to diag: {}", doc_count, diag_id);
+            log::info!(
+                "Created {} documents for diagnostic: {}",
+                doc_count,
+                diag_id
+            );
             Ok("import")
         }
         Commands::Setup { host } => {

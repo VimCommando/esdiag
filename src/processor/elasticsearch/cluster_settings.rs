@@ -37,7 +37,7 @@ impl DataProcessor for ClusterSettingsProcessor {
         let data_stream = "settings-cluster-esdiag".to_string();
         let data_stream_name = DataStreamName::from(data_stream.as_str());
         let metadata = self.diagnostic.metadata.as_meta_doc();
-        let mut data = match self.receiver.get::<ClusterSettings>().await {
+        let data = match self.receiver.get::<ClusterSettings>().await {
             Ok(data) => data,
             Err(_) => {
                 log::error!("Failed to process cluster settings");
@@ -46,9 +46,9 @@ impl DataProcessor for ClusterSettingsProcessor {
         };
 
         let scopes: Vec<_> = vec![
-            (DEFAULT, data["defaults"].take()),
-            (TRANSIENT, data["transient"].take()),
-            (PERSISTENT, data["persistent"].take()),
+            (DEFAULT, data.defaults),
+            (TRANSIENT, data.transient),
+            (PERSISTENT, data.persistent),
         ];
         log::debug!("cluster_settings scopes: {}", scopes.len());
         let cluster_settings_doc = ClusterSettingsDoc::new(metadata.clone(), data_stream_name);
