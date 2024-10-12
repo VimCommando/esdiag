@@ -230,14 +230,16 @@ impl ElasticsearchMetadata {
             Some(name) => name.replace(" ", "_"),
             None => cluster.name.replace(" ", "_"),
         };
-        let id = format!("{}@{}", name, collection_date_string);
+        let uuid = Uuid::new_v4().to_string();
+        let hash = uuid.chars().take(4).collect::<String>();
+        let id = format!("{}@{}#{}", name, collection_date_string, hash);
 
         let diagnostic = DiagnosticDoc {
             collection_date: collection_date.clone(),
             id,
             node: cluster.name.clone(),
             runner,
-            uuid: Uuid::new_v4().to_string(),
+            uuid,
             version: manifest.diag_version.clone(),
         };
 
