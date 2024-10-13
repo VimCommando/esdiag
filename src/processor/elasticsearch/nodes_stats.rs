@@ -1,4 +1,10 @@
-use super::{DataProcessor, ElasticsearchDiagnostic, Receiver};
+mod adaptive_selections;
+mod cluster_applier_stats;
+mod http_clients;
+mod ingest_pipelines;
+mod transport_actions;
+
+use super::{DataProcessor, ElasticsearchDiagnostic, ElasticsearchMetadata, Receiver};
 use crate::{data::elasticsearch::NodesStats, processor::Metadata};
 use json_patch::merge;
 use rayon::prelude::*;
@@ -48,202 +54,42 @@ impl DataProcessor for NodesStatsProcessor {
 
         let node_stats_docs: Vec<Value> = nodes_stats
             .par_drain()
-            .flat_map(|(node_id, node_stats)| {
-                // Extract transport.actions
-                let transport_actions_metadata = self
-                    .diagnostic
-                    .metadata
-                    .for_data_stream("metrics-node.transport.actions-esdiag")
-                    .as_meta_doc();
+            .flat_map(|(node_id, mut node_stats)| {
+                let node_summary = lookup_node.by_id(&node_id);
 
-                let transport_actions: Vec<_> = match node_stats.transport["actions"].as_object() {
-                    Some(data) => data
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                        .par_drain(..)
-                        .map(|(name, action)| {
-                            let mut action = json!({
-                                "transport": {
-                                    "action": action,
-                                },
-                            });
+                let transport_actions_docs = transport_actions::extract(
+                    node_stats.transport["actions"].take(),
+                    &self.diagnostic.metadata,
+                    node_summary,
+                );
 
-                            let action_patch = json!({
-                                "transport": {
-                                    "action": {
-                                        "name": name,
-                                    },
-                                },
-                            });
+                let http_clients_docs = http_clients::extract(
+                    node_stats.http["clients"].take(),
+                    &self.diagnostic.metadata,
+                    node_summary,
+                );
 
-                            merge(&mut action, &action_patch);
-                            merge(&mut action, &transport_actions_metadata);
-                            action
-                        })
-                        .collect(),
-                    None => Vec::new(),
+                let adaptive_selection_docs = adaptive_selections::extract(
+                    node_stats.adaptive_selection.take(),
+                    &self.diagnostic.metadata,
+                    node_summary,
+                    lookup_node,
+                );
+
+                let recording_docs = cluster_applier_stats::extract(
+                    node_stats.discovery["cluster_applier_stats"].take(),
+                    &self.diagnostic.metadata,
+                    node_summary,
+                );
+
+                let ingest_pipelines_docs = match node_stats.roles.contains(&*INGEST_ROLE) {
+                    true => ingest_pipelines::extract(
+                        node_stats.ingest.pipelines.take(),
+                        &self.diagnostic.metadata,
+                        node_summary,
+                    ),
+                    false => Vec::new(),
                 };
-                log::trace!("transport_actions: {}", transport_actions.len());
-
-                // Extract http.clients
-                let data_stream_http_metadata = self
-                    .diagnostic
-                    .metadata
-                    .for_data_stream("metrics-node.http.clients-esdiag")
-                    .as_meta_doc();
-
-                let clients: Vec<_> = match node_stats.http["clients"].as_array() {
-                    Some(data) => data
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                        .par_drain(..)
-                        .map(|client| {
-                            let mut doc = json!({ "http": { "client": client, }, });
-                            merge(&mut doc, &data_stream_http_metadata);
-                            doc
-                        })
-                        .collect(),
-                    None => Vec::new(),
-                };
-                log::trace!("clients: {}", clients.len());
-
-                // Extract adaptive_selection
-                let adaptive_selection_metadata = self
-                    .diagnostic
-                    .metadata
-                    .for_data_stream("metrics-node.adaptive_selection-esdiag")
-                    .as_meta_doc();
-
-                let adaptive_selections: Vec<_> = match node_stats.adaptive_selection.as_object() {
-                    Some(data) => data
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                        .par_drain(..)
-                        .map(|(peer_node_id, adaptive_selection)| {
-                            let mut doc = json!({
-                                "adaptive_selection": adaptive_selection,
-                            });
-
-                            let peer_node_patch = json!({
-                                "adaptive_selection": {
-                                    "node": lookup_node.by_id(&peer_node_id),
-                                },
-                            });
-
-                            merge(&mut doc, &peer_node_patch);
-                            merge(&mut doc, &adaptive_selection_metadata);
-                            doc
-                        })
-                        .collect(),
-                    None => Vec::new(),
-                };
-                log::trace!("adaptive_selections: {}", adaptive_selections.len());
-
-                // Extract ingest.pipelines and ingest.processors
-                let ingest_processor_metadata = self
-                    .diagnostic
-                    .metadata
-                    .for_data_stream("metrics-ingest.processor-esdiag")
-                    .as_meta_doc();
-                let ingest_pipeline_metadata = self
-                    .diagnostic
-                    .metadata
-                    .for_data_stream("metrics-ingest.pipeline-esdiag")
-                    .as_meta_doc();
-
-                let is_ingest = node_stats.roles.contains(&*INGEST_ROLE);
-
-                let pipelines: Vec<_> = if is_ingest {
-                    match node_stats.ingest["pipelines"].as_object() {
-                        Some(data) => data
-                            .into_iter()
-                            .collect::<Vec<_>>()
-                            .par_drain(..)
-                            .flat_map(|(name, pipeline)| {
-                                let processors: Vec<_> = match pipeline["processors"].as_array() {
-                                    Some(data) => data
-                                        .par_iter()
-                                        .enumerate()
-                                        .map(|(index, processor)| {
-                                            let mut doc = json!({
-                                                "node": lookup_node.by_id(&node_id),
-                                                "ingest": {
-                                                    "pipeline": {
-                                                        "name": name,
-                                                    },
-                                                    "processor": processor,
-                                                },
-                                            });
-
-                                            let processor_patch = json!({
-                                                "ingest": {
-                                                    "processor": {
-                                                        "order": index,
-                                                    }
-                                                }
-                                            });
-
-                                            merge(&mut doc, &processor_patch);
-                                            merge(&mut doc, &ingest_processor_metadata);
-                                            doc
-                                        })
-                                        .collect(),
-                                    None => Vec::new(),
-                                };
-
-                                let mut doc = json!({
-                                    "node": lookup_node.by_id(&node_id),
-                                    "ingest": {
-                                        "pipeline": pipeline,
-                                    },
-                                });
-
-                                let pipeline = json!({
-                                    "ingest": {
-                                        "pipeline": {
-                                            "processors": null,
-                                            "name": name,
-                                        }
-                                    }
-                                });
-
-                                merge(&mut doc, &pipeline);
-                                merge(&mut doc, &ingest_pipeline_metadata);
-                                let mut docs: Vec<Value> = vec![doc];
-                                docs.extend(processors);
-                                docs
-                            })
-                            .collect(),
-                        None => Vec::new(),
-                    }
-                } else {
-                    Vec::new()
-                };
-                log::trace!("pipelines: {}", pipelines.len());
-
-                // Extract discovery.cluster_applier_stats.recordings dataset
-                let cluster_applier_metadata = self
-                    .diagnostic
-                    .metadata
-                    .for_data_stream("metrics-node.discovery.cluster_applier-esdiag")
-                    .as_meta_doc();
-
-                let recordings: Vec<_> =
-                    match node_stats.discovery["cluster_applier_stats"]["recordings"].as_array() {
-                        Some(data) => data
-                            .par_iter()
-                            .map(|recording| {
-                                let mut doc = json!({
-                                    "cluster_applier_stats": recording,
-                                });
-
-                                merge(&mut doc, &cluster_applier_metadata);
-                                doc
-                            })
-                            .collect(),
-                        None => Vec::new(),
-                    };
-                log::trace!("recordings: {}", recordings.len());
 
                 // Final node_stats document
                 let mut doc = json!({
@@ -253,10 +99,7 @@ impl DataProcessor for NodesStatsProcessor {
 
                 let omit_patch = json!({
                     "node" : {
-                        "http": { "clients": null, "routes": null },
-                        "ingest": { "pipelines": null },
-                        "discovery": { "cluster_applier_stats": null },
-                        "transport": { "actions": null },
+                        "http": { "routes": null },
                     }
                 });
 
@@ -268,11 +111,11 @@ impl DataProcessor for NodesStatsProcessor {
 
                 // Start a vec with the top-level node_stats doc
                 let mut docs: Vec<Value> = vec![doc];
-                docs.extend(adaptive_selections);
-                docs.extend(clients);
-                docs.extend(pipelines);
-                docs.extend(recordings);
-                docs.extend(transport_actions);
+                docs.extend(adaptive_selection_docs);
+                docs.extend(http_clients_docs);
+                docs.extend(ingest_pipelines_docs);
+                docs.extend(recording_docs);
+                docs.extend(transport_actions_docs);
                 log::trace!("node_stats docs for {}: {}", node_id, docs.len());
                 docs
             })
