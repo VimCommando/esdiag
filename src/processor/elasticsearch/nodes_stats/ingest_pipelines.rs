@@ -1,9 +1,9 @@
-use super::ElasticsearchMetadata;
+use super::{ElasticsearchMetadata, NodeSummary};
 use crate::{
     data::elasticsearch::{
         IngestPipelines, IngestProcessor, IngestProcessorStats, IngestProcessors,
     },
-    processor::{lookup::elasticsearch::node::NodeSummary, Metadata},
+    processor::Metadata,
 };
 use json_patch::merge;
 use rayon::prelude::*;

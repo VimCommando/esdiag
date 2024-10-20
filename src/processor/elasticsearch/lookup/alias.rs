@@ -1,5 +1,7 @@
-use super::Lookup;
-use crate::data::elasticsearch::{Alias, AliasList};
+use crate::{
+    data::elasticsearch::{Alias, AliasList},
+    processor::lookup::Lookup,
+};
 use color_eyre::eyre::Result;
 
 impl From<String> for Lookup<Alias> {

@@ -4,7 +4,7 @@ mod http_clients;
 mod ingest_pipelines;
 mod transport_actions;
 
-use super::{DataProcessor, ElasticsearchMetadata, Lookups};
+use super::{DataProcessor, ElasticsearchMetadata, Lookups, NodeSummary};
 use crate::{data::elasticsearch::NodesStats, processor::Metadata};
 use json_patch::merge;
 use rayon::prelude::*;

@@ -1,5 +1,7 @@
-use super::Lookup;
-use crate::data::elasticsearch::{IlmExplain, IlmStats};
+use crate::{
+    data::elasticsearch::{IlmExplain, IlmStats},
+    processor::lookup::Lookup,
+};
 use color_eyre::eyre::Result;
 
 impl From<String> for Lookup<IlmStats> {

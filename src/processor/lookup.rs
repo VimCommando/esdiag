@@ -1,8 +1,6 @@
-/// Lookups for Elasticsearch data
-pub mod elasticsearch;
-
 use serde::Serialize;
 use std::collections::HashMap;
+
 /// A lookup table that allows for retrieving by four different keys: host, id, ip, and name
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Lookup<T> {

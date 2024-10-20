@@ -1,5 +1,7 @@
-use super::Lookup;
-use crate::data::elasticsearch::{Node, Nodes};
+use crate::{
+    data::elasticsearch::{Node, Nodes},
+    processor::lookup::Lookup,
+};
 use color_eyre::eyre::Result;
 use serde::Serialize;
 use serde_json::Value;

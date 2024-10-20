@@ -4,6 +4,8 @@ mod cluster_settings;
 mod index_settings;
 /// Processor for the `_stats` API
 mod index_stats;
+/// Processor for Elasticsearch lookups
+mod lookup;
 /// Processor for Elasticsearch diagnostics metadata
 mod metadata;
 /// Processor for the `_nodes` API
@@ -15,10 +17,7 @@ mod searchable_snapshots_stats;
 /// Processor for the `_tasks` API
 mod tasks;
 
-use super::{
-    lookup::{elasticsearch::node::NodeSummary, Lookup},
-    DataProcessor, DiagnosticProcessor, Metadata,
-};
+use super::{lookup::Lookup, DataProcessor, DiagnosticProcessor, Metadata};
 use crate::{
     data::{
         self,
@@ -34,6 +33,7 @@ use crate::{
 };
 use color_eyre::eyre::Result;
 use futures::{future::join_all, stream::FuturesUnordered};
+use lookup::NodeSummary;
 use metadata::ElasticsearchMetadata;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;

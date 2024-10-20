@@ -1,5 +1,7 @@
-use super::Lookup;
-use crate::data::elasticsearch::{DataStream, DataStreams, Indices};
+use crate::{
+    data::elasticsearch::{DataStream, DataStreams, Indices},
+    processor::lookup::Lookup,
+};
 use color_eyre::eyre::Result;
 
 impl From<&String> for Lookup<DataStream> {

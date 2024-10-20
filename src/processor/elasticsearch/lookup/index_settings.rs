@@ -1,5 +1,7 @@
-use super::Lookup;
-use crate::data::elasticsearch::{IndexSettings, IndicesSettings};
+use crate::{
+    data::elasticsearch::{IndexSettings, IndicesSettings},
+    processor::lookup::Lookup,
+};
 use color_eyre::eyre::Result;
 use serde::Serialize;
 

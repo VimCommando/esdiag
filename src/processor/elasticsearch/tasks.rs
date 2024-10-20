@@ -1,7 +1,7 @@
-use super::{DataProcessor, ElasticsearchMetadata, Lookups};
+use super::{DataProcessor, ElasticsearchMetadata, Lookups, NodeSummary};
 use crate::{
     data::elasticsearch::{NodeTasks, ParentTask, Task, Tasks},
-    processor::{lookup::elasticsearch::node::NodeSummary, Metadata},
+    processor::Metadata,
 };
 use rayon::prelude::*;
 use serde::Serialize;

@@ -1,5 +1,7 @@
-use super::Lookup;
-use crate::data::elasticsearch::{SearchableSnapshotsCacheStats, SharedCacheStats};
+use crate::{
+    data::elasticsearch::{SearchableSnapshotsCacheStats, SharedCacheStats},
+    processor::lookup::Lookup,
+};
 use color_eyre::eyre::Result;
 
 impl From<&String> for Lookup<SharedCacheStats> {
