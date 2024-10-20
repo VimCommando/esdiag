@@ -1,90 +1,43 @@
-use super::{DataFamilies, DataSet};
 use serde::{Deserialize, Serialize};
 
-/// Defines the known data sets from an Elasticsearch diagnostic
+use crate::data::elasticsearch::{
+    AliasList, ClusterSettings, DataStreams, IlmExplain, IndicesSettings, IndicesStats, Nodes,
+    NodesStats, SearchableSnapshotsCacheStats, SearchableSnapshotsStats, Tasks, Version,
+};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ElasticsearchDataSet {
-    Alias,
-    DataStreams,
-    Nodes,
-    Version,
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+pub enum DataSet {
+    Aliases,
     ClusterSettings,
+    DataStreams,
     IlmExplain,
-    IndexSettings,
-    IndexStats,
+    IndicesSettings,
+    IndicesStats,
+    Nodes,
     NodesStats,
-    SharedCacheStats,
-    SearchableSnapshotStats,
+    SearchableSnapshotsCacheStats,
+    SearchableSnapshotsStats,
     Tasks,
+    Version,
 }
 
-use ElasticsearchDataSet::*;
-
-pub struct Elasticsearch {
-    pub data_sets: Vec<DataSet>,
-    pub lookup_sets: Vec<DataSet>,
-    pub metadata_sets: Vec<DataSet>,
-}
-
-impl Elasticsearch {
-    pub fn new() -> Box<dyn DataFamilies> {
-        let metadata_sets: Vec<DataSet> = Vec::from([
-            DataSet::Elasticsearch(Alias),
-            DataSet::Elasticsearch(Version),
-            DataSet::Elasticsearch(DataStreams),
-            DataSet::Elasticsearch(IlmExplain),
-            DataSet::Elasticsearch(SharedCacheStats),
-        ]);
-        let lookup_sets: Vec<DataSet> = Vec::from([
-            DataSet::Elasticsearch(Nodes),
-            DataSet::Elasticsearch(IndexSettings),
-            DataSet::Elasticsearch(SearchableSnapshotStats),
-        ]);
-        let data_sets: Vec<DataSet> = Vec::from([
-            DataSet::Elasticsearch(ClusterSettings),
-            DataSet::Elasticsearch(Tasks),
-            DataSet::Elasticsearch(IndexStats),
-            DataSet::Elasticsearch(NodesStats),
-        ]);
-
-        Box::new(Self {
-            data_sets,
-            lookup_sets,
-            metadata_sets,
-        })
-    }
-}
-
-impl DataFamilies for Elasticsearch {
-    fn get_metadata_sets(&self) -> Vec<DataSet> {
-        self.metadata_sets.clone()
-    }
-
-    fn get_lookup_sets(&self) -> Vec<DataSet> {
-        self.lookup_sets.clone()
-    }
-
-    fn get_data_sets(&self) -> Vec<DataSet> {
-        self.data_sets.clone()
-    }
-}
-
-impl ToString for ElasticsearchDataSet {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for DataSet {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Alias => "alias".to_string(),
-            DataStreams => "data_stream".to_string(),
-            Nodes => "nodes".to_string(),
-            Version => "version".to_string(),
-            ClusterSettings => "cluster_settings_defaults".to_string(),
-            IlmExplain => "ilm_explain".to_string(),
-            IndexSettings => "settings".to_string(),
-            IndexStats => "indices_stats".to_string(),
-            NodesStats => "nodes_stats".to_string(),
-            SharedCacheStats => "searchable_snapshots_cache_stats".to_string(),
-            SearchableSnapshotStats => "searchable_snapshots_stats".to_string(),
-            Tasks => "tasks".to_string(),
+            DataSet::Aliases => write!(fmt, "aliases"),
+            DataSet::ClusterSettings => write!(fmt, "cluster_settings"),
+            DataSet::DataStreams => write!(fmt, "data_streams"),
+            DataSet::IlmExplain => write!(fmt, "ilm_explain"),
+            DataSet::IndicesSettings => write!(fmt, "indices_settings"),
+            DataSet::IndicesStats => write!(fmt, "indices_stats"),
+            DataSet::Nodes => write!(fmt, "nodes"),
+            DataSet::NodesStats => write!(fmt, "nodes_stats"),
+            DataSet::SearchableSnapshotsCacheStats => {
+                write!(fmt, "searchable_snapshots_cache_stats")
+            }
+            DataSet::SearchableSnapshotsStats => write!(fmt, "searchable_snapshots_stats"),
+            DataSet::Tasks => write!(fmt, "tasks"),
+            DataSet::Version => write!(fmt, "version"),
         }
     }
 }
@@ -109,4 +62,76 @@ pub struct ElasticsearchVersion {
     pub cluster_uuid: String,
     pub version: ElasticsearchVersionDetails,
     pub tagline: String,
+}
+
+impl From<AliasList> for DataSet {
+    fn from(_: AliasList) -> Self {
+        DataSet::Aliases
+    }
+}
+
+impl From<ClusterSettings> for DataSet {
+    fn from(_: ClusterSettings) -> Self {
+        DataSet::ClusterSettings
+    }
+}
+
+impl From<DataStreams> for DataSet {
+    fn from(_: DataStreams) -> Self {
+        DataSet::DataStreams
+    }
+}
+
+impl From<IlmExplain> for DataSet {
+    fn from(_: IlmExplain) -> Self {
+        DataSet::IlmExplain
+    }
+}
+
+impl From<IndicesSettings> for DataSet {
+    fn from(_: IndicesSettings) -> Self {
+        DataSet::IndicesSettings
+    }
+}
+
+impl From<IndicesStats> for DataSet {
+    fn from(_: IndicesStats) -> Self {
+        DataSet::IndicesStats
+    }
+}
+
+impl From<Nodes> for DataSet {
+    fn from(_: Nodes) -> Self {
+        DataSet::Nodes
+    }
+}
+
+impl From<NodesStats> for DataSet {
+    fn from(_: NodesStats) -> Self {
+        DataSet::NodesStats
+    }
+}
+
+impl From<SearchableSnapshotsCacheStats> for DataSet {
+    fn from(_: SearchableSnapshotsCacheStats) -> Self {
+        DataSet::SearchableSnapshotsCacheStats
+    }
+}
+
+impl From<SearchableSnapshotsStats> for DataSet {
+    fn from(_: SearchableSnapshotsStats) -> Self {
+        DataSet::SearchableSnapshotsStats
+    }
+}
+
+impl From<Tasks> for DataSet {
+    fn from(_: Tasks) -> Self {
+        DataSet::Tasks
+    }
+}
+
+impl From<Version> for DataSet {
+    fn from(_: Version) -> Self {
+        DataSet::Version
+    }
 }

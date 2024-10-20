@@ -1,4 +1,7 @@
-use crate::data::{diagnostic::data_source::DataSource, Uri};
+use crate::data::{
+    diagnostic::{data_source::DataSource, elasticsearch::DataSet},
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -6,33 +9,33 @@ use std::collections::HashMap;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Node {
-    aggregations: Value,
-    pub attributes: Value,
+    aggregations: Option<Value>,
+    pub attributes: Option<Value>,
     build_flavor: String,
     build_hash: String,
     build_type: String,
     component_version: Option<ComponentVersion>,
-    pub host: String,
-    http: Value,
+    pub host: Option<String>,
+    http: Option<Value>,
     index_version: Option<i64>,
     //ingest: Value,
-    pub ip: String,
+    pub ip: Option<String>,
     jvm: Value,
     //modules: Value,
     pub name: String,
     pub os: Value,
-    plugins: Value,
+    plugins: Option<Value>,
     process: Value,
     pub role: Option<String>,
     pub roles: Vec<String>,
-    settings: Value,
+    settings: Option<Value>,
     thread_pool: Value,
-    total_indexing_buffer: Value,
-    total_indexing_buffer_in_bytes: Value,
-    transport: Value,
-    transport_address: String,
+    total_indexing_buffer: Option<Value>,
+    total_indexing_buffer_in_bytes: Option<Value>,
+    transport: Option<Value>,
+    transport_address: Option<String>,
     transport_version: Option<i64>,
-    pub version: semver::Version,
+    pub version: Option<semver::Version>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -59,7 +62,7 @@ impl DataSource for Nodes {
         }
     }
 
-    fn name() -> &'static str {
-        "nodes"
+    fn name() -> String {
+        format!("{}", DataSet::Nodes)
     }
 }

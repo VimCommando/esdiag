@@ -1,4 +1,7 @@
-use crate::data::{diagnostic::data_source::DataSource, Uri};
+use crate::data::{
+    diagnostic::{data_source::DataSource, elasticsearch::DataSet},
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -47,7 +50,7 @@ impl DataSource for AliasList {
         }
     }
 
-    fn name() -> &'static str {
-        "alias"
+    fn name() -> String {
+        format!("{}", DataSet::Aliases)
     }
 }

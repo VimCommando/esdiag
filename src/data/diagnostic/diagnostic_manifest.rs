@@ -1,5 +1,5 @@
 use super::{data_source::DataSource, DiagPath, Manifest, Product};
-use crate::data::Uri;
+use crate::data::{diagnostic::DataSet, Uri};
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 
@@ -27,8 +27,8 @@ impl DataSource for DiagnosticManifest {
         }
     }
 
-    fn name() -> &'static str {
-        "diagnostic_manifest"
+    fn name() -> String {
+        format!("{}", DataSet::DiagnosticManifest)
     }
 }
 

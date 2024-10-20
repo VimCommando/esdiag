@@ -32,12 +32,12 @@ impl DataProcessor<ElasticsearchMetadata> for IndicesStats {
                 let ilm = lookup.ilm_explain.by_name(&index);
                 let index_settings = match lookup.index_settings.by_name(&index) {
                     Some(settings) => settings,
-                    None if &index == ".geoip_databases" => {
+                    None if &index == ".geoip_databases" || &index == ".tasks" => {
                         log::debug!("Skipping index: {}", index);
                         return Vec::new();
                     }
                     None => {
-                        log::warn!("No index settings found for index: {}", index);
+                        log::debug!("No index settings found for index: {}", index);
                         return Vec::new();
                     }
                 };

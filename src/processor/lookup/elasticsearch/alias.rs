@@ -1,5 +1,6 @@
 use super::Lookup;
 use crate::data::elasticsearch::{Alias, AliasList};
+use color_eyre::eyre::Result;
 
 impl From<String> for Lookup<Alias> {
     fn from(string: String) -> Self {
@@ -23,5 +24,17 @@ impl From<AliasList> for Lookup<Alias> {
         });
         log::debug!("lookup alias entries: {}", lookup.len());
         lookup
+    }
+}
+
+impl From<Result<AliasList>> for Lookup<Alias> {
+    fn from(alias_list: Result<AliasList>) -> Self {
+        match alias_list {
+            Ok(alias_list) => Lookup::<Alias>::from(alias_list),
+            Err(e) => {
+                log::warn!("Failed to parse AliasList: {}", e);
+                Lookup::new()
+            }
+        }
     }
 }

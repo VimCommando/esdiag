@@ -1,3 +1,5 @@
+/// Enum for data sources
+pub mod data_set;
 /// Trait for receiving data from a source
 pub mod data_source;
 /// Modern diagnostic bundle manifest file
@@ -13,42 +15,11 @@ pub mod logstash;
 /// Legacy diagnostic bundle manifest file
 pub mod manifest;
 
-use std::str::FromStr;
-
+pub use data_set::DataSet;
 pub use diagnostic_manifest::DiagnosticManifest;
-pub use eck::ElasticCloudKubernetes;
-pub use elasticsearch::Elasticsearch;
-pub use kibana::Kibana;
-pub use logstash::Logstash;
 pub use manifest::Manifest;
-
-use elasticsearch::ElasticsearchDataSet;
 use serde::{Deserialize, Deserializer, Serialize};
-
-pub trait DataFamilies {
-    fn get_data_sets(&self) -> Vec<DataSet>;
-    fn get_lookup_sets(&self) -> Vec<DataSet>;
-    fn get_metadata_sets(&self) -> Vec<DataSet>;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DataSet {
-    Elasticsearch(ElasticsearchDataSet),
-    //Kibana(KibanaDataSet),
-    //Logstash(LogstashDataSet),
-}
-
-impl ToString for DataSet {
-    fn to_string(&self) -> String {
-        match self {
-            DataSet::Elasticsearch(data_set) => data_set.to_string(),
-            //DataSet::Kibana(data_set) => data_set.to_string(),
-            //DataSet::Logstash(data_set) => data_set.to_string(),
-        }
-    }
-}
-
-// Product enum to hold the Elasticsearch, Kibana, or Logstash product
+use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Hash, Clone, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

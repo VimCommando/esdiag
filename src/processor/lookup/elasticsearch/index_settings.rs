@@ -1,5 +1,6 @@
 use super::Lookup;
 use crate::data::elasticsearch::{IndexSettings, IndicesSettings};
+use color_eyre::eyre::Result;
 use serde::Serialize;
 
 #[derive(Clone, Serialize)]
@@ -46,5 +47,17 @@ impl From<IndicesSettings> for Lookup<IndexSettings> {
             lookup.add(index).with_name(&name).with_id(&id);
         });
         lookup
+    }
+}
+
+impl From<Result<IndicesSettings>> for Lookup<IndexSettings> {
+    fn from(indices_settings: Result<IndicesSettings>) -> Self {
+        match indices_settings {
+            Ok(indices_settings) => Lookup::<IndexSettings>::from(indices_settings),
+            Err(e) => {
+                log::warn!("Failed to parse IndicesSettings: {}", e);
+                Lookup::new()
+            }
+        }
     }
 }

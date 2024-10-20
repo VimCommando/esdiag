@@ -1,4 +1,7 @@
-use crate::data::{diagnostic::data_source::DataSource, Uri};
+use crate::data::{
+    diagnostic::{data_source::DataSource, elasticsearch::DataSet},
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,7 +40,8 @@ impl DataSource for SearchableSnapshotsCacheStats {
             )),
         }
     }
-    fn name() -> &'static str {
-        "searchable_snapshots_cache_stats"
+
+    fn name() -> String {
+        format!("{}", DataSet::SearchableSnapshotsCacheStats)
     }
 }

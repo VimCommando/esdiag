@@ -1,5 +1,8 @@
 use super::DataStream;
-use crate::data::{diagnostic::data_source::DataSource, Uri};
+use crate::data::{
+    diagnostic::{data_source::DataSource, elasticsearch::DataSet},
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -111,7 +114,7 @@ impl DataSource for IndicesSettings {
         }
     }
 
-    fn name() -> &'static str {
-        "index_settings"
+    fn name() -> String {
+        format!("{}", DataSet::IndicesSettings)
     }
 }

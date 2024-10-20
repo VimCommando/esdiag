@@ -1,5 +1,6 @@
 use super::Lookup;
 use crate::data::elasticsearch::{SearchableSnapshotsCacheStats, SharedCacheStats};
+use color_eyre::eyre::Result;
 
 impl From<&String> for Lookup<SharedCacheStats> {
     fn from(string: &String) -> Self {
@@ -22,5 +23,17 @@ impl From<SearchableSnapshotsCacheStats> for Lookup<SharedCacheStats> {
 
         log::debug!("lookup shared_cache entries: {}", lookup.len(),);
         lookup
+    }
+}
+
+impl From<Result<SearchableSnapshotsCacheStats>> for Lookup<SharedCacheStats> {
+    fn from(stats_result: Result<SearchableSnapshotsCacheStats>) -> Self {
+        match stats_result {
+            Ok(stats) => Lookup::<SharedCacheStats>::from(stats),
+            Err(e) => {
+                log::warn!("Failed to parse SearchableSnapshotsCacheStats: {}", e);
+                Lookup::new()
+            }
+        }
     }
 }

@@ -1,4 +1,7 @@
-use crate::data::{diagnostic::data_source::DataSource, Uri};
+use crate::data::{
+    diagnostic::{data_source::DataSource, elasticsearch::DataSet},
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 
@@ -65,8 +68,8 @@ impl DataSource for DataStreams {
         }
     }
 
-    fn name() -> &'static str {
-        "data_stream"
+    fn name() -> String {
+        format!("{}", DataSet::DataStreams)
     }
 }
 

@@ -1,4 +1,7 @@
-use crate::data::{diagnostic::data_source::DataSource, Uri};
+use crate::data::{
+    diagnostic::{data_source::DataSource, elasticsearch::DataSet},
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,7 +27,8 @@ impl DataSource for SearchableSnapshotsStats {
             _ => Err(eyre!("Unsupported source for searchable snapshots stats")),
         }
     }
-    fn name() -> &'static str {
-        "searchable_snapshots_stats"
+
+    fn name() -> String {
+        format!("{}", DataSet::SearchableSnapshotsStats)
     }
 }

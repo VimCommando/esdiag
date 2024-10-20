@@ -22,7 +22,7 @@ use super::{
 use crate::{
     data::{
         self,
-        diagnostic::{data_source::DataSource, DiagnosticManifest},
+        diagnostic::{data_source::DataSource, elasticsearch::DataSet, DiagnosticManifest},
         elasticsearch::{
             Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreams, IlmExplain,
             IlmStats, IndexSettings, IndicesSettings, IndicesStats, Nodes, NodesStats,
@@ -37,8 +37,10 @@ use futures::{future::join_all, stream::FuturesUnordered};
 use metadata::ElasticsearchMetadata;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
-use std::{pin::Pin, sync::Arc};
+use std::{collections::HashMap, pin::Pin, sync::Arc};
 use tokio::{sync::RwLock, task::JoinHandle};
+
+type ExporterDocumentQueue = Arc<RwLock<Vec<(String, Vec<Value>)>>>;
 
 #[derive(Serialize)]
 pub struct ElasticsearchDiagnostic {
@@ -49,7 +51,7 @@ pub struct ElasticsearchDiagnostic {
     #[serde(skip)]
     receiver: Arc<Receiver>,
     #[serde(skip)]
-    queue: Arc<RwLock<Vec<(String, Vec<Value>)>>>,
+    queue: ExporterDocumentQueue,
 }
 
 impl DiagnosticProcessor for ElasticsearchDiagnostic {
@@ -64,12 +66,12 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             ElasticsearchMetadata::try_new(manifest, cluster.with_display_name(display_name))?;
 
         let lookups = Lookups {
-            alias: Lookup::from(receiver.get::<AliasList>().await?),
-            data_stream: Lookup::from(receiver.get::<DataStreams>().await?),
-            index_settings: Lookup::from(receiver.get::<IndicesSettings>().await?),
-            node: Lookup::from(receiver.get::<Nodes>().await?),
-            ilm_explain: Lookup::from(receiver.get::<IlmExplain>().await?),
-            shared_cache: Lookup::from(receiver.get::<SearchableSnapshotsCacheStats>().await?),
+            alias: Lookup::from(receiver.get::<AliasList>().await),
+            data_stream: Lookup::from(receiver.get::<DataStreams>().await),
+            index_settings: Lookup::from(receiver.get::<IndicesSettings>().await),
+            node: Lookup::from(receiver.get::<Nodes>().await),
+            ilm_explain: Lookup::from(receiver.get::<IlmExplain>().await),
+            shared_cache: Lookup::from(receiver.get::<SearchableSnapshotsCacheStats>().await),
         };
 
         Ok(Box::new(Self {
@@ -109,16 +111,34 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
         let diag = Arc::new(self);
 
         let futures = FuturesUnordered::new();
-        let mut tasks = vec![
-            spawn_processor::<ClusterSettings>(diag.clone()),
-            spawn_processor::<IndicesSettings>(diag.clone()),
-            spawn_processor::<IndicesStats>(diag.clone()),
-            spawn_processor::<Nodes>(diag.clone()),
-            spawn_processor::<NodesStats>(diag.clone()),
-            spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
-            spawn_processor::<Tasks>(diag.clone()),
-        ];
-        tasks.drain(..).map(|task| futures.push(task)).count();
+        let mut tasks = HashMap::from([
+            (
+                DataSet::ClusterSettings,
+                spawn_processor::<ClusterSettings>(diag.clone()),
+            ),
+            (
+                DataSet::IndicesSettings,
+                spawn_processor::<IndicesSettings>(diag.clone()),
+            ),
+            (
+                DataSet::IndicesStats,
+                spawn_processor::<IndicesStats>(diag.clone()),
+            ),
+            (DataSet::Nodes, spawn_processor::<Nodes>(diag.clone())),
+            (
+                DataSet::NodesStats,
+                spawn_processor::<NodesStats>(diag.clone()),
+            ),
+            (
+                DataSet::SearchableSnapshotsStats,
+                spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
+            ),
+            (DataSet::Tasks, spawn_processor::<Tasks>(diag.clone())),
+        ]);
+        tasks
+            .drain()
+            .map(|(_name, task)| futures.push(task))
+            .count();
 
         let doc_count = join_all(futures)
             .await
@@ -144,15 +164,14 @@ where
             .receiver
             .get::<T>()
             .await
-            .ok()
             .map(|data| data.generate_docs(lookups, metadata));
         match docs {
-            Some(docs) => {
+            Ok(docs) => {
                 diagnostic.queue.write().await.push(docs);
                 diagnostic.process_queue().await
             }
-            None => {
-                log::warn!("No {} data found", T::name());
+            Err(e) => {
+                log::warn!("No {} data found: {e}", T::name());
                 0
             }
         }

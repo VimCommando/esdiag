@@ -1,5 +1,6 @@
 use super::Lookup;
 use crate::data::elasticsearch::{IlmExplain, IlmStats};
+use color_eyre::eyre::Result;
 
 impl From<String> for Lookup<IlmStats> {
     fn from(string: String) -> Self {
@@ -18,5 +19,17 @@ impl From<IlmExplain> for Lookup<IlmStats> {
 
         log::debug!("lookup_ilm entries: {}", lookup.len());
         lookup
+    }
+}
+
+impl From<Result<IlmExplain>> for Lookup<IlmStats> {
+    fn from(ilm_explain_result: Result<IlmExplain>) -> Self {
+        match ilm_explain_result {
+            Ok(ilm_explain) => Lookup::<IlmStats>::from(ilm_explain),
+            Err(e) => {
+                log::warn!("Failed to parse IlmExplain: {}", e);
+                Lookup::new()
+            }
+        }
     }
 }

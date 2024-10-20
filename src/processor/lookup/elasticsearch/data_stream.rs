@@ -1,5 +1,6 @@
 use super::Lookup;
 use crate::data::elasticsearch::{DataStream, DataStreams, Indices};
+use color_eyre::eyre::Result;
 
 impl From<&String> for Lookup<DataStream> {
     fn from(string: &String) -> Self {
@@ -30,5 +31,17 @@ impl From<DataStreams> for Lookup<DataStream> {
 
         log::debug!("lookup data_stream entries: {}", lookup.len(),);
         lookup
+    }
+}
+
+impl From<Result<DataStreams>> for Lookup<DataStream> {
+    fn from(data_streams: Result<DataStreams>) -> Self {
+        match data_streams {
+            Ok(data_streams) => Lookup::<DataStream>::from(data_streams),
+            Err(e) => {
+                log::warn!("Failed to parse DataStreams: {}", e);
+                Lookup::new()
+            }
+        }
     }
 }

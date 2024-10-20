@@ -1,19 +1,20 @@
 use super::Lookup;
 use crate::data::elasticsearch::{Node, Nodes};
+use color_eyre::eyre::Result;
 use serde::Serialize;
 use serde_json::Value;
 
 #[derive(Clone, Serialize)]
 pub struct NodeSummary {
-    pub attributes: Value,
-    pub host: String,
+    pub attributes: Option<Value>,
+    pub host: Option<String>,
     pub id: Option<String>,
-    pub ip: String,
+    pub ip: Option<String>,
     pub name: String,
     pub os: Value,
     pub role: String,
     pub roles: Vec<String>,
-    pub version: String,
+    pub version: Option<String>,
 }
 
 impl NodeSummary {
@@ -50,7 +51,7 @@ impl From<&Node> for NodeSummary {
             os: node.os.clone(),
             role: node.role.clone().unwrap_or_default(),
             roles: node.roles.clone(),
-            version: node.version.to_string(),
+            version: node.version.as_ref().map(|v| v.to_string()),
         }
     }
 }
@@ -69,6 +70,18 @@ impl From<Nodes> for Lookup<NodeSummary> {
             lookup.add(node_summary).with_name(&name).with_id(&id);
         });
         lookup
+    }
+}
+
+impl From<Result<Nodes>> for Lookup<NodeSummary> {
+    fn from(nodes_result: Result<Nodes>) -> Self {
+        match nodes_result {
+            Ok(nodes) => Lookup::<NodeSummary>::from(nodes),
+            Err(e) => {
+                log::warn!("Failed to parse Nodes: {}", e);
+                Lookup::new()
+            }
+        }
     }
 }
 

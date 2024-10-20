@@ -1,4 +1,7 @@
-use crate::data::{diagnostic::data_source::DataSource, Uri};
+use crate::data::{
+    diagnostic::{data_source::DataSource, elasticsearch::DataSet},
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,27 +19,27 @@ pub struct NodeStats {
     #[serde(skip_serializing)] // Docs split into separate datastream
     pub adaptive_selection: Option<Value>,
     allocations: Option<Value>, // Only present on data nodes
-    attributes: Value,
+    attributes: Option<Value>,
     breakers: Value,
     pub discovery: Value,
     fs: Value,
-    host: Value,
+    host: Option<Value>,
     pub http: Value,
     indexing_pressure: Value,
     indices: Value,
     pub ingest: Ingest,
-    ip: Value,
+    ip: Option<Value>,
     jvm: Value,
     name: Value,
     os: Value,
     process: Value,
-    repositories: Value,
+    repositories: Option<Value>,
     pub roles: Vec<String>,
     script: Value,
     script_cache: Value,
     thread_pool: Value,
-    pub transport: Value,
-    transport_address: Value,
+    pub transport: Option<Value>,
+    transport_address: Option<Value>,
     timestamp: i64,
 }
 
@@ -84,7 +87,7 @@ impl DataSource for NodesStats {
         }
     }
 
-    fn name() -> &'static str {
-        "nodes_stats"
+    fn name() -> String {
+        format!("{}", DataSet::NodesStats)
     }
 }

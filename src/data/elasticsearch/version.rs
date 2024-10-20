@@ -1,4 +1,7 @@
-use crate::data::{diagnostic::data_source::DataSource, Uri};
+use crate::data::{
+    diagnostic::{data_source::DataSource, elasticsearch::DataSet},
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 
@@ -48,7 +51,7 @@ impl DataSource for Cluster {
         }
     }
 
-    fn name() -> &'static str {
-        "version"
+    fn name() -> String {
+        format!("{}", DataSet::Version)
     }
 }

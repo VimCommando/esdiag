@@ -1,4 +1,6 @@
-use super::{data_source::DataSource, elasticsearch::ElasticsearchVersion, DiagPath, Product};
+use super::{
+    data_source::DataSource, elasticsearch::ElasticsearchVersion, DataSet, DiagPath, Product,
+};
 use crate::{data::elasticsearch, data::Uri};
 use color_eyre::eyre::{eyre, Result};
 use regex::Regex;
@@ -134,7 +136,7 @@ impl DataSource for Manifest {
         }
     }
 
-    fn name() -> &'static str {
-        "manifest"
+    fn name() -> String {
+        format!("{}", DataSet::Manifest)
     }
 }

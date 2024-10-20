@@ -31,11 +31,17 @@ impl DataProcessor<ElasticsearchMetadata> for NodesStats {
             .flat_map(|(node_id, mut node_stats)| {
                 let node_summary = lookup_node.by_id(&node_id);
 
-                let transport_actions_docs = transport_actions::extract(
-                    node_stats.transport["actions"].take(),
-                    &metadata,
-                    node_summary,
-                );
+                let transport_actions_docs = match node_stats.transport {
+                    Some(ref mut transport) => transport_actions::extract(
+                        transport["actions"].take(),
+                        &metadata,
+                        node_summary,
+                    ),
+                    None => {
+                        log::trace!("Skipping transport stats for node {}", node_id);
+                        Vec::new()
+                    }
+                };
 
                 let http_clients_docs = http_clients::extract(
                     node_stats.http["clients"].take(),
