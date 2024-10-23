@@ -1,5 +1,5 @@
 use crate::{
-    data::elasticsearch::{Node, Nodes},
+    data::elasticsearch::{Node, Nodes, OsDetails},
     processor::lookup::Lookup,
 };
 use color_eyre::eyre::Result;
@@ -13,7 +13,7 @@ pub struct NodeSummary {
     pub id: Option<String>,
     pub ip: Option<String>,
     pub name: String,
-    pub os: Value,
+    pub os: OsDetails,
     pub role: String,
     pub roles: Vec<String>,
     pub version: Option<String>,

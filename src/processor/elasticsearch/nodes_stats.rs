@@ -30,6 +30,10 @@ impl DataProcessor<ElasticsearchMetadata> for NodesStats {
             .par_drain()
             .flat_map(|(node_id, mut node_stats)| {
                 let node_summary = lookup_node.by_id(&node_id);
+                let allocated_processors = node_summary
+                    .map(|node| node.os.allocated_processors)
+                    .unwrap_or(1);
+                node_stats.calculate_stats(allocated_processors);
 
                 let transport_actions_docs = match node_stats.transport {
                     Some(ref mut transport) => transport_actions::extract(

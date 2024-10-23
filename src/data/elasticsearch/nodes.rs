@@ -23,7 +23,7 @@ pub struct Node {
     jvm: Value,
     //modules: Value,
     pub name: String,
-    pub os: Value,
+    pub os: OsDetails,
     plugins: Option<Value>,
     process: Value,
     pub role: Option<String>,
@@ -42,6 +42,17 @@ pub struct Node {
 struct ComponentVersion {
     ml_config_version: i64,
     transform_config_version: i64,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct OsDetails {
+    pub refresh_interval_in_millis: usize,
+    pub name: String,
+    pub pretty_name: String,
+    pub arch: String,
+    pub version: String,
+    pub available_processors: usize,
+    pub allocated_processors: usize,
 }
 
 // Deserializing data structures
