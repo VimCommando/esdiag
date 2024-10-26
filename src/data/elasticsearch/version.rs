@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Cluster {
     #[serde(skip_deserializing)]
-    pub display_name: Option<String>,
+    pub display_name: String,
     #[serde(alias = "name")]
     pub diagnostic_node: String,
     #[serde(alias = "cluster_name")]
@@ -22,6 +22,18 @@ pub struct Cluster {
 
 impl Cluster {
     pub fn with_display_name(self, display_name: Option<String>) -> Self {
+        let display_name = match display_name {
+            Some(name) => {
+                // Removes Elastic Cloud appended hash from name
+                let stripped_name = regex::Regex::new(r"\(.*\)")
+                    .unwrap()
+                    .replace_all(&name, "")
+                    .to_string();
+                stripped_name.trim().to_string()
+            }
+            None => self.name.clone(),
+        };
+
         Self {
             display_name,
             ..self

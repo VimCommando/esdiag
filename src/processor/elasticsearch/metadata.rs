@@ -79,19 +79,14 @@ impl ElasticsearchMetadata {
             .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
             .unwrap();
 
-        // Create a human readable diagnostic ID
-        let name = match &cluster.display_name {
-            Some(name) if &runner == "ess" => {
-                let mut parts = name.split_whitespace().collect::<Vec<&str>>();
-                parts.pop();
-                parts.join("_")
-            }
-            Some(name) => name.replace(" ", "_"),
-            None => cluster.name.replace(" ", "_"),
-        };
         let uuid = Uuid::new_v4().to_string();
-        let hash = uuid.chars().take(4).collect::<String>();
-        let id = format!("{}@{}#{}", name, collection_date_string, hash);
+        // Human readable ID
+        let id = format!(
+            "{}@{}#{}",
+            cluster.display_name.replace(" ", "_"),
+            collection_date_string,
+            uuid.chars().take(4).collect::<String>()
+        );
 
         let diagnostic = DiagnosticDoc {
             collection_date: collection_date.clone(),
