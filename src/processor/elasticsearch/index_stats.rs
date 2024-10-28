@@ -42,16 +42,16 @@ impl DataProcessor<ElasticsearchMetadata> for IndicesStats {
                     }
                 };
                 let is_write_index = {
-                    data_stream.is_some_and(|ds| ds.is_write_index())
+                    data_stream.is_some_and(|ds| ds.is_write_index)
                         || alias.is_some_and(|a| a.is_write_index)
                 };
 
                 let since_creation = index_settings
                     .creation_date
-                    .map(|date| collection_date - date);
+                    .map(|creation_date| collection_date - creation_date);
                 let since_rollover = ilm
                     .and_then(|ilm| ilm.lifecycle_date_millis)
-                    .map(|date| collection_date - date);
+                    .map(|lifecycle_date| collection_date - lifecycle_date);
                 let is_before_rollover = ilm.is_some_and(|ilm| {
                     ilm.action
                         .as_ref()
@@ -63,7 +63,7 @@ impl DataProcessor<ElasticsearchMetadata> for IndicesStats {
                         match creation == rollover {
                             true if is_before_rollover => creation / 1000,
                             true => 0,
-                            false => (rollover - creation) / 1000,
+                            false => (creation - rollover) / 1000,
                         }
                     } else {
                         0
@@ -211,11 +211,10 @@ impl DataProcessor<ElasticsearchMetadata> for IndicesStats {
                 let bytes_per_day_pri = match write_phase_sec {
                     0 => 0,
                     x => {
-                        (index_stats.primaries["store"]["size_in_bytes"]
+                        index_stats.primaries["store"]["size_in_bytes"]
                             .as_i64()
                             .expect("Failed to get primaries.store.size_in_bytes")
-                            * 86_400)
-                            / x
+                            * (86_400 / x)
                     }
                 };
 

@@ -20,7 +20,8 @@ pub struct DataStream {
     pub ilm_policy: Option<String>,
     #[serde(skip_serializing)]
     pub indices: Indices,
-    pub is_write_index: Option<bool>,
+    #[serde(skip_deserializing)]
+    pub is_write_index: bool,
     pub name: String,
     pub next_generation_managed_by: Option<String>,
     pub prefer_ilm: Option<bool>,
@@ -33,15 +34,11 @@ pub struct DataStream {
 }
 
 impl DataStream {
-    pub fn is_write_index(&self) -> bool {
-        match self.is_write_index {
-            Some(value) => value,
-            None => false,
+    pub fn set_write_index(self, value: bool) -> Self {
+        Self {
+            is_write_index: value,
+            ..self
         }
-    }
-
-    pub fn set_write_index(&mut self, value: bool) {
-        self.is_write_index = Some(value);
     }
 }
 

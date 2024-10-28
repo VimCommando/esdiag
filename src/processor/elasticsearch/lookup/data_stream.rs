@@ -18,17 +18,25 @@ impl From<DataStreams> for Lookup<DataStream> {
         data_streams
             .data_streams
             .drain(..)
-            .enumerate()
-            .for_each(|(i, mut data_stream)| {
+            .for_each(|mut data_stream| {
                 let name = data_stream.name.clone();
-                let indices: Indices = data_stream.indices.drain(..).collect();
-                let index_count = indices.len() - 1;
-                data_stream.set_write_index(i == index_count);
-                lookup.add(data_stream).with_name(&name);
-                // Each data stream can have multiple indices
-                indices.iter().for_each(|index| {
-                    lookup.with_id(&index.index_name.clone());
-                });
+                let mut indices: Indices = data_stream.indices.drain(..).collect();
+                let write_index = indices.len() - 1;
+                let write_data_stream = data_stream.clone().set_write_index(true);
+                if write_index > 0 {
+                    lookup.add(data_stream).with_name(&name);
+                }
+
+                for (i, index) in indices.drain(..).enumerate() {
+                    if i == write_index {
+                        lookup
+                            .add(write_data_stream.clone())
+                            .with_name(&name)
+                            .with_id(&index.index_name.clone());
+                    } else {
+                        lookup.with_id(&index.index_name.clone());
+                    }
+                }
             });
 
         log::debug!("lookup data_stream entries: {}", lookup.len(),);
