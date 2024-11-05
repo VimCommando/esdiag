@@ -1,17 +1,8 @@
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{eyre, Result};
 use esdiag::{
-    client::Host,
-    data::{
-        diagnostic::{DiagnosticManifest, Manifest},
-        elasticsearch::Cluster,
-        Uri,
-    },
-    env::LOG_LEVEL,
-    exporter::Exporter,
-    processor::Diagnostic,
-    receiver::Receiver,
-    setup,
+    client::Host, data::Uri, env::LOG_LEVEL, exporter::Exporter, processor::Diagnostic,
+    receiver::Receiver, setup,
 };
 use url::Url;
 
@@ -190,17 +181,9 @@ async fn run() -> Result<&'static str> {
 
             let receiver = Receiver::try_from(input_uri.clone())?;
             let exporter = Exporter::try_from(output_uri.clone())?;
-            let manifest = if let Ok(manifest) = receiver.get::<DiagnosticManifest>().await {
-                log::debug!("Using diagnostic_manifest.json");
-                manifest
-            } else if let Ok(manifest) = receiver.get::<Manifest>().await {
-                log::warn!("Falling back to manifest.json");
-                manifest.try_into()?
-            } else {
-                log::warn!("Falling back to version.json");
-                let version = receiver.get::<Cluster>().await?;
-                Manifest::try_from(version)?.try_into()?
-            };
+
+            let manifest = receiver.try_get_manifest().await?;
+
             log::trace!("{}", serde_json::to_string(&manifest).unwrap());
             let diagnostic_processor =
                 Diagnostic::try_new_processor(manifest, receiver, exporter).await?;

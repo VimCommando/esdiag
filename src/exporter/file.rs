@@ -12,6 +12,15 @@ pub struct FileExporter {
     path: PathBuf,
 }
 
+impl Clone for FileExporter {
+    fn clone(&self) -> Self {
+        Self {
+            file: self.file.try_clone().expect("Failed to clone file"),
+            path: self.path.clone(),
+        }
+    }
+}
+
 impl TryFrom<PathBuf> for FileExporter {
     type Error = color_eyre::eyre::Report;
 

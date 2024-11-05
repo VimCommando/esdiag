@@ -34,12 +34,16 @@ impl DataSource for DiagnosticManifest {
 
 impl From<Manifest> for DiagnosticManifest {
     fn from(manifest: Manifest) -> Self {
+        let product = match manifest.diag_type.as_deref() {
+            Some("eck-diagnostics") => Product::ECK,
+            _ => Product::Elasticsearch,
+        };
         Self {
-            mode: manifest.diag_type,
-            product: manifest.product,
+            mode: Some("compatible".to_string()),
+            product,
             flags: manifest.diagnostic_inputs,
             diagnostic: manifest.diag_version,
-            r#type: Some("unknown".to_string()),
+            r#type: manifest.diag_type,
             runner: manifest.runner,
             version: manifest
                 .product_version

@@ -213,7 +213,9 @@ impl DataProcessor<ElasticsearchMetadata> for IndicesStats {
                     x => {
                         index_stats.primaries["store"]["size_in_bytes"]
                             .as_i64()
-                            .expect("Failed to get primaries.store.size_in_bytes")
+                            .expect(&format!(
+                                "Failed to parse {index} primaries.store.size_in_bytes"
+                            ))
                             * (86_400 / x)
                     }
                 };

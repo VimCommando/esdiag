@@ -9,13 +9,18 @@ use archive::ArchiveReceiver;
 use directory::DirectoryReceiver;
 use elasticsearch::ElasticsearchReceiver;
 
-use crate::data::{diagnostic::data_source::DataSource, Uri};
+use crate::data::{
+    diagnostic::{data_source::DataSource, DiagnosticManifest, Manifest},
+    elasticsearch::Cluster,
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde::de::DeserializeOwned;
 
 trait Receive {
     #[allow(dead_code)]
     async fn is_connected(&self) -> bool;
+    fn set_work_dir(&mut self, work_dir: &str) -> Result<()>;
     async fn get<T>(&self) -> Result<T>
     where
         T: DataSource + DeserializeOwned;
@@ -30,6 +35,7 @@ trait Receive {
 /// - `Archive`: Reads data from a `.zip` archive file.
 /// - `Directory`: Reads data from a directory in the local file system.
 /// - `Elasticsearch`: Requests data via API calls from an Elasticsearch service.
+#[derive(Clone)]
 pub enum Receiver {
     /// Read from a `.zip` archive file
     Archive(ArchiveReceiver),
@@ -50,6 +56,46 @@ impl Receiver {
             Receiver::Elasticsearch(elasticsearch_receiver) => {
                 elasticsearch_receiver.get::<T>().await
             }
+        }
+    }
+
+    pub async fn is_connected(&self) -> bool {
+        match self {
+            Receiver::Archive(archive_receiver) => archive_receiver.is_connected().await,
+            Receiver::Directory(directory_receiver) => directory_receiver.is_connected().await,
+            Receiver::Elasticsearch(elasticsearch_receiver) => {
+                elasticsearch_receiver.is_connected().await
+            }
+        }
+    }
+
+    pub fn set_work_dir(&mut self, work_dir: &str) -> Result<()> {
+        match self {
+            Receiver::Archive(archive_receiver) => archive_receiver.set_work_dir(work_dir),
+            Receiver::Directory(directory_receiver) => directory_receiver.set_work_dir(work_dir),
+            Receiver::Elasticsearch(elasticsearch_receiver) => {
+                elasticsearch_receiver.set_work_dir(work_dir)
+            }
+        }
+    }
+
+    pub fn clone_for_subdir(&self, sub_dir: &str) -> Result<Self> {
+        let mut receiver = self.clone();
+        receiver.set_work_dir(sub_dir)?;
+        Ok(receiver)
+    }
+
+    pub async fn try_get_manifest(&self) -> Result<DiagnosticManifest> {
+        if let Ok(manifest) = self.get::<DiagnosticManifest>().await {
+            log::debug!("Using diagnostic_manifest.json");
+            Ok(manifest)
+        } else if let Ok(manifest) = self.get::<Manifest>().await {
+            log::warn!("Falling back to manifest.json");
+            Ok(manifest.try_into()?)
+        } else {
+            log::warn!("Falling back to version.json");
+            let version = self.get::<Cluster>().await?;
+            Ok(Manifest::try_from(version)?.try_into()?)
         }
     }
 }

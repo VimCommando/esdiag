@@ -4,9 +4,11 @@ use color_eyre::eyre::{eyre, Result};
 use serde::de::DeserializeOwned;
 use std::{fs::File, io::BufReader, path::PathBuf};
 
+#[derive(Clone)]
 pub struct DirectoryReceiver {
     path: PathBuf,
     uri: Uri,
+    work_dir: String,
 }
 
 impl TryFrom<Uri> for DirectoryReceiver {
@@ -20,6 +22,7 @@ impl TryFrom<Uri> for DirectoryReceiver {
                     Ok(Self {
                         path: path.clone(),
                         uri,
+                        work_dir: String::from(""),
                     })
                 }
                 false => {
@@ -47,12 +50,17 @@ impl Receive for DirectoryReceiver {
     where
         T: DeserializeOwned + DataSource,
     {
-        let filename = &self.path.join(T::source(&self.uri)?);
+        let filename = &self.path.join(&self.work_dir).join(T::source(&self.uri)?);
         log::debug!("Reading file: {}", &filename.display());
         let file = File::open(&filename)?;
         let reader = BufReader::new(file);
         let data: T = serde_json::from_reader(reader)?;
         Ok(data)
+    }
+
+    fn set_work_dir(&mut self, work_dir: &str) -> Result<()> {
+        self.work_dir = String::from(work_dir);
+        Ok(())
     }
 }
 

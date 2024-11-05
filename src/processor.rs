@@ -1,3 +1,5 @@
+/// Processors for Elastic Cloud Kubernetes (ECK) diagnostics
+pub mod elastic_cloud_kubernetes;
 /// Processors for Elasticsearch diagnostics
 pub mod elasticsearch;
 /// Lookup processors
@@ -5,6 +7,7 @@ mod lookup;
 
 use std::sync::Arc;
 
+use elastic_cloud_kubernetes::ElasticCloudKubernetesDiagnostic;
 use elasticsearch::{ElasticsearchDiagnostic, Lookups};
 
 use crate::{
@@ -16,6 +19,7 @@ use color_eyre::eyre::{eyre, Result};
 
 pub enum Diagnostic {
     Elasticsearch(Box<ElasticsearchDiagnostic>),
+    ElasticCloudKubernetes(Box<ElasticCloudKubernetesDiagnostic>),
     //Kibana(KibanaDiagnostic)
     //Logstash(LogstashDiagnostic)
 }
@@ -36,6 +40,11 @@ impl Diagnostic {
                 let diagnostic = ElasticsearchDiagnostic::new(manifest, receiver, exporter).await?;
                 Ok(Self::Elasticsearch(diagnostic))
             }
+            Product::ECK => {
+                let diagnostic =
+                    ElasticCloudKubernetesDiagnostic::new(manifest, receiver, exporter).await?;
+                Ok(Self::ElasticCloudKubernetes(diagnostic))
+            }
             _ => Err(eyre!("Unsupported product or diagnostic bundle")),
         }
     }
@@ -43,6 +52,7 @@ impl Diagnostic {
     pub async fn run(self) -> Result<(String, usize)> {
         match self {
             Self::Elasticsearch(diagnostic) => diagnostic.run().await,
+            Self::ElasticCloudKubernetes(diagnostic) => diagnostic.run().await,
             //Self::Kibana(diagnostic) => diagnostic.run().await,
             //Self::Logstash(diagnostic) => diagnostic.run().await,
         }

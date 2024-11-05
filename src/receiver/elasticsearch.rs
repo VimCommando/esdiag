@@ -6,6 +6,7 @@ use elasticsearch::{http, Elasticsearch};
 use serde::de::DeserializeOwned;
 use url::Url;
 
+#[derive(Clone)]
 pub struct ElasticsearchReceiver {
     client: Elasticsearch,
     url: Url,
@@ -111,6 +112,12 @@ impl Receive for ElasticsearchReceiver {
 
         // turbo-fish serde deserialization of the JSON response
         response.json::<T>().await.map_err(Into::into)
+    }
+
+    fn set_work_dir(&mut self, work_dir: &str) -> Result<()> {
+        Err(eyre!(
+            "ElasticsearchReceiver does not support setting a working directory: {work_dir}"
+        ))
     }
 }
 

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use url::Url;
 
+#[derive(Clone)]
 pub struct ElasticsearchExporter {
     client: Elasticsearch,
     url: Url,

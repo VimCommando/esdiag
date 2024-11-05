@@ -2,6 +2,7 @@ use super::Export;
 use color_eyre::eyre::Result;
 use serde_json::Value;
 
+#[derive(Clone)]
 pub struct StreamExporter {}
 
 impl StreamExporter {

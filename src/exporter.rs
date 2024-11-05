@@ -28,6 +28,7 @@ trait Export {
 /// - `Elasticsearch`: Exports data to an Elasticsearch cluster using the `_bulk` API.
 /// - `File`: Exports data to a `.ndjson` file.
 /// - `Stream`: Exports data to standard output (stdout).
+#[derive(Clone)]
 pub enum Exporter {
     /// Export to an Elasticsearch cluster with the `_bulk` API
     Elasticsearch(ElasticsearchExporter),
@@ -52,6 +53,10 @@ impl Exporter {
             Exporter::File(_) => "file",
             Exporter::Stream(_) => "stream",
         }
+    }
+
+    pub fn cloned(&self) -> Self {
+        self.clone()
     }
 }
 

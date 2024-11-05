@@ -2,11 +2,26 @@ use super::Receive;
 use crate::data::{diagnostic::data_source::DataSource, Uri};
 use color_eyre::{eyre::eyre, Result};
 use serde::de::DeserializeOwned;
-use std::{fs::File, io::BufReader, path::PathBuf};
+use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
+use tokio::sync::RwLock;
+use zip::ZipArchive;
 
+#[derive(Clone)]
 pub struct ArchiveReceiver {
-    path: PathBuf,
+    archive: Arc<RwLock<ZipArchive<File>>>,
+    subdir: Option<PathBuf>,
     uri: Uri,
+}
+
+impl ArchiveReceiver {
+    async fn get_subdir(&self) -> Result<PathBuf> {
+        let mut archive = self.archive.write().await;
+        let mut path = PathBuf::from(archive.by_index(0)?.name().to_string());
+        if path.extension() != None {
+            path.pop();
+        }
+        Ok(path)
+    }
 }
 
 impl TryFrom<Uri> for ArchiveReceiver {
@@ -19,8 +34,9 @@ impl TryFrom<Uri> for ArchiveReceiver {
                 true => {
                     log::debug!("File is valid: {}", path.display());
                     Ok(Self {
-                        path: path.clone(),
+                        archive: Arc::new(RwLock::new(ZipArchive::new(File::open(path)?)?)),
                         uri,
+                        subdir: None,
                     })
                 }
                 false => {
@@ -34,12 +50,17 @@ impl TryFrom<Uri> for ArchiveReceiver {
 }
 
 impl Receive for ArchiveReceiver {
-    /// Check if the file is exists on the filesystem
     async fn is_connected(&self) -> bool {
-        let is_file = self.path.is_file();
-        let filename = self.path.to_str().unwrap_or("");
-        log::debug!("Directory {filename} is valid: {is_file}");
-        is_file
+        let archive = self.archive.read().await;
+        let is_empty = archive.is_empty();
+        if log::log_enabled!(log::Level::Trace) {
+            let file_names: Vec<String> =
+                archive.file_names().map(|name| name.to_string()).collect();
+            log::trace!("Files in archive: {:?}", file_names);
+        }
+        let filename = self.uri.to_string();
+        log::debug!("Directory {filename} is valid: {is_empty}");
+        is_empty
     }
 
     /// Read the type's file from the filesystem
@@ -47,32 +68,35 @@ impl Receive for ArchiveReceiver {
     where
         T: DeserializeOwned + DataSource,
     {
-        let mut archive = zip::ZipArchive::new(File::open(self.path.as_path())?)?;
         let filename = T::source(&self.uri)?;
-
-        // Use the first file in the archive to determine the path
-        let file_path = {
-            let mut path = PathBuf::from(archive.by_index(0)?.name().to_string());
-            if path.extension() != None {
-                path.pop();
+        let file_str = match &self.subdir {
+            // Ugly hack to make ECK bundles with double-slashed paths work
+            // This will break if the sub-paths are fixed in the ECK bundles
+            Some(subdir) => &format!("{}//{}", subdir.display(), filename),
+            None => {
+                let subdir = self.get_subdir().await.map(|s| s.join(filename))?;
+                &format!("{}", subdir.display())
             }
-            path.push(filename);
-            path.to_str()
-                .expect("Archive PathBuf to string failed")
-                .to_string()
         };
+        let mut archive = self.archive.write().await;
 
         // Read lines directly from the compressed file
-        log::debug!("Reading {}", file_path);
-        let file = archive.by_name(&file_path)?;
+        log::debug!("Reading {}", file_str);
+        let file = archive.by_name(&file_str)?;
         let reader = BufReader::new(file);
         let data: T = serde_json::from_reader(reader)?;
         Ok(data)
+    }
+
+    fn set_work_dir(&mut self, work_dir: &str) -> Result<()> {
+        log::trace!("Setting subdir: {}", work_dir);
+        self.subdir = Some(PathBuf::from(work_dir));
+        Ok(())
     }
 }
 
 impl std::fmt::Display for ArchiveReceiver {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.path.display())
+        write!(f, "{}", self.uri)
     }
 }
