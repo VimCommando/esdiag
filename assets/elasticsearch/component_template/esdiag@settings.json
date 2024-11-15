@@ -1,30 +1,29 @@
 {
-    "version": 1,
-    "template": {
-        "lifecycle": {
-            "data_retention": "15d"
-        },
-        "settings": {
-            "index": {
-                "lifecycle": {
-                    "prefer_ilm": false,
-                    "name": "metrics"
-                },
-                "mapping": {
-                    "total_fields": {
-                        "ignore_dynamic_beyond_limit": "true"
-                    }
-                },
-                "query": {
-                    "default_field": [
-                        "*.name"
-                    ]
-                }
-            }
-        }
+  "version": 1,
+  "template": {
+    "lifecycle": {
+      "data_retention": "15d"
     },
-    "_meta": {
-        "managed": false,
-        "description": "Default settings for the esdiag index templates"
+    "settings": {
+      "index": {
+        "codec": "best_compression",
+        "lifecycle": {
+          "prefer_ilm": false,
+          "name": "metrics"
+        },
+        "mapping": {
+          "total_fields": {
+            "ignore_dynamic_beyond_limit": "true"
+          }
+        },
+        "query": {
+          "default_field": ["*.name"]
+        }
+      }
     }
+  },
+  "_meta": {
+    "managed": false,
+    "description": "Default settings for the esdiag index templates"
+  }
 }
