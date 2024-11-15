@@ -10,7 +10,14 @@
           "type": "object",
           "properties": {
             "ip": {
-              "type": "ip"
+              "type": "ip",
+              "ignore_malformed": true
+            },
+            "tier": {
+              "type": "keyword"
+            },
+            "role": {
+              "type": "keyword"
             },
             "roles": {
               "type": "keyword"

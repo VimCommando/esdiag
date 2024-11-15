@@ -1,50 +1,82 @@
+/// Processors for Elastic Cloud Kubernetes (ECK) diagnostics
+pub mod elastic_cloud_kubernetes;
+/// Processors for Elasticsearch diagnostics
 pub mod elasticsearch;
-use crate::input::{manifest::Manifest, DataSet};
-use elasticsearch::metadata::Metadata;
-use elasticsearch::EsDataSet;
-use serde_json::Value;
-use std::collections::HashMap;
+/// Lookup processors
+mod lookup;
 
-pub struct Processor {
-    pub metadata: Metadata,
+use std::sync::Arc;
+
+use elastic_cloud_kubernetes::ElasticCloudKubernetesDiagnostic;
+use elasticsearch::{ElasticsearchDiagnostic, Lookups};
+
+use crate::{
+    data::diagnostic::{DiagnosticManifest, Product},
+    exporter::Exporter,
+    receiver::Receiver,
+};
+use color_eyre::eyre::{eyre, Result};
+
+pub enum Diagnostic {
+    Elasticsearch(Box<ElasticsearchDiagnostic>),
+    ElasticCloudKubernetes(Box<ElasticCloudKubernetesDiagnostic>),
+    //Kibana(KibanaDiagnostic)
+    //Logstash(LogstashDiagnostic)
 }
 
-impl Processor {
-    pub fn new(manifest: &Manifest, metadata_content: HashMap<String, String>) -> Self {
-        Processor {
-            metadata: Metadata::new(manifest, metadata_content),
-        }
-    }
-    pub fn enrich_lookup(&mut self, dataset: &DataSet, data: String) -> Option<Vec<Value>> {
-        match dataset {
-            DataSet::Elasticsearch(es_dataset) => match es_dataset {
-                EsDataSet::Nodes => Some(elasticsearch::nodes::enrich_lookup(
-                    &mut self.metadata,
-                    data,
-                )),
-                EsDataSet::IndexSettings => Some(elasticsearch::index_settings::enrich_lookup(
-                    &mut self.metadata,
-                    data,
-                )),
-                _ => None,
-            },
+impl Diagnostic {
+    pub async fn try_new_processor(
+        manifest: DiagnosticManifest,
+        receiver: Receiver,
+        exporter: Exporter,
+    ) -> Result<Self> {
+        log::info!("Processing {} diagnostic", manifest.product);
+        log::trace!(
+            "Diagnostic Manifest: {}",
+            serde_json::to_string(&manifest).unwrap()
+        );
+        match manifest.product {
+            Product::Elasticsearch => {
+                let diagnostic = ElasticsearchDiagnostic::new(manifest, receiver, exporter).await?;
+                Ok(Self::Elasticsearch(diagnostic))
+            }
+            Product::ECK => {
+                let diagnostic =
+                    ElasticCloudKubernetesDiagnostic::new(manifest, receiver, exporter).await?;
+                Ok(Self::ElasticCloudKubernetes(diagnostic))
+            }
+            _ => Err(eyre!("Unsupported product or diagnostic bundle")),
         }
     }
 
-    pub fn enrich(&self, dataset: &DataSet, data: String) -> Vec<Value> {
-        match dataset {
-            DataSet::Elasticsearch(es_dataset) => match es_dataset {
-                EsDataSet::ClusterSettings => {
-                    elasticsearch::cluster_settings::enrich(&self.metadata, data)
-                }
-                EsDataSet::IndexStats => elasticsearch::index_stats::enrich(&self.metadata, data),
-                EsDataSet::NodesStats => elasticsearch::nodes_stats::enrich(&self.metadata, data),
-                EsDataSet::Tasks => elasticsearch::tasks::enrich(&self.metadata, data),
-                EsDataSet::SearchableSnapshotStats => {
-                    elasticsearch::searchable_snapshots_stats::enrich(&self.metadata, data)
-                }
-                _ => Vec::<Value>::new(),
-            },
+    pub async fn run(self) -> Result<(String, usize)> {
+        match self {
+            Self::Elasticsearch(diagnostic) => diagnostic.run().await,
+            Self::ElasticCloudKubernetes(diagnostic) => diagnostic.run().await,
+            //Self::Kibana(diagnostic) => diagnostic.run().await,
+            //Self::Logstash(diagnostic) => diagnostic.run().await,
         }
     }
+}
+
+trait DataProcessor<T> {
+    fn generate_docs(
+        self,
+        lookups: Arc<Lookups>,
+        metadata: Arc<T>,
+    ) -> (String, Vec<serde_json::Value>);
+}
+
+trait DiagnosticProcessor {
+    async fn new(
+        manifest: DiagnosticManifest,
+        receiver: Receiver,
+        exporter: Exporter,
+    ) -> Result<Box<Self>>;
+    async fn process_queue(&self) -> usize;
+    async fn run(self) -> Result<(String, usize)>;
+}
+
+trait Metadata {
+    fn as_meta_doc(&self) -> serde_json::Value;
 }

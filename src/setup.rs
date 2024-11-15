@@ -1,8 +1,14 @@
-use crate::input::file;
-use crate::output::{Output, Target};
+use crate::exporter::Exporter;
+use color_eyre::eyre::{eyre, Result};
+use include_dir::{include_dir, Dir};
 use serde::Deserialize;
 use serde_json::{from_slice, Value};
 use std::path::PathBuf;
+
+// Subdirectory for templates and configs files
+pub static ASSETS_DIR: Dir = include_dir!("assets");
+pub static ELASTICSEARCH_ASSETS: &str = "elasticsearch/assets.yml";
+pub static ELASTICSEARCH_SOURCES: &str = "elasticsearch/sources.yml";
 
 #[derive(Deserialize)]
 pub struct Asset {
@@ -14,35 +20,34 @@ pub struct Asset {
     pub suffix: Option<String>,
 }
 
-pub async fn assets(output: Output) -> Result<(), Box<dyn std::error::Error>> {
-    // load asset list from ./assets/{product}/assets.yml
-    let assets = file::parse_assets_yml(&output.target)?;
-    match output.test().await {
-        Ok(body) => log::debug!("Elasticsearch response: {body}"),
-        Err(e) => {
-            log::error!("Elasticsearch connection: FAILED {}", e);
-            std::process::exit(1);
+/// Submit saved assets to the Elasticsearch APIs
+pub async fn assets(exporter: Exporter) -> Result<()> {
+    match exporter {
+        Exporter::File(_) | Exporter::Stream(_) => {
+            return Err(eyre!("Setup only supports Elasticsearch."))
         }
+        _ => {}
     }
+
+    // load asset list from ./assets/{product}/assets.yml
+    let assets = parse_assets_yml(&exporter)?;
 
     for asset in assets {
         log::info!("Processing asset: {}", &asset.name);
         let dir_str = format!(
             "{}/{}",
-            &output.target,
+            &exporter.as_str(),
             &asset.subdir.unwrap_or("".to_string())
         );
         let subdir = PathBuf::from(dir_str);
-        let files = match file::ASSETS_DIR.get_dir(&subdir) {
+        let files = match ASSETS_DIR.get_dir(&subdir) {
             Some(dir) => dir.files(),
-            None => {
-                return Err("No assets directory found".into());
-            }
+            None => return Err(eyre!("No assets directory found")),
         };
 
         // send assets to Elasticsearch
-        match output.target {
-            Target::Elasticsearch(ref client) => {
+        match exporter {
+            Exporter::Elasticsearch(ref exporter) => {
                 // for each asset, send to Elasticsearch
                 for file in files {
                     log::debug!("file.path: {:?}", &file.path());
@@ -60,8 +65,10 @@ pub async fn assets(output: Output) -> Result<(), Box<dyn std::error::Error>> {
                         &stem,
                         asset.suffix.clone().unwrap_or("".to_string()),
                     );
-                    let response = client.send_asset(&endpoint, &value, &asset.method).await;
-                    match response {
+                    match exporter
+                        .send(&asset.method, &endpoint, value.as_ref())
+                        .await
+                    {
                         Ok(response) => match response.status_code().is_success() {
                             true => {
                                 log::info!(
@@ -77,13 +84,24 @@ pub async fn assets(output: Output) -> Result<(), Box<dyn std::error::Error>> {
                                 log::error!("Asset sent ERROR: {body}");
                             }
                         },
-
                         Err(e) => log::error!("Failed to send asset: {e:?}"),
                     }
                 }
             }
-            _ => log::error!("Output target not supported"),
+            _ => return Err(eyre!("Output target not supported")),
         }
     }
     Ok(())
+}
+
+/// Parses the assets YAML file for the given exporter. Currently only supports Elasticsearch.
+fn parse_assets_yml(exporter: &Exporter) -> Result<Vec<Asset>> {
+    let file = match exporter {
+        Exporter::Elasticsearch(_) => ASSETS_DIR
+            .get_file(ELASTICSEARCH_ASSETS)
+            .ok_or(eyre!("Error reading {ELASTICSEARCH_ASSETS}"))?,
+        _ => return Err(eyre!("Application not implemented")),
+    };
+    let assets = serde_yaml::from_slice(file.contents())?;
+    Ok(assets)
 }

@@ -1,141 +1,78 @@
-use super::lookup::node::NodeData;
-use super::metadata::{DataStream, Metadata, MetadataDoc};
+use super::{DataProcessor, ElasticsearchMetadata, Lookups, NodeSummary};
+use crate::{
+    data::elasticsearch::{NodeTasks, ParentTask, Task, Tasks},
+    processor::Metadata,
+};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde::Serialize;
+use serde_json::Value;
+use std::sync::Arc;
 
-pub fn enrich(metadata: &Metadata, data: String) -> Vec<Value> {
-    let data = match serde_json::from_str::<Nodes>(&data) {
-        Ok(data) => data,
-        Err(e) => {
-            log::error!("Failed to deserialize tasks: {}", e);
-            return Vec::new();
-        }
-    };
-    let lookup = &metadata.lookup;
-    let metadata = &metadata.as_doc;
-    let nodes: Vec<(_, _)> = data.nodes.into_iter().collect();
+impl DataProcessor<ElasticsearchMetadata> for Tasks {
+    fn generate_docs(
+        self,
+        lookups: Arc<Lookups>,
+        metadata: Arc<ElasticsearchMetadata>,
+    ) -> (String, Vec<Value>) {
+        log::debug!("processing tasks");
+        let data_stream = "metrics-task-esdiag".to_string();
+        let lookup_node = &lookups.node;
+        let task_metadata = metadata.for_data_stream(&data_stream).as_meta_doc();
 
-    let task_doc = TaskDoc::new(metadata.clone(), DataStream::from("metrics-task-esdiag"));
+        let nodes: Vec<(String, NodeTasks)> = self.nodes.into_par_iter().collect();
 
-    let tasks: Vec<Value> = nodes
-        .into_par_iter()
-        .flat_map(|(node_id, node)| {
-            node.tasks
-                .iter()
-                .collect::<Vec<_>>()
-                .into_par_iter()
-                .map(|(_, task)| {
-                    let node = lookup.node.by_id(node_id.as_str()).cloned();
-                    let task_doc = task_doc.clone().with(node, task.clone());
-                    json!(task_doc)
-                })
-                .collect::<Vec<Value>>()
-        })
-        .collect();
+        let tasks: Vec<Value> = nodes
+            .into_par_iter()
+            .flat_map(|(node_id, node)| {
+                node.tasks
+                    .iter()
+                    .collect::<Vec<_>>()
+                    .into_par_iter()
+                    .map(|(_, task)| {
+                        let node = lookup_node
+                            .by_id(node_id.as_str())
+                            .cloned()
+                            .expect("Node not found for task");
+                        serde_json::to_value(TaskDoc::new(task, task_metadata.clone(), node))
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<Value>>()
+            })
+            .collect();
 
-    log::debug!("task docs: {}", tasks.len());
-    tasks
+        log::debug!("task docs: {}", tasks.len());
+        (data_stream, tasks)
+    }
 }
-
-// Serializing data structures
 
 #[derive(Clone, Serialize)]
 pub struct TaskDoc {
     #[serde(flatten)]
-    metadata: MetadataDoc,
-    data_stream: DataStream,
-    node: Option<NodeData>,
-    task: Option<TaskData>,
+    metadata: Value,
+    node: NodeSummary,
+    task: TaskWithParent,
 }
 
 impl TaskDoc {
-    pub fn new(metadata: MetadataDoc, data_stream: DataStream) -> Self {
+    pub fn new(task: &Task, metadata: Value, node: NodeSummary) -> Self {
+        let parent = task
+            .parent_task_id
+            .as_ref()
+            .map(|id| ParentTask::from(id.clone()));
         TaskDoc {
-            data_stream,
-            metadata,
-            node: None,
-            task: None,
-        }
-    }
-
-    pub fn with(mut self, node: Option<NodeData>, task: Task) -> Self {
-        self.node = node;
-        self.task = Some(TaskData::from(task));
-        self
-    }
-}
-
-#[derive(Clone, Serialize)]
-pub struct TaskData {
-    id: u64,
-    r#type: String,
-    action: String,
-    description: String,
-    start_time_in_millis: u64,
-    running_time_in_nanos: u64,
-    cancellable: bool,
-    cancelled: Option<bool>,
-    parent_task: Option<ParentTask>,
-    headers: Option<Value>,
-}
-
-impl TaskData {
-    pub fn from(task: Task) -> Self {
-        TaskData {
-            id: task.id,
-            r#type: task.r#type,
-            action: task.action,
-            description: task.description,
-            start_time_in_millis: task.start_time_in_millis,
-            running_time_in_nanos: task.running_time_in_nanos,
-            cancellable: task.cancellable,
-            cancelled: task.cancelled,
-            parent_task: task.parent_task_id.as_ref().map(|id| ParentTask::from(id)),
-            headers: task.headers.clone(),
+            metadata: metadata.clone(),
+            node,
+            task: TaskWithParent {
+                task: task.clone(),
+                parent,
+            },
         }
     }
 }
 
 #[derive(Clone, Serialize)]
-pub struct ParentTask {
-    id: u64,
-    node: String,
-}
-
-impl ParentTask {
-    pub fn from(parent_task: &String) -> Self {
-        let mut parts = parent_task.split(':');
-        ParentTask {
-            id: parts.next().unwrap_or_default().parse().unwrap_or_default(),
-            node: parts.next().unwrap_or_default().to_string(),
-        }
-    }
-}
-
-// Deserializing data structures
-
-#[derive(Debug, Deserialize)]
-struct Nodes {
-    nodes: HashMap<String, Node>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Node {
-    tasks: HashMap<String, Task>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct Task {
-    id: u64,
-    r#type: String,
-    action: String,
-    description: String,
-    start_time_in_millis: u64,
-    running_time_in_nanos: u64,
-    cancellable: bool,
-    cancelled: Option<bool>,
-    parent_task_id: Option<String>,
-    headers: Option<Value>,
+pub struct TaskWithParent {
+    #[serde(flatten)]
+    task: Task,
+    parent: Option<ParentTask>,
 }

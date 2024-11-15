@@ -1,54 +1,42 @@
-use super::{Lookup, LookupDisplay};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::{
+    data::elasticsearch::{Alias, AliasList},
+    processor::lookup::Lookup,
+};
+use color_eyre::eyre::Result;
 
-#[derive(Clone, Debug, Serialize)]
-pub struct AliasDoc {
-    pub name: String,
-    pub is_hidden: bool,
-    pub is_write_index: bool,
-}
-
-impl AliasDoc {
-    fn new(alias_name: String, data: AliasData) -> Self {
-        Self {
-            name: alias_name,
-            is_hidden: data.is_hidden.unwrap_or(false),
-            is_write_index: data.is_write_index.unwrap_or(false),
-        }
-    }
-}
-
-impl LookupDisplay for AliasDoc {
-    fn display() -> &'static str {
-        "alias_doc"
-    }
-}
-
-impl From<String> for Lookup<AliasDoc> {
+impl From<String> for Lookup<Alias> {
     fn from(string: String) -> Self {
-        let index_alias: HashMap<String, IndexAlias> =
+        let alias_list: AliasList =
             serde_json::from_str(&string).expect("Failed to parse AliasData");
-        let mut lookup_alias: Lookup<AliasDoc> = Lookup::new();
+        Lookup::<Alias>::from(alias_list)
+    }
+}
 
-        for (index_name, index_data) in index_alias {
-            for (alias_name, alias_data) in index_data.aliases {
-                let alias_doc = AliasDoc::new(alias_name, alias_data);
-                lookup_alias.add(alias_doc).with_name(&index_name);
+impl From<AliasList> for Lookup<Alias> {
+    fn from(mut alias_list: AliasList) -> Self {
+        let mut lookup: Lookup<Alias> = Lookup::new();
+        alias_list.drain().for_each(|(index_name, mut aliases)| {
+            aliases
+                .aliases
+                .drain()
+                .for_each(|(alias_name, alias_settings)| {
+                    let alias = Alias::from(alias_settings).with_name(alias_name);
+                    lookup.add(alias).with_name(&index_name);
+                });
+        });
+        log::debug!("lookup alias entries: {}", lookup.len());
+        lookup
+    }
+}
+
+impl From<Result<AliasList>> for Lookup<Alias> {
+    fn from(alias_list: Result<AliasList>) -> Self {
+        match alias_list {
+            Ok(alias_list) => Lookup::<Alias>::from(alias_list),
+            Err(e) => {
+                log::warn!("Failed to parse AliasList: {}", e);
+                Lookup::new()
             }
         }
-        log::debug!("lookup_alias entries: {}", lookup_alias.entries.len());
-        lookup_alias
     }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct AliasData {
-    is_hidden: Option<bool>,
-    is_write_index: Option<bool>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct IndexAlias {
-    aliases: HashMap<String, AliasData>,
 }

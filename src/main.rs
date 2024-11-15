@@ -1,29 +1,13 @@
-mod env;
-mod host;
-mod input;
-mod output;
-mod processor;
-mod setup;
-mod uri;
-
 use clap::{Parser, Subcommand};
-use env::LOG_LEVEL;
-use futures::future::join_all;
-use futures::stream::FuturesUnordered;
-use host::Host;
-use input::{manifest::Manifest, Input};
-use log;
-use output::Output;
-use processor::Processor;
-use std::{collections::HashMap, panic, str::FromStr, sync::Arc};
-use tokio::task;
-use uri::Uri;
+use color_eyre::eyre::{eyre, Result};
+use esdiag::{
+    client::Host, data::Uri, env::LOG_LEVEL, exporter::Exporter, processor::Diagnostic,
+    receiver::Receiver, setup,
+};
 use url::Url;
 
-use crate::output::file;
-
 // Define command line arguments
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(name = "esdiag")]
 #[command(about = "Elastic Stack Diagnostics (esdiag) - collect diagnostics and import into Elasticsearch", long_about = None)]
 struct Cli {
@@ -31,7 +15,7 @@ struct Cli {
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Commands {
     /// [NOT IMPLEMENTED] Collects diagnostics from a host's API endpoints
     Collect {
@@ -41,16 +25,6 @@ enum Commands {
         /// The output directory to save the diagnostics to
         #[arg(help = "Theoutput to save the diagnostics to (file, directory)")]
         output: String,
-    },
-    /// Process, enrich and import a diagnostic into Elasticsearch
-    Import {
-        /// The target to write processed diagnostic data to
-        #[arg(help = "Target to write processed diagnostic documents to (`-` for stdout)")]
-        target: String,
-
-        /// The source to read diagnostic data from
-        #[arg(help = "Source to read diagnostic data from")]
-        source: String,
     },
     /// Configure and test a remote host connection
     Host {
@@ -89,6 +63,16 @@ enum Commands {
         #[arg(help = "Save the host configuration", long, short)]
         save: bool,
     },
+    /// Process, enrich and import a diagnostic into Elasticsearch
+    Import {
+        /// The target to write processed diagnostic data to
+        #[arg(help = "Target to write processed diagnostic documents to (`-` for stdout)")]
+        target: String,
+
+        /// The source to read diagnostic data from
+        #[arg(help = "Source to read diagnostic data from")]
+        source: String,
+    },
     /// Setup required assets to visualize diagnostic imports
     Setup {
         /// Known host to setup assets in, only supports Elasticsearch or Kibana
@@ -98,55 +82,43 @@ enum Commands {
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
-async fn main() {
+async fn main() -> Result<()> {
     let env = env_logger::Env::default().filter_or("LOG_LEVEL", LOG_LEVEL);
     env_logger::Builder::from_env(env)
         .format_timestamp_millis()
-        //.target(env_logger::Target::Stdout)
         .init();
+    color_eyre::install()?;
 
-    panic::set_hook(Box::new(|panic| {
-        // Use the error level to log the panic
+    std::panic::set_hook(Box::new(|panic| {
+        // Log any panics as errors
         log::debug!("{:?}", panic);
         log::error!("{}", panic);
     }));
 
+    clear_last_run_files()?;
+
+    match run().await {
+        Ok(cmd) => {
+            log::info!("{cmd} complete");
+            Ok(())
+        }
+        Err(e) => {
+            log::error!("{}", e);
+            Err(eyre!(e))
+        }
+    }
+}
+
+async fn run() -> Result<&'static str> {
     // use clap to parse command line arguments
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Collect { host, output } => {
-            unimplemented!(
-                "Collect command not yet implemented! host: {}, output: {}",
-                host,
-                output
-            );
-            //log::info!("Collecting diagnostics from {}", host);
-            //collect_diagnostics(host, output).await;
-        }
-        Commands::Import { target, source } => {
-            let output_uri = match uri::classify(target) {
-                Ok(uri) => uri,
-                Err(e) => {
-                    log::debug!("Invalid target: {:?}", e);
-                    panic!("Invalid ouput: {}", target);
-                }
-            };
-            let input_uri = match uri::classify(source) {
-                Ok(uri) => uri,
-                Err(e) => {
-                    log::debug!("Invalid source: {:?}", e);
-                    panic!("Invalid input: {}", source);
-                }
-            };
-            log::info!("input: {}", input_uri);
-            log::info!("output: {}", output_uri);
-
-            let manifest = Manifest::from_uri(&input_uri).expect("Failed to parse manifest");
-            let input = Input::new(input_uri, manifest);
-            let output = Output::from_uri(output_uri);
-            import_diagnostics(input, output).await;
-        }
+        Commands::Collect { host, output } => Err(eyre!(
+            "Collect command not yet implemented! host: {}, output: {}",
+            host,
+            output
+        )),
         Commands::Host {
             name,
             app,
@@ -160,164 +132,89 @@ async fn main() {
             save,
         } => {
             log::info!("Configuring host {name}");
-            // Fix misleading error message when either host and app are missing
-            let host = match Host::get_known(name) {
-                Some(host) => host,
-                None => match app {
-                    None => {
-                        log::error!("Application must be specified for new host configurations");
-                        return;
-                    }
-                    Some(app) => Host::new(
-                        url.clone().unwrap(),
-                        app.clone(),
-                        auth.clone(),
-                        accept_invalid_certs.clone(),
-                        apikey.clone(),
-                        cloud_id.clone(),
-                        username.clone(),
-                        password.clone(),
-                    ),
-                },
+            let host = match app.is_some() && url.is_some() {
+                false => Host::get_known(&name).ok_or(eyre!(
+                    "Host {name} not found, include `app` and `url` to setup a new host."
+                ))?,
+                true => Host::new(
+                    url.clone().unwrap(),
+                    app.clone().unwrap(),
+                    auth.clone(),
+                    accept_invalid_certs.clone(),
+                    apikey.clone(),
+                    cloud_id.clone(),
+                    username.clone(),
+                    password.clone(),
+                ),
             };
 
             let valid_connection = match host.test().await {
-                Ok(response) => {
-                    log::info!("Host connection {name}: {}", response.status());
-                    true
+                Ok((is_valid, message)) => {
+                    match is_valid {
+                        true => log::info!("Host {name}: {}", &message),
+                        false => log::warn!("Host {name}: {}", &message),
+                    }
+                    is_valid
                 }
                 Err(e) => {
-                    log::error!("Host connection: FAILED {:?}", e);
+                    log::error!("Host connection: FAILED ❌ {}", &e);
+                    log::debug!("{:?}", e);
+                    log::warn!("Check your URL and certificates!");
                     false
                 }
             };
 
-            if valid_connection && *save {
-                match host.save(name.to_string()) {
-                    Ok(_) => {
-                        let hosts_file = host::get_hosts_path();
-                        log::info!(
-                            "Host '{name}' saved to {}",
-                            hosts_file.to_str().expect("Failed to get hosts file path")
-                        );
-                    }
-                    Err(e) => log::error!("Failed to save host configuration: {}", e),
-                }
+            if *save {
+                let hostfile = host.save(name.to_string())?;
+                log::info!("Host {name} successfully saved to {hostfile}");
             }
+            match valid_connection {
+                true => Ok("host"),
+                false => Err(eyre!("Host connection failed")),
+            }
+        }
+        Commands::Import { target, source } => {
+            let output_uri = Uri::parse(target)?;
+            let input_uri = Uri::parse(source)?;
+            log::info!("input: {}", input_uri);
+            log::info!("output: {}", output_uri);
+
+            let receiver = Receiver::try_from(input_uri.clone())?;
+            let exporter = Exporter::try_from(output_uri.clone())?;
+
+            let manifest = receiver.try_get_manifest().await?;
+
+            log::trace!("{}", serde_json::to_string(&manifest).unwrap());
+            let diagnostic_processor =
+                Diagnostic::try_new_processor(manifest, receiver, exporter).await?;
+            let (diag_id, doc_count) = diagnostic_processor.run().await?;
+            log::info!(
+                "Created {} documents for diagnostic: {}",
+                doc_count,
+                diag_id
+            );
+            Ok("import")
         }
         Commands::Setup { host } => {
             log::info!("Setting up Elasticsearch assets in {host}");
-            let host = Host::from_str(host).unwrap();
-            let output = Output::from_host(host);
-            match setup::assets(output).await {
-                Ok(_) => log::info!("Assets setup complete"),
-                Err(e) => log::error!("Failed to setup assets: {}", e),
-            };
+            let uri = Uri::parse(host)?;
+            let exporter = Exporter::try_from(uri)?;
+            setup::assets(exporter).await?;
+            Ok("setup")
         }
     }
 }
 
-async fn import_diagnostics(input: Input, output: Output) {
-    let metadata_content: HashMap<String, String> = input
-        .dataset
-        .metadata
-        .iter()
-        .filter_map(|dataset| match input.load_string(dataset) {
-            Some(data) => Some((dataset.to_string(), data)),
-            None => {
-                log::warn!("Failed to load metadata for {}", dataset.to_string());
-                None
-            }
-        })
-        .collect();
-
-    log::debug!("metadata_content keys: {:?}", metadata_content.keys());
-
-    let mut processor = Processor::new(&input.manifest, metadata_content);
-
-    let futures = FuturesUnordered::new();
-    let input = Arc::new(input);
-    let output = Arc::new(output);
-
-    for lookup in &input.dataset.lookup {
-        let lookup_name = lookup.to_string();
-
-        match input.load_string(&lookup) {
-            Some(data) => {
-                if let Some(docs) = processor.enrich_lookup(&lookup, data) {
-                    let output: Arc<Output> = Arc::clone(&output);
-                    let future = task::spawn(async move {
-                        let count = output.send(docs).await.unwrap_or_else(|e| {
-                            log::error!("Failed to send data to output: {}", e);
-                            0
-                        });
-                        log::info!(
-                            "Sent {} docs for {} to {}",
-                            &count,
-                            lookup_name,
-                            output.target,
-                        );
-                        count
-                    });
-                    futures.push(future);
-                }
-            }
-            None => {
-                log::info!("No docs for lookup: {}", lookup.to_string());
-            }
-        }
+fn clear_last_run_files() -> Result<()> {
+    let last_run = std::path::PathBuf::from(std::env::var("HOME")?).join(".esdiag/last_run");
+    if !last_run.exists() {
+        std::fs::create_dir_all(&last_run)?;
     }
-
-    // If debug logging, save metadata to file
-    if log::log_enabled!(log::Level::Debug) {
-        for (input, data) in processor.metadata.to_hashmap() {
-            file::write_ndjson_if_debug(data, "metadata.ndjson", true).ok();
-            log::info!("metadata.json - added {}", input);
-        }
+    let files = vec!["bulk_errors.ndjson", "diagnostic.json"];
+    for file in files {
+        let file = last_run.join(file);
+        log::debug!("Removing {}", &file.display());
+        let _ = std::fs::remove_file(file);
     }
-
-    let data_sets = input.dataset.data.clone();
-    let processor = Arc::new(processor);
-
-    // Process each data set in parallel and push the resulting futures into `futures`
-    for data_set in data_sets {
-        let name = data_set.to_string();
-        let input: Arc<Input> = Arc::clone(&input);
-        let processor: Arc<Processor> = Arc::clone(&processor);
-        let output: Arc<Output> = Arc::clone(&output);
-
-        let future = task::spawn(async move {
-            let data = task::spawn_blocking(move || match input.load_string(&data_set) {
-                Some(string) => processor.enrich(&data_set, string),
-                None => {
-                    log::warn!("Failed to load data for {}", data_set.to_string());
-                    Vec::new()
-                }
-            })
-            .await
-            .unwrap_or_else(|e| {
-                log::error!("Failed to enrich data: {}", e);
-                Vec::new()
-            });
-
-            let count = output.send(data).await.unwrap_or_else(|e| {
-                log::error!("Failed to send data to output: {}", e);
-                0
-            });
-            log::info!("Sent {} docs for {} to {}", count, name, output.target,);
-            count
-        });
-        futures.push(future);
-    }
-
-    // Await all futures to complete, and sum the total count of docs processed
-    let doc_count = join_all(futures).await;
-
-    log::debug!("{}", input.dataset,);
-    log::info!(
-        "Import complete! Sent {} docs from {} sources for diagnostic: {}",
-        doc_count.into_iter().map(|x| x.unwrap_or(0)).sum::<usize>(),
-        input.dataset.len(),
-        &processor.metadata.diagnostic.uuid
-    );
+    Ok(())
 }

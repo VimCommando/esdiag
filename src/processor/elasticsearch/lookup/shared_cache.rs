@@ -1,48 +1,41 @@
-use super::{Lookup, LookupDisplay};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct SharedCacheStats {
-    pub reads: u64,
-    pub bytes_read_in_bytes: u64,
-    pub writes: u64,
-    pub bytes_written_in_bytes: u64,
-    pub evictions: u64,
-    pub num_regions: u64,
-    pub size_in_bytes: u64,
-    pub region_size_in_bytes: u64,
-}
+use crate::{
+    data::elasticsearch::{SearchableSnapshotsCacheStats, SharedCacheStats},
+    processor::lookup::Lookup,
+};
+use color_eyre::eyre::Result;
 
 impl From<&String> for Lookup<SharedCacheStats> {
     fn from(string: &String) -> Self {
-        let nodes: Nodes = serde_json::from_str(&string).expect("Failed to parse SharedCacheStats");
-        let mut lookup_shared_cache: Lookup<SharedCacheStats> = Lookup::new();
+        let nodes: SearchableSnapshotsCacheStats =
+            serde_json::from_str(&string).expect("Failed to parse SharedCacheStats");
+        Lookup::<SharedCacheStats>::from(nodes)
+    }
+}
 
-        for (node_id, node) in nodes.nodes {
-            lookup_shared_cache.add(node.shared_cache).with_id(&node_id);
+impl From<SearchableSnapshotsCacheStats> for Lookup<SharedCacheStats> {
+    fn from(mut searchable_snapshots_cache_stats: SearchableSnapshotsCacheStats) -> Self {
+        let mut lookup: Lookup<SharedCacheStats> = Lookup::new();
+
+        searchable_snapshots_cache_stats
+            .nodes
+            .drain()
+            .for_each(|(node_id, node)| {
+                lookup.add(node.shared_cache).with_id(&node_id);
+            });
+
+        log::debug!("lookup shared_cache entries: {}", lookup.len(),);
+        lookup
+    }
+}
+
+impl From<Result<SearchableSnapshotsCacheStats>> for Lookup<SharedCacheStats> {
+    fn from(stats_result: Result<SearchableSnapshotsCacheStats>) -> Self {
+        match stats_result {
+            Ok(stats) => Lookup::<SharedCacheStats>::from(stats),
+            Err(e) => {
+                log::warn!("Failed to parse SearchableSnapshotsCacheStats: {}", e);
+                Lookup::new()
+            }
         }
-
-        log::debug!(
-            "lookup_shared_cache entries: {}",
-            lookup_shared_cache.entries.len(),
-        );
-        lookup_shared_cache
     }
-}
-
-impl LookupDisplay for SharedCacheStats {
-    fn display() -> &'static str {
-        "shared_cache_stats"
-    }
-}
-
-#[derive(Clone, Deserialize)]
-struct Nodes {
-    nodes: HashMap<String, SharedCache>,
-}
-
-#[derive(Clone, Deserialize)]
-struct SharedCache {
-    shared_cache: SharedCacheStats,
 }
