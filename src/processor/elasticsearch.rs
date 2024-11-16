@@ -155,7 +155,7 @@ type DataProcessorTask = Pin<Box<JoinHandle<usize>>>;
 
 fn spawn_processor<T>(diagnostic: Arc<ElasticsearchDiagnostic>) -> DataProcessorTask
 where
-    T: DataSource + DataProcessor<ElasticsearchMetadata> + DeserializeOwned + Send + Sync,
+    T: DataSource + DataProcessor<Lookups, ElasticsearchMetadata> + DeserializeOwned + Send + Sync,
 {
     let lookups = diagnostic.lookups.clone();
     let metadata = diagnostic.metadata.clone();

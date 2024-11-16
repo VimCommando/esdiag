@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-impl DataProcessor<ElasticsearchMetadata> for IndicesStats {
+impl DataProcessor<Lookups, ElasticsearchMetadata> for IndicesStats {
     fn generate_docs(
         self,
         lookups: Arc<Lookups>,

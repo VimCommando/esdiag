@@ -66,12 +66,8 @@ impl Diagnostic {
     }
 }
 
-trait DataProcessor<T> {
-    fn generate_docs(
-        self,
-        lookups: Arc<Lookups>,
-        metadata: Arc<T>,
-    ) -> (String, Vec<serde_json::Value>);
+trait DataProcessor<T, U> {
+    fn generate_docs(self, lookups: Arc<T>, metadata: Arc<U>) -> (String, Vec<serde_json::Value>);
 }
 
 trait DiagnosticProcessor {

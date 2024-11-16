@@ -16,9 +16,12 @@ pub struct LogstashVersion {
     status: String,
     snapshot: bool,
     pipeline: Pipeline,
-    build_date: String,
-    build_sha: String,
-    build_snapshot: bool,
+    #[serde(skip_serializing)]
+    pub build_date: Option<String>,
+    #[serde(skip_serializing)]
+    pub build_sha: Option<String>,
+    #[serde(skip_serializing)]
+    pub build_snapshot: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]

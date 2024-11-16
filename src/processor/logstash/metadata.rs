@@ -9,7 +9,7 @@ use serde_json::Value;
 
 #[derive(Clone, Serialize)]
 pub struct LogstashMetadata {
-    pub logstash: LogstashVersion,
+    pub node: LogstashVersion,
     pub diagnostic: DiagnosticDoc,
     pub timestamp: i64,
     pub as_doc: MetadataDoc,
@@ -19,7 +19,7 @@ pub struct LogstashMetadata {
 pub struct MetadataDoc {
     #[serde(rename = "@timestamp")]
     pub timestamp: i64,
-    pub logstash: LogstashVersion,
+    pub node: LogstashVersion,
     pub diagnostic: DiagnosticDoc,
     pub data_stream: DataStreamName,
 }
@@ -31,23 +31,30 @@ impl Metadata for MetadataDoc {
 }
 
 impl LogstashMetadata {
-    pub fn try_new(manifest: DiagnosticManifest, logstash: LogstashVersion) -> Result<Self> {
-        let name = logstash.name.replace(" ", "_");
+    pub fn try_new(manifest: DiagnosticManifest, node: LogstashVersion) -> Result<Self> {
+        let name = node.name.replace(" ", "_");
         let diagnostic = DiagnosticDoc::try_from(manifest.with_name(name))?;
         let timestamp = diagnostic.collection_date;
 
         let as_doc = MetadataDoc {
             timestamp,
-            logstash: logstash.clone(),
+            node: node.clone(),
             diagnostic: diagnostic.clone(),
             data_stream: DataStreamName::from("metrics-default-esdiag"),
         };
 
         Ok(Self {
             as_doc,
-            logstash,
+            node,
             diagnostic,
             timestamp,
         })
+    }
+
+    pub fn for_data_stream(&self, data_stream: &str) -> MetadataDoc {
+        MetadataDoc {
+            data_stream: DataStreamName::from(data_stream),
+            ..self.as_doc.clone()
+        }
     }
 }

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Deserialize, Serialize, Debug)]
 pub struct LogstashPlugins {
     // Omitted duplicate metadata fields from deserialization
-    total: u32,
+    pub total: u32,
     plugins: Vec<Plugin>,
 }
 

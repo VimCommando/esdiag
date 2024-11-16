@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-impl DataProcessor<ElasticsearchMetadata> for Nodes {
+impl DataProcessor<Lookups, ElasticsearchMetadata> for Nodes {
     fn generate_docs(
         self,
         lookups: Arc<Lookups>,

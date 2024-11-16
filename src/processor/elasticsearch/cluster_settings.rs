@@ -12,7 +12,7 @@ const DEFAULT: &str = "default";
 const PERSISTENT: &str = "persistent";
 const TRANSIENT: &str = "transient";
 
-impl DataProcessor<ElasticsearchMetadata> for ClusterSettings {
+impl DataProcessor<Lookups, ElasticsearchMetadata> for ClusterSettings {
     fn generate_docs(
         self,
         _lookups: Arc<Lookups>,

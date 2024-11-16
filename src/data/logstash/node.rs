@@ -9,13 +9,30 @@ use std::collections::HashMap;
 #[derive(Deserialize, Serialize)]
 pub struct LogstashNode {
     // Omitted duplicate metadata fields from deserialization
-    pipelines: HashMap<String, Pipeline>,
+    #[serde(skip_serializing)]
+    pipelines: Option<HashMap<String, Pipeline>>,
     os: Os,
     jvm: Jvm,
 }
 
+impl LogstashNode {
+    pub fn get_pipeline_count(&self) -> u32 {
+        match self.pipelines {
+            Some(ref pipelines) => pipelines.len() as u32,
+            None => 0,
+        }
+    }
+
+    pub fn take_pipelines(&mut self) -> HashMap<String, Pipeline> {
+        match self.pipelines.take() {
+            Some(pipelines) => pipelines,
+            None => HashMap::new(),
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize)]
-struct Pipeline {
+pub struct Pipeline {
     ephemeral_id: String,
     hash: String,
     workers: u32,
