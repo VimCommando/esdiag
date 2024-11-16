@@ -2,6 +2,8 @@
 mod metadata;
 /// Logstash node processor
 mod node;
+/// Logstash node stats processor
+mod node_stats;
 /// Logstash plugins
 mod plugins;
 
@@ -83,23 +85,18 @@ impl DiagnosticProcessor for LogstashDiagnostic {
             }
         };
 
-        /*
-                let docs = self
-                    .receiver
-                    .get::<LogstashNodeStats>()
-                    .await
-                    .map(|data| data.generate_docs(self.lookups.clone(), self.metadata.clone()));
+        if let Ok((index, docs)) = self
+            .receiver
+            .get::<LogstashNodeStats>()
+            .await
+            .map(|data| data.generate_docs(self.lookups.clone(), self.metadata.clone()))
+        {
+            match self.exporter.write(index, docs).await {
+                Ok(count) => doc_count += count,
+                Err(e) => log::error!("Elasticsearch exporter: {e}"),
+            }
+        };
 
-                let docs = self.receiver
-                    .get::<LogstashPlugins>()
-                    .await
-                    .map(|data| data.generate_docs(self.lookups.clone(), self.metadata.clone()));
-
-                let docs = self.receiver
-                    .get::<LogstashHotThreads>()
-                    .await
-                    .map(|data| data.generate_docs(self.lookups.clone(), self.metadata.clone()));
-        */
         Ok((String::from("Logstash"), doc_count))
     }
 

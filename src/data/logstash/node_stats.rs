@@ -13,10 +13,17 @@ pub struct LogstashNodeStats {
     process: ProcessStats,
     events: EventStats,
     flow: HashMap<String, StatsHistory>,
-    pipelines: HashMap<String, PipelineStats>,
+    #[serde(skip_serializing)]
+    pipelines: Option<HashMap<String, PipelineStats>>,
     reloads: ReloadStats,
     os: OsStats,
     queue: QueueStats,
+}
+
+impl LogstashNodeStats {
+    pub fn take_pipelines(&mut self) -> Option<HashMap<String, PipelineStats>> {
+        self.pipelines.take()
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -112,26 +119,33 @@ struct EventStats {
 }
 
 #[derive(Deserialize, Serialize)]
-struct PipelineStats {
+pub struct PipelineStats {
     r#events: EventStats,
     flow: HashMap<String, StatsHistory>,
-    plugins: Option<Plugins>,
+    #[serde(skip_serializing)]
+    plugins: Option<PipelinePlugins>,
     reloads: PipelineReloadStats,
     queue: PipelineQueueStats,
     hash: String,
     ephemeral_id: String,
 }
 
-#[derive(Deserialize, Serialize)]
-struct Plugins {
-    inputs: Vec<InputPlugin>,
-    codecs: Vec<CodecPlugin>,
-    filters: Vec<FilterPlugin>,
-    outputs: Vec<OutputPlugin>,
+impl PipelineStats {
+    pub fn take_plugins(&mut self) -> Option<PipelinePlugins> {
+        self.plugins.take()
+    }
 }
 
 #[derive(Deserialize, Serialize)]
-struct InputPlugin {
+pub struct PipelinePlugins {
+    pub inputs: Vec<InputPlugin>,
+    pub codecs: Vec<CodecPlugin>,
+    pub filters: Vec<FilterPlugin>,
+    pub outputs: Vec<OutputPlugin>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct InputPlugin {
     id: String,
     flow: HashMap<String, StatsHistory>,
     name: String,
@@ -140,7 +154,7 @@ struct InputPlugin {
 }
 
 #[derive(Deserialize, Serialize)]
-struct CodecPlugin {
+pub struct CodecPlugin {
     id: String,
     encode: CodecStats,
     name: String,
@@ -154,7 +168,7 @@ struct CodecStats {
 }
 
 #[derive(Deserialize, Serialize)]
-struct FilterPlugin {
+pub struct FilterPlugin {
     id: String,
     flow: HashMap<String, StatsHistory>,
     name: String,
@@ -172,7 +186,7 @@ struct StatsHistory {
 }
 
 #[derive(Deserialize, Serialize)]
-struct OutputPlugin {
+pub struct OutputPlugin {
     id: String,
     flow: HashMap<String, StatsHistory>,
     name: String,
