@@ -2,6 +2,8 @@
 mod metadata;
 /// Logstash node processor
 mod node;
+/// Logstash plugins
+mod plugins;
 
 use super::{DataProcessor, DiagnosticProcessor, Metadata};
 use crate::{
@@ -60,6 +62,18 @@ impl DiagnosticProcessor for LogstashDiagnostic {
         if let Ok((index, docs)) = self
             .receiver
             .get::<LogstashNode>()
+            .await
+            .map(|data| data.generate_docs(self.lookups.clone(), self.metadata.clone()))
+        {
+            match self.exporter.write(index, docs).await {
+                Ok(count) => doc_count += count,
+                Err(e) => log::error!("Elasticsearch exporter: {e}"),
+            }
+        };
+
+        if let Ok((index, docs)) = self
+            .receiver
+            .get::<LogstashPlugins>()
             .await
             .map(|data| data.generate_docs(self.lookups.clone(), self.metadata.clone()))
         {

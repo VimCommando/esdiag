@@ -5,15 +5,15 @@ use crate::data::{
 use color_eyre::eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize)]
 pub struct LogstashPlugins {
     // Omitted duplicate metadata fields from deserialization
     pub total: u32,
-    plugins: Vec<Plugin>,
+    pub plugins: Vec<Plugin>,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-struct Plugin {
+#[derive(Deserialize, Serialize)]
+pub struct Plugin {
     name: String,
     version: String,
 }
