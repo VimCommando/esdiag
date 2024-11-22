@@ -1,6 +1,6 @@
 use super::{DataProcessor, ElasticsearchMetadata, Lookups};
 use crate::{
-    data::elasticsearch::{ClusterSettings, DataStreamName},
+    data::{diagnostic::DataStreamName, elasticsearch::ClusterSettings},
     processor::Metadata,
 };
 use json_patch::merge;
@@ -12,7 +12,7 @@ const DEFAULT: &str = "default";
 const PERSISTENT: &str = "persistent";
 const TRANSIENT: &str = "transient";
 
-impl DataProcessor<ElasticsearchMetadata> for ClusterSettings {
+impl DataProcessor<Lookups, ElasticsearchMetadata> for ClusterSettings {
     fn generate_docs(
         self,
         _lookups: Arc<Lookups>,

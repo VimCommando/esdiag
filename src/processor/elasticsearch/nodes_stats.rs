@@ -13,7 +13,7 @@ use std::sync::{Arc, LazyLock};
 
 static INGEST_ROLE: LazyLock<String> = LazyLock::new(|| String::from("ingest"));
 
-impl DataProcessor<ElasticsearchMetadata> for NodesStats {
+impl DataProcessor<Lookups, ElasticsearchMetadata> for NodesStats {
     fn generate_docs(
         self,
         lookups: Arc<Lookups>,

@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
-impl DataProcessor<ElasticsearchMetadata> for SearchableSnapshotsStats {
+impl DataProcessor<Lookups, ElasticsearchMetadata> for SearchableSnapshotsStats {
     fn generate_docs(
         self,
         _lookups: Arc<Lookups>,
