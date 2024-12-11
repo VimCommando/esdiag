@@ -77,6 +77,7 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for IndicesStats {
                                 "alias": alias,
                                 "creation_date": index_settings.creation_date,
                                 "codec": index_settings.codec,
+                                "mode": index_settings.mode,
                                 "data_stream": data_stream,
                                 "ilm": ilm,
                                 "indexing_complete": index_settings.indexing_complete(),
@@ -235,6 +236,7 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for IndicesStats {
                     "index": {
                         "alias": alias,
                         "codec": index_settings.codec,
+                        "mode": index_settings.mode,
                         "data_stream": data_stream,
                         "ilm": ilm,
                         "name": index,

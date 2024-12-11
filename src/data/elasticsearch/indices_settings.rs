@@ -24,6 +24,8 @@ pub struct IndexSettings {
     pub hidden: Option<String>,
     pub lifecycle: Option<Value>,
     pub mapping: Option<Value>,
+    #[serde(default = "default_mode")]
+    pub mode: String,
     #[serde(deserialize_with = "number_from_string")]
     pub number_of_replicas: Option<i64>,
     #[serde(deserialize_with = "number_from_string")]
@@ -79,7 +81,11 @@ struct Index {
 }
 
 fn default_codec() -> String {
-    String::from("best_speed")
+    String::from("default")
+}
+
+fn default_mode() -> String {
+    String::from("standard")
 }
 
 fn default_refresh_interval() -> String {
