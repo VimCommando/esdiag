@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Serialize)]
 pub struct DiagnosticDoc {
-    pub collection_date: i64,
+    pub collection_date: u64,
     pub runner: String,
     pub id: String,
     pub uuid: String,
@@ -15,7 +15,7 @@ pub struct DiagnosticDoc {
 
 impl DiagnosticDoc {
     pub fn new(
-        collection_date: i64,
+        collection_date: u64,
         id: String,
         runner: String,
         uuid: String,
@@ -37,22 +37,22 @@ impl TryFrom<DiagnosticManifest> for DiagnosticDoc {
     fn try_from(manifest: DiagnosticManifest) -> Result<Self> {
         let collection_date = {
             if let Ok(date) = DateTime::parse_from_rfc3339(&manifest.collection_date) {
-                date.timestamp_millis()
+                date.timestamp_millis() as u64
             } else if let Ok(date) =
                 DateTime::parse_from_str(&manifest.collection_date, "%Y-%m-%dT%H:%M:%S%.3f%z")
             {
-                date.timestamp_millis()
+                date.timestamp_millis() as u64
             } else {
                 log::warn!(
                     "Failed to parse collection date: {}",
                     manifest.collection_date
                 );
-                chrono::Utc::now().timestamp_millis()
+                chrono::Utc::now().timestamp_millis() as u64
             }
         };
 
         let collection_date_string = Utc
-            .timestamp_millis_opt(collection_date)
+            .timestamp_millis_opt(collection_date as i64)
             .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
             .unwrap();
 

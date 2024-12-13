@@ -18,7 +18,7 @@ pub struct IndexSettings {
     #[serde(default = "default_codec", deserialize_with = "deserialize_codec")]
     pub codec: String,
     #[serde(deserialize_with = "number_from_string")]
-    pub creation_date: Option<i64>,
+    pub creation_date: Option<u64>,
     pub default_pipeline: Option<String>,
     pub final_pipeline: Option<String>,
     pub hidden: Option<String>,
@@ -27,9 +27,9 @@ pub struct IndexSettings {
     #[serde(default = "default_mode")]
     pub mode: String,
     #[serde(deserialize_with = "number_from_string")]
-    pub number_of_replicas: Option<i64>,
+    pub number_of_replicas: Option<u64>,
     #[serde(deserialize_with = "number_from_string")]
-    pub number_of_shards: Option<i64>,
+    pub number_of_shards: Option<u64>,
     pub priority: Option<String>,
     pub provided_name: Option<String>,
     pub query: Option<Value>,
@@ -44,7 +44,7 @@ pub struct IndexSettings {
     pub version: Value,
     // Not in source json
     #[serde(skip_deserializing)]
-    pub age: Option<i64>,
+    pub age: Option<u64>,
     #[serde(skip_deserializing)]
     pub data_stream: Option<DataStream>,
     #[serde(skip_deserializing)]
@@ -110,15 +110,15 @@ where
 /// The standard deserializer from serde_json does not deserializing numbers from
 /// strings. Unfortunately the _settings API frequently wraps numbers in quotes.
 
-fn number_from_string<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+fn number_from_string<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let value: Value = Deserialize::deserialize(deserializer)?;
 
     match value {
-        Value::Number(num) => Ok(num.as_i64()),
-        Value::String(s) => Ok(s.parse::<i64>().ok()),
+        Value::Number(num) => Ok(num.as_u64()),
+        Value::String(s) => Ok(s.parse::<u64>().ok()),
         Value::Null => Ok(None),
         _ => Err(serde::de::Error::custom(
             "expected a number or a string representing a number",

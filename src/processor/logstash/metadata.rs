@@ -11,14 +11,14 @@ use serde_json::Value;
 pub struct LogstashMetadata {
     pub node: Version,
     pub diagnostic: DiagnosticDoc,
-    pub timestamp: i64,
+    pub timestamp: u64,
     pub as_doc: MetadataDoc,
 }
 
 #[derive(Clone, Serialize)]
 pub struct MetadataDoc {
     #[serde(rename = "@timestamp")]
-    pub timestamp: i64,
+    pub timestamp: u64,
     pub node: Version,
     pub diagnostic: DiagnosticDoc,
     pub data_stream: DataStreamName,

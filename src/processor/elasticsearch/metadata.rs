@@ -11,7 +11,7 @@ use serde_json::Value;
 pub struct ElasticsearchMetadata {
     pub cluster: Cluster,
     pub diagnostic: DiagnosticDoc,
-    pub timestamp: i64,
+    pub timestamp: u64,
     pub as_doc: MetadataDoc,
 }
 
@@ -27,7 +27,7 @@ impl ElasticsearchMetadata {
 #[derive(Clone, Serialize)]
 pub struct MetadataDoc {
     #[serde(rename = "@timestamp")]
-    pub timestamp: i64,
+    pub timestamp: u64,
     pub cluster: Cluster,
     pub diagnostic: DiagnosticDoc,
     pub data_stream: DataStreamName,
