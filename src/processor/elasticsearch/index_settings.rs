@@ -54,7 +54,7 @@ impl IndexSettingsDoc {
     fn with(
         self,
         name: String,
-        age: i64,
+        age: u64,
         data_stream: Option<DataStream>,
         metadata: Value,
     ) -> Self {

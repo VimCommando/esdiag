@@ -16,14 +16,14 @@ pub struct IlmStats {
     //pub index: String,
     pub managed: bool,
     pub policy: Option<String>,
-    pub index_creation_date_millis: Option<i64>,
-    pub lifecycle_date_millis: Option<i64>,
+    pub index_creation_date_millis: Option<u64>,
+    pub lifecycle_date_millis: Option<u64>,
     pub phase: Option<String>,
-    pub phase_time_millis: Option<i64>,
+    pub phase_time_millis: Option<u64>,
     pub action: Option<String>,
-    pub action_time_millis: Option<i64>,
+    pub action_time_millis: Option<u64>,
     pub step: Option<String>,
-    pub step_time_millis: Option<i64>,
+    pub step_time_millis: Option<u64>,
     pub repository_name: Option<String>,
     pub snapshot_name: Option<String>,
     pub phase_execution: Option<PhaseExecution>,
@@ -45,7 +45,7 @@ pub struct PhaseExecution {
     policy: String,
     phase_definition: Option<PhaseDefinition>,
     version: i32,
-    modified_date_in_millis: i64,
+    modified_date_in_millis: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
