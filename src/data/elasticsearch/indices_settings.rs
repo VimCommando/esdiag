@@ -60,7 +60,7 @@ impl IndexSettings {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Settings {
     settings: Index,
 }
@@ -72,7 +72,7 @@ impl Settings {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Index {
     index: IndexSettings,
 }

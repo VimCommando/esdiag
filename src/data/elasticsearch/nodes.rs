@@ -52,9 +52,7 @@ pub struct OsDetails {
     pub allocated_processors: usize,
 }
 
-// Deserializing data structures
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Nodes {
     _nodes: Value,
     //cluster_name: String,

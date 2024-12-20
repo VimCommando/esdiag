@@ -1,8 +1,14 @@
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{eyre, Result};
 use esdiag::{
-    client::Host, data::Uri, env::LOG_LEVEL, exporter::Exporter, processor::Diagnostic,
-    receiver::Receiver, setup,
+    client::Host,
+    collector::Collector,
+    data::Uri,
+    env::LOG_LEVEL,
+    exporter::{DirectoryExporter, Exporter},
+    processor::Diagnostic,
+    receiver::Receiver,
+    setup,
 };
 use url::Url;
 
@@ -118,11 +124,21 @@ async fn run() -> Result<&'static str> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Collect { host, output } => Err(eyre!(
-            "Collect command not yet implemented! host: {}, output: {}",
-            host,
-            output
-        )),
+        Commands::Collect { host, output } => {
+            let host = Uri::parse(host)?;
+            let output = Uri::parse(output)?;
+            match host {
+                Uri::Host(_) => {
+                    log::info!("Collecting diagnostic from {host}");
+                    let receiver = Receiver::try_from(host)?;
+                    let exporter = DirectoryExporter::try_from(output)?;
+                    let collector = Collector::try_new(receiver, exporter).await?;
+                    collector.collect().await?;
+                    Ok("collect")
+                }
+                _ => Err(eyre!("Collect requires a known host")),
+            }
+        }
         Commands::Host {
             name,
             app,

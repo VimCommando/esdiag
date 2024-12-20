@@ -7,7 +7,7 @@ mod elasticsearch;
 
 use archive::ArchiveReceiver;
 use directory::DirectoryReceiver;
-use elasticsearch::ElasticsearchReceiver;
+pub use elasticsearch::ElasticsearchReceiver;
 
 use crate::data::{
     diagnostic::{DataSource, DiagnosticManifest, Manifest},
