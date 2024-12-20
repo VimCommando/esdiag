@@ -46,37 +46,34 @@ impl ElasticsearchCollector {
     }
 
     pub async fn collect(&self) -> Result<usize> {
-        self.save(self.receiver.try_get_manifest().await?).await?;
-        self.save(self.receiver.get::<AliasList>().await?).await?;
-        self.save(self.receiver.get::<ClusterSettings>().await?)
-            .await?;
-        self.save(self.receiver.get::<DataStreams>().await?).await?;
-        self.save(self.receiver.get::<IlmExplain>().await?).await?;
-        self.save(self.receiver.get::<IndicesSettings>().await?)
-            .await?;
-        self.save(self.receiver.get::<IndicesStats>().await?)
-            .await?;
-        self.save(self.receiver.get::<Nodes>().await?).await?;
-        self.save(self.receiver.get::<NodesStats>().await?).await?;
-        self.save(self.receiver.get::<SearchableSnapshotsCacheStats>().await?)
-            .await?;
-        match self.receiver.get::<SearchableSnapshotsStats>().await {
-            Ok(stats) => self.save(stats).await?,
-            Err(_) => log::warn!("No searchable snapshots stats available"),
-        };
-        self.save(self.receiver.get::<Tasks>().await?).await?;
+        let total = 12;
+        let mut file_count = 0;
+        //self.save(self.receiver.try_get_manifest().await?).await?;
+        file_count += self.save::<AliasList>().await?;
+        file_count += self.save::<ClusterSettings>().await?;
+        file_count += self.save::<DataStreams>().await?;
+        file_count += self.save::<IlmExplain>().await?;
+        file_count += self.save::<IndicesSettings>().await?;
+        file_count += self.save::<IndicesStats>().await?;
+        file_count += self.save::<Nodes>().await?;
+        file_count += self.save::<NodesStats>().await?;
+        file_count += self.save::<SearchableSnapshotsCacheStats>().await?;
+        file_count += self.save::<SearchableSnapshotsStats>().await?;
+        file_count += self.save::<Tasks>().await?;
 
-        let file_count = 1;
-        log::info!("Collected {file_count} files into {}", self.exporter);
+        log::info!(
+            "Collected {file_count} of {total} files into {}",
+            self.exporter
+        );
         Ok(file_count)
     }
 
-    async fn save<T>(&self, content: T) -> Result<()>
+    async fn save<T>(&self) -> Result<usize>
     where
-        T: serde::Serialize + DataSource,
+        T: DataSource,
     {
+        let content = self.receiver.get_raw::<T>().await?;
         let path = PathBuf::from(T::source(PathType::File)?);
-        self.exporter.save(path, content).await?;
-        Ok(())
+        self.exporter.save(path, content).await.map(|_| 1)
     }
 }

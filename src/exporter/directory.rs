@@ -1,22 +1,17 @@
-use color_eyre::eyre::{eyre, Result};
-use serde::Serialize;
-use std::{fs::File, path::PathBuf};
-
 use crate::data::Uri;
+use color_eyre::eyre::{eyre, Result};
+use std::{fs::File, io::Write, path::PathBuf};
 
 pub struct DirectoryExporter {
     path: PathBuf,
 }
 
 impl DirectoryExporter {
-    pub async fn save<T>(&self, path: PathBuf, content: T) -> Result<()>
-    where
-        T: Serialize,
-    {
+    pub async fn save(&self, path: PathBuf, content: String) -> Result<()> {
         let path = &self.path.join(path);
         log::debug!("Writing file: {}", &path.display());
-        let file = File::create(path)?;
-        serde_json::to_writer_pretty(&file, &content)?;
+        let mut file = File::create(path)?;
+        file.write_all(content.as_bytes())?;
         Ok(())
     }
 }
