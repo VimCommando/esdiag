@@ -22,13 +22,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// [NOT IMPLEMENTED] Collects diagnostics from a host's API endpoints
+    /// Collects diagnostics from an Elasticsearch host's API endpoints, saves to a directory
     Collect {
         /// The host to collect diagnostics from
-        #[arg(help = "The host to collect diagnostics from")]
+        #[arg(help = "The Elasticsearch host to collect diagnostics from")]
         host: String,
         /// The output directory to save the diagnostics to
-        #[arg(help = "Theoutput to save the diagnostics to (file, directory)")]
+        #[arg(help = "The directory to save the diagnostics files to")]
         output: String,
     },
     /// Configure and test a remote host connection
