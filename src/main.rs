@@ -31,7 +31,7 @@ enum Commands {
         #[arg(help = "The directory to save the diagnostics files to")]
         output: String,
     },
-    /// Configure and test a remote host connection
+    /// Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
     Host {
         /// A name to identify this host
         #[arg(help = "A name to identify this host")]
