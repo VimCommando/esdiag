@@ -59,10 +59,10 @@ impl TryFrom<DiagnosticManifest> for DiagnosticDoc {
         let uuid = Uuid::new_v4().to_string();
         // Human readable ID
         let id = format!(
-            "{}@{}#{}",
+            "{}@{}~{}",
             manifest.name.expect("Diagnostic name not found"),
-            collection_date_string,
-            uuid.chars().take(4).collect::<String>()
+            &collection_date_string[..10], // Trim to only date
+            &uuid[..4]
         );
 
         let runner = match &manifest.runner {
