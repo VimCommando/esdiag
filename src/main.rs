@@ -78,7 +78,9 @@ enum Commands {
     /// Receives a diagnostic from the input, processes it, and sends processed docs to the output
     Process {
         /// Source to read diagnostic data from
-        #[arg(help = "Source to read diagnostic data from (archive, directory, or known host)")]
+        #[arg(
+            help = "Source to read diagnostic data from (archive, directory, known host or uploader URL)"
+        )]
         input: String,
 
         /// Target to send processed diagnostic documents to
@@ -205,11 +207,11 @@ async fn run() -> Result<&'static str> {
         Commands::Process { input, output } => {
             let input_uri = Uri::try_from(input)?;
             let output_uri = Uri::try_from(output)?;
+            log::info!("input: {}", input_uri);
+            log::info!("output: {}", output_uri);
 
             let receiver = Receiver::try_from(input_uri)?;
             let exporter = Exporter::try_from(output_uri)?;
-            log::info!("input: {}", receiver);
-            log::info!("output: {}", exporter);
 
             let manifest = receiver.try_get_manifest().await?;
 
