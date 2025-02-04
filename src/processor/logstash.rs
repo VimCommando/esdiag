@@ -11,7 +11,7 @@ use super::{DataProcessor, DiagnosticProcessor, Metadata};
 use crate::{
     data::{
         self,
-        diagnostic::{DataSource, DiagnosticManifest},
+        diagnostic::{DataSource, DiagnosticManifest, DiagnosticReport, Product},
         logstash::{Node, NodeStats, Plugins, Version},
     },
     exporter::Exporter,
@@ -21,6 +21,7 @@ use color_eyre::eyre::Result;
 use metadata::LogstashMetadata;
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Serialize)]
 pub struct LogstashDiagnostic {
@@ -30,6 +31,8 @@ pub struct LogstashDiagnostic {
     exporter: Arc<Exporter>,
     #[serde(skip)]
     receiver: Arc<Receiver>,
+    #[serde(skip)]
+    report: Arc<RwLock<DiagnosticReport>>,
 }
 
 impl LogstashDiagnostic {
@@ -58,6 +61,8 @@ impl DiagnosticProcessor for LogstashDiagnostic {
         let logstash_version = receiver.get::<Version>().await?;
         let metadata = LogstashMetadata::try_new(manifest, logstash_version)?;
         let plugins = receiver.get::<Plugins>().await?;
+        let report =
+            DiagnosticReport::from(metadata.diagnostic.clone()).with_product(Product::Logstash);
 
         Ok(Box::new(Self {
             lookups: Arc::new(Lookups {
@@ -66,10 +71,11 @@ impl DiagnosticProcessor for LogstashDiagnostic {
             metadata: Arc::new(metadata),
             exporter: Arc::new(exporter),
             receiver: Arc::new(receiver),
+            report: Arc::new(RwLock::new(report)),
         }))
     }
 
-    async fn run(self) -> Result<(String, usize)> {
+    async fn run(self) -> Result<DiagnosticReport> {
         log::debug!("Running Logstash diagnostic processors");
         if log::max_level() >= log::Level::Debug {
             data::save_file("diagnostic.json", &self)?;
@@ -80,11 +86,10 @@ impl DiagnosticProcessor for LogstashDiagnostic {
         doc_count += self.process::<NodeStats>().await?;
         doc_count += self.process::<Plugins>().await?;
 
-        Ok((String::from("Logstash"), doc_count))
-    }
+        let mut report = self.report.write().await;
+        report.docs_total = doc_count as u32;
 
-    async fn process_queue(&self) -> usize {
-        0
+        Ok(report.clone())
     }
 }
 

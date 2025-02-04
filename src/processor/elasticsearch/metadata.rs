@@ -1,6 +1,6 @@
 use super::Metadata;
 use crate::data::{
-    diagnostic::{DataStreamName, DiagnosticDoc, DiagnosticManifest},
+    diagnostic::{DataStreamName, DiagnosticMetadata, DiagnosticManifest},
     elasticsearch::Cluster,
 };
 use color_eyre::eyre::Result;
@@ -10,7 +10,7 @@ use serde_json::Value;
 #[derive(Clone, Serialize)]
 pub struct ElasticsearchMetadata {
     pub cluster: Cluster,
-    pub diagnostic: DiagnosticDoc,
+    pub diagnostic: DiagnosticMetadata,
     pub timestamp: u64,
     pub as_doc: MetadataDoc,
 }
@@ -29,7 +29,7 @@ pub struct MetadataDoc {
     #[serde(rename = "@timestamp")]
     pub timestamp: u64,
     pub cluster: Cluster,
-    pub diagnostic: DiagnosticDoc,
+    pub diagnostic: DiagnosticMetadata,
     pub data_stream: DataStreamName,
 }
 
@@ -42,7 +42,7 @@ impl Metadata for MetadataDoc {
 impl ElasticsearchMetadata {
     pub fn try_new(manifest: DiagnosticManifest, cluster: Cluster) -> Result<Self> {
         let name = cluster.display_name.replace(" ", "_");
-        let diagnostic = DiagnosticDoc::try_from(manifest.with_name(name))?;
+        let diagnostic = DiagnosticMetadata::try_from(manifest.with_name(name))?;
         let timestamp = diagnostic.collection_date;
 
         let as_doc = MetadataDoc {

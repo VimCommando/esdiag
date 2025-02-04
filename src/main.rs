@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use color_eyre::eyre::{eyre, Result};
 use esdiag::{
     client::KnownHost,
-    data::{Collector, Uri},
+    data::{save_file, Collector, Uri},
     env::LOG_LEVEL,
     exporter::{DirectoryExporter, Exporter},
     processor::Diagnostic,
@@ -216,13 +216,16 @@ async fn run() -> Result<&'static str> {
             let manifest = receiver.try_get_manifest().await?;
 
             log::trace!("{}", serde_json::to_string(&manifest)?);
-            let diagnostic_processor =
-                Diagnostic::try_new_processor(manifest, receiver, exporter).await?;
-            let (diag_id, doc_count) = diagnostic_processor.run().await?;
+            let diagnostic = Diagnostic::try_new_processor(manifest, receiver, exporter).await?;
+            let report = diagnostic.run().await?;
+            if log::max_level() >= log::Level::Debug {
+                save_file("report.json", &report)?;
+            }
+
             log::info!(
                 "Created {} documents for diagnostic: {}",
-                doc_count,
-                diag_id
+                report.docs_total,
+                report.metadata.id,
             );
             Ok("process")
         }
@@ -239,13 +242,16 @@ async fn run() -> Result<&'static str> {
             let manifest = receiver.try_get_manifest().await?;
 
             log::trace!("{}", serde_json::to_string(&manifest)?);
-            let diagnostic_processor =
-                Diagnostic::try_new_processor(manifest, receiver, exporter).await?;
-            let (diag_id, doc_count) = diagnostic_processor.run().await?;
+            let diagnostic = Diagnostic::try_new_processor(manifest, receiver, exporter).await?;
+            let report = diagnostic.run().await?;
+            if log::max_level() >= log::Level::Debug {
+                save_file("report.json", &report)?;
+            }
+
             log::info!(
                 "Created {} documents for diagnostic: {}",
-                doc_count,
-                diag_id
+                report.docs_total,
+                report.metadata.id,
             );
             Ok("import")
         }
@@ -264,7 +270,7 @@ fn clear_last_run_files() -> Result<()> {
     if !last_run.exists() {
         std::fs::create_dir_all(&last_run)?;
     }
-    let files = vec!["bulk_errors.ndjson", "diagnostic.json"];
+    let files = vec!["bulk_errors.ndjson", "diagnostic.json", "report.json"];
     for file in files {
         let file = last_run.join(file);
         log::debug!("Removing {}", &file.display());

@@ -17,11 +17,15 @@ mod searchable_snapshots_stats;
 /// Processor for the `_tasks` API
 mod tasks;
 
-use super::{lookup::Lookup, DataProcessor, DiagnosticProcessor, Metadata};
+use super::{DataProcessor, DiagnosticProcessor, Metadata};
 use crate::{
     data::{
         self,
-        diagnostic::{elasticsearch::DataSet, DataSource, DiagnosticManifest},
+        diagnostic::{
+            elasticsearch::DataSet,
+            report::{BatchResponse, ProcessorSummary},
+            DataSource, DiagnosticManifest, DiagnosticReport, Lookup, Product,
+        },
         elasticsearch::{
             Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreams, IlmExplain,
             IlmStats, IndexSettings, IndicesSettings, IndicesStats, Nodes, NodesStats,
@@ -51,7 +55,31 @@ pub struct ElasticsearchDiagnostic {
     #[serde(skip)]
     receiver: Arc<Receiver>,
     #[serde(skip)]
+    report: Arc<RwLock<DiagnosticReport>>,
+    #[serde(skip)]
     queue: ExporterDocumentQueue,
+}
+
+impl ElasticsearchDiagnostic {
+    async fn process_queue(&self) -> BatchResponse {
+        let queue = self.queue.clone();
+        let exporter = self.exporter.clone();
+
+        let mut queue_guard = queue.write().await;
+        match queue_guard.pop() {
+            Some((index, docs)) => {
+                log::debug!("Processing queue {index}");
+                match exporter.write(index.clone(), docs).await {
+                    Ok(count) => BatchResponse::new(count as u32),
+                    Err(e) => {
+                        log::error!("Elasticsearch exporter: {e}");
+                        BatchResponse::new(0)
+                    }
+                }
+            }
+            None => BatchResponse::new(0),
+        }
+    }
 }
 
 impl DiagnosticProcessor for ElasticsearchDiagnostic {
@@ -64,6 +92,8 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
         let display_name = receiver.get::<ClusterSettings>().await?.get_display_name();
         let metadata =
             ElasticsearchMetadata::try_new(manifest, cluster.with_display_name(display_name))?;
+        let mut report = DiagnosticReport::from(metadata.diagnostic.clone())
+            .with_product(Product::Elasticsearch);
 
         let lookups = Lookups {
             alias: Lookup::from(receiver.get::<AliasList>().await),
@@ -74,35 +104,24 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             shared_cache: Lookup::from(receiver.get::<SearchableSnapshotsCacheStats>().await),
         };
 
+        report.add_lookup("alias", &lookups.alias);
+        report.add_lookup("data_stream", &lookups.data_stream);
+        report.add_lookup("index_settings", &lookups.index_settings);
+        report.add_lookup("node", &lookups.node);
+        report.add_lookup("ilm_explain", &lookups.ilm_explain);
+        report.add_lookup("shared_cache", &lookups.shared_cache);
+
         Ok(Box::new(Self {
             exporter: Arc::new(exporter),
             lookups: Arc::new(lookups),
-            metadata: Arc::new(metadata),
+            metadata: Arc::new(metadata.clone()),
             queue: Arc::new(RwLock::new(Vec::<(String, Vec<Value>)>::new())),
             receiver: Arc::new(receiver),
+            report: Arc::new(RwLock::new(report)),
         }))
     }
 
-    async fn process_queue(&self) -> usize {
-        let queue = self.queue.clone();
-        let exporter = self.exporter.clone();
-
-        let mut queue_guard = queue.write().await;
-        let mut doc_count: usize = 0;
-        for (index, docs) in queue_guard.drain(..) {
-            log::debug!("Processing queue {index}");
-            if docs.is_empty() {
-                continue;
-            }
-            match exporter.write(index, docs).await {
-                Ok(count) => doc_count += count,
-                Err(e) => log::error!("Elasticsearch exporter: {e}"),
-            }
-        }
-        doc_count
-    }
-
-    async fn run(self) -> Result<(String, usize)> {
+    async fn run(self) -> Result<DiagnosticReport> {
         log::debug!("Running Elasticsearch diagnostic processors");
         if log::max_level() >= log::Level::Debug {
             data::save_file("diagnostic.json", &self)?;
@@ -140,18 +159,19 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             .map(|(_name, task)| futures.push(task))
             .count();
 
-        let doc_count = join_all(futures)
+        let mut report = diag.report.write().await;
+        join_all(futures)
             .await
             .into_iter()
             .filter_map(Result::ok)
-            .sum();
-        let diag_id = diag.metadata.diagnostic.id.clone();
+            .flatten()
+            .for_each(|summary| report.add_processor_summary(summary));
 
-        Ok((diag_id, doc_count))
+        Ok(report.clone())
     }
 }
 
-type DataProcessorTask = Pin<Box<JoinHandle<usize>>>;
+type DataProcessorTask = Pin<Box<JoinHandle<Option<ProcessorSummary>>>>;
 
 fn spawn_processor<T>(diagnostic: Arc<ElasticsearchDiagnostic>) -> DataProcessorTask
 where
@@ -160,19 +180,20 @@ where
     let lookups = diagnostic.lookups.clone();
     let metadata = diagnostic.metadata.clone();
     Box::pin(tokio::task::spawn(async move {
-        let docs = diagnostic
-            .receiver
-            .get::<T>()
-            .await
-            .map(|data| data.generate_docs(lookups, metadata));
+        let mut summary = ProcessorSummary::new(T::name());
+        let docs = diagnostic.receiver.get::<T>().await.map(|data| {
+            summary.source_parsed = true;
+            data.generate_docs(lookups, metadata)
+        });
         match docs {
             Ok(docs) => {
                 diagnostic.queue.write().await.push(docs);
-                diagnostic.process_queue().await
+                summary.add_batch(diagnostic.process_queue().await);
+                Some(summary)
             }
             Err(e) => {
                 log::warn!("No {} data found: {e}", T::name());
-                0
+                None
             }
         }
     }))

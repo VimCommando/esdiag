@@ -1,5 +1,5 @@
 use super::{ElasticsearchMetadata, NodeSummary};
-use crate::processor::{lookup::Lookup, Metadata};
+use crate::{data::diagnostic::Lookup, processor::Metadata};
 use json_patch::merge;
 use rayon::prelude::*;
 use serde_json::{json, Value};

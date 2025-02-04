@@ -1,6 +1,6 @@
-use crate::{
-    data::elasticsearch::{DataStream, DataStreams, Indices},
-    processor::lookup::Lookup,
+use crate::data::{
+    diagnostic::Lookup,
+    elasticsearch::{DataStream, DataStreams, Indices},
 };
 use color_eyre::eyre::Result;
 

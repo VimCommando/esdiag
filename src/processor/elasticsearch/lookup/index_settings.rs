@@ -1,6 +1,6 @@
-use crate::{
-    data::elasticsearch::{IndexSettings, IndicesSettings},
-    processor::lookup::Lookup,
+use crate::data::{
+    diagnostic::Lookup,
+    elasticsearch::{IndexSettings, IndicesSettings},
 };
 use color_eyre::eyre::Result;
 use serde::Serialize;

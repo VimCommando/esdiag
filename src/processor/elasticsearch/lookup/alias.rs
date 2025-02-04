@@ -1,6 +1,6 @@
-use crate::{
-    data::elasticsearch::{Alias, AliasList},
-    processor::lookup::Lookup,
+use crate::data::{
+    diagnostic::Lookup,
+    elasticsearch::{Alias, AliasList},
 };
 use color_eyre::eyre::Result;
 

@@ -4,8 +4,6 @@ pub mod elastic_cloud_kubernetes;
 pub mod elasticsearch;
 /// Processors for Logstash diagnostics
 pub mod logstash;
-/// Lookup processors
-mod lookup;
 
 use std::sync::Arc;
 
@@ -14,7 +12,7 @@ use elasticsearch::ElasticsearchDiagnostic;
 use logstash::LogstashDiagnostic;
 
 use crate::{
-    data::diagnostic::{DiagnosticManifest, Product},
+    data::diagnostic::{report::DiagnosticReport, DiagnosticManifest, Product},
     exporter::Exporter,
     receiver::Receiver,
 };
@@ -56,7 +54,7 @@ impl Diagnostic {
         }
     }
 
-    pub async fn run(self) -> Result<(String, usize)> {
+    pub async fn run(self) -> Result<DiagnosticReport> {
         match self {
             Self::Elasticsearch(diagnostic) => diagnostic.run().await,
             Self::ElasticCloudKubernetes(diagnostic) => diagnostic.run().await,
@@ -76,8 +74,7 @@ trait DiagnosticProcessor {
         receiver: Receiver,
         exporter: Exporter,
     ) -> Result<Box<Self>>;
-    async fn process_queue(&self) -> usize;
-    async fn run(self) -> Result<(String, usize)>;
+    async fn run(self) -> Result<DiagnosticReport>;
 }
 
 trait Metadata {
