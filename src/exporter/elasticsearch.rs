@@ -1,7 +1,10 @@
 use super::Export;
 use crate::{
     client::{Auth, ElasticsearchBuilder, KnownHost},
-    data,
+    data::{
+        self,
+        diagnostic::report::{BatchResponse, ProcessorSummary},
+    },
 };
 use color_eyre::eyre::{eyre, Result};
 use elasticsearch::{
@@ -68,18 +71,19 @@ impl TryFrom<KnownHost> for ElasticsearchExporter {
 }
 
 impl Export for ElasticsearchExporter {
-    async fn write(&self, index: String, mut docs: Vec<Value>) -> Result<usize> {
+    async fn write(&self, index: String, mut docs: Vec<Value>) -> Result<ProcessorSummary> {
         let client = Arc::new(self.client.clone());
         let workers = 4;
         let bulk_size = 5000;
         let semaphore = Arc::new(Semaphore::new(workers));
+        let mut summary = ProcessorSummary::new(index.clone());
 
         let futures = FuturesUnordered::new();
 
         while !docs.is_empty() {
             let client = client.clone();
-            let index = index.clone();
             let batch_size = std::cmp::min(docs.len(), bulk_size);
+            let index = index.clone();
             let ops: Vec<BulkOperation<serde_json::Value>> = docs
                 .drain(..batch_size)
                 .map(|doc| BulkOperation::create(doc).pipeline("esdiag").into())
@@ -93,20 +97,17 @@ impl Export for ElasticsearchExporter {
 
             futures.push(tokio::spawn(future));
         }
-        let doc_count = join_all(futures)
+
+        join_all(futures)
             .await
             .into_iter()
             .filter_map(Result::ok)
-            .filter_map(|result| match result {
-                Ok(count) => Some(count),
-                Err(e) => {
-                    log::error!("{}", e);
-                    None
-                }
-            })
-            .sum();
+            .flatten()
+            .for_each(|response| {
+                summary.add_batch(response);
+            });
 
-        Ok(doc_count)
+        Ok(summary)
     }
 
     async fn is_connected(&self) -> bool {
@@ -145,7 +146,7 @@ impl std::fmt::Display for ElasticsearchExporter {
 async fn parse_response(
     index: String,
     response: Result<Response, elasticsearch::Error>,
-) -> Result<usize> {
+) -> Result<BatchResponse> {
     let response = response?;
     log::trace!("{:?}", &response);
     let status_code = response.status_code().as_u16();
@@ -192,5 +193,14 @@ async fn parse_response(
         )?;
     }
 
-    Ok(doc_count)
+    let batch_response = BatchResponse {
+        docs: item_count as u32,
+        errors: error_count as u32,
+        retries: 0,
+        size: 0,
+        status_code,
+        time: body.get("took").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+    };
+
+    Ok(batch_response)
 }

@@ -1,9 +1,12 @@
+use crate::data::diagnostic::report::{BatchResponse, ProcessorSummary};
+
 use super::Export;
 use color_eyre::eyre::Result;
 use serde_json::Value;
 use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
+    os::unix::fs::MetadataExt,
     path::PathBuf,
 };
 
@@ -42,7 +45,10 @@ impl Export for FileExporter {
         is_file
     }
 
-    async fn write(&self, index: String, docs: Vec<Value>) -> Result<usize> {
+    async fn write(&self, index: String, docs: Vec<Value>) -> Result<ProcessorSummary> {
+        let start_time = std::time::Instant::now();
+        let mut summary = ProcessorSummary::new(index.clone());
+        let mut batch = BatchResponse::new(docs.len() as u32);
         match &self.path.is_file() {
             false => {
                 log::info!("Creating file {}", &self.path.display());
@@ -60,8 +66,12 @@ impl Export for FileExporter {
             doc_count += 1;
         }
         writer.flush()?;
+        batch.size = self.file.metadata()?.size() as u32;
+        batch.time = start_time.elapsed().as_millis() as u32;
+
+        summary.add_batch(batch);
         log::info!("{}, created {} docs", index, doc_count);
-        Ok(doc_count)
+        Ok(summary)
     }
 }
 

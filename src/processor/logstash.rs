@@ -11,7 +11,9 @@ use super::{DataProcessor, DiagnosticProcessor, Metadata};
 use crate::{
     data::{
         self,
-        diagnostic::{DataSource, DiagnosticManifest, DiagnosticReport, Product},
+        diagnostic::{
+            report::ProcessorSummary, DataSource, DiagnosticManifest, DiagnosticReport, Product,
+        },
         logstash::{Node, NodeStats, Plugins, Version},
     },
     exporter::Exporter,
@@ -36,7 +38,7 @@ pub struct LogstashDiagnostic {
 }
 
 impl LogstashDiagnostic {
-    async fn process<T>(&self) -> Result<usize>
+    async fn process<T>(&self) -> Result<ProcessorSummary>
     where
         T: DataSource + DataProcessor<Lookups, LogstashMetadata> + DeserializeOwned + Send + Sync,
     {
@@ -81,13 +83,10 @@ impl DiagnosticProcessor for LogstashDiagnostic {
             data::save_file("diagnostic.json", &self)?;
         }
 
-        let mut doc_count = 0;
-        doc_count += self.process::<Node>().await?;
-        doc_count += self.process::<NodeStats>().await?;
-        doc_count += self.process::<Plugins>().await?;
-
         let mut report = self.report.write().await;
-        report.docs_total = doc_count as u32;
+        report.add_processor_summary(self.process::<Node>().await?);
+        report.add_processor_summary(self.process::<NodeStats>().await?);
+        report.add_processor_summary(self.process::<Plugins>().await?);
 
         Ok(report.clone())
     }

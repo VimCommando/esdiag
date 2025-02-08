@@ -22,9 +22,8 @@ use crate::{
     data::{
         self,
         diagnostic::{
-            elasticsearch::DataSet,
-            report::{BatchResponse, ProcessorSummary},
-            DataSource, DiagnosticManifest, DiagnosticReport, Lookup, Product,
+            elasticsearch::DataSet, report::ProcessorSummary, DataSource, DiagnosticManifest,
+            DiagnosticReport, Lookup, Product,
         },
         elasticsearch::{
             Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreams, IlmExplain,
@@ -61,23 +60,17 @@ pub struct ElasticsearchDiagnostic {
 }
 
 impl ElasticsearchDiagnostic {
-    async fn process_queue(&self) -> BatchResponse {
+    async fn process_queue(&self) -> Option<ProcessorSummary> {
         let queue = self.queue.clone();
         let exporter = self.exporter.clone();
 
         let mut queue_guard = queue.write().await;
-        match queue_guard.pop() {
-            Some((index, docs)) => {
-                log::debug!("Processing queue {index}");
-                match exporter.write(index.clone(), docs).await {
-                    Ok(count) => BatchResponse::new(count as u32),
-                    Err(e) => {
-                        log::error!("Elasticsearch exporter: {e}");
-                        BatchResponse::new(0)
-                    }
-                }
-            }
-            None => BatchResponse::new(0),
+        if let Some((index, docs)) = queue_guard.pop() {
+            log::debug!("Processing queue {index}");
+            exporter.write(index, docs).await.ok()
+        } else {
+            log::warn!("Queue was empty");
+            None
         }
     }
 }
@@ -180,16 +173,15 @@ where
     let lookups = diagnostic.lookups.clone();
     let metadata = diagnostic.metadata.clone();
     Box::pin(tokio::task::spawn(async move {
-        let mut summary = ProcessorSummary::new(T::name());
-        let docs = diagnostic.receiver.get::<T>().await.map(|data| {
-            summary.source_parsed = true;
-            data.generate_docs(lookups, metadata)
-        });
+        let docs = diagnostic
+            .receiver
+            .get::<T>()
+            .await
+            .map(|data| data.generate_docs(lookups, metadata));
         match docs {
             Ok(docs) => {
                 diagnostic.queue.write().await.push(docs);
-                summary.add_batch(diagnostic.process_queue().await);
-                Some(summary)
+                diagnostic.process_queue().await
             }
             Err(e) => {
                 log::warn!("No {} data found: {e}", T::name());

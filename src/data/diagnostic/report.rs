@@ -48,11 +48,11 @@ impl DiagnosticReport {
 #[derive(Serialize, Clone)]
 pub struct BatchResponse {
     pub docs: u32,
-    errors: u32,
-    retries: u16,
-    size: u32,
-    status_code: u16,
-    time: u32,
+    pub errors: u32,
+    pub retries: u16,
+    pub size: u32,
+    pub status_code: u16,
+    pub time: u32,
 }
 
 impl BatchResponse {
@@ -70,7 +70,7 @@ impl BatchResponse {
 
 #[derive(Serialize, Clone)]
 pub struct ProcessorSummary {
-    avg_size: u32,
+    pub avg_size: u32,
     avg_time: u32,
     batch_count: u32,
     batch_errors: u32,
