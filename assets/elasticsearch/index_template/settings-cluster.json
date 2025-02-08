@@ -151,6 +151,39 @@
             }
           }
         },
+        "indexing_pressure.memory": {
+          "subobjects": false,
+          "type": "object",
+          "properties": {
+            "coordinating.limit": {
+              "type": "keyword"
+            },
+            "limit": {
+              "type": "keyword"
+            },
+            "primary.limit": {
+              "type": "keyword"
+            },
+            "replica.limit": {
+              "type": "keyword"
+            },
+            "split_bulk.watermark.high": {
+              "type": "keyword"
+            },
+            "split_bulk.watermark.high.bulk_size": {
+              "type": "keyword"
+            },
+            "split_bulk.watermark.low": {
+              "type": "keyword"
+            },
+            "split_bulk.watermark.low.bulk_size": {
+              "type": "keyword"
+            },
+            "split_bulk_threshold": {
+              "type": "keyword"
+            }
+          }
+        },
         "node.bandwidth.recovery.operator": {
           "type": "object",
           "subobjects": false
