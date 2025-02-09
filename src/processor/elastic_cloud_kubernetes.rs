@@ -57,7 +57,7 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
         }))
     }
 
-    async fn run(self) -> Result<DiagnosticReport> {
+    async fn run(self) -> Result<()> {
         self.receiver.is_connected().await;
         for diagnostic in self.included_diagnostics {
             match diagnostic.diag_type.as_str() {
@@ -72,12 +72,7 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
                     let diagnostic =
                         ElasticsearchDiagnostic::new(manifest, receiver, self.exporter.cloned())
                             .await?;
-                    let report = diagnostic.run().await?;
-                    log::info!(
-                        "Created {} documents for diagnostic: {}",
-                        report.docs_total,
-                        report.metadata.id,
-                    );
+                    diagnostic.run().await?;
                 }
                 _ => {
                     log::warn!(
@@ -89,8 +84,14 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
             }
         }
 
-        let report = self.report.read().await;
-        Ok(report.clone())
+        let report = self.report.write().await;
+        log::info!(
+            "Created {} documents for diagnostic: {}",
+            report.docs_total,
+            report.metadata.id,
+        );
+        self.exporter.save_report(&*report).await?;
+        Ok(())
     }
 }
 

@@ -34,7 +34,7 @@ use crate::{
     exporter::Exporter,
     receiver::Receiver,
 };
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{eyre, Result};
 use futures::{future::join_all, stream::FuturesUnordered};
 use lookup::NodeSummary;
 use metadata::ElasticsearchMetadata;
@@ -120,8 +120,12 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
         }))
     }
 
-    async fn run(self) -> Result<DiagnosticReport> {
+    async fn run(self) -> Result<()> {
         log::debug!("Running Elasticsearch diagnostic processors");
+        if let false = self.exporter.is_connected().await {
+            return Err(eyre!("Exporter is not connected"));
+        }
+
         if log::max_level() >= log::Level::Debug {
             data::save_file("diagnostic.json", &self)?;
         }
@@ -166,7 +170,14 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             .flatten()
             .for_each(|summary| report.add_processor_summary(summary));
 
-        Ok(report.clone())
+        log::info!(
+            "Created {} documents for diagnostic: {}",
+            report.docs_total,
+            report.metadata.id,
+        );
+        diag.exporter.save_report(&*report).await?;
+
+        Ok(())
     }
 }
 

@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use color_eyre::eyre::{eyre, Result};
 use esdiag::{
     client::KnownHost,
-    data::{save_file, Collector, Uri},
+    data::{Collector, Uri},
     env::LOG_LEVEL,
     exporter::{DirectoryExporter, Exporter},
     processor::Diagnostic,
@@ -214,20 +214,10 @@ async fn run() -> Result<&'static str> {
             let exporter = Exporter::try_from(output_uri)?;
 
             let manifest = receiver.try_get_manifest().await?;
-
             log::trace!("{}", serde_json::to_string(&manifest)?);
-            let diagnostic = Diagnostic::try_new_processor(manifest, receiver, exporter).await?;
-            let report = diagnostic.run().await?;
-            if log::max_level() >= log::Level::Debug {
-                save_file("report.json", &report)?;
-            }
 
-            log::info!(
-                "Created {} documents for diagnostic: {}",
-                report.docs_total,
-                report.metadata.id,
-            );
-            Ok("process")
+            let diagnostic = Diagnostic::try_new(manifest, receiver, exporter).await?;
+            diagnostic.run().await.map(|_| "process")
         }
         Commands::Import { target, source } => {
             let output_uri = Uri::try_from(target)?;
@@ -240,20 +230,10 @@ async fn run() -> Result<&'static str> {
             let exporter = Exporter::try_from(output_uri)?;
 
             let manifest = receiver.try_get_manifest().await?;
-
             log::trace!("{}", serde_json::to_string(&manifest)?);
-            let diagnostic = Diagnostic::try_new_processor(manifest, receiver, exporter).await?;
-            let report = diagnostic.run().await?;
-            if log::max_level() >= log::Level::Debug {
-                save_file("report.json", &report)?;
-            }
 
-            log::info!(
-                "Created {} documents for diagnostic: {}",
-                report.docs_total,
-                report.metadata.id,
-            );
-            Ok("import")
+            let diagnostic = Diagnostic::try_new(manifest, receiver, exporter).await?;
+            diagnostic.run().await.map(|_| "import")
         }
         Commands::Setup { host } => {
             log::info!("Setting up Elasticsearch assets in {host}");

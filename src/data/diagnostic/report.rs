@@ -63,6 +63,8 @@ impl TryFrom<DiagnosticManifest> for DiagnosticReportBuilder {
 
 #[derive(Serialize, Clone)]
 pub struct DiagnosticReport {
+    #[serde(rename = "@timestamp")]
+    timestamp: u64,
     product: Product,
     origin: Origin,
     pub docs_total: u32,
@@ -94,6 +96,7 @@ impl TryFrom<DiagnosticReportBuilder> for DiagnosticReport {
 
     fn try_from(builder: DiagnosticReportBuilder) -> Result<Self> {
         Ok(Self {
+            timestamp: chrono::Utc::now().timestamp_millis() as u64,
             docs_total: builder.docs_total,
             lookups: builder.lookups,
             metadata: builder.metadata,

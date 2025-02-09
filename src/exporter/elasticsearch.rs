@@ -3,13 +3,16 @@ use crate::{
     client::{Auth, ElasticsearchBuilder, KnownHost},
     data::{
         self,
-        diagnostic::report::{BatchResponse, ProcessorSummary},
+        diagnostic::{
+            report::{BatchResponse, ProcessorSummary},
+            DiagnosticReport,
+        },
     },
 };
 use color_eyre::eyre::{eyre, Result};
 use elasticsearch::{
     http::{headers, request::JsonBody, response::Response, Method},
-    BulkOperation, BulkParts, Elasticsearch,
+    BulkOperation, BulkParts, Elasticsearch, IndexParts,
 };
 use futures::{future::join_all, stream::FuturesUnordered};
 use serde_json::Value;
@@ -111,29 +114,48 @@ impl Export for ElasticsearchExporter {
     }
 
     async fn is_connected(&self) -> bool {
-        let status_code = match self
-            .client
-            .send(
-                elasticsearch::http::Method::Get,
-                "",
-                elasticsearch::http::headers::HeaderMap::new(),
-                Option::<&String>::None,
-                Option::<&String>::None,
-                None,
-            )
-            .await
-        {
+        let status_code = match self.client.info().send().await {
             Ok(res) => {
+                log::debug!("Exporter is connected: {}", res.status_code());
                 log::trace!("{:?}", res);
-                res.status_code().as_str().to_string()
+                res.status_code().as_u16()
             }
             Err(e) => {
                 log::error!("{e}");
-                "599".to_string()
+                599
             }
         };
 
-        status_code == "200"
+        status_code == 200
+    }
+
+    async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
+        data::save_file("report.json", report)?;
+        match self
+            .client
+            .index(IndexParts::Index("metrics-diagnostic-esdiag"))
+            .body(report)
+            .send()
+            .await
+        {
+            Ok(res) => {
+                let status_code = res.status_code().as_u16();
+                let body = res.json::<Value>().await?;
+                match status_code {
+                    200 | 201 => {
+                        log::info!("metrics-diagnostic-esdiag, created diagnostic report");
+                        log::trace!("response body: {body}");
+                        Ok(())
+                    }
+                    400..600 => Err(eyre!("http {status_code}: {body}")),
+                    _ => Err(eyre!("unexpected response: http {status_code}: {body}")),
+                }
+            }
+            Err(e) => {
+                log::error!("{e}");
+                Err(e.into())
+            }
+        }
     }
 }
 

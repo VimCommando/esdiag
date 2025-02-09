@@ -79,7 +79,7 @@ impl DiagnosticProcessor for LogstashDiagnostic {
         }))
     }
 
-    async fn run(self) -> Result<DiagnosticReport> {
+    async fn run(self) -> Result<()> {
         log::debug!("Running Logstash diagnostic processors");
         if log::max_level() >= log::Level::Debug {
             data::save_file("diagnostic.json", &self)?;
@@ -90,7 +90,13 @@ impl DiagnosticProcessor for LogstashDiagnostic {
         report.add_processor_summary(self.process::<NodeStats>().await?);
         report.add_processor_summary(self.process::<Plugins>().await?);
 
-        Ok(report.clone())
+        log::info!(
+            "Created {} documents for diagnostic: {}",
+            report.docs_total,
+            report.metadata.id,
+        );
+        self.exporter.save_report(&*report).await?;
+        Ok(())
     }
 }
 

@@ -12,7 +12,7 @@ use elasticsearch::ElasticsearchDiagnostic;
 use logstash::LogstashDiagnostic;
 
 use crate::{
-    data::diagnostic::{report::DiagnosticReport, DiagnosticManifest, Product},
+    data::diagnostic::{DiagnosticManifest, Product},
     exporter::Exporter,
     receiver::Receiver,
 };
@@ -26,7 +26,7 @@ pub enum Diagnostic {
 }
 
 impl Diagnostic {
-    pub async fn try_new_processor(
+    pub async fn try_new(
         manifest: DiagnosticManifest,
         receiver: Receiver,
         exporter: Exporter,
@@ -54,13 +54,14 @@ impl Diagnostic {
         }
     }
 
-    pub async fn run(self) -> Result<DiagnosticReport> {
+    pub async fn run(self) -> Result<()> {
         match self {
-            Self::Elasticsearch(diagnostic) => diagnostic.run().await,
-            Self::ElasticCloudKubernetes(diagnostic) => diagnostic.run().await,
-            //Self::Kibana(diagnostic) => diagnostic.run().await,
-            Self::Logstash(diagnostic) => diagnostic.run().await,
-        }
+            Self::Elasticsearch(diagnostic) => diagnostic.run().await?,
+            Self::ElasticCloudKubernetes(diagnostic) => diagnostic.run().await?,
+            //Self::Kibana(diagnostic) => diagnostic.run().await?,
+            Self::Logstash(diagnostic) => diagnostic.run().await?,
+        };
+        Ok(())
     }
 }
 
@@ -74,7 +75,7 @@ trait DiagnosticProcessor {
         receiver: Receiver,
         exporter: Exporter,
     ) -> Result<Box<Self>>;
-    async fn run(self) -> Result<DiagnosticReport>;
+    async fn run(self) -> Result<()>;
 }
 
 trait Metadata {

@@ -12,14 +12,17 @@ use elasticsearch::ElasticsearchExporter;
 use file::FileExporter;
 use stream::StreamExporter;
 
-use crate::data::{diagnostic::report::ProcessorSummary, Uri};
+use crate::data::{
+    diagnostic::{report::ProcessorSummary, DiagnosticReport},
+    Uri,
+};
 use color_eyre::eyre::{eyre, Result};
 use serde_json::Value;
 
 trait Export {
-    #[allow(dead_code)]
     async fn is_connected(&self) -> bool;
     async fn write(&self, index: String, docs: Vec<Value>) -> Result<ProcessorSummary>;
+    async fn save_report(&self, report: &DiagnosticReport) -> Result<()>;
 }
 
 /// The different types of exporters for data output.
@@ -60,6 +63,22 @@ impl Exporter {
 
     pub fn cloned(&self) -> Self {
         self.clone()
+    }
+
+    pub async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
+        match self {
+            Exporter::Elasticsearch(exporter) => exporter.save_report(report).await,
+            Exporter::File(exporter) => exporter.save_report(report).await,
+            Exporter::Stream(exporter) => exporter.save_report(report).await,
+        }
+    }
+
+    pub async fn is_connected(&self) -> bool {
+        match self {
+            Exporter::Elasticsearch(exporter) => exporter.is_connected().await,
+            Exporter::File(exporter) => exporter.is_connected().await,
+            Exporter::Stream(exporter) => exporter.is_connected().await,
+        }
     }
 }
 

@@ -1,4 +1,7 @@
-use crate::data::diagnostic::report::{BatchResponse, ProcessorSummary};
+use crate::data::diagnostic::{
+    report::{BatchResponse, ProcessorSummary},
+    DiagnosticReport,
+};
 
 use super::Export;
 use color_eyre::eyre::Result;
@@ -72,6 +75,10 @@ impl Export for FileExporter {
         summary.add_batch(batch);
         log::info!("{}, created {} docs", index, doc_count);
         Ok(summary)
+    }
+
+    async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
+        crate::data::save_file("report.json", report)
     }
 }
 
