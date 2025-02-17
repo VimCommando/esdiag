@@ -7,7 +7,6 @@ pub struct DiagnosticReportBuilder {
     lookups: HashMap<String, LookupSummary>,
     processors: HashMap<String, ProcessorSummary>,
     product: Option<Product>,
-    docs_total: u32,
     metadata: DiagnosticMetadata,
     origin: Option<Origin>,
 }
@@ -35,7 +34,6 @@ impl DiagnosticReportBuilder {
 impl From<DiagnosticMetadata> for DiagnosticReportBuilder {
     fn from(metadata: DiagnosticMetadata) -> Self {
         Self {
-            docs_total: 0,
             lookups: HashMap::new(),
             metadata,
             processors: HashMap::new(),
@@ -51,7 +49,6 @@ impl TryFrom<DiagnosticManifest> for DiagnosticReportBuilder {
     fn try_from(manifest: DiagnosticManifest) -> Result<Self> {
         let metadata = DiagnosticMetadata::try_from(manifest)?;
         Ok(Self {
-            docs_total: 0,
             lookups: HashMap::new(),
             metadata,
             processors: HashMap::new(),
@@ -63,21 +60,36 @@ impl TryFrom<DiagnosticManifest> for DiagnosticReportBuilder {
 
 #[derive(Serialize, Clone)]
 pub struct DiagnosticReport {
-    #[serde(rename = "@timestamp")]
-    timestamp: u64,
     product: Product,
     origin: Origin,
     pub docs_total: u32,
+    doc_errors: u32,
     lookups: HashMap<String, LookupSummary>,
-    processors: HashMap<String, ProcessorSummary>,
+    processor: ProcessorStats,
     #[serde(flatten)]
     pub metadata: DiagnosticMetadata,
 }
 
+#[derive(Serialize, Clone)]
+struct ProcessorStats {
+    count: u32,
+    errors: u32,
+    failures: Vec<String>,
+    stats: HashMap<String, ProcessorSummary>,
+}
+
 impl DiagnosticReport {
     pub fn add_processor_summary(&mut self, summary: ProcessorSummary) {
+        self.processor.count += 1;
+        if !summary.source.parsed {
+            self.processor.errors += 1;
+            self.processor.failures.push(summary.processor.clone());
+        }
         self.docs_total += summary.docs;
-        self.processors.insert(summary.processor.clone(), summary);
+        self.doc_errors += summary.doc_errors;
+        self.processor
+            .stats
+            .insert(summary.processor.clone(), summary);
     }
 
     pub fn add_lookup<T>(&mut self, name: &str, lookup: &Lookup<T>)
@@ -96,12 +108,17 @@ impl TryFrom<DiagnosticReportBuilder> for DiagnosticReport {
 
     fn try_from(builder: DiagnosticReportBuilder) -> Result<Self> {
         Ok(Self {
-            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-            docs_total: builder.docs_total,
+            docs_total: 0,
+            doc_errors: 0,
             lookups: builder.lookups,
             metadata: builder.metadata,
             origin: builder.origin.ok_or_else(|| eyre!("Origin not set"))?,
-            processors: builder.processors,
+            processor: ProcessorStats {
+                count: 0,
+                errors: 0,
+                failures: Vec::new(),
+                stats: builder.processors,
+            },
             product: builder.product.unwrap_or(Product::Unknown),
         })
     }

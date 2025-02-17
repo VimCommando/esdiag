@@ -15,7 +15,7 @@ use elasticsearch::{
     BulkOperation, BulkParts, Elasticsearch, IndexParts,
 };
 use futures::{future::join_all, stream::FuturesUnordered};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use url::Url;
@@ -131,10 +131,15 @@ impl Export for ElasticsearchExporter {
 
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
         data::save_file("report.json", report)?;
+        let body = json!({
+            "@timestamp": chrono::Utc::now().timestamp_millis(),
+            "diagnostic": report ,
+        });
         match self
             .client
             .index(IndexParts::Index("metrics-diagnostic-esdiag"))
-            .body(report)
+            .pipeline("esdiag")
+            .body(body)
             .send()
             .await
         {
