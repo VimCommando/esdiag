@@ -28,7 +28,7 @@ use crate::{
         elasticsearch::{
             Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreams, IlmExplain,
             IlmStats, IndexSettings, IndicesSettings, IndicesStats, Nodes, NodesStats,
-            SearchableSnapshotsCacheStats, SearchableSnapshotsStats, SharedCacheStats, Tasks,
+            SearchableSnapshotsCacheStats, SharedCacheStats, Tasks,
         },
     },
     exporter::Exporter,
@@ -151,10 +151,12 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
                 DataSet::NodesStats,
                 spawn_processor::<NodesStats>(diag.clone()),
             ),
-            (
-                DataSet::SearchableSnapshotsStats,
-                spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
-            ),
+            // Temporarily omitting in favor of an include/exclude/diag_type
+            // filter to prevent the "expected" error
+            // (
+            // DataSet::SearchableSnapshotsStats,
+            // spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
+            // ),
             (DataSet::Tasks, spawn_processor::<Tasks>(diag.clone())),
         ]);
         tasks
