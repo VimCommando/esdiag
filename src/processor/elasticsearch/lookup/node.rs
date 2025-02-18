@@ -1,6 +1,6 @@
-use crate::{
-    data::elasticsearch::{Node, Nodes, OsDetails},
-    processor::lookup::Lookup,
+use crate::data::{
+    diagnostic::Lookup,
+    elasticsearch::{Node, Nodes, OsDetails},
 };
 use color_eyre::eyre::Result;
 use serde::Serialize;

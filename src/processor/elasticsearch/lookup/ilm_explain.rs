@@ -1,6 +1,6 @@
-use crate::{
-    data::elasticsearch::{IlmExplain, IlmStats},
-    processor::lookup::Lookup,
+use crate::data::{
+    diagnostic::Lookup,
+    elasticsearch::{IlmExplain, IlmStats},
 };
 use color_eyre::eyre::Result;
 

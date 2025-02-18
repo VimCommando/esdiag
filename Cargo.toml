@@ -1,8 +1,8 @@
 [package]
 name = "esdiag"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.83"
 
 [dependencies]
 base64 = "0.22.1"

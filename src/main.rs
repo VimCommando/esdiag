@@ -214,17 +214,10 @@ async fn run() -> Result<&'static str> {
             let exporter = Exporter::try_from(output_uri)?;
 
             let manifest = receiver.try_get_manifest().await?;
-
             log::trace!("{}", serde_json::to_string(&manifest)?);
-            let diagnostic_processor =
-                Diagnostic::try_new_processor(manifest, receiver, exporter).await?;
-            let (diag_id, doc_count) = diagnostic_processor.run().await?;
-            log::info!(
-                "Created {} documents for diagnostic: {}",
-                doc_count,
-                diag_id
-            );
-            Ok("process")
+
+            let diagnostic = Diagnostic::try_new(manifest, receiver, exporter).await?;
+            diagnostic.run().await.map(|_| "process")
         }
         Commands::Import { target, source } => {
             let output_uri = Uri::try_from(target)?;
@@ -237,17 +230,10 @@ async fn run() -> Result<&'static str> {
             let exporter = Exporter::try_from(output_uri)?;
 
             let manifest = receiver.try_get_manifest().await?;
-
             log::trace!("{}", serde_json::to_string(&manifest)?);
-            let diagnostic_processor =
-                Diagnostic::try_new_processor(manifest, receiver, exporter).await?;
-            let (diag_id, doc_count) = diagnostic_processor.run().await?;
-            log::info!(
-                "Created {} documents for diagnostic: {}",
-                doc_count,
-                diag_id
-            );
-            Ok("import")
+
+            let diagnostic = Diagnostic::try_new(manifest, receiver, exporter).await?;
+            diagnostic.run().await.map(|_| "import")
         }
         Commands::Setup { host } => {
             log::info!("Setting up Elasticsearch assets in {host}");
@@ -264,7 +250,7 @@ fn clear_last_run_files() -> Result<()> {
     if !last_run.exists() {
         std::fs::create_dir_all(&last_run)?;
     }
-    let files = vec!["bulk_errors.ndjson", "diagnostic.json"];
+    let files = vec!["bulk_errors.ndjson", "diagnostic.json", "report.json"];
     for file in files {
         let file = last_run.join(file);
         log::debug!("Removing {}", &file.display());

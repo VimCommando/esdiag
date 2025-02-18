@@ -5,7 +5,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 #[derive(Clone, Serialize)]
-pub struct DiagnosticDoc {
+pub struct DiagnosticMetadata {
     pub collection_date: u64,
     pub runner: String,
     pub id: String,
@@ -13,7 +13,7 @@ pub struct DiagnosticDoc {
     pub version: Option<String>,
 }
 
-impl DiagnosticDoc {
+impl DiagnosticMetadata {
     pub fn new(
         collection_date: u64,
         id: String,
@@ -21,7 +21,7 @@ impl DiagnosticDoc {
         uuid: String,
         version: Option<String>,
     ) -> Self {
-        DiagnosticDoc {
+        DiagnosticMetadata {
             collection_date,
             runner,
             id,
@@ -31,7 +31,7 @@ impl DiagnosticDoc {
     }
 }
 
-impl TryFrom<DiagnosticManifest> for DiagnosticDoc {
+impl TryFrom<DiagnosticManifest> for DiagnosticMetadata {
     type Error = color_eyre::eyre::Report;
 
     fn try_from(manifest: DiagnosticManifest) -> Result<Self> {
@@ -70,7 +70,7 @@ impl TryFrom<DiagnosticManifest> for DiagnosticDoc {
             None => "Unknown".to_string(),
         };
 
-        Ok(DiagnosticDoc::new(
+        Ok(DiagnosticMetadata::new(
             collection_date,
             id,
             runner,

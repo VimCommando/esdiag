@@ -1,12 +1,15 @@
-use super::{lookup::Lookup, DiagnosticProcessor, ElasticsearchDiagnostic};
+use super::{DiagnosticProcessor, ElasticsearchDiagnostic};
 use crate::{
-    data::diagnostic::{DiagPath, DiagnosticManifest},
+    data::diagnostic::{
+        DiagPath, DiagnosticManifest, DiagnosticReport, DiagnosticReportBuilder, Lookup, Product,
+    },
     exporter::Exporter,
     receiver::Receiver,
 };
 use color_eyre::eyre::Result;
 use serde::Serialize;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Serialize)]
 pub struct ElasticCloudKubernetesDiagnostic {
@@ -15,6 +18,8 @@ pub struct ElasticCloudKubernetesDiagnostic {
     exporter: Arc<Exporter>,
     #[serde(skip)]
     receiver: Arc<Receiver>,
+    #[serde(skip)]
+    report: Arc<RwLock<DiagnosticReport>>,
     included_diagnostics: Vec<DiagPath>,
 }
 
@@ -38,15 +43,21 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
             None => vec![],
         };
 
+        let report = DiagnosticReportBuilder::try_from(manifest)?
+            .product(Product::ECK)
+            .receiver(receiver.to_string())
+            .build()?;
+
         Ok(Box::new(Self {
             lookups,
             exporter: Arc::new(exporter),
             receiver: Arc::new(receiver),
+            report: Arc::new(RwLock::new(report)),
             included_diagnostics,
         }))
     }
 
-    async fn run(self) -> Result<(String, usize)> {
+    async fn run(self) -> Result<()> {
         self.receiver.is_connected().await;
         for diagnostic in self.included_diagnostics {
             match diagnostic.diag_type.as_str() {
@@ -61,12 +72,7 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
                     let diagnostic =
                         ElasticsearchDiagnostic::new(manifest, receiver, self.exporter.cloned())
                             .await?;
-                    let (diag_id, doc_count) = diagnostic.run().await?;
-                    log::info!(
-                        "Created {} documents for diagnostic: {}",
-                        doc_count,
-                        diag_id
-                    );
+                    diagnostic.run().await?;
                 }
                 _ => {
                     log::warn!(
@@ -78,11 +84,14 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
             }
         }
 
-        Ok(("eck-diagnostic".to_string(), 0))
-    }
-
-    async fn process_queue(&self) -> usize {
-        0
+        let report = self.report.write().await;
+        log::info!(
+            "Created {} documents for diagnostic: {}",
+            report.docs.created,
+            report.metadata.id,
+        );
+        self.exporter.save_report(&*report).await?;
+        Ok(())
     }
 }
 

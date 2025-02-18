@@ -1,6 +1,6 @@
-use crate::{
-    data::elasticsearch::{SearchableSnapshotsCacheStats, SharedCacheStats},
-    processor::lookup::Lookup,
+use crate::data::{
+    diagnostic::Lookup,
+    elasticsearch::{SearchableSnapshotsCacheStats, SharedCacheStats},
 };
 use color_eyre::eyre::Result;
 

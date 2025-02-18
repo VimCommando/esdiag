@@ -16,15 +16,21 @@ pub mod elasticsearch;
 pub mod kibana;
 /// Logstash diagnostic bundle
 pub mod logstash;
+/// Diagnostic lookup tables
+pub mod lookup;
 /// Legacy diagnostic bundle manifest file
 pub mod manifest;
+/// Diagnostic job report
+pub mod report;
 
 pub use data_set::DataSet;
 pub use data_source::DataSource;
 pub use data_stream_name::DataStreamName;
 pub use diagnostic_manifest::DiagnosticManifest;
-pub use doc::DiagnosticDoc;
+pub use doc::DiagnosticMetadata;
+pub use lookup::Lookup;
 pub use manifest::Manifest;
+pub use report::{DiagnosticReport, DiagnosticReportBuilder};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::str::FromStr;
 

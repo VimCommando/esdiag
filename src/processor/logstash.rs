@@ -11,7 +11,10 @@ use super::{DataProcessor, DiagnosticProcessor, Metadata};
 use crate::{
     data::{
         self,
-        diagnostic::{DataSource, DiagnosticManifest},
+        diagnostic::{
+            report::ProcessorSummary, DataSource, DiagnosticManifest, DiagnosticReport,
+            DiagnosticReportBuilder, Product,
+        },
         logstash::{Node, NodeStats, Plugins, Version},
     },
     exporter::Exporter,
@@ -21,6 +24,7 @@ use color_eyre::eyre::Result;
 use metadata::LogstashMetadata;
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Serialize)]
 pub struct LogstashDiagnostic {
@@ -30,10 +34,12 @@ pub struct LogstashDiagnostic {
     exporter: Arc<Exporter>,
     #[serde(skip)]
     receiver: Arc<Receiver>,
+    #[serde(skip)]
+    report: Arc<RwLock<DiagnosticReport>>,
 }
 
 impl LogstashDiagnostic {
-    async fn process<T>(&self) -> Result<usize>
+    async fn process<T>(&self) -> Result<ProcessorSummary>
     where
         T: DataSource + DataProcessor<Lookups, LogstashMetadata> + DeserializeOwned + Send + Sync,
     {
@@ -58,6 +64,9 @@ impl DiagnosticProcessor for LogstashDiagnostic {
         let logstash_version = receiver.get::<Version>().await?;
         let metadata = LogstashMetadata::try_new(manifest, logstash_version)?;
         let plugins = receiver.get::<Plugins>().await?;
+        let report = DiagnosticReportBuilder::from(metadata.diagnostic.clone())
+            .product(Product::Logstash)
+            .build()?;
 
         Ok(Box::new(Self {
             lookups: Arc::new(Lookups {
@@ -66,25 +75,28 @@ impl DiagnosticProcessor for LogstashDiagnostic {
             metadata: Arc::new(metadata),
             exporter: Arc::new(exporter),
             receiver: Arc::new(receiver),
+            report: Arc::new(RwLock::new(report)),
         }))
     }
 
-    async fn run(self) -> Result<(String, usize)> {
+    async fn run(self) -> Result<()> {
         log::debug!("Running Logstash diagnostic processors");
         if log::max_level() >= log::Level::Debug {
             data::save_file("diagnostic.json", &self)?;
         }
 
-        let mut doc_count = 0;
-        doc_count += self.process::<Node>().await?;
-        doc_count += self.process::<NodeStats>().await?;
-        doc_count += self.process::<Plugins>().await?;
+        let mut report = self.report.write().await;
+        report.add_processor_summary(self.process::<Node>().await?);
+        report.add_processor_summary(self.process::<NodeStats>().await?);
+        report.add_processor_summary(self.process::<Plugins>().await?);
 
-        Ok((String::from("Logstash"), doc_count))
-    }
-
-    async fn process_queue(&self) -> usize {
-        0
+        log::info!(
+            "Created {} documents for diagnostic: {}",
+            report.docs.created,
+            report.metadata.id,
+        );
+        self.exporter.save_report(&*report).await?;
+        Ok(())
     }
 }
 

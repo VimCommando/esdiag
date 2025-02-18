@@ -1,3 +1,8 @@
+use crate::data::diagnostic::{
+    report::{BatchResponse, ProcessorSummary},
+    DiagnosticReport,
+};
+
 use super::Export;
 use color_eyre::eyre::Result;
 use serde_json::Value;
@@ -12,18 +17,29 @@ impl StreamExporter {
 }
 
 impl Export for StreamExporter {
-    async fn write(&self, _index: String, docs: Vec<Value>) -> Result<usize> {
-        log::debug!("Writing {} docs to stdout", docs.len());
-        let doc_count = docs.len();
+    async fn write(&self, index: String, docs: Vec<Value>) -> Result<ProcessorSummary> {
+        let doc_count = docs.len() as u32;
+        let start_time = std::time::Instant::now();
+        let mut summary = ProcessorSummary::new(index);
+        let mut batch = BatchResponse::new(doc_count);
+        log::debug!("Writing {} docs to stdout", doc_count);
         for doc in docs {
             serde_json::to_writer(std::io::stdout(), &doc)?;
             println!();
         }
-        Ok(doc_count)
+        batch.size = doc_count;
+        batch.time = start_time.elapsed().as_secs() as u32;
+        batch.time = start_time.elapsed().as_millis() as u32;
+        summary.add_batch(batch);
+        Ok(summary)
     }
 
     async fn is_connected(&self) -> bool {
         true
+    }
+
+    async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
+        crate::data::save_file("report.json", report)
     }
 }
 

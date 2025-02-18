@@ -1,6 +1,6 @@
 use super::Metadata;
 use crate::data::{
-    diagnostic::{DataStreamName, DiagnosticDoc, DiagnosticManifest},
+    diagnostic::{DataStreamName, DiagnosticMetadata, DiagnosticManifest},
     logstash::Version,
 };
 use color_eyre::eyre::Result;
@@ -10,7 +10,7 @@ use serde_json::Value;
 #[derive(Clone, Serialize)]
 pub struct LogstashMetadata {
     pub node: Version,
-    pub diagnostic: DiagnosticDoc,
+    pub diagnostic: DiagnosticMetadata,
     pub timestamp: u64,
     pub as_doc: MetadataDoc,
 }
@@ -20,7 +20,7 @@ pub struct MetadataDoc {
     #[serde(rename = "@timestamp")]
     pub timestamp: u64,
     pub node: Version,
-    pub diagnostic: DiagnosticDoc,
+    pub diagnostic: DiagnosticMetadata,
     pub data_stream: DataStreamName,
 }
 
@@ -33,7 +33,7 @@ impl Metadata for MetadataDoc {
 impl LogstashMetadata {
     pub fn try_new(manifest: DiagnosticManifest, node: Version) -> Result<Self> {
         let name = node.name.replace(" ", "_");
-        let diagnostic = DiagnosticDoc::try_from(manifest.with_name(name))?;
+        let diagnostic = DiagnosticMetadata::try_from(manifest.with_name(name))?;
         let timestamp = diagnostic.collection_date;
 
         let as_doc = MetadataDoc {

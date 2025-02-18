@@ -1,0 +1,29 @@
+{
+  "index_patterns": ["metrics-diagnostic-esdiag"],
+  "composed_of": ["esdiag@metadata", "esdiag@mappings", "esdiag@settings"],
+  "allow_auto_create": true,
+  "data_stream": {},
+  "priority": 300,
+  "template": {
+    "mappings": {
+      "numeric_detection": false,
+      "dynamic": true,
+      "properties": {
+        "agent": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "keyword"
+            },
+            "type": {
+              "type": "constant_keyword"
+            },
+            "version": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  }
+}

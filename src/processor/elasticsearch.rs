@@ -17,21 +17,24 @@ mod searchable_snapshots_stats;
 /// Processor for the `_tasks` API
 mod tasks;
 
-use super::{lookup::Lookup, DataProcessor, DiagnosticProcessor, Metadata};
+use super::{DataProcessor, DiagnosticProcessor, Metadata};
 use crate::{
     data::{
         self,
-        diagnostic::{elasticsearch::DataSet, DataSource, DiagnosticManifest},
+        diagnostic::{
+            elasticsearch::DataSet, report::ProcessorSummary, DataSource, DiagnosticManifest,
+            DiagnosticReport, DiagnosticReportBuilder, Lookup, Product,
+        },
         elasticsearch::{
             Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreams, IlmExplain,
             IlmStats, IndexSettings, IndicesSettings, IndicesStats, Nodes, NodesStats,
-            SearchableSnapshotsCacheStats, SearchableSnapshotsStats, SharedCacheStats, Tasks,
+            SearchableSnapshotsCacheStats, SharedCacheStats, Tasks,
         },
     },
     exporter::Exporter,
     receiver::Receiver,
 };
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{eyre, Result};
 use futures::{future::join_all, stream::FuturesUnordered};
 use lookup::NodeSummary;
 use metadata::ElasticsearchMetadata;
@@ -51,7 +54,29 @@ pub struct ElasticsearchDiagnostic {
     #[serde(skip)]
     receiver: Arc<Receiver>,
     #[serde(skip)]
+    report: Arc<RwLock<DiagnosticReport>>,
+    #[serde(skip)]
     queue: ExporterDocumentQueue,
+}
+
+impl ElasticsearchDiagnostic {
+    async fn process_queue(&self, name: String) -> Option<ProcessorSummary> {
+        let queue = self.queue.clone();
+        let exporter = self.exporter.clone();
+
+        let mut queue_guard = queue.write().await;
+        if let Some((index, docs)) = queue_guard.pop() {
+            log::debug!("Processing queue {index}");
+            exporter
+                .write(index, docs)
+                .await
+                .ok()
+                .map(|summary| summary.rename(name).was_parsed())
+        } else {
+            log::warn!("Queue was empty");
+            None
+        }
+    }
 }
 
 impl DiagnosticProcessor for ElasticsearchDiagnostic {
@@ -64,6 +89,10 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
         let display_name = receiver.get::<ClusterSettings>().await?.get_display_name();
         let metadata =
             ElasticsearchMetadata::try_new(manifest, cluster.with_display_name(display_name))?;
+        let mut report = DiagnosticReportBuilder::from(metadata.diagnostic.clone())
+            .product(Product::Elasticsearch)
+            .receiver(receiver.to_string())
+            .build()?;
 
         let lookups = Lookups {
             alias: Lookup::from(receiver.get::<AliasList>().await),
@@ -74,36 +103,29 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             shared_cache: Lookup::from(receiver.get::<SearchableSnapshotsCacheStats>().await),
         };
 
+        report.add_lookup("alias", &lookups.alias);
+        report.add_lookup("data_stream", &lookups.data_stream);
+        report.add_lookup("index_settings", &lookups.index_settings);
+        report.add_lookup("node", &lookups.node);
+        report.add_lookup("ilm_explain", &lookups.ilm_explain);
+        report.add_lookup("shared_cache", &lookups.shared_cache);
+
         Ok(Box::new(Self {
             exporter: Arc::new(exporter),
             lookups: Arc::new(lookups),
-            metadata: Arc::new(metadata),
+            metadata: Arc::new(metadata.clone()),
             queue: Arc::new(RwLock::new(Vec::<(String, Vec<Value>)>::new())),
             receiver: Arc::new(receiver),
+            report: Arc::new(RwLock::new(report)),
         }))
     }
 
-    async fn process_queue(&self) -> usize {
-        let queue = self.queue.clone();
-        let exporter = self.exporter.clone();
-
-        let mut queue_guard = queue.write().await;
-        let mut doc_count: usize = 0;
-        for (index, docs) in queue_guard.drain(..) {
-            log::debug!("Processing queue {index}");
-            if docs.is_empty() {
-                continue;
-            }
-            match exporter.write(index, docs).await {
-                Ok(count) => doc_count += count,
-                Err(e) => log::error!("Elasticsearch exporter: {e}"),
-            }
-        }
-        doc_count
-    }
-
-    async fn run(self) -> Result<(String, usize)> {
+    async fn run(self) -> Result<()> {
         log::debug!("Running Elasticsearch diagnostic processors");
+        if let false = self.exporter.is_connected().await {
+            return Err(eyre!("Exporter is not connected"));
+        }
+
         if log::max_level() >= log::Level::Debug {
             data::save_file("diagnostic.json", &self)?;
         }
@@ -129,10 +151,12 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
                 DataSet::NodesStats,
                 spawn_processor::<NodesStats>(diag.clone()),
             ),
-            (
-                DataSet::SearchableSnapshotsStats,
-                spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
-            ),
+            // Temporarily omitting in favor of an include/exclude/diag_type filter to
+            // prevent the expected error
+            // (
+            // DataSet::SearchableSnapshotsStats,
+            // spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
+            // ),
             (DataSet::Tasks, spawn_processor::<Tasks>(diag.clone())),
         ]);
         tasks
@@ -140,18 +164,26 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             .map(|(_name, task)| futures.push(task))
             .count();
 
-        let doc_count = join_all(futures)
+        let mut report = diag.report.write().await;
+        join_all(futures)
             .await
             .into_iter()
             .filter_map(Result::ok)
-            .sum();
-        let diag_id = diag.metadata.diagnostic.id.clone();
+            .flatten()
+            .for_each(|summary| report.add_processor_summary(summary));
 
-        Ok((diag_id, doc_count))
+        log::info!(
+            "Created {} documents for diagnostic: {}",
+            report.docs.created,
+            report.metadata.id,
+        );
+        diag.exporter.save_report(&*report).await?;
+
+        Ok(())
     }
 }
 
-type DataProcessorTask = Pin<Box<JoinHandle<usize>>>;
+type DataProcessorTask = Pin<Box<JoinHandle<Option<ProcessorSummary>>>>;
 
 fn spawn_processor<T>(diagnostic: Arc<ElasticsearchDiagnostic>) -> DataProcessorTask
 where
@@ -168,11 +200,11 @@ where
         match docs {
             Ok(docs) => {
                 diagnostic.queue.write().await.push(docs);
-                diagnostic.process_queue().await
+                diagnostic.process_queue(T::name()).await
             }
             Err(e) => {
                 log::warn!("No {} data found: {e}", T::name());
-                0
+                Some(ProcessorSummary::new(T::name()))
             }
         }
     }))

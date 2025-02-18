@@ -1,15 +1,21 @@
 use super::Export;
 use crate::{
     client::{Auth, ElasticsearchBuilder, KnownHost},
-    data,
+    data::{
+        self,
+        diagnostic::{
+            report::{BatchResponse, ProcessorSummary},
+            DiagnosticReport,
+        },
+    },
 };
 use color_eyre::eyre::{eyre, Result};
 use elasticsearch::{
     http::{headers, request::JsonBody, response::Response, Method},
-    BulkOperation, BulkParts, Elasticsearch,
+    BulkOperation, BulkParts, Elasticsearch, IndexParts,
 };
 use futures::{future::join_all, stream::FuturesUnordered};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use url::Url;
@@ -68,18 +74,19 @@ impl TryFrom<KnownHost> for ElasticsearchExporter {
 }
 
 impl Export for ElasticsearchExporter {
-    async fn write(&self, index: String, mut docs: Vec<Value>) -> Result<usize> {
+    async fn write(&self, index: String, mut docs: Vec<Value>) -> Result<ProcessorSummary> {
         let client = Arc::new(self.client.clone());
         let workers = 4;
         let bulk_size = 5000;
         let semaphore = Arc::new(Semaphore::new(workers));
+        let mut summary = ProcessorSummary::new(index.clone());
 
         let futures = FuturesUnordered::new();
 
         while !docs.is_empty() {
             let client = client.clone();
-            let index = index.clone();
             let batch_size = std::cmp::min(docs.len(), bulk_size);
+            let index = index.clone();
             let ops: Vec<BulkOperation<serde_json::Value>> = docs
                 .drain(..batch_size)
                 .map(|doc| BulkOperation::create(doc).pipeline("esdiag").into())
@@ -93,46 +100,71 @@ impl Export for ElasticsearchExporter {
 
             futures.push(tokio::spawn(future));
         }
-        let doc_count = join_all(futures)
+
+        join_all(futures)
             .await
             .into_iter()
             .filter_map(Result::ok)
-            .filter_map(|result| match result {
-                Ok(count) => Some(count),
-                Err(e) => {
-                    log::error!("{}", e);
-                    None
-                }
-            })
-            .sum();
+            .flatten()
+            .for_each(|response| {
+                summary.add_batch(response);
+            });
 
-        Ok(doc_count)
+        Ok(summary)
     }
 
     async fn is_connected(&self) -> bool {
-        let status_code = match self
-            .client
-            .send(
-                elasticsearch::http::Method::Get,
-                "",
-                elasticsearch::http::headers::HeaderMap::new(),
-                Option::<&String>::None,
-                Option::<&String>::None,
-                None,
-            )
-            .await
-        {
+        let status_code = match self.client.info().send().await {
             Ok(res) => {
+                log::debug!("Exporter is connected: {}", res.status_code());
                 log::trace!("{:?}", res);
-                res.status_code().as_str().to_string()
+                res.status_code().as_u16()
             }
             Err(e) => {
                 log::error!("{e}");
-                "599".to_string()
+                599
             }
         };
 
-        status_code == "200"
+        status_code == 200
+    }
+
+    async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
+        data::save_file("report.json", report)?;
+        let body = json!({
+            "@timestamp": chrono::Utc::now().timestamp_millis(),
+            "diagnostic": report ,
+            "agent": {
+                "type": "esdiag",
+                "version": semver::Version::parse(env!("CARGO_PKG_VERSION"))?,
+            }
+        });
+        match self
+            .client
+            .index(IndexParts::Index("metrics-diagnostic-esdiag"))
+            .pipeline("esdiag")
+            .body(body)
+            .send()
+            .await
+        {
+            Ok(res) => {
+                let status_code = res.status_code().as_u16();
+                let body = res.json::<Value>().await?;
+                match status_code {
+                    200 | 201 => {
+                        log::info!("metrics-diagnostic-esdiag, created diagnostic report");
+                        log::trace!("response body: {body}");
+                        Ok(())
+                    }
+                    400..600 => Err(eyre!("http {status_code}: {body}")),
+                    _ => Err(eyre!("unexpected response: http {status_code}: {body}")),
+                }
+            }
+            Err(e) => {
+                log::error!("{e}");
+                Err(e.into())
+            }
+        }
     }
 }
 
@@ -145,7 +177,7 @@ impl std::fmt::Display for ElasticsearchExporter {
 async fn parse_response(
     index: String,
     response: Result<Response, elasticsearch::Error>,
-) -> Result<usize> {
+) -> Result<BatchResponse> {
     let response = response?;
     log::trace!("{:?}", &response);
     let status_code = response.status_code().as_u16();
@@ -192,5 +224,14 @@ async fn parse_response(
         )?;
     }
 
-    Ok(doc_count)
+    let batch_response = BatchResponse {
+        docs: item_count as u32,
+        errors: error_count as u32,
+        retries: 0,
+        size: 0,
+        status_code,
+        time: body.get("took").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+    };
+
+    Ok(batch_response)
 }
