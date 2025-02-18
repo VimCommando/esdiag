@@ -232,7 +232,7 @@ Usage: esdiag collect <HOST> <OUTPUT>
 
 Arguments:
   <HOST>    The Elasticsearch host to collect diagnostics from
-  <OUTPUT>  The directory to save the diagnostics files to
+  <OUTPUT>  An existing directory to create a diagnostic directory and files in
 
 Options:
   -h, --help  Print help
