@@ -28,7 +28,7 @@ enum Commands {
         #[arg(help = "The Elasticsearch host to collect diagnostics from")]
         host: String,
         /// The output directory to save the diagnostics to
-        #[arg(help = "The directory to save the diagnostics files to")]
+        #[arg(help = "An existing directory to create a diagnostic directory and files in")]
         output: String,
     },
     /// Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`

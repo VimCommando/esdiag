@@ -32,18 +32,15 @@ impl TryFrom<PathBuf> for DirectoryExporter {
     type Error = color_eyre::eyre::Report;
 
     fn try_from(path: PathBuf) -> Result<Self> {
-        let subpath = path.join("commercial");
         if !path.exists() {
-            log::debug!("Creating directory: {}", &subpath.display());
-            std::fs::create_dir_all(subpath)?;
+            return Err(eyre!("Directory output not found: {}", path.display()));
         }
-        match path.is_dir() {
-            true => Ok(Self { path }),
-            false => Err(eyre!(
-                "Directory input must be a directory: {}",
-                path.display()
-            )),
-        }
+        let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+        let directory = path.join(format!("api-diagnostic-{}", timestamp));
+        log::debug!("Creating directory: {}", &directory.display());
+        std::fs::create_dir_all(directory.clone().join("commercial"))?;
+
+        Ok(Self { path: directory })
     }
 }
 
