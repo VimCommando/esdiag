@@ -33,7 +33,7 @@ impl TryFrom<PathBuf> for DirectoryExporter {
 
     fn try_from(path: PathBuf) -> Result<Self> {
         if !path.exists() {
-            return Err(eyre!("Directory output not fount: {}", path.display()));
+            return Err(eyre!("Directory output not found: {}", path.display()));
         }
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         let directory = path.join(format!("api-diagnostic-{}", timestamp));
