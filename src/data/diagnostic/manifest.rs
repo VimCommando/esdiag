@@ -23,9 +23,46 @@ pub struct Manifest {
     pub included_diagnostics: Option<Vec<DiagPath>>,
 }
 
-impl Manifest {
+pub struct ManifestBuilder {
+    diag_type: Option<String>,
+    diagnostic_inputs: Option<String>,
+    diag_version: Option<String>,
+    product: Product,
+    product_version: Option<ProductVersion>,
+    runner: Option<String>,
+    collection_date: String,
+    included_diagnostics: Option<Vec<DiagPath>>,
+}
+
+impl ManifestBuilder {
+    pub fn new() -> Self {
+        Self {
+            diag_type: None,
+            diagnostic_inputs: None,
+            diag_version: None,
+            product: Product::Elasticsearch,
+            product_version: None,
+            runner: None,
+            collection_date: chrono::Utc::now().to_rfc3339(),
+            included_diagnostics: None,
+        }
+    }
+
+    pub fn build(self) -> Manifest {
+        Manifest {
+            diag_type: self.diag_type,
+            diagnostic_inputs: self.diagnostic_inputs,
+            diag_version: self.diag_version,
+            product: self.product,
+            product_version: self.product_version,
+            runner: self.runner,
+            collection_date: self.collection_date,
+            included_diagnostics: self.included_diagnostics,
+        }
+    }
+
     /// Updates product based on diag_type
-    pub fn with_product(mut self) -> Self {
+    pub fn product(mut self) -> Self {
         log::debug!("Setting product from diag_type: {:?}", self.diag_type);
         self.product = match &self.diag_type {
             Some(diag_type) => match diag_type.as_str() {
@@ -48,7 +85,7 @@ impl Manifest {
     }
 
     /// Updates diag_type based on diagnostic_inputs
-    pub fn with_diag_type(mut self) -> Self {
+    pub fn diag_type(mut self) -> Self {
         if self.diag_type.is_some() {
             log::trace!("diag_type already set {:?}", self.diag_type);
             return self;
@@ -70,10 +107,28 @@ impl Manifest {
         }
     }
 
-    /// Updates runner with provided String
-    pub fn with_runner(mut self, runner: &str) -> Self {
+    /// The runner used to execute the diagnostic
+    pub fn runner(mut self, runner: &str) -> Self {
         self.runner = Some(runner.to_string());
         self
+    }
+
+    /// A collection date, used if the manifest does not have one
+    pub fn collection_date(mut self, date: String) -> Self {
+        self.collection_date = date;
+        self
+    }
+}
+
+impl From<elasticsearch::Cluster> for ManifestBuilder {
+    fn from(version: elasticsearch::Cluster) -> Self {
+        let builder = ManifestBuilder::new();
+        Self {
+            diag_type: Some("es-unknown".to_string()),
+            product_version: Some(ProductVersion::from(version.version)),
+            runner: Some("unknown".to_string()),
+            ..builder
+        }
     }
 }
 

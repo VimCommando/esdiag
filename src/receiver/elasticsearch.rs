@@ -32,6 +32,10 @@ impl TryFrom<KnownHost> for ElasticsearchReceiver {
 }
 
 impl Receive for ElasticsearchReceiver {
+    async fn collection_date(&self) -> String {
+        chrono::Utc::now().to_rfc3339()
+    }
+
     async fn is_connected(&self) -> bool {
         log::debug!("Testing Elasticsearch client connection");
         // An empty request to `/`
