@@ -13,7 +13,7 @@ use elastic_uploader::ElasticUploaderReceiver;
 pub use elasticsearch::ElasticsearchReceiver;
 
 use crate::data::{
-    diagnostic::{DataSource, DiagnosticManifest, Manifest},
+    diagnostic::{manifest::ManifestBuilder, DataSource, DiagnosticManifest, Manifest},
     elasticsearch::Cluster,
     Uri,
 };
@@ -22,6 +22,7 @@ use serde::de::DeserializeOwned;
 
 trait Receive {
     async fn is_connected(&self) -> bool;
+    async fn collection_date(&self) -> String;
     async fn get<T>(&self) -> Result<T>
     where
         T: DataSource + DeserializeOwned;
@@ -106,6 +107,15 @@ impl Receiver {
         Ok(receiver)
     }
 
+    pub async fn collection_date(&self) -> String {
+        match self {
+            Receiver::Archive(receiver) => receiver.collection_date().await,
+            Receiver::Directory(receiver) => receiver.collection_date().await,
+            Receiver::Elasticsearch(receiver) => receiver.collection_date().await,
+            Receiver::ElasticUploader(receiver) => receiver.collection_date().await,
+        }
+    }
+
     pub async fn try_get_manifest(&self) -> Result<DiagnosticManifest> {
         if let Ok(manifest) = self.get::<DiagnosticManifest>().await {
             log::debug!("Using diagnostic_manifest.json");
@@ -114,11 +124,13 @@ impl Receiver {
             log::warn!("Falling back to manifest.json");
             Ok(manifest.try_into()?)
         } else {
-            log::warn!("Falling back to version.json");
-            let version = self.get::<Cluster>().await?;
+            let cluster = self.get::<Cluster>().await?;
+            let manifest_builder = ManifestBuilder::from(cluster);
+            let collection_date = self.collection_date().await;
+            log::warn!("Falling back to version.json with collection date {collection_date}");
             let manifest = match self {
-                Receiver::Elasticsearch(_) => Manifest::try_from(version)?.with_runner("esdiag"),
-                _ => Manifest::try_from(version)?,
+                Receiver::Elasticsearch(_) => manifest_builder.runner("esdiag").build(),
+                _ => manifest_builder.collection_date(collection_date).build(),
             };
             Ok(manifest.try_into()?)
         }

@@ -6,12 +6,14 @@ use std::{
     fs::File,
     io::{BufReader, Read},
     path::PathBuf,
+    time::SystemTime,
 };
 
 #[derive(Clone)]
 pub struct DirectoryReceiver {
     path: PathBuf,
     work_dir: String,
+    created_date: SystemTime,
 }
 
 impl TryFrom<PathBuf> for DirectoryReceiver {
@@ -24,6 +26,7 @@ impl TryFrom<PathBuf> for DirectoryReceiver {
                 Ok(Self {
                     path: path.clone(),
                     work_dir: String::from(""),
+                    created_date: path.metadata()?.created()?,
                 })
             }
             false => {
@@ -38,6 +41,10 @@ impl TryFrom<PathBuf> for DirectoryReceiver {
 }
 
 impl Receive for DirectoryReceiver {
+    async fn collection_date(&self) -> String {
+        chrono::DateTime::<chrono::Utc>::from(self.created_date).to_rfc3339()
+    }
+
     async fn is_connected(&self) -> bool {
         let is_dir = self.path.is_dir();
         let directory_name = self.path.to_str().unwrap_or("");

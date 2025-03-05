@@ -25,6 +25,10 @@ pub struct ElasticUploaderReceiver {
 /// A receiver for the Elastic Uploader service (https://upload.elastic.co).
 /// This will download the archive on first use and cache it in memory.
 impl Receive for ElasticUploaderReceiver {
+    async fn collection_date(&self) -> String {
+        chrono::Utc::now().to_rfc3339()
+    }
+
     async fn is_connected(&self) -> bool {
         let client = reqwest::Client::new();
         let request = client.head(self.url.clone());
