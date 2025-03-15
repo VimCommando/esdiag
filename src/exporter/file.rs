@@ -9,7 +9,6 @@ use serde_json::Value;
 use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
-    os::unix::fs::MetadataExt,
     path::PathBuf,
 };
 
@@ -69,7 +68,21 @@ impl Export for FileExporter {
             doc_count += 1;
         }
         writer.flush()?;
-        batch.size = self.file.metadata()?.size() as u32;
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            batch.size = self.file.metadata()?.size() as u32;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            batch.size = self.file.metadata()?.size() as u32;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::fs::MetadataExt;
+            batch.size = self.file.metadata()?.file_size() as u32;
+        }
         batch.time = start_time.elapsed().as_millis() as u32;
 
         summary.add_batch(batch);
