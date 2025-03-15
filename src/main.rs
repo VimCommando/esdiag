@@ -258,7 +258,13 @@ async fn run() -> Result<&'static str> {
 }
 
 fn clear_last_run_files() -> Result<()> {
-    let last_run = std::path::PathBuf::from(std::env::var("HOME")?).join(".esdiag/last_run");
+    let home_dir = match std::env::consts::OS {
+        "windows" => std::env::var("USERPROFILE")?,
+        "linux" | "macos" => std::env::var("HOME")?,
+        os => return Err(eyre!("Unknown home directory for operating system: {os} ")),
+    };
+    log::debug!("Home directory is: {home_dir}");
+    let last_run = std::path::PathBuf::from(home_dir).join(".esdiag/last_run");
     if !last_run.exists() {
         std::fs::create_dir_all(&last_run)?;
     }
