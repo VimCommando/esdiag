@@ -26,6 +26,7 @@ impl TryFrom<PathBuf> for DirectoryReceiver {
                 Ok(Self {
                     path: path.clone(),
                     work_dir: String::from(""),
+                    // TODO: WSL trips this up on NTFS mounts
                     created_date: path.metadata()?.created()?,
                 })
             }
