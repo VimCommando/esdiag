@@ -84,7 +84,7 @@ Usage
 
 1. Save a target Elasticsearch cluster to the hosts configuration
     ```sh
-    esdiag host my_cluster elasticsearch http://localhost:9200 --auth none
+    esdiag host my_cluster elasticsearch http://localhost:9200
     ```
 
 2. Setup the Elasticsearch cluster with the templates, data streams, etc.
