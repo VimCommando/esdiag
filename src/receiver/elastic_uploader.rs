@@ -1,4 +1,4 @@
-use super::{archive::trim_to_working_directory, Receive};
+use super::{archive::trim_to_working_directory, Receive, ReceiveMultiple};
 use crate::data::diagnostic::{data_source::PathType, DataSource};
 use bytes::Bytes;
 use color_eyre::eyre::{eyre, Result};
@@ -18,6 +18,7 @@ type ArchivePointer = Arc<RwLock<Option<ArchiveCursor>>>;
 #[derive(Clone)]
 pub struct ElasticUploaderReceiver {
     archive: ArchivePointer,
+    subdir: Option<PathBuf>,
     token: String,
     url: Url,
 }
@@ -51,14 +52,19 @@ impl Receive for ElasticUploaderReceiver {
             let archive = get_file_from_uploader(self.url.clone(), &self.token).await?;
             archive_lock.replace(archive);
         }
-
         let filename = T::source(PathType::File)?;
-
         let data: T = if let Some(archive) = archive_lock.as_mut() {
-            // Use the first file in the archive as the base path
-            let mut path = PathBuf::from(archive.by_index(0)?.name().to_string());
-            trim_to_working_directory(&mut path);
-            let filename = path.join(filename).display().to_string();
+            let filename = match &self.subdir {
+                // Ugly hack to make ECK bundles with double-slashed paths work
+                // This will break if the sub-paths are fixed in the ECK bundles
+                Some(subdir) => &format!("{}//{}", subdir.display(), filename),
+                None => {
+                    let mut path = PathBuf::from(archive.by_index(0)?.name().to_string());
+                    trim_to_working_directory(&mut path);
+                    let path = path.join(filename);
+                    &format!("{}", path.display())
+                }
+            };
 
             // Read lines directly from the compressed file
             log::debug!("Reading {}", filename);
@@ -69,6 +75,14 @@ impl Receive for ElasticUploaderReceiver {
             return Err(eyre!("Archive was not downloaded and cached"));
         };
         Ok(data)
+    }
+}
+
+impl ReceiveMultiple for ElasticUploaderReceiver {
+    fn set_work_dir(&mut self, work_dir: &str) -> Result<()> {
+        log::trace!("Setting subdir: {}", work_dir);
+        self.subdir = Some(PathBuf::from(work_dir));
+        Ok(())
     }
 }
 
@@ -86,9 +100,10 @@ impl TryFrom<Url> for ElasticUploaderReceiver {
         url.set_password(None).ok();
         log::info!("Downloading archive from {url}");
         Ok(Self {
-            url,
-            token,
             archive: Arc::new(RwLock::new(None)),
+            subdir: None,
+            token,
+            url,
         })
     }
 }

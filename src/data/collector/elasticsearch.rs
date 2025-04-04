@@ -68,19 +68,17 @@ impl ElasticsearchCollector {
 
     async fn save_diagnostic_manifest(&self) -> Result<usize> {
         let cluster = self.receiver.get::<Cluster>().await?;
-        let manifest = DiagnosticManifest {
-            collection_date: chrono::Utc::now()
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            diagnostic: Some(format!("esdiag-{}", env!("CARGO_PKG_VERSION"))),
-            flags: None,
-            included_diagnostics: None,
-            mode: Some("standard".to_string()),
-            name: Some(cluster.diagnostic_node.clone()),
-            product: Product::Elasticsearch,
-            r#type: Some("elasticsearch_diagnostic".to_string()),
-            runner: Some("esdiag".to_string()),
-            version: Some(cluster.version.number.to_string()),
-        };
+        let manifest = DiagnosticManifest::new(
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            Some(format!("esdiag-{}", env!("CARGO_PKG_VERSION"))),
+            None,
+            None,
+            Some("standard".to_string()),
+            Product::Elasticsearch,
+            Some("elasticsearch_diagnostic".to_string()),
+            Some("esdiag".to_string()),
+            Some(cluster.version.number.to_string()),
+        );
 
         let path = PathBuf::from(DiagnosticManifest::source(PathType::File)?);
         let filename = format!("{}", path.display());
