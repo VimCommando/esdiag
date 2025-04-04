@@ -97,6 +97,7 @@ impl Receiver {
         match self {
             Receiver::Archive(reciever) => reciever.set_work_dir(work_dir),
             Receiver::Directory(reciever) => reciever.set_work_dir(work_dir),
+            Receiver::ElasticUploader(reciever) => reciever.set_work_dir(work_dir),
             _ => Err(eyre!("Cannot set working directly on {}", self)),
         }
     }
@@ -117,23 +118,35 @@ impl Receiver {
     }
 
     pub async fn try_get_manifest(&self) -> Result<DiagnosticManifest> {
-        if let Ok(manifest) = self.get::<DiagnosticManifest>().await {
-            log::debug!("Using diagnostic_manifest.json");
-            Ok(manifest)
-        } else if let Ok(manifest) = self.get::<Manifest>().await {
-            log::warn!("Falling back to manifest.json");
-            Ok(manifest.try_into()?)
-        } else {
-            let cluster = self.get::<Cluster>().await?;
-            let manifest_builder = ManifestBuilder::from(cluster);
-            let collection_date = self.collection_date().await;
-            log::warn!("Falling back to version.json with collection date {collection_date}");
-            let manifest = match self {
-                Receiver::Elasticsearch(_) => manifest_builder.runner("esdiag").build(),
-                _ => manifest_builder.collection_date(collection_date).build(),
-            };
-            Ok(manifest.try_into()?)
+        match self.get::<DiagnosticManifest>().await {
+            Ok(manifest) => {
+                log::debug!("Using diagnostic_manifest.json");
+                return Ok(manifest);
+            }
+            Err(e) => {
+                log::debug!("Error reading diagnostic_manifest.json: {e}");
+            }
         }
+
+        match self.get::<Manifest>().await {
+            Ok(manifest) => {
+                log::warn!("Falling back to manifest.json");
+                return Ok(manifest.try_into()?);
+            }
+            Err(e) => {
+                log::debug!("Error reading manifest.json: {e}");
+            }
+        }
+
+        let cluster = self.get::<Cluster>().await?;
+        let manifest_builder = ManifestBuilder::from(cluster);
+        let collection_date = self.collection_date().await;
+        log::warn!("Falling back to version.json with collection date {collection_date}");
+        let manifest = match self {
+            Receiver::Elasticsearch(_) => manifest_builder.runner("esdiag").build(),
+            _ => manifest_builder.collection_date(collection_date).build(),
+        };
+        Ok(manifest.try_into()?)
     }
 }
 

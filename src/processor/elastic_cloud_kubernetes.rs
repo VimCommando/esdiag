@@ -86,7 +86,7 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
 
         let report = self.report.write().await;
         log::info!(
-            "Created {} documents for diagnostic: {}",
+            "Created {} documents for diagnostic (ECK): {}",
             report.docs.created,
             report.metadata.id,
         );

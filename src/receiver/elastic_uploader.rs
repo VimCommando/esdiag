@@ -1,4 +1,4 @@
-use super::{archive::trim_to_working_directory, Receive};
+use super::{archive::trim_to_working_directory, Receive, ReceiveMultiple};
 use crate::data::diagnostic::{data_source::PathType, DataSource};
 use bytes::Bytes;
 use color_eyre::eyre::{eyre, Result};
@@ -18,8 +18,26 @@ type ArchivePointer = Arc<RwLock<Option<ArchiveCursor>>>;
 #[derive(Clone)]
 pub struct ElasticUploaderReceiver {
     archive: ArchivePointer,
+    subdir: Option<PathBuf>,
     token: String,
     url: Url,
+}
+
+impl ElasticUploaderReceiver {
+    fn resolve_archive_path(&self, archive: &mut ArchiveCursor, filename: &str) -> Result<String> {
+        let full_path = match &self.subdir {
+            // Ugly hack to make ECK bundles with double-slashed paths work
+            // This will break if the sub-paths are fixed in the ECK bundles
+            Some(subdir) => format!("{}//{}", subdir.display(), filename),
+            None => {
+                let mut path = PathBuf::from(archive.by_index(0)?.name().to_string());
+                trim_to_working_directory(&mut path);
+                let path = path.join(filename);
+                format!("{}", path.display())
+            }
+        };
+        Ok(full_path)
+    }
 }
 
 /// A receiver for the Elastic Uploader service (https://upload.elastic.co).
@@ -52,23 +70,28 @@ impl Receive for ElasticUploaderReceiver {
             archive_lock.replace(archive);
         }
 
-        let filename = T::source(PathType::File)?;
-
-        let data: T = if let Some(archive) = archive_lock.as_mut() {
-            // Use the first file in the archive as the base path
-            let mut path = PathBuf::from(archive.by_index(0)?.name().to_string());
-            trim_to_working_directory(&mut path);
-            let filename = path.join(filename).display().to_string();
-
-            // Read lines directly from the compressed file
-            log::debug!("Reading {}", filename);
-            let file = archive.by_name(&filename)?;
-            let reader = BufReader::new(file);
-            serde_json::from_reader(reader)?
-        } else {
-            return Err(eyre!("Archive was not downloaded and cached"));
+        // Early return if archive is not available
+        let Some(archive) = archive_lock.as_mut() else {
+            return Err(eyre!("Archive was not downloaded or cached"));
         };
+
+        // Determine the fully-qualified filename within in the archive
+        let filename = self.resolve_archive_path(archive, T::source(PathType::File)?)?;
+
+        // Read and deserialize the file from the archive
+        log::debug!("Reading {}", filename);
+        let file = archive.by_name(&filename)?;
+        let reader = BufReader::new(file);
+        let data: T = serde_json::from_reader(reader)?;
         Ok(data)
+    }
+}
+
+impl ReceiveMultiple for ElasticUploaderReceiver {
+    fn set_work_dir(&mut self, work_dir: &str) -> Result<()> {
+        log::trace!("Setting subdir: {}", work_dir);
+        self.subdir = Some(PathBuf::from(work_dir));
+        Ok(())
     }
 }
 
@@ -86,9 +109,10 @@ impl TryFrom<Url> for ElasticUploaderReceiver {
         url.set_password(None).ok();
         log::info!("Downloading archive from {url}");
         Ok(Self {
-            url,
-            token,
             archive: Arc::new(RwLock::new(None)),
+            subdir: None,
+            token,
+            url,
         })
     }
 }

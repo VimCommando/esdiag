@@ -1,5 +1,4 @@
 use super::DiagnosticManifest;
-use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use color_eyre::eyre::Result;
 use serde::Serialize;
 use uuid::Uuid;
@@ -35,44 +34,16 @@ impl TryFrom<DiagnosticManifest> for DiagnosticMetadata {
     type Error = color_eyre::eyre::Report;
 
     fn try_from(manifest: DiagnosticManifest) -> Result<Self> {
-        let collection_date = {
-            if let Ok(date) = DateTime::parse_from_rfc3339(&manifest.collection_date) {
-                date.timestamp_millis() as u64
-            } else if let Ok(date) =
-                DateTime::parse_from_str(&manifest.collection_date, "%Y-%m-%dT%H:%M:%S%.3f%z")
-            {
-                date.timestamp_millis() as u64
-            } else {
-                log::warn!(
-                    "Failed to parse collection date: {}",
-                    manifest.collection_date
-                );
-                chrono::Utc::now().timestamp_millis() as u64
-            }
-        };
-
-        let collection_date_string = Utc
-            .timestamp_millis_opt(collection_date as i64)
-            .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Secs, true))
-            .unwrap();
-
-        let uuid = Uuid::new_v4().to_string();
-        // Human readable ID
-        let id = format!(
-            "{}@{}~{}",
-            manifest.name.expect("Diagnostic name not found"),
-            &collection_date_string[..10], // Trim to only date
-            &uuid[..4]
-        );
-
         let runner = match &manifest.runner {
             Some(runner) => runner.clone(),
             None => "Unknown".to_string(),
         };
 
+        let uuid = Uuid::new_v4().to_string();
+
         Ok(DiagnosticMetadata::new(
-            collection_date,
-            id,
+            manifest.collection_date_in_millis(),
+            manifest.diagnostic_id(&uuid).clone(),
             runner,
             uuid,
             manifest.version,
