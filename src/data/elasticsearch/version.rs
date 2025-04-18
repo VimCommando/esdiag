@@ -1,6 +1,6 @@
 #![allow(unreachable_patterns)] // supresses a warning about the `name` alias
 use crate::data::diagnostic::{data_source::PathType, elasticsearch::DataSet, DataSource};
-use color_eyre::eyre::Result;
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize, Serialize)]

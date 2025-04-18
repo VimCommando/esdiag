@@ -3,7 +3,7 @@ use crate::data::{
     diagnostic::{DataStreamName, DiagnosticMetadata, DiagnosticManifest},
     logstash::Version,
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 use serde::Serialize;
 use serde_json::Value;
 

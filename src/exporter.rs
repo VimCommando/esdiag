@@ -19,7 +19,7 @@ use crate::{
         Uri,
     },
 };
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use serde_json::Value;
 
 trait Export {
@@ -86,7 +86,7 @@ impl Exporter {
 }
 
 impl TryFrom<Uri> for Exporter {
-    type Error = color_eyre::Report;
+    type Error = eyre::Report;
     fn try_from(uri: Uri) -> std::result::Result<Self, Self::Error> {
         match uri {
             Uri::File(file) => Ok(Exporter::File(FileExporter::try_from(file)?)),
@@ -110,7 +110,7 @@ impl std::fmt::Display for Exporter {
 }
 
 impl TryFrom<KnownHost> for Exporter {
-    type Error = color_eyre::Report;
+    type Error = eyre::Report;
     fn try_from(host: KnownHost) -> std::result::Result<Self, Self::Error> {
         match host.app() {
             Product::Elasticsearch => Ok(Exporter::Elasticsearch(ElasticsearchExporter::try_from(

@@ -1,5 +1,5 @@
 use super::{DiagnosticManifest, DiagnosticMetadata, Lookup, Product};
-use color_eyre::eyre::{eyre, OptionExt, Report, Result};
+use eyre::{eyre, OptionExt, Report, Result};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -42,7 +42,7 @@ impl From<DiagnosticMetadata> for DiagnosticReportBuilder {
 }
 
 impl TryFrom<DiagnosticManifest> for DiagnosticReportBuilder {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(manifest: DiagnosticManifest) -> Result<Self> {
         let metadata = DiagnosticMetadata::try_from(manifest)?;
@@ -113,7 +113,7 @@ impl DiagnosticReport {
 }
 
 impl TryFrom<DiagnosticReportBuilder> for DiagnosticReport {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(builder: DiagnosticReportBuilder) -> Result<Self> {
         Ok(Self {

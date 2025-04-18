@@ -10,7 +10,7 @@ use crate::{
     },
     {exporter::DirectoryExporter, receiver::Receiver},
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 use std::path::PathBuf;
 
 pub struct ElasticsearchCollector {

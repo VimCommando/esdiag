@@ -2,7 +2,7 @@ use crate::data::{
     diagnostic::Lookup,
     elasticsearch::{SearchableSnapshotsCacheStats, SharedCacheStats},
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 
 impl From<&String> for Lookup<SharedCacheStats> {
     fn from(string: &String) -> Self {

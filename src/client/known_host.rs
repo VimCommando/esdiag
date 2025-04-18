@@ -1,5 +1,5 @@
 use crate::data::diagnostic::Product;
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_yaml;

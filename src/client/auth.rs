@@ -1,5 +1,5 @@
 use clap::ValueEnum;
-use color_eyre::eyre::Result;
+use eyre::Result;
 use std::str::FromStr;
 
 pub enum Auth {

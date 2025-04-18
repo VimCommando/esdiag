@@ -17,7 +17,7 @@ use crate::data::{
     elasticsearch::Cluster,
     Uri,
 };
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use serde::de::DeserializeOwned;
 
 trait Receive {
@@ -151,7 +151,7 @@ impl Receiver {
 }
 
 impl TryFrom<Uri> for Receiver {
-    type Error = color_eyre::Report;
+    type Error = eyre::Report;
     fn try_from(uri: Uri) -> std::result::Result<Self, Self::Error> {
         let receiver = match uri {
             Uri::Directory(dir) => Receiver::Directory(DirectoryReceiver::try_from(dir)?),

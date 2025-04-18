@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use color_eyre::eyre::{eyre, Result};
 use esdiag::{
     client::{KnownHost, KnownHostBuilder},
     data::{diagnostic::Product, Collector, Uri},
@@ -9,6 +8,7 @@ use esdiag::{
     receiver::Receiver,
     setup,
 };
+use eyre::{eyre, Result};
 use url::Url;
 
 // Define command line arguments
@@ -101,7 +101,6 @@ async fn main() -> Result<()> {
     env_logger::Builder::from_env(env)
         .format_timestamp_millis()
         .init();
-    color_eyre::install()?;
 
     std::panic::set_hook(Box::new(|panic| {
         // Log any panics as errors

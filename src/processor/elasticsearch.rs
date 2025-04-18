@@ -34,7 +34,7 @@ use crate::{
     exporter::Exporter,
     receiver::Receiver,
 };
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use futures::{future::join_all, stream::FuturesUnordered};
 use lookup::NodeSummary;
 use metadata::ElasticsearchMetadata;
