@@ -1,6 +1,6 @@
 use super::DataStream;
 use crate::data::diagnostic::{data_source::PathType, elasticsearch::DataSet, DataSource};
-use color_eyre::eyre::Result;
+use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;

@@ -1,5 +1,5 @@
 use crate::client::KnownHost;
-use color_eyre::eyre::{eyre, OptionExt, Report, Result};
+use eyre::{eyre, OptionExt, Report, Result};
 use std::{
     path::{Path, PathBuf},
     str::FromStr,

@@ -3,7 +3,7 @@ use std::sync::RwLock;
 
 use super::{data_source::PathType, DataSource, DiagPath, Manifest, Product};
 use crate::data::diagnostic::DataSet;
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]

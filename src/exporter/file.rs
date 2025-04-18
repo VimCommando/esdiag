@@ -4,7 +4,7 @@ use crate::data::diagnostic::{
 };
 
 use super::Export;
-use color_eyre::eyre::Result;
+use eyre::Result;
 use serde_json::Value;
 use std::{
     fs::{File, OpenOptions},
@@ -27,7 +27,7 @@ impl Clone for FileExporter {
 }
 
 impl TryFrom<PathBuf> for FileExporter {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(path: PathBuf) -> Result<Self> {
         let file = OpenOptions::new()

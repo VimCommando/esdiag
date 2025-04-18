@@ -2,7 +2,7 @@ use crate::data::{
     diagnostic::Lookup,
     elasticsearch::{Alias, AliasList},
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 
 impl From<String> for Lookup<Alias> {
     fn from(string: String) -> Self {

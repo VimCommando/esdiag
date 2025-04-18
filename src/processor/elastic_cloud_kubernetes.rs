@@ -6,7 +6,7 @@ use crate::{
     exporter::Exporter,
     receiver::Receiver,
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;

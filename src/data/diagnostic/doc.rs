@@ -1,5 +1,5 @@
 use super::DiagnosticManifest;
-use color_eyre::eyre::Result;
+use eyre::Result;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -31,7 +31,7 @@ impl DiagnosticMetadata {
 }
 
 impl TryFrom<DiagnosticManifest> for DiagnosticMetadata {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(manifest: DiagnosticManifest) -> Result<Self> {
         let runner = match &manifest.runner {

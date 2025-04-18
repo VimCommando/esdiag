@@ -2,7 +2,7 @@ use crate::data::{
     diagnostic::Lookup,
     elasticsearch::{IlmExplain, IlmStats},
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 
 impl From<String> for Lookup<IlmStats> {
     fn from(string: String) -> Self {

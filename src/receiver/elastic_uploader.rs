@@ -1,7 +1,7 @@
 use super::{archive::trim_to_working_directory, Receive, ReceiveMultiple};
 use crate::data::diagnostic::{data_source::PathType, DataSource};
 use bytes::Bytes;
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use serde::de::DeserializeOwned;
 use std::{
     io::{BufReader, Cursor},
@@ -80,7 +80,10 @@ impl Receive for ElasticUploaderReceiver {
 
         // Read and deserialize the file from the archive
         log::debug!("Reading {}", filename);
-        let file = archive.by_name(&filename)?;
+        let file = match archive.by_name(&filename) {
+            Ok(file) => file,
+            Err(_) => return Err(eyre!("Failed to read file ${filename} from archive")),
+        };
         let reader = BufReader::new(file);
         let data: T = serde_json::from_reader(reader)?;
         Ok(data)
@@ -96,7 +99,7 @@ impl ReceiveMultiple for ElasticUploaderReceiver {
 }
 
 impl TryFrom<Url> for ElasticUploaderReceiver {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(url: Url) -> Result<Self> {
         let mut url = url.clone();

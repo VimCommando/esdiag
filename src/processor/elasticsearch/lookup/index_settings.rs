@@ -2,7 +2,7 @@ use crate::data::{
     diagnostic::Lookup,
     elasticsearch::{IndexSettings, IndicesSettings},
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 
 impl From<IndicesSettings> for Lookup<IndexSettings> {
     fn from(mut indices_settings: IndicesSettings) -> Self {

@@ -14,7 +14,7 @@ pub use uri::Uri;
 
 // ------ Utility Function -------
 use crate::env;
-use color_eyre::eyre::Result;
+use eyre::Result;
 use serde::Serialize;
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
 

@@ -16,7 +16,7 @@ use crate::{
     exporter::Exporter,
     receiver::Receiver,
 };
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 
 pub enum Diagnostic {
     Elasticsearch(Box<ElasticsearchDiagnostic>),

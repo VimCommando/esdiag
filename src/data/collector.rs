@@ -2,7 +2,7 @@
 mod elasticsearch;
 
 use crate::{exporter::DirectoryExporter, receiver::Receiver};
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use elasticsearch::ElasticsearchCollector;
 
 pub enum Collector {

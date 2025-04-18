@@ -1,5 +1,5 @@
 use crate::exporter::Exporter;
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use include_dir::{include_dir, Dir};
 use serde::Deserialize;
 use serde_json::{from_slice, Value};

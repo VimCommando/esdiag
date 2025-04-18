@@ -20,7 +20,7 @@ use crate::{
     exporter::Exporter,
     receiver::Receiver,
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 use metadata::LogstashMetadata;
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;

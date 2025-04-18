@@ -3,7 +3,7 @@ use crate::{
     client::KnownHost,
     data::diagnostic::{data_source::PathType, DataSource},
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 use elasticsearch::{http, Elasticsearch};
 use serde::de::DeserializeOwned;
 use url::Url;
@@ -22,7 +22,7 @@ impl ElasticsearchReceiver {
 }
 
 impl TryFrom<KnownHost> for ElasticsearchReceiver {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(host: KnownHost) -> Result<Self> {
         let url = host.get_url();

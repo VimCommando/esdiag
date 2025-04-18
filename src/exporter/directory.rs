@@ -1,5 +1,5 @@
 use crate::data::Uri;
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use std::{fs::File, io::Write, path::PathBuf};
 
 pub struct DirectoryExporter {
@@ -17,7 +17,7 @@ impl DirectoryExporter {
 }
 
 impl TryFrom<Uri> for DirectoryExporter {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(uri: Uri) -> Result<Self> {
         match uri {
@@ -29,7 +29,7 @@ impl TryFrom<Uri> for DirectoryExporter {
 }
 
 impl TryFrom<PathBuf> for DirectoryExporter {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(path: PathBuf) -> Result<Self> {
         if !path.exists() {

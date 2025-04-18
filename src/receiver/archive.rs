@@ -1,6 +1,6 @@
 use super::{Receive, ReceiveMultiple, ReceiveRaw};
 use crate::data::diagnostic::{data_source::PathType, DataSource};
-use color_eyre::{eyre::eyre, Result};
+use eyre::{eyre, Result};
 use serde::de::DeserializeOwned;
 use std::{
     fs::File,
@@ -59,7 +59,7 @@ impl ArchiveReceiver {
 }
 
 impl TryFrom<PathBuf> for ArchiveReceiver {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(path: PathBuf) -> Result<Self> {
         let filename = format!("{}", path.display());

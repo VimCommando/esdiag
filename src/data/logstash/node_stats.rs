@@ -1,5 +1,5 @@
 use crate::data::diagnostic::{data_source::PathType, logstash::DataSet, DataSource};
-use color_eyre::eyre::Result;
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

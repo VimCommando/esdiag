@@ -1,6 +1,5 @@
 use super::{auth::Auth, known_host::KnownHost};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use color_eyre::eyre::Result;
 use elasticsearch::{
     self,
     cert::CertificateValidation,
@@ -10,6 +9,7 @@ use elasticsearch::{
     },
     Elasticsearch,
 };
+use eyre::Result;
 use url::Url;
 
 pub struct ElasticsearchBuilder {
@@ -85,7 +85,7 @@ impl ElasticsearchBuilder {
 }
 
 impl TryFrom<KnownHost> for Elasticsearch {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(host: KnownHost) -> Result<Elasticsearch> {
         let client = match host {

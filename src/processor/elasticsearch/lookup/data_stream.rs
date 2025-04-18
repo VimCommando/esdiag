@@ -2,7 +2,7 @@ use crate::data::{
     diagnostic::Lookup,
     elasticsearch::{DataStream, DataStreams, Indices},
 };
-use color_eyre::eyre::Result;
+use eyre::Result;
 
 impl From<&String> for Lookup<DataStream> {
     fn from(string: &String) -> Self {

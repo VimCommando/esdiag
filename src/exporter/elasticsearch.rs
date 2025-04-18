@@ -9,11 +9,11 @@ use crate::{
         },
     },
 };
-use color_eyre::eyre::{eyre, Result};
 use elasticsearch::{
     http::{headers, request::JsonBody, response::Response, Method},
     BulkOperation, BulkParts, Elasticsearch, IndexParts,
 };
+use eyre::{eyre, Result};
 use futures::{future::join_all, stream::FuturesUnordered};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -64,7 +64,7 @@ impl ElasticsearchExporter {
 }
 
 impl TryFrom<KnownHost> for ElasticsearchExporter {
-    type Error = color_eyre::eyre::Report;
+    type Error = eyre::Report;
 
     fn try_from(host: KnownHost) -> Result<Self> {
         let url = host.get_url();

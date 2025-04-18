@@ -3,7 +3,7 @@ use super::{
     Product,
 };
 use crate::data::elasticsearch;
-use color_eyre::eyre::{eyre, Result};
+use eyre::{eyre, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -172,7 +172,7 @@ impl From<elasticsearch::Version> for ProductVersion {
 }
 
 impl TryFrom<elasticsearch::Cluster> for Manifest {
-    type Error = color_eyre::eyre::Error;
+    type Error = eyre::Error;
 
     /// Create a manifest from a cluster's metadata (`version.json`) file
     fn try_from(cluster: elasticsearch::Cluster) -> Result<Self, Self::Error> {
