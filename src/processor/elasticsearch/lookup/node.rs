@@ -94,6 +94,8 @@ impl std::fmt::Display for Node {
 /// Determines a node's tier based on a precedence of assigned roles.
 fn get_tier(roles: &Vec<String>) -> String {
     match () {
+        _ if roles.contains(&"index".to_string()) => "index",
+        _ if roles.contains(&"search".to_string()) => "search",
         _ if roles.contains(&"data_hot".to_string()) => "hot",
         _ if roles.contains(&"data_warm".to_string()) => "warm",
         _ if roles.contains(&"data_cold".to_string()) => "cold",
@@ -115,27 +117,30 @@ fn get_tier(roles: &Vec<String>) -> String {
 /// Return a number for tier sorting
 fn get_tier_order(tier: &str) -> usize {
     match tier {
-        "hot" => 0,
-        "warm" => 1,
-        "cold" => 2,
-        "frozen" => 3,
-        "content" => 4,
-        "data" => 5,
-        "ingest" => 6,
-        "ml" => 7,
-        "transform" => 8,
-        "tiebreaker" => 9,
-        "master" => 10,
-        "remote" => 11,
-        "coord" => 12,
-        "node" => 13,
+        "index" => 0,
+        "search" => 1,
+        "hot" => 2,
+        "warm" => 3,
+        "cold" => 4,
+        "frozen" => 5,
+        "content" => 6,
+        "data" => 7,
+        "ingest" => 8,
+        "ml" => 9,
+        "transform" => 10,
+        "tiebreaker" => 11,
+        "master" => 12,
+        "remote" => 13,
+        "coord" => 14,
+        "node" => 15,
         _ => 99,
     }
 }
 
-/// Renames an `instance-0000000001` type name into a `tier-00001` name.
+/// Renames default Elastic Cloud names into something more compact.
 fn get_tier_node_name(node_name: String, tier: &str) -> String {
     if let Some(("instance", number)) = node_name.split_once('-') {
+        // Renames `instance-0000000001` into `tier-00001`
         let number = number.trim_start_matches("000000");
         format!("{}-{}", tier, number)
     } else {
@@ -153,10 +158,12 @@ fn get_roles_abbreviation(role_list: &Vec<String>) -> String {
             "data_hot" => 'h',
             "data_warm" => 'w',
             "data_cold" => 'c',
+            "index" => 'I',
             "ingest" => 'i',
             "master" => 'm',
             "ml" => 'l',
             "remote_cluster_client" => 'r',
+            "search" => 'S',
             "transform" => 't',
             _ => return None,
         };
