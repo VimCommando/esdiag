@@ -10,8 +10,6 @@ mod ilm_explain;
 mod indices_settings;
 /// Data types the `_stats` API
 mod indices_stats;
-/// Metadata for Elasticsearch diagnostics
-mod metadata;
 /// Data types the `_nodes` API
 mod nodes;
 /// Data types the `_nodes/stats` API
@@ -31,7 +29,6 @@ pub use data_streams::*;
 pub use ilm_explain::*;
 pub use indices_settings::*;
 pub use indices_stats::*;
-//pub use metadata::*;
 pub use nodes::*;
 pub use nodes_stats::*;
 pub use searchable_snapshots_cache_stats::*;

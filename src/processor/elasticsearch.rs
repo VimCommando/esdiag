@@ -22,8 +22,8 @@ use crate::{
     data::{
         self,
         diagnostic::{
-            elasticsearch::DataSet, report::ProcessorSummary, DataSource, DiagnosticManifest,
-            DiagnosticReport, DiagnosticReportBuilder, Lookup, Product,
+            DataSource, DiagnosticManifest, DiagnosticReport, DiagnosticReportBuilder, Lookup,
+            Product, elasticsearch::DataSet, report::ProcessorSummary,
         },
         elasticsearch::{
             Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreams, IlmExplain,
@@ -34,11 +34,11 @@ use crate::{
     exporter::Exporter,
     receiver::Receiver,
 };
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use futures::{future::join_all, stream::FuturesUnordered};
 use lookup::NodeSummary;
 use metadata::ElasticsearchMetadata;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::{collections::HashMap, pin::Pin, sync::Arc};
 use tokio::{sync::RwLock, task::JoinHandle};
