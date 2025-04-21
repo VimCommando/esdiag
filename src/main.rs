@@ -231,7 +231,16 @@ async fn run() -> Result<&'static str> {
             diagnostic.run().await.map(|_| "import")
         }
         Commands::Setup { host } => {
-            let uri = host.and_then(|host| Uri::try_from(host).ok());
+            let uri = match host {
+                Some(host) => match Uri::try_from(host) {
+                    Ok(uri) => Some(uri),
+                    Err(e) => {
+                        log::error!("Failed to convert host to Uri: {}", e);
+                        return Err(e.into());
+                    }
+                },
+                None => None,
+            };
             let exporter = Exporter::try_from(uri)?;
             log::info!("Setting up Elasticsearch assets in {exporter}");
             setup::assets(exporter).await?;
