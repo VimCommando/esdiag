@@ -161,6 +161,9 @@
             "limit": {
               "type": "keyword"
             },
+            "max_operation_size": {
+              "type": "keyword"
+            },
             "primary.limit": {
               "type": "keyword"
             },
@@ -184,12 +187,16 @@
             }
           }
         },
+        "logger": {
+          "type": "object",
+          "subobjects": false
+        },
         "node.bandwidth.recovery.operator": {
           "type": "object",
           "subobjects": false
         },
         "xpack.searchable.snapshot.shared_cache.size": {
-          "type": "long"
+          "type": "keyword"
         }
       }
     }

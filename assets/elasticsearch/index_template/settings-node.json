@@ -1,70 +1,102 @@
 {
-    "index_patterns": [
-        "settings-node-esdiag*"
-    ],
-    "composed_of": [
-        "esdiag@mappings",
-        "esdiag@metadata",
-        "esdiag@settings"
-    ],
-    "allow_auto_create": true,
-    "data_stream": {
-        "hidden": false,
-        "allow_custom_routing": false
-    },
-    "priority": 300,
-    "template": {
-        "mappings": {
-            "numeric_detection": false,
-            "dynamic": true,
-            "properties": {
-                "data_stream": {
-                    "type": "object",
-                    "properties": {
-                        "dataset": {
-                            "type": "constant_keyword",
-                            "value": "node"
-                        },
-                        "type": {
-                            "type": "constant_keyword",
-                            "value": "settings"
-                        }
-                    }
-                },
-                "jvm.version": {
-                    "type": "keyword"
-                },
-                "node.ip": {
-                    "type": "ip"
-                },
-                "ingest.processors": {
-                    "eager_global_ordinals": false,
-                    "index": true,
-                    "type": "flattened",
-                    "split_queries_on_whitespace": false,
-                    "index_options": "docs",
-                    "doc_values": true
-                },
-                "diagnostic.uid": {
-                    "type": "keyword"
-                },
-                "plugins": {
-                    "eager_global_ordinals": false,
-                    "index": true,
-                    "type": "flattened",
-                    "split_queries_on_whitespace": false,
-                    "index_options": "docs",
-                    "doc_values": true
-                },
-                "modules": {
-                    "eager_global_ordinals": false,
-                    "index": true,
-                    "type": "flattened",
-                    "split_queries_on_whitespace": false,
-                    "index_options": "docs",
-                    "doc_values": true
-                }
+  "index_patterns": ["settings-node-esdiag*"],
+  "composed_of": ["esdiag@mappings", "esdiag@metadata", "esdiag@settings"],
+  "allow_auto_create": true,
+  "data_stream": {
+    "hidden": false,
+    "allow_custom_routing": false
+  },
+  "priority": 300,
+  "template": {
+    "mappings": {
+      "numeric_detection": false,
+      "dynamic": true,
+      "properties": {
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "dataset": {
+              "type": "constant_keyword",
+              "value": "node"
+            },
+            "type": {
+              "type": "constant_keyword",
+              "value": "settings"
             }
+          }
+        },
+        "jvm.version": {
+          "type": "keyword"
+        },
+        "node": {
+          "type": "object",
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "settings": {
+              "type": "object",
+              "properties": {
+                "logger": {
+                  "type": "object",
+                  "subobjects": false
+                },
+                "xpack": {
+                  "type": "object",
+                  "properties": {
+                    "searchable": {
+                      "type": "object",
+                      "properties": {
+                        "snapshot": {
+                          "type": "object",
+                          "properties": {
+                            "shared_cache": {
+                              "type": "object",
+                              "subobjects": false,
+                              "properties": {
+                                "size": {
+                                  "type": "keyword"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ingest.processors": {
+          "eager_global_ordinals": false,
+          "index": true,
+          "type": "flattened",
+          "split_queries_on_whitespace": false,
+          "index_options": "docs",
+          "doc_values": true
+        },
+        "diagnostic.uid": {
+          "type": "keyword"
+        },
+        "plugins": {
+          "eager_global_ordinals": false,
+          "index": true,
+          "type": "flattened",
+          "split_queries_on_whitespace": false,
+          "index_options": "docs",
+          "doc_values": true
+        },
+        "modules": {
+          "eager_global_ordinals": false,
+          "index": true,
+          "type": "flattened",
+          "split_queries_on_whitespace": false,
+          "index_options": "docs",
+          "doc_values": true
         }
+      }
     }
+  }
 }
