@@ -1,14 +1,14 @@
 use clap::{Parser, Subcommand};
 use esdiag::{
     client::{KnownHost, KnownHostBuilder},
-    data::{diagnostic::Product, Collector, Uri},
+    data::{Collector, Uri, diagnostic::Product},
     env::LOG_LEVEL,
     exporter::{DirectoryExporter, Exporter},
     processor::Diagnostic,
     receiver::Receiver,
     setup,
 };
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use url::Url;
 
 // Define command line arguments
@@ -90,7 +90,7 @@ enum Commands {
     Setup {
         /// Known Elasticsaerch host to import assets into
         #[arg(help = "Known Elasticsearch host to import assets into")]
-        host: String,
+        host: Option<String>,
     },
 }
 
@@ -204,25 +204,7 @@ async fn run() -> Result<&'static str> {
             log::info!("input: {}", input_uri);
 
             let receiver = Receiver::try_from(input_uri)?;
-            let exporter = match output_uri {
-                Some(output_uri) => {
-                    log::info!("output: {}", output_uri);
-                    Exporter::try_from(output_uri)?
-                }
-                None => {
-                    let url = Url::parse(&std::env::var("ESDIAG_OUTPUT_URL")?)?;
-                    log::info!("output: Env {}", url);
-                    let apikey = std::env::var("ESDIAG_OUTPUT_APIKEY").ok();
-                    let username = std::env::var("ESDIAG_OUTPUT_USERNAME").ok();
-                    let password = std::env::var("ESDIAG_OUTPUT_PASSWORD").ok();
-                    let host = KnownHostBuilder::new(url)
-                        .apikey(apikey)
-                        .username(username)
-                        .password(password)
-                        .build()?;
-                    Exporter::try_from(host)?
-                }
-            };
+            let exporter = Exporter::try_from(output_uri)?;
 
             let manifest = receiver.try_get_manifest().await?;
             log::trace!("{}", serde_json::to_string(&manifest)?);
@@ -231,14 +213,14 @@ async fn run() -> Result<&'static str> {
             diagnostic.run().await.map(|_| "process")
         }
         Commands::Import { target, source } => {
-            let output_uri = Uri::try_from(target)?;
             let input_uri = Uri::try_from(source)?;
+            let output_uri = Uri::try_from(target)?;
             log::info!("input: {}", input_uri);
             log::info!("output: {}", output_uri);
             log::warn!("The `import` command is deprecated, please use `process` instead");
 
             let receiver = Receiver::try_from(input_uri)?;
-            let exporter = Exporter::try_from(output_uri)?;
+            let exporter = Exporter::try_from(Some(output_uri))?;
 
             let manifest = receiver.try_get_manifest().await?;
             log::trace!("{}", serde_json::to_string(&manifest)?);
@@ -247,9 +229,9 @@ async fn run() -> Result<&'static str> {
             diagnostic.run().await.map(|_| "import")
         }
         Commands::Setup { host } => {
-            log::info!("Setting up Elasticsearch assets in {host}");
-            let uri = Uri::try_from(host)?;
+            let uri = host.and_then(|host| Uri::try_from(host).ok());
             let exporter = Exporter::try_from(uri)?;
+            log::info!("Setting up Elasticsearch assets in {exporter}");
             setup::assets(exporter).await?;
             Ok("setup")
         }
