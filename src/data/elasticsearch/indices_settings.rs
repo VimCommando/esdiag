@@ -1,8 +1,8 @@
 use super::DataStream;
-use crate::data::diagnostic::{data_source::PathType, elasticsearch::DataSet, DataSource};
+use crate::data::diagnostic::{DataSource, data_source::PathType, elasticsearch::DataSet};
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 pub type IndicesSettings = HashMap<String, Settings>;
@@ -37,7 +37,7 @@ pub struct IndexSettings {
     pub shard_limit: Option<Value>,
     pub sort: Option<Value>,
     pub source: Option<String>,
-    pub store: Option<Value>,
+    pub store: Option<StoreSettings>,
     pub uuid: String,
     pub version: Value,
     // Not in source json
@@ -49,16 +49,32 @@ pub struct IndexSettings {
     pub name: Option<String>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StoreSettings {
+    pub config: Option<String>,
+    pub store_type: Option<String>,
+    pub snapshot: Option<StoreSnapshot>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StoreSnapshot {
+    pub snapshot_name: String,
+    pub index_uuid: String,
+    pub repository_uuid: String,
+    pub index_name: String,
+    pub partial: String,
+    pub repository_name: String,
+    pub snapshot_uuid: String,
+}
+
 impl IndexSettings {
     /// Determines additional field values from previously deserialized data
     pub fn build(mut self) -> Self {
         let source = self.source_mode();
-        let config = json!({"config": format!("{}-{}-{}", &self.mode, source, &self.codec)});
+        self.store.as_mut().map(|store| {
+            store.config = Some(format!("{}-{}-{}", &self.mode, source, &self.codec));
+        });
         self.source = Some(source);
-        match self.store {
-            Some(ref mut store) => json_patch::merge(store, &config),
-            None => self.store = Some(config),
-        };
         self
     }
 
