@@ -1,4 +1,4 @@
-use super::{DataProcessor, ElasticsearchMetadata, Lookups, NodeSummary};
+use super::{DataProcessor, ElasticsearchMetadata, Lookups, NodeDocument};
 use crate::{
     data::elasticsearch::{NodeTasks, ParentTask, Task, Tasks},
     processor::Metadata,
@@ -49,12 +49,12 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for Tasks {
 pub struct TaskDoc {
     #[serde(flatten)]
     metadata: Value,
-    node: NodeSummary,
+    node: NodeDocument,
     task: TaskWithParent,
 }
 
 impl TaskDoc {
-    pub fn new(task: &Task, metadata: Value, node: NodeSummary) -> Self {
+    pub fn new(task: &Task, metadata: Value, node: NodeDocument) -> Self {
         let parent = task
             .parent_task_id
             .as_ref()

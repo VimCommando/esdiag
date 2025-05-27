@@ -17,8 +17,28 @@ pub struct IndexStats {
     pub health: Option<String>,
     pub primaries: Stats,
     pub total: Stats,
-    #[serde(skip_serializing)]
-    pub shards: Option<HashMap<String, Value>>,
+    pub shards: Option<HashMap<u16, Vec<ShardEntry>>>,
+}
+
+#[derive(Deserialize)]
+pub struct ShardEntry {
+    pub routing: ShardRouting,
+    pub commit: Value,
+    pub seq_no: Value,
+    pub retention_leases: Value,
+    pub shard_path: Value,
+    pub search_idle: bool,
+    pub search_idle_time: Option<u64>,
+    #[serde(flatten)]
+    pub stats: Stats,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ShardRouting {
+    pub node: String,
+    pub primary: bool,
+    pub state: String,
+    pub relocating_node: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -47,9 +67,13 @@ pub struct Stats {
 
 #[derive(Deserialize, Serialize)]
 pub struct Docs {
-    pub count: Option<u64>,
-    pub deleted: Option<u64>,
-    pub total_size_in_bytes: Option<u64>,
+    pub count: u64,
+    pub deleted: u64,
+    pub total_size_in_bytes: u64,
+    // Calculated
+    pub avg_size: Option<u64>,
+    pub per_gb: Option<u64>,
+    pub deleted_percent: Option<f32>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -66,17 +90,21 @@ pub struct StoreStats {
 
 #[derive(Deserialize, Serialize)]
 pub struct Indexing {
-    pub delete_current: Option<u64>,
-    pub delete_time_in_millis: Option<u64>,
-    pub delete_total: Option<u64>,
-    pub index_current: Option<u64>,
-    pub index_failed: Option<u64>,
-    pub index_time_in_millis: Option<u64>,
-    pub index_total: Option<u64>,
+    pub delete_current: u64,
+    pub delete_time_in_millis: u64,
+    pub delete_total: u64,
+    pub index_current: u64,
+    pub index_failed: u64,
+    pub index_time_in_millis: u64,
+    pub index_total: u64,
     pub is_throttled: Option<bool>,
     pub noop_update_total: Option<u64>,
     pub throttle_time_in_millis: Option<u64>,
     pub write_load: Option<f64>,
+    // Calculated
+    pub avg_docs_sec: Option<u64>,
+    pub avg_cpu_millis: Option<u64>,
+    pub avg_bytes_sec: Option<u64>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -92,21 +120,26 @@ pub struct Get {
 
 #[derive(Deserialize, Serialize)]
 pub struct Search {
-    fetch_current: Option<u64>,
-    fetch_failure: Option<u64>,
-    fetch_time_in_millis: Option<u64>,
-    fetch_total: Option<u64>,
-    open_contexts: Option<u64>,
-    query_current: Option<u64>,
-    query_failure: Option<u64>,
-    query_time_in_millis: Option<u64>,
-    query_total: Option<u64>,
-    scroll_current: Option<u64>,
-    scroll_time_in_millis: Option<u64>,
-    scroll_total: Option<u64>,
-    suggest_current: Option<u64>,
-    suggest_time_in_millis: Option<u64>,
-    suggest_total: Option<u64>,
+    pub fetch_current: Option<u64>,
+    pub fetch_failure: Option<u64>,
+    pub fetch_time_in_millis: u64,
+    pub fetch_total: u64,
+    pub open_contexts: Option<u64>,
+    pub query_current: Option<u64>,
+    pub query_failure: Option<u64>,
+    pub query_time_in_millis: u64,
+    pub query_total: u64,
+    pub scroll_current: Option<u64>,
+    pub scroll_time_in_millis: Option<u64>,
+    pub scroll_total: Option<u64>,
+    pub suggest_current: Option<u64>,
+    pub suggest_time_in_millis: Option<u64>,
+    pub suggest_total: Option<u64>,
+    // Calculated
+    pub avg_fetch_cpu_millis: Option<u64>,
+    pub avg_fetch_rate: Option<f64>,
+    pub avg_query_cpu_millis: Option<u64>,
+    pub avg_query_rate: Option<f64>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -215,9 +248,13 @@ pub struct Recovery {
 pub struct Bulk {
     pub avg_size_in_bytes: Option<u64>,
     pub avg_time_in_millis: Option<u64>,
-    pub total_operations: Option<u64>,
-    pub total_size_in_bytes: Option<u64>,
-    pub total_time_in_millis: Option<u64>,
+    pub total_operations: u64,
+    pub total_size_in_bytes: u64,
+    pub total_time_in_millis: u64,
+    // Calculated
+    pub avg_bytes_sec: Option<u64>,
+    pub compression_ratio: Option<f32>,
+    pub storage_ratio: Option<f32>,
 }
 
 #[derive(Deserialize, Serialize)]

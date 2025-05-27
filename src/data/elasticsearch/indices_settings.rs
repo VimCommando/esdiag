@@ -19,6 +19,8 @@ pub struct IndexSettings {
     pub default_pipeline: Option<String>,
     pub final_pipeline: Option<String>,
     pub hidden: Option<String>,
+    #[serde(default)]
+    pub is_write_index: Option<bool>,
     pub lifecycle: Option<Value>,
     pub mapping: Option<Value>,
     #[serde(default = "default_to_standard")]
@@ -89,21 +91,31 @@ impl IndexSettings {
     }
 
     /// Sets the age of the index in milliseconds to the given epoch time
-    pub fn age(mut self, epoch_millis: u64) -> Self {
-        self.age = self.creation_date.map(|date| epoch_millis - date);
-        self
+    pub fn age(self, epoch_millis: u64) -> Self {
+        Self {
+            age: self.creation_date.map(|date| epoch_millis - date),
+            ..self
+        }
     }
 
     /// Sets the data stream for the index
-    pub fn data_stream(mut self, data_stream: Option<DataStream>) -> Self {
-        self.data_stream = data_stream;
-        self
+    pub fn data_stream(self, data_stream: Option<DataStream>) -> Self {
+        let is_data_stream_write_index = data_stream.as_ref().map_or(false, |ds| ds.is_write_index);
+        Self {
+            data_stream,
+            is_write_index: Some(
+                self.is_write_index.unwrap_or(false) || is_data_stream_write_index,
+            ),
+            ..self
+        }
     }
 
     /// Adds the name of the index
-    pub fn name(mut self, name: String) -> Self {
-        self.name = Some(name);
-        self
+    pub fn name(self, name: String) -> Self {
+        Self {
+            name: Some(name),
+            ..self
+        }
     }
 
     /// Returns the mapping.source.mode
@@ -139,6 +151,7 @@ impl std::default::Default for IndexSettings {
             default_pipeline: None,
             final_pipeline: None,
             hidden: None,
+            is_write_index: None,
             lifecycle: None,
             mapping: None,
             mode: "unkown".to_string(),
@@ -165,19 +178,12 @@ impl std::default::Default for IndexSettings {
 
 #[derive(Deserialize, Serialize)]
 pub struct Settings {
-    settings: Index,
-}
-
-impl Settings {
-    /// Consume `self` and return the index settings, dropping the unnecessary parent data.
-    pub fn index(self) -> IndexSettings {
-        self.settings.index
-    }
+    pub settings: Index,
 }
 
 #[derive(Deserialize, Serialize)]
-struct Index {
-    index: IndexSettings,
+pub struct Index {
+    pub index: IndexSettings,
 }
 
 fn default_to_default() -> String {
