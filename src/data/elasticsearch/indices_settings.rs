@@ -149,7 +149,7 @@ impl std::default::Default for IndexSettings {
             allocation: None,
             auto_expand_replicas: None,
             blocks: None,
-            codec: "unkown".to_string(),
+            codec: "unknown".to_string(),
             creation_date: None,
             default_pipeline: None,
             final_pipeline: None,
