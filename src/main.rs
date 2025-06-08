@@ -16,8 +16,15 @@ use url::Url;
 #[command(name = "esdiag")]
 #[command(about = "Elastic Stack Diagnostics (esdiag) - collect diagnostics and import into Elasticsearch", long_about = None)]
 struct Cli {
+    /// Enable debug logging
+    #[arg(global = true, long)]
+    debug: bool,
+    /// Print version and exit
+    #[arg(long)]
+    version: bool,
+    /// Commands
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -99,10 +106,27 @@ enum Commands {
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() -> Result<()> {
     let start_time = std::time::Instant::now();
-    let env = env_logger::Env::default().filter_or("LOG_LEVEL", LOG_LEVEL);
-    env_logger::Builder::from_env(env)
-        .format_timestamp_millis()
-        .init();
+
+    // Parse CLI early to check for debug flag
+    let cli = Cli::parse();
+
+    if cli.version {
+        println!("esdiag {}", env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+    }
+
+    // Initialize logging with debug override if flag is set
+    if cli.debug {
+        env_logger::Builder::new()
+            .filter_level(log::LevelFilter::Debug)
+            .format_timestamp_millis()
+            .init();
+    } else {
+        let env = env_logger::Env::default().filter_or("LOG_LEVEL", LOG_LEVEL);
+        env_logger::Builder::from_env(env)
+            .format_timestamp_millis()
+            .init();
+    }
 
     std::panic::set_hook(Box::new(|panic| {
         // Log any panics as errors
@@ -112,7 +136,7 @@ async fn main() -> Result<()> {
 
     clear_last_run_files()?;
 
-    match run().await {
+    match run(cli).await {
         Ok(cmd) => {
             log::info!(
                 "{cmd} complete in {:.3} seconds",
@@ -127,11 +151,15 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run() -> Result<&'static str> {
-    // use clap to parse command line arguments
-    let cli = Cli::parse();
+async fn run(cli: Cli) -> Result<&'static str> {
+    let command = if let Some(command) = cli.command {
+        command
+    } else {
+        log::debug!("No command provided");
+        return Ok("none");
+    };
 
-    match cli.command {
+    match command {
         Commands::Collect { host, output } => {
             let known_host = Uri::try_from(host)?;
             let output = Uri::try_from(output)?;
