@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::styling};
 use esdiag::{
     client::{KnownHost, KnownHostBuilder},
     data::{Collector, Uri, diagnostic::Product},
@@ -11,20 +11,24 @@ use esdiag::{
 use eyre::{Result, eyre};
 use url::Url;
 
+// CLI Styling
+const STYLES: styling::Styles = styling::Styles::styled()
+    .header(styling::AnsiColor::BrightWhite.on_default())
+    .usage(styling::AnsiColor::BrightWhite.on_default())
+    .literal(styling::AnsiColor::Green.on_default())
+    .placeholder(styling::AnsiColor::Cyan.on_default());
+
 // Define command line arguments
 #[derive(Debug, Parser)]
-#[command(name = "esdiag")]
+#[command(name = "esdiag", version, styles = STYLES)]
 #[command(about = "Elastic Stack Diagnostics (esdiag) - collect diagnostics and import into Elasticsearch", long_about = None)]
 struct Cli {
     /// Enable debug logging
     #[arg(global = true, long)]
     debug: bool,
-    /// Print version and exit
-    #[arg(long)]
-    version: bool,
     /// Commands
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Commands,
 }
 
 #[derive(Debug, Subcommand)]
@@ -110,11 +114,6 @@ async fn main() -> Result<()> {
     // Parse CLI early to check for debug flag
     let cli = Cli::parse();
 
-    if cli.version {
-        println!("esdiag {}", env!("CARGO_PKG_VERSION"));
-        std::process::exit(0);
-    }
-
     // Initialize logging with debug override if flag is set
     if cli.debug {
         env_logger::Builder::new()
@@ -152,14 +151,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run(cli: Cli) -> Result<&'static str> {
-    let command = if let Some(command) = cli.command {
-        command
-    } else {
-        log::debug!("No command provided");
-        return Ok("none");
-    };
-
-    match command {
+    match cli.command {
         Commands::Collect { host, output } => {
             let known_host = Uri::try_from(host)?;
             let output = Uri::try_from(output)?;
