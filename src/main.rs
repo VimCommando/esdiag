@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::styling};
 use esdiag::{
     client::{KnownHost, KnownHostBuilder},
     data::{Collector, Uri, diagnostic::Product},
@@ -11,11 +11,22 @@ use esdiag::{
 use eyre::{Result, eyre};
 use url::Url;
 
+// CLI Styling
+const STYLES: styling::Styles = styling::Styles::styled()
+    .header(styling::AnsiColor::BrightWhite.on_default())
+    .usage(styling::AnsiColor::BrightWhite.on_default())
+    .literal(styling::AnsiColor::Green.on_default())
+    .placeholder(styling::AnsiColor::Cyan.on_default());
+
 // Define command line arguments
 #[derive(Debug, Parser)]
-#[command(name = "esdiag")]
+#[command(name = "esdiag", version, styles = STYLES)]
 #[command(about = "Elastic Stack Diagnostics (esdiag) - collect diagnostics and import into Elasticsearch", long_about = None)]
 struct Cli {
+    /// Enable debug logging
+    #[arg(global = true, long)]
+    debug: bool,
+    /// Commands
     #[command(subcommand)]
     command: Commands,
 }
@@ -99,10 +110,22 @@ enum Commands {
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() -> Result<()> {
     let start_time = std::time::Instant::now();
-    let env = env_logger::Env::default().filter_or("LOG_LEVEL", LOG_LEVEL);
-    env_logger::Builder::from_env(env)
-        .format_timestamp_millis()
-        .init();
+
+    // Parse CLI early to check for debug flag
+    let cli = Cli::parse();
+
+    // Initialize logging with debug override if flag is set
+    if cli.debug {
+        env_logger::Builder::new()
+            .filter_level(log::LevelFilter::Debug)
+            .format_timestamp_millis()
+            .init();
+    } else {
+        let env = env_logger::Env::default().filter_or("LOG_LEVEL", LOG_LEVEL);
+        env_logger::Builder::from_env(env)
+            .format_timestamp_millis()
+            .init();
+    }
 
     std::panic::set_hook(Box::new(|panic| {
         // Log any panics as errors
@@ -112,7 +135,7 @@ async fn main() -> Result<()> {
 
     clear_last_run_files()?;
 
-    match run().await {
+    match run(cli).await {
         Ok(cmd) => {
             log::info!(
                 "{cmd} complete in {:.3} seconds",
@@ -127,10 +150,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run() -> Result<&'static str> {
-    // use clap to parse command line arguments
-    let cli = Cli::parse();
-
+async fn run(cli: Cli) -> Result<&'static str> {
     match cli.command {
         Commands::Collect { host, output } => {
             let known_host = Uri::try_from(host)?;
