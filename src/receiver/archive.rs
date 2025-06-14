@@ -1,6 +1,6 @@
 use super::{Receive, ReceiveMultiple, ReceiveRaw};
-use crate::data::diagnostic::{data_source::PathType, DataSource};
-use eyre::{eyre, Result};
+use crate::data::diagnostic::{DataSource, data_source::PathType};
+use eyre::{Result, eyre};
 use serde::de::DeserializeOwned;
 use std::{
     fs::File,
@@ -67,7 +67,7 @@ impl TryFrom<PathBuf> for ArchiveReceiver {
             true => {
                 log::debug!("File is valid: {}", path.display());
                 let file = File::open(path)?;
-                let created_date = file.metadata()?.created()?;
+                let created_date = file.metadata()?.modified()?;
                 let archive = ZipArchive::new(file)?;
                 Ok(Self {
                     archive: Arc::new(RwLock::new(archive)),

@@ -1,6 +1,6 @@
 use super::{Receive, ReceiveMultiple, ReceiveRaw};
-use crate::data::diagnostic::{data_source::PathType, DataSource};
-use eyre::{eyre, Result};
+use crate::data::diagnostic::{DataSource, data_source::PathType};
+use eyre::{Result, eyre};
 use serde::de::DeserializeOwned;
 use std::{
     fs::File,
@@ -26,8 +26,7 @@ impl TryFrom<PathBuf> for DirectoryReceiver {
                 Ok(Self {
                     path: path.clone(),
                     work_dir: String::from(""),
-                    // TODO: WSL trips this up on NTFS mounts
-                    created_date: path.metadata()?.created()?,
+                    created_date: path.metadata()?.modified()?,
                 })
             }
             false => {
