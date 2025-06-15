@@ -80,7 +80,7 @@ function set_auth_header() {
 
 function kibana_objects_import() {
     local kibana_space="default"
-    local response_file="target/dashboard_import.json"
+    local response_file="target/kibana_import.json"
 
     # Don't import before Kibana is responding
 
@@ -229,6 +229,11 @@ function dependencies_validate() {
     if (( $failures > 0 )); then
         log_error "Dependencies: $(white $failures) checks $(red failed)"
         exit 1
+    fi
+
+    if [[ ! -d "target" ]]; then
+        log_info "Creating directory: $(gray target)"
+        mkdir "target"
     fi
 }
 
