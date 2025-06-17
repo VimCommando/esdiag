@@ -19,7 +19,7 @@ Step-by-step instructions:
 
 8. For `Expiration` use 90 days or custom; InfoSec recommends no more than 1 year
 
-9. For `Repository Access`, pick `Only selected repositires`
+9. For `Repository Access`, pick `Only selected repositories`
 
 10. In the `Select repositories` search box, type `esdiag` and pick two results: `esdiag` and `esdiag-dashboards`
 
