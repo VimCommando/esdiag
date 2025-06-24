@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Export these variables, they will be passed to the container
+declare ESDIAG_KIBANA_URL=${ESDIAG_KIBANA_URL:-"http://localhost:5601"}
 declare ESDIAG_OUTPUT_URL=${ESDIAG_OUTPUT_URL:-"http://host.docker.internal:9200"}
 declare ESDIAG_OUTPUT_APIKEY=${ESDIAG_OUTPUT_APIKEY}
 declare ESDIAG_OUTPUT_USERNAME=${ESDIAG_OUTPUT_USERNAME}

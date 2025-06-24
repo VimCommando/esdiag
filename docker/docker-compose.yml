@@ -20,7 +20,7 @@ services:
       LOG_LEVEL: info
     command: ["serve"]
     networks:
-      - esdiag-net
+      - net
     ports:
       - 3000:3000
 
@@ -41,9 +41,9 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - esdiag-data:/usr/share/elasticsearch/data
+      - data:/usr/share/elasticsearch/data
     networks:
-      - esdiag-net
+      - net
     ports:
       - 9200:9200
 
@@ -55,14 +55,14 @@ services:
     environment:
       ELASTICSEARCH_HOSTS: http://esdiag-elasticsearch:9200
     networks:
-      - esdiag-net
+      - net
     ports:
       - 5601:5601
 
 volumes:
-  esdiag-data:
+  data:
     driver: local
 
 networks:
-  esdiag-net:
+  net:
     driver: bridge
