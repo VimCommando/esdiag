@@ -29,9 +29,6 @@ declare apikey=${ESDIAG_OUTPUT_APIKEY}
 declare username=${ESDIAG_OUTPUT_USERNAME}
 declare password=${ESDIAG_OUTPUT_PASSWORD}
 
-# Landing page when opening the web browser
-declare kibana_homepage="/app/dashboards#/view/2c8cd284-79ef-4787-8b79-0030e0df467b"
-
 # The `export.ndjson` file to import into Kibana, can be provided as the only argument to the script
 # Defaults to the newest dashboard file in `assets/kibana/esdiag-dashboards*.ndjson`
 # Is overwritten by `dashboards_latest_release_download()` if a GITHUB_TOKEN is defined
@@ -225,7 +222,6 @@ function browser_homepage_open() {
 # ----- Container Functions -----
 
 function esdiag_container_build() {
-    stack_containers_run &
     if [[ $(docker images -q esdiag:${esdiag_version} 2> /dev/null) == "" ]]; then
         log_info "Building $(cyan "esdiag:${esdiag_version}") container image"
     else
@@ -246,16 +242,16 @@ function esdiag_container_build() {
 function stack_containers_pull() {
     log_info "Running $(white "docker compose pull esdiag-elasticsearch esdiag-kibana") in background"
     docker compose --file docker/docker-compose.yml pull esdiag-elasticsearch esdiag-kibana > /dev/null 2>&1 &
-    wait $!
-    if [[ $? -ne 0 ]]; then
-        log_error "$(white "docker compose up") $(red failed) with exit status ${?}"
-        exit $?
-    fi
 }
 
 function containers_run () {
     log_info "Running $(white "docker compose up --detach")"
     docker compose --file docker/docker-compose.yml up --detach > /dev/null 2>&1 &
+    wait $!
+    if [[ $? -ne 0 ]]; then
+        log_error "$(white "docker compose up") $(red failed) with exit status ${?}"
+        exit $?
+    fi
 }
 
 # ----- Elasticsearch Functions -----
@@ -294,7 +290,7 @@ function dependencies_validate() {
     local failures=0
 
     if ! command -v docker &> /dev/null; then
-        log_error "$(white docker) is required to build and run conatiners"
+        log_error "$(white docker) is required to pull, build and run conatiners"
         failures=$((failures + 1))
     fi
 
@@ -304,7 +300,7 @@ function dependencies_validate() {
     fi
 
     if ! command -v jq &> /dev/null; then
-        log_error "$(white jq) is required to read from json files and $(white curl) responses"
+        log_error "$(white jq) is required to read json files and $(white curl) responses"
         failures=$((failures + 1))
     fi
 
