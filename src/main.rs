@@ -190,8 +190,11 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 }
                 _ = async {
                     loop {
-                        let mut rx = rx.write().await;
-                        match rx.recv().await {
+                        let bytes = {
+                            let mut rx = rx.write().await;
+                            rx.recv()
+                        };
+                        match bytes.await {
                             Some(bytes) => {
                                 server.set_processing().await;
                                 let receiver = Receiver::try_from(bytes)?;
