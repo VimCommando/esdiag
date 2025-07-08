@@ -80,9 +80,6 @@
                 vertical-align: middle;
                 width: 20px;
             }
-            .hidden {
-                display: none;
-            }
             /* Specific styling for spinner in processing state */
             .processing .spinner {
                 border-top-color: #4285f4;
@@ -334,7 +331,7 @@
             clearFile.addEventListener("click", function (e) {
                 e.stopPropagation();
                 updateFileInfo(null);
-                updateStatus({ status: "ready" });
+                pollStatus();
             });
 
             // Initialize button state when page loads
