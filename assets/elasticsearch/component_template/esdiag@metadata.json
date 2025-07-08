@@ -1,4 +1,7 @@
 {
+  "_meta": {
+    "description": "ESDiag common cluster and diagnostic metadata mappings"
+  },
   "template": {
     "mappings": {
       "dynamic_date_formats": [
@@ -7,46 +10,50 @@
       ],
       "properties": {
         "cluster": {
-          "type": "object",
           "properties": {
-            "name": {
+            "diagnostic_node": {
               "type": "keyword"
             },
-            "uuid": {
+            "display_name": {
+              "type": "keyword"
+            },
+            "name": {
               "type": "keyword"
             },
             "tagline": {
               "type": "object",
               "enabled": false
             },
+            "uuid": {
+              "type": "keyword"
+            },
             "version": {
-              "type": "object",
               "properties": {
-                "number": {
-                  "type": "version"
+                "build_date": {
+                  "type": "date"
                 },
                 "build_flavor": {
-                  "type": "keyword"
-                },
-                "build_type": {
                   "type": "keyword"
                 },
                 "build_hash": {
                   "type": "keyword"
                 },
-                "build_date": {
-                  "type": "date"
-                },
                 "build_snapshot": {
                   "type": "boolean"
                 },
+                "build_type": {
+                  "type": "keyword"
+                },
                 "lucene_version": {
+                  "type": "version"
+                },
+                "minimum_index_compatibility_version": {
                   "type": "version"
                 },
                 "minimum_wire_compatibility_version": {
                   "type": "version"
                 },
-                "minimum_index_compatibility_version": {
+                "number": {
                   "type": "version"
                 }
               }
@@ -56,17 +63,6 @@
         "diagnostic": {
           "type": "object",
           "properties": {
-            "node": {
-              "ignore_above": 1024,
-              "type": "keyword"
-            },
-            "inputs": {
-              "type": "match_only_text"
-            },
-            "runner": {
-              "ignore_above": 1024,
-              "type": "keyword"
-            },
             "collection_date": {
               "format": "strict_date_optional_time||epoch_millis",
               "index": true,
@@ -75,7 +71,26 @@
               "type": "date",
               "doc_values": true
             },
+            "inputs": {
+              "type": "match_only_text"
+            },
+            "runner": {
+              "ignore_above": 1024,
+              "type": "keyword"
+            },
+            "kibana_link": {
+              "type": "object",
+              "enabled": false
+            },
+            "node": {
+              "ignore_above": 1024,
+              "type": "keyword"
+            },
             "uuid": {
+              "ignore_above": 1024,
+              "type": "keyword"
+            },
+            "version": {
               "ignore_above": 1024,
               "type": "keyword"
             }
@@ -92,8 +107,5 @@
       }
     }
   },
-  "_meta": {
-    "managed": false,
-    "description": "Common mappings for the esdiag metadata"
-  }
+  "version": 2
 }

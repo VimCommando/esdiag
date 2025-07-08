@@ -1,7 +1,7 @@
 Elastic Stack Diagnostics
 ==========================
 
-The Elastic Stack Diagnostics (`esdiag`) tool simplifies processing and importing diagnostic bundles into Elasticsearch. It pre-processes, split and enriches the raw API outputs into Elasticsearch-friendly documents. This makes building diagnostic Kibana dashboards, ES|QL queries, and more, easy.
+Elastic Stack Diagnostics (`esdiag`) simplifies processing and importing diagnostic bundles into Elasticsearch. It pre-processes, splits and enriches the raw API outputs into Elasticsearch-friendly JSON documents. This makes using diagnostic data for Kibana dashboards, ES|QL queries, and more, easy.
 
 Running locally within containers
 ----------------------------------
@@ -12,7 +12,7 @@ Use the `bin/stack-local-setup.sh` to quickly spin up a fully-local environment.
 
 1. Clone this repository to your local machine using either `git` or [GitHub Desktop](https://desktop.github.com/download/)
 2. Be sure you have the dependencies installed: `docker`, `jq`, `curl`, `grep`, and `sed`.
-3. Pick either the **Automated** or **Manual** dashboard update method
+3. Pick either the **Automated** or **Manual** dashboard update method (easily to switch later)
 
 > ℹ️ Note: You can use any container runtime, as long as it supports the `docker compose` subcommand.
 
@@ -49,8 +49,8 @@ Now run the script from this repository's root directory:
 Once the script is complete, you will have:
 1. A single Elasticsearch node with all index templates installed.
 2. A fully-configured Kibana instance with dashboards, data views, and saved searches imported.
-3. A Docker container image to use with `bin/esdiag-docker.sh` for processing diagnostic bundles.
-4. A web browser opened to http://localhost:5601
+3. An `esdiag:latest` Docker container serving the web interface (also works with `bin/esdiag-docker.sh`).
+4. A web browser opened to the ESDiag web interface at http://localhost:3000 (Windows may not auto-launch the browser)
 5. If you configured `automated` dashboard updates, re-running the script will update and re-import the dashboards.
 
 ### 4. Processing diagnostics
@@ -126,14 +126,9 @@ If you have `ssh` authentication already configured, it possible to install dire
 
 Validate the installation is working by simply running `esdiag help`. If you see the help message, you're ready to configure some hosts, setup a cluster, and import some diagnostics!
 
-If you need a simple, local, security-disabled Elasticsearch and Kibana environment, use the `docker-compose.yml` file in the `docker` directory.
+Refer to the `example.env` file to configure a default output with environment variables, without any `host` configurations.
 
-```sh
-cd docker
-docker compose up -d
-```
-
-This will download the latest Elasticsearch and Kibana images, start them up, and expose the ports `9200` and `5601` on your local machine.
+If you need a simple, local, security-disabled Elasticsearch and Kibana environment, use the `bin/stack-local-setup.sh` script above. You can still target a local install to the stack running in the containers.
 
 Usage
 --------------------
@@ -157,6 +152,8 @@ Usage
 
 4. Open Kibana and explore!
 
+If you set the `ESDIAG_KIBANA_URL` environment variable with your target Kibana URL (no trailing `/`), ESDiag will log a link directly to a pre-filtered cluster report dashboard.
+
 ### Commands
 
 #### Help
@@ -174,6 +171,7 @@ Commands:
   host     Configure and test a remote host connection
   import   [DEPRECATED] Process, enrich and import a diagnostic into Elasticsearch
   process  Receives a diagnostic from the input, processes it, and sends processed docs to the output
+  serve    Start a web server to receive diagnostic bundle uploads
   setup    Import assets (templates, ingest pipelines, etc.) to a known Elasticsearch host
   help     Print this message or the help of the given subcommand(s)
 
@@ -186,6 +184,8 @@ Options:
 The `esdiag host` command allows you configure and test authentication information. On a succesful connection test, it writes the configuration to your `~/esdiag/hosts.yml` file for easy re-use.
 
 > ℹ️ Note: This command does not work with `bin/esdiag-docker.sh`
+
+Alternatively you can use a `.env` file and set `ESDIAG_OUTPUT_*` values; see `example.env`.
 
 ```
 Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
@@ -223,10 +223,6 @@ Options:
   -h, --help  Print help
 ```
 
-#### Import
-
-> ⚠️ DEPRECATED: This command will be removed in a future version.
-
 #### Process
 
 The `esdiag process <input> [output]` will read the diagnostic data from `<input>`, run the source documents through a series of processors, and send the enriched documents to the `<output>` target.
@@ -250,7 +246,7 @@ Usage: esdiag process <INPUT> [OUTPUT]
 
 Arguments:
   <INPUT>
-          Source to read diagnostic data from (archive, directory, known host or uploader URL)
+          Source to read diagnostic data from (archive, directory, known host, or uploader URL)
 
   [OUTPUT]
           Target to send the processed diagnostic documents to (known host, file, stdout, or env). Strings will be checked against the known hosts stored in `~/.esdiag/hosts.yml` and will fallback to a filename if not found. Use `-` for stdout. If nothing is provided, the target will be determined based on the environment variables: ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, and ESDIAG_OUTPUT_PASSWORD.
@@ -282,6 +278,42 @@ To pull a diagnostic into your local cluster directly from `diag-cluster`:
 
 ```sh
 esdl diag-cluster
+```
+
+#### Serve
+
+The `esdiag serve` command starts a web server that accepts diagnostic bundle uploads through a user-friendly interface. This makes it easy to receive and process diagnostics without requiring command-line access from the uploading user.
+
+```
+Start a web server to receive diagnostic bundle uploads
+
+Usage: esdiag serve [OPTIONS] [OUTPUT]
+
+Arguments:
+  [OUTPUT]
+          Target to send the processed diagnostic documents to (known host, file, stdout, or env). Strings will be checked against the known hosts stored in `~/.esdiag/hosts.yml` and will fallback to a filename if not found. Use `-` for stdout. If nothing is provided, the output will try using the environment variables: ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, and ESDIAG_OUTPUT_PASSWORD.
+
+Options:
+  -p, --port <PORT>
+          The port to bind the server to [default: 3000]
+  -h, --help
+          Print help
+```
+
+Example usage:
+
+```sh
+# Start a server on the default port 3000 that sends processed diagnostics to a known host
+esdiag serve localhost
+
+# Start a server on port 8080
+esdiag serve --port 8080 localhost
+```
+
+You can access the web interface at http://localhost:3000 (or your specified port) or use curl to upload a file:
+
+```sh
+curl -F "file=@/path/to/diagnostic.zip" http://localhost:3000/upload
 ```
 
 #### Collect

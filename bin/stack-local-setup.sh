@@ -15,20 +15,19 @@ fi
 
 # ----- User Configuration -----
 
-declare kibana_url="http://localhost:5601"
-declare elasticsearch_url="http://localhost:9200"
 declare github_token=${GITHUB_TOKEN}
-declare assets_path="assets/kibana"
 
 # ----- Advanced Configuration -----
+
+declare elasticsearch_url=${ESDIAG_OUTPUT_URL:-"http://localhost:9200"}
+declare kibana_url=${ESDIAG_KIBANA_URL:-"http://localhost:5601"}
+declare esdiag_url="http://localhost:3000"
+declare assets_path="assets/kibana"
 
 # Use ESDIAG_OUTPUT* environment variables to configure Elastic Stack authentication
 declare apikey=${ESDIAG_OUTPUT_APIKEY}
 declare username=${ESDIAG_OUTPUT_USERNAME}
 declare password=${ESDIAG_OUTPUT_PASSWORD}
-
-# Landing page when opening the web browser
-declare kibana_homepage="/app/dashboards#/view/2c8cd284-79ef-4787-8b79-0030e0df467b"
 
 # The `export.ndjson` file to import into Kibana, can be provided as the only argument to the script
 # Defaults to the newest dashboard file in `assets/kibana/esdiag-dashboards*.ndjson`
@@ -37,7 +36,7 @@ declare dashboard_file=${1:-$(ls -tr assets/kibana/esdiag-dashboards*.ndjson 2>/
 
 # Git repository information
 declare esdiag_dashboards_url="https://api.github.com/repos/elastic/esdiag-dashboards"
-declare esdiag_url="https://api.github.com/repos/elastic/esdiag"
+declare esdiag_github_url="https://api.github.com/repos/elastic/esdiag"
 declare esdiag_branch=${ESDIAG_BRANCH:-"main"}
 declare esdiag_version=$(grep -o '^version = ".*"' Cargo.toml | sed -E 's/^version = "(.*)"/\1/')
 
@@ -74,7 +73,7 @@ function github_token_check() {
         --header "Authorization: token ${github_token}" \
         --header "X-GitHub-Api-Version: 2022-11-28" \
         --write-out "%{http_code}" --output /dev/null \
-        "${esdiag_url}" )
+        "${esdiag_github_url}" )
 
     if [[ $token_status == "200" ]]; then
         log_info "GitHub token is $(green valid): http ${token_status}"
@@ -94,7 +93,7 @@ function esdiag_version_check() {
         --header "Accept: application/vnd.github+json" \
         --header "Authorization: token ${github_token}" \
         --header "X-GitHub-Api-Version: 2022-11-28" \
-          "${esdiag_url}/contents/Cargo.toml?ref=${esdiag_branch}" \
+          "${esdiag_github_url}/contents/Cargo.toml?ref=${esdiag_branch}" \
           | jq -r '.content' | base64 -d | grep "^version = " | sed 's/version = "\(.*\)"/\1/')
 
     log_info "latest version: $(cyan ${esdiag_latest}) on $(gray ${esdiag_branch})"
@@ -192,6 +191,8 @@ function kibana_objects_import() {
         fi
     done
     log_info "$(magenta Kibana) is $(green ready)!"
+    # Kibana's "ready" is overly optimistic and imports may fail, so give it another second
+    sleep 1
 
     # Import saved objects
 
@@ -213,26 +214,28 @@ function kibana_objects_import() {
     export success_count=$(jq -r .successCount "${response_file}")
 }
 
-function browser_homepage_open() {
-    local homepage_url="${kibana_url}${kibana_homepage}"
-    log_info "Opening web browser to $(blue "${homepage_url}")"
-    open ${homepage_url}
+function browser_open() {
+    log_info "Opening web browser to $(blue "${esdiag_url}")"
+    if [[ $(command -v explorer.exe) ]]; then
+        # Windows Subsystem for Linux (WSL)
+        explorer.exe ${esdiag_url}
+    elif [[ $(command -v open) ]]; then
+        # MacOS
+        open ${esdiag_url}
+    elif [[ $(command -v gnome-open) ]]; then
+        # Linux with Gnome
+        gnome-open ${esdiag_url}
+    elif [[ $(command -v xdg-open) ]]; then
+        # Linux, more generic
+        xdg-open ${esdiag_url}
+    else
+        log_warn "No browser launcher found"
+    fi
 }
 
 # ----- Container Functions -----
 
-function stack_containers_run() {
-    log_info "Running $(white "docker compose up -d") in background"
-    docker compose --file docker/docker-compose.yml up --detach > /dev/null 2>&1 &
-    wait $!
-    if [[ $? -ne 0 ]]; then
-        log_error "$(white "docker compose up") $(red failed) with exit status ${?}"
-        exit $?
-    fi
-}
-
-function containers_build_and_run() {
-    stack_containers_run &
+function esdiag_container_build() {
     if [[ $(docker images -q esdiag:${esdiag_version} 2> /dev/null) == "" ]]; then
         log_info "Building $(cyan "esdiag:${esdiag_version}") container image"
     else
@@ -246,6 +249,21 @@ function containers_build_and_run() {
         docker tag esdiag:${esdiag_version} esdiag:latest
     else
         log_error "$(white "docker build") $(red failed) with exit status ${?}"
+        exit $?
+    fi
+}
+
+function stack_containers_pull() {
+    log_info "Running $(white "docker compose pull esdiag-elasticsearch esdiag-kibana") in background"
+    docker compose --file docker/docker-compose.yml pull esdiag-elasticsearch esdiag-kibana > /dev/null 2>&1 &
+}
+
+function containers_run () {
+    log_info "Running $(white "docker compose up --detach")"
+    docker compose --file docker/docker-compose.yml up --detach > /dev/null 2>&1 &
+    wait $!
+    if [[ $? -ne 0 ]]; then
+        log_error "$(white "docker compose up") $(red failed) with exit status ${?}"
         exit $?
     fi
 }
@@ -286,7 +304,7 @@ function dependencies_validate() {
     local failures=0
 
     if ! command -v docker &> /dev/null; then
-        log_error "$(white docker) is required to build and run conatiners"
+        log_error "$(white docker) is required to pull, build and run conatiners"
         failures=$((failures + 1))
     fi
 
@@ -296,7 +314,7 @@ function dependencies_validate() {
     fi
 
     if ! command -v jq &> /dev/null; then
-        log_error "$(white jq) is required to read from json files and $(white curl) responses"
+        log_error "$(white jq) is required to read json files and $(white curl) responses"
         failures=$((failures + 1))
     fi
 
@@ -347,10 +365,12 @@ fi
 
 # If we have a dashboard file, proceed with setup
 if [[ -f $dashboard_file ]]; then
-    containers_build_and_run \
+    stack_containers_pull \
+    && esdiag_container_build \
+    && containers_run \
     && elasticsearch_templates_setup \
     && kibana_objects_import \
-    && browser_homepage_open \
+    && browser_open \
     && log_info "$(white ${0}) is $(green complete)!"
 else
     log_error "ESDiag Dashboards file $(red "not found")"

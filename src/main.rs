@@ -6,9 +6,11 @@ use esdiag::{
     exporter::{DirectoryExporter, Exporter},
     processor::Diagnostic,
     receiver::Receiver,
+    server::ApiServer,
     setup,
 };
 use eyre::{Result, eyre};
+use tokio::signal::unix::{SignalKind, signal};
 use url::Url;
 
 // CLI Styling
@@ -41,6 +43,22 @@ enum Commands {
         /// The output directory to save the diagnostics to
         #[arg(help = "An existing directory to create a diagnostic directory and files in")]
         output: String,
+    },
+    /// Start a web server to receive diagnostic bundle uploads
+    Serve {
+        /// The port to bind the server to
+        #[arg(
+            help = "The port to bind the server to",
+            long,
+            short,
+            default_value = "3000"
+        )]
+        port: u16,
+        /// Target to send processed diagnostic documents to
+        #[arg(
+            long_help = "Target to send the processed diagnostic documents to (known host, file, stdout, or env). Strings will be checked against the known hosts stored in `~/.esdiag/hosts.yml` and will fallback to a filename if not found. Use `-` for stdout. If nothing is provided, the output will try using the environment variables: ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, and ESDIAG_OUTPUT_PASSWORD."
+        )]
+        output: Option<String>,
     },
     /// Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
     Host {
@@ -152,6 +170,67 @@ async fn main() -> Result<()> {
 
 async fn run(cli: Cli) -> Result<&'static str> {
     match cli.command {
+        Commands::Serve { port, output } => {
+            log::info!("Starting ESDiag API server");
+
+            let output_uri = output.and_then(|o| Uri::try_from(o).ok());
+            let exporter = Exporter::try_from(output_uri)?;
+
+            let mut server = ApiServer::new(port, exporter.to_string());
+
+            let rx = match &server.rx {
+                Some(rx) => rx.clone(),
+                None => return Err(eyre!("Server rx error")),
+            };
+
+            // This will process uploaded diagnostics until a termination signal is received
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    log::info!("Shutting down server (Ctrl+C)...");
+                }
+                _ = async {
+                    let mut term_signal = signal(SignalKind::terminate()).map_err(|e| eyre!("Failed to install SIGTERM handler: {}", e))?;
+                    term_signal.recv().await;
+                    log::info!("Shutting down server (SIGTERM)...");
+                    Ok::<_, eyre::Report>(())
+                } => {}
+                _ = async {
+                    loop {
+                        let mut rx = rx.write().await;
+                        match rx.recv().await {
+                            Some(bytes) => {
+                                server.set_processing().await;
+                                let receiver = Receiver::try_from(bytes)?;
+                                let manifest = match receiver.try_get_manifest().await {
+                                    Ok(manifest) => manifest,
+                                    Err(err) => {
+                                        let message = format!("Failed to build manifest, invalid diagnostic archive");
+                                        log::error!("Failed to build manifest: {}", err);
+                                        server.set_error(message).await;
+                                        continue;
+                                    }
+                                };
+                                let report = Diagnostic::try_new(manifest, receiver, exporter.clone()).await?.run().await?;
+                                log::debug!("Diagnostic report generated: {}", serde_json::to_string(&report)?);
+                                server.set_complete(report).await;
+                            }
+                            None => {
+                                let message = format!("Failed receiving archive bytes");
+                                log::error!("{}", message);
+                                server.set_error(message).await;
+                            }
+                        }
+                        log::info!("Waiting for next diagnostic...");
+                    }
+                    #[allow(unreachable_code)]
+                    Ok::<_, eyre::Report>(())
+                } => {}
+            }
+
+            // Allow time for graceful shutdown
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            Ok("serve")
+        }
         Commands::Collect { host, output } => {
             let known_host = Uri::try_from(host)?;
             let output = Uri::try_from(output)?;
