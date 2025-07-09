@@ -4,18 +4,18 @@ use crate::{
     data::{
         self,
         diagnostic::{
-            report::{BatchResponse, ProcessorSummary},
             DiagnosticReport,
+            report::{BatchResponse, ProcessorSummary},
         },
     },
 };
 use elasticsearch::{
-    http::{headers, request::JsonBody, response::Response, Method},
     BulkOperation, BulkParts, Elasticsearch, IndexParts,
+    http::{Method, headers, request::JsonBody, response::Response},
 };
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use futures::{future::join_all, stream::FuturesUnordered};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use url::Url;
@@ -131,6 +131,7 @@ impl Export for ElasticsearchExporter {
 
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
         data::save_file("report.json", report)?;
+        let diagnostic_id = report.metadata.id.clone();
         let body = json!({
             "@timestamp": chrono::Utc::now().timestamp_millis(),
             "diagnostic": report ,
@@ -152,7 +153,10 @@ impl Export for ElasticsearchExporter {
                 let body = res.json::<Value>().await?;
                 match status_code {
                     200 | 201 => {
-                        log::info!("metrics-diagnostic-esdiag, created diagnostic report");
+                        log::info!(
+                            "metrics-diagnostic-esdiag, created diagnostic report {}",
+                            diagnostic_id
+                        );
                         log::trace!("response body: {body}");
                         Ok(())
                     }
@@ -196,7 +200,7 @@ async fn parse_response(
     let doc_count = item_count - error_count;
 
     match status_code {
-        200 if error_count == 0 => log::info!("{}, created {} docs", index, doc_count),
+        200 if error_count == 0 => log::debug!("{}, created {} docs", index, doc_count),
         200 => log::warn!(
             "{}, created {} docs with {} errors",
             index,

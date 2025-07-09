@@ -1,4 +1,4 @@
-use crate::data::diagnostic::DiagnosticReport;
+use crate::processor::{Job, JobFailed, JobProcessing};
 use axum::{
     Router,
     extract::{DefaultBodyLimit, Multipart},
@@ -7,32 +7,25 @@ use axum::{
     routing::{get, post},
 };
 use bytes::Bytes;
-use std::{net::SocketAddr, sync::Arc};
-use tokio::sync::{RwLock, mpsc};
+use std::{collections::VecDeque, net::SocketAddr, sync::Arc};
+use tokio::sync::{RwLock, mpsc, oneshot};
 
 static INDEX_HTML: &str = include_str!("server/index.html");
-
-// Status of a diagnostic processing job
-#[derive(Clone)]
-pub enum ProcessingStatus {
-    Ready,
-    Processing,
-    Complete(DiagnosticReport),
-    Error(String),
-}
 
 #[derive(Clone)]
 pub struct ApiServer {
     server_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
+    worker_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
+    shutdown_signal: Option<Arc<oneshot::Sender<()>>>,
     pub rx: Option<Arc<RwLock<mpsc::Receiver<Bytes>>>>,
-    //port: u16,
     state: Arc<ApiState>,
 }
 
 // Shared state for the API server
 struct ApiState {
     upload_tx: mpsc::Sender<Bytes>,
-    processing_status: Arc<RwLock<ProcessingStatus>>,
+    job_queue: Arc<RwLock<VecDeque<JobProcessing>>>,
+    job_history: Arc<RwLock<Vec<Job>>>,
     exporter: String,
 }
 
@@ -45,7 +38,8 @@ impl ApiServer {
         // Create shared state
         let state = Arc::new(ApiState {
             upload_tx: tx.clone(),
-            processing_status: Arc::new(RwLock::new(ProcessingStatus::Ready)),
+            job_queue: Arc::new(RwLock::new(VecDeque::with_capacity(10))),
+            job_history: Arc::new(RwLock::new(Vec::with_capacity(100))),
             exporter,
         });
 
@@ -80,18 +74,16 @@ impl ApiServer {
             }
         });
 
-        Self {
+        let mut server = Self {
             server_handle: Some(Arc::new(handle)),
+            worker_handle: None,
+            shutdown_signal: None,
             rx: Some(rx_clone),
-            //port,
             state,
-        }
-    }
+        };
 
-    // Update the processing status for a diagnostic
-    pub async fn update_status(&mut self, new_status: ProcessingStatus) {
-        let mut status = self.state.processing_status.write().await;
-        *status = new_status;
+        server.start_worker();
+        server
     }
 
     async fn index_handler() -> impl IntoResponse {
@@ -129,10 +121,6 @@ impl ApiServer {
 
                         // Clone the data to avoid ownership issues
                         let bytes = Bytes::copy_from_slice(&data);
-
-                        // Store the processing status
-                        let mut status = state.processing_status.write().await;
-                        *status = ProcessingStatus::Processing;
 
                         // Send the bytes through the channel
                         if state.upload_tx.send(bytes).await.is_ok() {
@@ -176,59 +164,143 @@ impl ApiServer {
     }
 
     async fn status_handler(state: Arc<ApiState>) -> impl IntoResponse {
-        let status = state.processing_status.read().await;
+        let queue_size = state.job_queue.read().await.len();
+        let history = state.job_history.read().await;
 
-        match &*status {
-            ProcessingStatus::Processing => (
-                StatusCode::OK,
-                axum::Json(serde_json::json!({
-                    "status": "processing",
-                    "progress": "Processing diagnostic..."
-                })),
-            ),
-            ProcessingStatus::Complete(report) => (
-                StatusCode::OK,
-                axum::Json(serde_json::json!({
-                    "status": "complete",
-                    "report": report
-                })),
-            ),
-            ProcessingStatus::Error(error) => (
-                StatusCode::OK,
-                axum::Json(serde_json::json!({
-                    "status": "error",
-                    "error": error
-                })),
-            ),
-            ProcessingStatus::Ready => (
+        match queue_size {
+            0 => (
                 StatusCode::OK,
                 axum::Json(serde_json::json!({
                     "status": "ready",
                     "exporter": state.exporter,
+                    "history": *history,
+                    "queue": {
+                        "size": queue_size
+                    }
+                })),
+            ),
+            1..10 => (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "status": "processing",
+                    "progress": "Processing diagnostic...",
+                    "history": *history,
+                    "queue": {
+                        "size": queue_size
+                    }
+                })),
+            ),
+            _ => (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "status": "busy",
+                    "warning": "Too many jobs in queue",
+                    "history": *history,
+                    "queue": {
+                        "size": queue_size
+                    }
                 })),
             ),
         }
     }
 
-    pub fn shutdown(&mut self) {
+    pub async fn shutdown(&mut self) {
+        // Send shutdown signal to worker thread if it exists
+        if let Some(tx) = self.shutdown_signal.take() {
+            log::debug!("Sending shutdown signal to worker thread");
+            if let Err(e) = Arc::try_unwrap(tx).map(|tx| tx.send(())) {
+                log::warn!("Failed to send shutdown signal to worker thread: {:?}", e);
+            }
+        }
+
+        // Wait for worker thread to complete if it exists
+        if let Some(handle) = self.worker_handle.take() {
+            log::debug!("Waiting for worker thread to complete");
+
+            // Use a timeout to avoid waiting forever
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                Arc::try_unwrap(handle).unwrap(),
+            )
+            .await
+            {
+                Ok(result) => match result {
+                    Ok(_) => log::info!("Worker thread shut down successfully"),
+                    Err(e) => log::warn!("Error joining worker thread: {:?}", e),
+                },
+                Err(_) => log::warn!("Timeout waiting for worker thread to shut down"),
+            }
+        }
+
+        // Shutdown the main server
         if let Some(handle) = self.server_handle.take() {
             Arc::try_unwrap(handle).map(|handle| handle.abort()).ok();
+            log::debug!("Server thread aborted");
         }
     }
 
-    // Updates processing status with the diagnostic report
-    pub async fn set_complete(&mut self, report: DiagnosticReport) {
-        self.update_status(ProcessingStatus::Complete(report)).await;
+    pub async fn job_push(&mut self, job: JobProcessing) {
+        let mut queue = self.state.job_queue.write().await;
+        log::debug!("Adding job {} to queue {}", job.id, queue.len());
+        queue.push_back(job);
     }
 
-    // Updates processing status with the diagnostic report
-    pub async fn set_processing(&mut self) {
-        self.update_status(ProcessingStatus::Processing).await;
+    pub async fn job_record_failure(&mut self, job: JobFailed) {
+        log::error!("Job {} failed with error: {}", job.id, job.error);
+        self.state.job_history.write().await.push(Job::Failed(job));
     }
 
-    // Updates processing status with an error
-    pub async fn set_error(&mut self, error: String) {
-        self.update_status(ProcessingStatus::Error(error)).await;
+    // Start a thread to process diagnostics in the background
+    fn start_worker(&mut self) {
+        let state = self.state.clone();
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+        self.shutdown_signal = Some(Arc::new(shutdown_tx));
+
+        let handle = tokio::spawn(async move {
+            log::info!("Starting diagnostic worker thread");
+
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => {
+                        log::debug!("Worker thread received shutdown signal");
+                        break;
+                    }
+                    _ = async {
+                        // Check if there are any jobs in the queue
+                        let mut queue = state.job_queue.write().await;
+                        if let Some(job) = queue.pop_front() {
+                            // Release the lock before processing
+                            drop(queue);
+
+                            let mut history = state.job_history.write().await;
+                            log::info!("Processing job {} from queue", job.id);
+                            match job.process().await {
+                                Ok(job_completed) => {
+                                    log::info!("Job {} completed successfully", job_completed.id);
+                                    history.push(Job::Completed(job_completed));
+                                }
+                                Err(job_failed) => {
+                                    log::error!(
+                                        "Job {} failed with error: {}",
+                                        job_failed.id,
+                                        job_failed.error
+                                    );
+                                    history.push(Job::Failed(job_failed));
+                                }
+                            }
+                        } else {
+                            // No jobs in queue, sleep for a while before checking again
+                            drop(queue);
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+                    } => {}
+                }
+            }
+        });
+
+        self.worker_handle = Some(Arc::new(handle));
+        log::debug!("Diagnostic worker thread started");
     }
 }
 
@@ -240,6 +312,18 @@ impl Default for ApiServer {
 
 impl Drop for ApiServer {
     fn drop(&mut self) {
-        self.shutdown();
+        // Abort the server thread if it exists
+        if let Some(handle) = self.server_handle.take() {
+            Arc::try_unwrap(handle).map(|handle| handle.abort()).ok();
+        }
+
+        // Send shutdown signal to worker thread if it exists
+        if let Some(tx) = self.shutdown_signal.take() {
+            if let Err(e) = Arc::try_unwrap(tx).map(|tx| tx.send(())) {
+                log::warn!("Failed to send shutdown signal to worker thread: {:?}", e);
+            }
+        }
+
+        log::info!("ApiServer dropped, server and worker threads are being shut down");
     }
 }
