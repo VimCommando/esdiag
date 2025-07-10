@@ -5,7 +5,7 @@ use crate::{
         self,
         diagnostic::{
             DiagnosticReport,
-            report::{BatchResponse, ProcessorSummary},
+            report::{BatchResponse, Identifiers, ProcessorSummary},
         },
     },
 };
@@ -24,6 +24,7 @@ use url::Url;
 pub struct ElasticsearchExporter {
     client: Elasticsearch,
     url: Url,
+    pub identifiers: Identifiers,
 }
 
 impl ElasticsearchExporter {
@@ -34,7 +35,11 @@ impl ElasticsearchExporter {
             .auth(auth)
             .build()?;
 
-        Ok(Self { client, url })
+        Ok(Self {
+            client,
+            url,
+            identifiers: Identifiers::default(),
+        })
     }
 
     /// Send a request to an arbitrary path on the Elasticsearch client
@@ -69,11 +74,38 @@ impl TryFrom<KnownHost> for ElasticsearchExporter {
     fn try_from(host: KnownHost) -> Result<Self> {
         let url = host.get_url();
         let client = Elasticsearch::try_from(host)?;
-        Ok(Self { client, url })
+        Ok(Self {
+            client,
+            url,
+            identifiers: Identifiers::default(),
+        })
     }
 }
 
 impl Export for ElasticsearchExporter {
+    fn with_identifiers(self, identifiers: Identifiers) -> Self {
+        Self {
+            identifiers,
+            ..self
+        }
+    }
+
+    async fn is_connected(&self) -> bool {
+        let status_code = match self.client.info().send().await {
+            Ok(res) => {
+                log::debug!("Exporter is connected: {}", res.status_code());
+                log::trace!("{:?}", res);
+                res.status_code().as_u16()
+            }
+            Err(e) => {
+                log::error!("{e}");
+                599
+            }
+        };
+
+        status_code == 200
+    }
+
     async fn write(&self, index: String, mut docs: Vec<Value>) -> Result<ProcessorSummary> {
         let client = Arc::new(self.client.clone());
         let workers = 4;
@@ -111,22 +143,6 @@ impl Export for ElasticsearchExporter {
             });
 
         Ok(summary)
-    }
-
-    async fn is_connected(&self) -> bool {
-        let status_code = match self.client.info().send().await {
-            Ok(res) => {
-                log::debug!("Exporter is connected: {}", res.status_code());
-                log::trace!("{:?}", res);
-                res.status_code().as_u16()
-            }
-            Err(e) => {
-                log::error!("{e}");
-                599
-            }
-        };
-
-        status_code == 200
     }
 
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {

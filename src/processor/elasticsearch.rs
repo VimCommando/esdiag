@@ -165,6 +165,7 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             .count();
 
         let mut report = diag.report.write().await;
+        report.add_identifiers(diag.exporter.identifiers());
         join_all(futures)
             .await
             .into_iter()

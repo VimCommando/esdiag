@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
     <head>
-        <title>Elasticsearch Diagnostics Upload</title>
+        <title>Elastic Stack Diagnostics Upload</title>
         <style>
             body {
                 font-family:
@@ -84,9 +84,8 @@
             .status-box {
                 padding: 16px;
                 border-radius: 4px;
-                margin-bottom: 10px;
                 max-width: 640px;
-                margin: 0 auto;
+                margin: 8px auto;
             }
             .ready {
                 background-color: #e3e8f2;
@@ -193,6 +192,33 @@
             .hidden {
                 display: none;
             }
+
+            .user-menu {
+                position: absolute;
+                top: 100%;
+                right: 0;
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+                padding: 8px;
+                min-width: 150px;
+                margin-top: 8px;
+                display: none;
+                z-index: 1000;
+            }
+
+            .user-circle:hover .user-menu {
+                display: block;
+            }
+
+            .user-menu-item {
+                padding: 8px;
+                font-size: 14px;
+                font-weight: 600;
+                color: #333;
+                white-space: nowrap;
+            }
             .user-circle {
                 background-color: #3b5582;
                 border-radius: 50%;
@@ -205,6 +231,8 @@
                 margin: 0px 12px;
                 height: 24px;
                 width: 24px;
+                position: relative;
+                cursor: pointer;
             }
         </style>
     </head>
@@ -297,9 +325,16 @@
                         </g>
                     </svg>
                 </div>
-                Elasticsearch Diagnostics
+                Elastic Stack Diagnostics
             </h1>
-            <div id="user-circle" class="user-circle">A</div>
+            <div id="user-circle" class="user-circle">
+                A
+                <div class="user-menu">
+                    <div id="username-display" class="user-menu-item">
+                        Loading username...
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="content">
             <h2>Upload File</h2>
@@ -364,17 +399,12 @@
 
         <script>
             // User information
-            function getUserInitial() {
-                // This would normally come from a session or authentication system
-                // For demonstration, we'll assume username is undefined
-                const username = undefined; // Replace with actual username if available
-                const defaultName = "Anonymous";
-                const name = username || defaultName;
-                return name.charAt(0).toUpperCase();
+            function setUserInfo(username) {
+                document.getElementById("user-circle").firstChild.textContent =
+                    username ? username.charAt(0).toUpperCase() : "_";
+                document.getElementById("username-display").textContent =
+                    username || "Anonymous";
             }
-
-            // Set user circle initial
-            document.getElementById("user-circle").innerText = getUserInitial();
 
             // File upload handling
             const dropArea = document.getElementById("drop-area");
@@ -507,7 +537,9 @@
                 message,
                 report,
                 status,
+                user,
             }) {
+                setUserInfo(user);
                 const currentStatus = document.getElementById("current-status");
                 const historyContainer =
                     document.getElementById("history-container");
@@ -582,6 +614,7 @@
                             history: data.history || [],
                             message: data.message || data.progress,
                             status: data.status,
+                            user: data.user,
                         });
                     })
                     .catch((error) => {

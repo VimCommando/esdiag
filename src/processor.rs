@@ -113,6 +113,7 @@ trait Metadata {
 pub struct JobNew {
     pub id: String,
     filename: String,
+    user: Option<String>,
     #[serde(skip_serializing)]
     receiver: Receiver,
 }
@@ -121,6 +122,7 @@ pub struct JobNew {
 pub struct JobReady {
     pub id: String,
     filename: String,
+    user: Option<String>,
     #[serde(skip_serializing)]
     diagnostic: Diagnostic,
 }
@@ -129,6 +131,7 @@ pub struct JobReady {
 pub struct JobProcessing {
     pub id: String,
     filename: String,
+    user: Option<String>,
     #[serde(skip_serializing)]
     diagnostic: Diagnostic,
 }
@@ -137,6 +140,7 @@ pub struct JobProcessing {
 pub struct JobCompleted {
     pub id: String,
     filename: String,
+    user: Option<String>,
     report: DiagnosticReport,
 }
 
@@ -144,6 +148,7 @@ pub struct JobCompleted {
 pub struct JobFailed {
     pub id: String,
     pub filename: String,
+    pub user: Option<String>,
     pub error: String,
 }
 
@@ -152,6 +157,7 @@ impl From<String> for JobFailed {
         JobFailed {
             id: uuid::Uuid::new_v4().to_string(),
             filename: String::new(),
+            user: None,
             error,
         }
     }
@@ -168,11 +174,7 @@ pub enum Job {
 
 impl JobNew {
     pub fn with_filename(self, filename: String) -> Self {
-        JobNew {
-            id: self.id,
-            receiver: self.receiver,
-            filename,
-        }
+        JobNew { filename, ..self }
     }
 
     pub async fn ready(self, exporter: Exporter) -> Result<JobReady, JobFailed> {
@@ -183,6 +185,7 @@ impl JobNew {
                 return Err(JobFailed {
                     id: self.id,
                     filename: self.filename,
+                    user: self.user,
                     error: err.to_string(),
                 });
             }
@@ -192,11 +195,13 @@ impl JobNew {
             Ok(diagnostic) => Ok(JobReady {
                 id: self.id,
                 filename: self.filename,
+                user: self.user,
                 diagnostic,
             }),
             Err(err) => Err(JobFailed {
                 id: self.id,
                 filename: self.filename,
+                user: self.user,
                 error: err.to_string(),
             }),
         }
@@ -204,11 +209,12 @@ impl JobNew {
 }
 
 impl JobNew {
-    pub fn new(filename: String, receiver: Receiver) -> Self {
+    pub fn new(filename: String, user: Option<String>, receiver: Receiver) -> Self {
         let id = Uuid::new_v4().to_string();
         JobNew {
             id,
             filename,
+            user,
             receiver,
         }
     }
@@ -219,6 +225,7 @@ impl JobReady {
         JobProcessing {
             id: self.id,
             filename: self.filename,
+            user: self.user,
             diagnostic: self.diagnostic,
         }
     }
@@ -230,11 +237,13 @@ impl JobProcessing {
             Ok(report) => Ok(JobCompleted {
                 id: self.id,
                 filename: self.filename,
+                user: self.user,
                 report,
             }),
             Err(error) => Err(JobFailed {
                 id: self.id,
                 filename: self.filename,
+                user: self.user,
                 error: error.to_string(),
             }),
         }
@@ -242,11 +251,12 @@ impl JobProcessing {
 }
 
 impl Job {
-    pub fn new(filename: String, receiver: Receiver) -> Self {
+    pub fn new(filename: String, user: Option<String>, receiver: Receiver) -> Self {
         let id = Uuid::new_v4().to_string();
         Job::New(JobNew {
             id,
             filename,
+            user,
             receiver,
         })
     }
@@ -271,6 +281,16 @@ impl Job {
         }
     }
 
+    pub fn user(&self) -> Option<String> {
+        match self {
+            Job::New(job) => job.user.clone(),
+            Job::Ready(job) => job.user.clone(),
+            Job::Processing(job) => job.user.clone(),
+            Job::Completed(job) => job.user.clone(),
+            Job::Failed(job) => job.user.clone(),
+        }
+    }
+
     pub async fn ready(self, exporter: Exporter) -> Result<Self, Self> {
         if let Job::New(job) = self {
             match job.ready(exporter).await {
@@ -281,6 +301,7 @@ impl Job {
             Err(Job::Failed(JobFailed {
                 id: self.id(),
                 filename: self.filename(),
+                user: self.user(),
                 error: "Attempted to ready a job that was not new".to_string(),
             }))
         }

@@ -2,7 +2,7 @@ use crate::processor::{Job, JobFailed, JobProcessing};
 use axum::{
     Router,
     extract::{DefaultBodyLimit, Multipart},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post},
 };
@@ -17,14 +17,14 @@ pub struct ApiServer {
     server_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
     worker_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
     shutdown_signal: Option<Arc<oneshot::Sender<()>>>,
-    pub rx: Option<Arc<RwLock<mpsc::Receiver<(String, Bytes)>>>>,
+    pub rx: Option<Arc<RwLock<mpsc::Receiver<(String, Option<String>, Bytes)>>>>,
     state: Arc<ApiState>,
 }
 
 struct ApiState {
     exporter: String,
     job: JobState,
-    upload_tx: mpsc::Sender<(String, Bytes)>,
+    upload_tx: mpsc::Sender<(String, Option<String>, Bytes)>,
 }
 
 struct JobState {
@@ -35,7 +35,7 @@ struct JobState {
 
 impl ApiServer {
     pub fn new(port: u16, exporter: String) -> Self {
-        let (tx, rx) = mpsc::channel::<(String, Bytes)>(1);
+        let (tx, rx) = mpsc::channel::<(String, Option<String>, Bytes)>(1);
         let rx = Arc::new(RwLock::new(rx));
         let rx_clone = rx.clone();
 
@@ -56,13 +56,14 @@ impl ApiServer {
         let handle = tokio::spawn(async move {
             // Handler closures
             let upload_handler = {
-                move |multipart: Multipart| async move {
-                    Self::upload_handler(multipart, state_uploader).await
+                move |headers, multipart: Multipart| async move {
+                    Self::upload_handler(headers, multipart, state_uploader).await
                 }
             };
 
-            let status_handler =
-                { move || async move { Self::status_handler(state_handler).await } };
+            let status_handler = {
+                move |headers| async move { Self::status_handler(headers, state_handler).await }
+            };
 
             const ONE_GIBIBYTE: usize = 1024 * 1024 * 1024;
             let app = Router::new()
@@ -97,13 +98,26 @@ impl ApiServer {
         Html(INDEX_HTML)
     }
 
-    async fn upload_handler(mut multipart: Multipart, state: Arc<ApiState>) -> impl IntoResponse {
+    async fn upload_handler(
+        headers: HeaderMap,
+        mut multipart: Multipart,
+        state: Arc<ApiState>,
+    ) -> impl IntoResponse {
+        // Extract authenticated user email from header
+        let username = headers
+            .get("X-Goog-Authenticated-User-Email")
+            .and_then(|value| value.to_str().ok())
+            .map(|email| {
+                // Google auth headers are typically in format "accounts.google.com:email"
+                email.split(':').last().unwrap_or(email).to_string()
+            });
+
         // Process the multipart form
         while let Ok(Some(field)) = multipart.next_field().await {
             if field.name() == Some("file") {
                 // Check if the file has a valid filename
-                let file_name = match field.file_name() {
-                    Some(file_name) if !file_name.ends_with(".zip") => {
+                let filename = match field.file_name() {
+                    Some(filename) if !filename.ends_with(".zip") => {
                         return (
                             StatusCode::BAD_REQUEST,
                             axum::Json(serde_json::json!({
@@ -123,14 +137,19 @@ impl ApiServer {
                 match field.bytes().await {
                     Ok(data) => {
                         let message =
-                            format!("Received upload: {} ({} bytes)", file_name, data.len());
+                            format!("Received upload: {} ({} bytes)", filename, data.len());
                         log::info!("{}", message);
 
                         // Clone the data to avoid ownership issues
                         let bytes = Bytes::copy_from_slice(&data);
 
                         // Send the bytes through the channel
-                        if state.upload_tx.send((file_name, bytes)).await.is_ok() {
+                        if state
+                            .upload_tx
+                            .send((filename, username, bytes))
+                            .await
+                            .is_ok()
+                        {
                             return (
                                 StatusCode::OK,
                                 axum::Json(serde_json::json!({
@@ -170,10 +189,23 @@ impl ApiServer {
         )
     }
 
-    async fn status_handler(state: Arc<ApiState>) -> impl IntoResponse {
+    async fn status_handler(headers: HeaderMap, state: Arc<ApiState>) -> impl IntoResponse {
+        // Extract authenticated user email from header
+        let user_email = headers
+            .get("X-Goog-Authenticated-User-Email")
+            .and_then(|value| value.to_str().ok())
+            .map(|email| {
+                // Google auth headers are typically in format "accounts.google.com:email"
+                email.split(':').last().unwrap_or(email).to_string()
+            });
+
         let queue_size = state.job.queue.read().await.len();
-        let history = state.job.history.read().await;
         let current = state.job.current.read().await;
+        let history = state.job.history.read().await;
+        let history = history
+            .iter()
+            .filter(|entry| entry.user() == user_email)
+            .collect::<Vec<&Job>>();
 
         match queue_size {
             0 => (
@@ -181,11 +213,12 @@ impl ApiServer {
                 axum::Json(serde_json::json!({
                     "status": "ready",
                     "exporter": state.exporter,
+                    "user": user_email,
                     "current": *current,
                     "queue": {
                         "size": queue_size
                     },
-                    "history": *history,
+                    "history": history,
                 })),
             ),
             1..10 => (
@@ -193,6 +226,7 @@ impl ApiServer {
                 axum::Json(serde_json::json!({
                     "status": "processing",
                     "progress": "Processing diagnostic...",
+                    "user": user_email,
                     "current": *current,
                     "queue": {
                         "size": queue_size
@@ -205,6 +239,7 @@ impl ApiServer {
                 axum::Json(serde_json::json!({
                     "status": "busy",
                     "warning": "Too many jobs in queue",
+                    "user": user_email,
                     "current": *current,
                     "queue": {
                         "size": queue_size
