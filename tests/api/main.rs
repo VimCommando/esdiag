@@ -242,3 +242,162 @@ async fn status_with_auth_header_returns_user() {
     // Clean up - properly shutdown the server and processor thread
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn auth_header_filters_job_history() {
+    // Create a server instance for testing
+    let port = 9883;
+    let mut server = ApiServer::new(port, "-".to_string());
+
+    // Allow time for server to start
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Create test client
+    let client = reqwest::Client::new();
+    let status_url = format!("http://localhost:{}/status", port);
+
+    // Define test user emails
+    let user1_email = "accounts.google.com:user1@example.com";
+    let user2_email = "accounts.google.com:user2@example.com";
+
+    // Manually add test jobs to the history
+    {
+        use esdiag::processor::JobFailed;
+
+        // Add jobs with no user (visible without auth)
+        server
+            .job_record_failure(JobFailed {
+                id: "job1".to_string(),
+                filename: "public_file1.zip".to_string(),
+                user: None,
+                error: "Test error for public job 1".to_string(),
+            })
+            .await;
+
+        server
+            .job_record_failure(JobFailed {
+                id: "job2".to_string(),
+                filename: "public_file2.zip".to_string(),
+                user: None,
+                error: "Test error for public job 2".to_string(),
+            })
+            .await;
+
+        // Add user-specific jobs
+        server
+            .job_record_failure(JobFailed {
+                id: "job3".to_string(),
+                filename: "user1_specific.zip".to_string(),
+                user: Some("user1@example.com".to_string()),
+                error: "Test error for user1".to_string(),
+            })
+            .await;
+
+        server
+            .job_record_failure(JobFailed {
+                id: "job4".to_string(),
+                filename: "user2_specific.zip".to_string(),
+                user: Some("user2@example.com".to_string()),
+                error: "Test error for user2".to_string(),
+            })
+            .await;
+    }
+
+    // Test 1: No auth header should show only jobs with no user
+    let status_response = client
+        .get(&status_url)
+        .send()
+        .await
+        .expect("Failed to send status request without auth");
+
+    let status_body: Value = status_response
+        .json()
+        .await
+        .expect("Failed to parse status response");
+
+    // Check that public jobs are visible (those with user: None)
+    let history = &status_body["history"];
+    assert!(history.is_array(), "History should be an array");
+    assert_eq!(
+        history.as_array().unwrap().len(),
+        2,
+        "Without auth header, should see jobs with no user"
+    );
+
+    // Test 2: User 1 auth header should only show User 1's job
+    let status_response = client
+        .get(&status_url)
+        .header("X-Goog-Authenticated-User-Email", user1_email)
+        .send()
+        .await
+        .expect("Failed to send status request with User 1 auth");
+
+    let status_body: Value = status_response
+        .json()
+        .await
+        .expect("Failed to parse status response");
+
+    // With user1 auth, should see only user1's job
+    let history = &status_body["history"];
+    assert!(history.is_array(), "History should be an array");
+    assert_eq!(
+        history.as_array().unwrap().len(),
+        1,
+        "With User 1 auth header, should see only user1's job"
+    );
+
+    // Verify it's the correct job
+    if !history.as_array().unwrap().is_empty() {
+        let job = &history.as_array().unwrap()[0];
+        if let Some(failed) = job.get("Failed") {
+            if let Some(filename) = failed.get("filename") {
+                if let Some(filename_str) = filename.as_str() {
+                    assert!(
+                        filename_str.contains("user1_specific.zip"),
+                        "User1 should see their specific job"
+                    );
+                }
+            }
+        }
+    }
+
+    // Test 3: User 2 auth header should only show User 2's job
+    let status_response = client
+        .get(&status_url)
+        .header("X-Goog-Authenticated-User-Email", user2_email)
+        .send()
+        .await
+        .expect("Failed to send status request with User 2 auth");
+
+    let status_body: Value = status_response
+        .json()
+        .await
+        .expect("Failed to parse status response");
+
+    // With user2 auth, should see only user2's job
+    let history = &status_body["history"];
+    assert!(history.is_array(), "History should be an array");
+    assert_eq!(
+        history.as_array().unwrap().len(),
+        1,
+        "With User 2 auth header, should see only user2's job"
+    );
+
+    // Verify it's the correct job
+    if !history.as_array().unwrap().is_empty() {
+        let job = &history.as_array().unwrap()[0];
+        if let Some(failed) = job.get("Failed") {
+            if let Some(filename) = failed.get("filename") {
+                if let Some(filename_str) = filename.as_str() {
+                    assert!(
+                        filename_str.contains("user2_specific.zip"),
+                        "User2 should see their specific job"
+                    );
+                }
+            }
+        }
+    }
+
+    // Clean up - properly shutdown the server
+    server.shutdown().await;
+}
