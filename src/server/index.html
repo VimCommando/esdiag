@@ -30,9 +30,9 @@
             .header {
                 display: flex;
                 align-items: center;
-                padding: 0px 8px;
+                justify-content: space-between;
+                padding: 0px 12px;
                 height: 48px;
-                width: 100%;
                 background-color: #0b1628;
                 color: #ffffff;
             }
@@ -193,6 +193,19 @@
             .hidden {
                 display: none;
             }
+            .user-circle {
+                background-color: #3b5582;
+                border-radius: 50%;
+                color: #ffffff;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 12px;
+                font-weight: 450;
+                margin: 0px 12px;
+                height: 24px;
+                width: 24px;
+            }
         </style>
     </head>
 
@@ -284,8 +297,9 @@
                         </g>
                     </svg>
                 </div>
-                Elastic Stack Diagnostics
+                Elasticsearch Diagnostics
             </h1>
+            <div id="user-circle" class="user-circle">A</div>
         </div>
         <div class="content">
             <h2>Upload File</h2>
@@ -349,6 +363,19 @@
         </div>
 
         <script>
+            // User information
+            function getUserInitial() {
+                // This would normally come from a session or authentication system
+                // For demonstration, we'll assume username is undefined
+                const username = undefined; // Replace with actual username if available
+                const defaultName = "Anonymous";
+                const name = username || defaultName;
+                return name.charAt(0).toUpperCase();
+            }
+
+            // Set user circle initial
+            document.getElementById("user-circle").innerText = getUserInitial();
+
             // File upload handling
             const dropArea = document.getElementById("drop-area");
             const fileInput = document.getElementById("file-input");
