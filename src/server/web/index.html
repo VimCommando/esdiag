@@ -93,9 +93,10 @@
                 <div class="tab-content active" id="file-content">
                     <form
                         id="upload-form"
-                        action="/upload"
-                        method="post"
-                        enctype="multipart/form-data"
+                        hx-post="/upload"
+                        hx-target="#upload-result"
+                        hx-swap="innerHTML"
+                        hx-encoding="multipart/form-data"
                     >
                         <p class="info">
                             Upload a file from your local computer
@@ -170,10 +171,18 @@
                             disabled
                         />
                     </form>
+                    <div id="upload-result"></div>
                 </div>
 
                 <div class="tab-content" id="service-content">
-                    <form id="upload-service-form">
+                    <form
+                        id="upload-service-form"
+                        enctype="multipart/form-data"
+                        hx-encoding="multipart/form-data"
+                        hx-post="/upload_service"
+                        hx-swap="innerHTML"
+                        hx-target="#upload-service-result"
+                    >
                         <p class="info">
                             Forward a file from the Elastic upload service:
                             <a href="https://upload.elastic.co" target="_blank"
@@ -239,6 +248,7 @@
                             id="upload-service-button"
                         />
                     </form>
+                    <div id="upload-service-result"></div>
                 </div>
             </div>
             <div

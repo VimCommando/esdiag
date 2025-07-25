@@ -204,88 +204,72 @@ document.addEventListener("updateUserAndKibana", function (evt) {
   }
 });
 
-document.getElementById("upload-form").addEventListener("submit", function (e) {
-  e.preventDefault();
-  const formData = new FormData(this);
-  // Keep the file visible while uploading
-  const currentFile = fileInput.files[0];
-  updateStatus({ status: "uploading" });
+// HTMX upload event handlers
+document.addEventListener("htmx:beforeRequest", function (evt) {
+  if (evt.detail.target.id === "upload-result") {
+    updateStatus({ status: "uploading" });
 
-  // Use XMLHttpRequest to track upload progress
-  const xhr = new XMLHttpRequest();
-  const progressBar = document.getElementById("upload-progress-bar");
-  const progressContainer = document.getElementById(
-    "upload-progress-container",
-  );
-  const progressText = document.getElementById("upload-progress-text");
+    const progressContainer = document.getElementById(
+      "upload-progress-container",
+    );
+    const progressText = document.getElementById("upload-progress-text");
+    const progressBar = document.getElementById("upload-progress-bar");
 
-  // Show progress elements
-  progressContainer.classList.add("active");
-  progressText.classList.add("active");
+    // Show progress elements
+    progressContainer.classList.add("active");
+    progressText.classList.add("active");
 
-  // Reset progress bar
-  progressBar.style.width = "0%";
-  progressText.textContent = "0%";
+    // Since HTMX doesn't support progress tracking, show indeterminate progress
+    progressBar.style.width = "100%";
+    progressText.textContent = "Uploading...";
+  }
+});
 
-  xhr.upload.addEventListener("progress", function (event) {
-    if (event.lengthComputable) {
-      const percentComplete = (event.loaded / event.total) * 100;
-      const percentFormatted = Math.round(percentComplete) + "%";
+document.addEventListener("htmx:afterRequest", function (evt) {
+  if (evt.detail.target.id === "upload-result") {
+    const progressContainer = document.getElementById(
+      "upload-progress-container",
+    );
+    const progressText = document.getElementById("upload-progress-text");
+    const progressBar = document.getElementById("upload-progress-bar");
 
-      progressBar.style.width = percentFormatted;
-      progressText.textContent = percentFormatted;
-    }
-  });
-
-  xhr.onload = function () {
-    if (xhr.status >= 200 && xhr.status < 300) {
-      const body = JSON.parse(xhr.responseText);
-      // Make sure to pass queue information from the response
-      updateStatus({
-        ...body,
-        queue: body.queue || {},
-      });
-      // Reset progress bar after a delay to show completion
-      setTimeout(() => {
-        progressBar.style.width = "0%";
-        progressContainer.classList.remove("active");
-        progressText.classList.remove("active");
-        // Only clear file info after upload is complete and progress bar is hidden
-        updateFileInfo(null);
-        // Re-enable drop area
-        document.getElementById("drop-area").style.pointerEvents = "";
-      }, 1000);
-    } else {
-      updateStatus({
-        status: "error",
-        error: "Upload failed with status: " + xhr.status,
-      });
-      // Hide progress elements
+    // Hide progress elements after upload
+    setTimeout(() => {
       progressContainer.classList.remove("active");
       progressText.classList.remove("active");
-      // Clear file info after error
+      progressBar.style.width = "0%";
+      progressText.textContent = "0%";
       updateFileInfo(null);
-      // Re-enable drop area
-      document.getElementById("drop-area").style.pointerEvents = "";
-    }
-  };
+    }, 2000);
 
-  xhr.onerror = function () {
-    updateStatus({
-      status: "error",
-      error: "Upload failed",
-    });
-    // Hide progress elements
+    // Trigger immediate status poll for updates
+    setTimeout(() => htmx.trigger(document.body, "statusPoll"), 100);
+  }
+});
+
+document.addEventListener("htmx:responseError", function (evt) {
+  if (evt.detail.target.id === "upload-result") {
+    const progressContainer = document.getElementById(
+      "upload-progress-container",
+    );
+    const progressText = document.getElementById("upload-progress-text");
+
+    // Hide progress elements on error
     progressContainer.classList.remove("active");
     progressText.classList.remove("active");
-    // Clear file info after error
     updateFileInfo(null);
-    // Re-enable drop area
     document.getElementById("drop-area").style.pointerEvents = "";
-  };
 
-  xhr.open("POST", "/upload", true);
-  xhr.send(formData);
+    // Trigger immediate status poll for updates
+    setTimeout(() => htmx.trigger(document.body, "statusPoll"), 100);
+  }
+});
+
+// Handle upload success trigger
+document.addEventListener("uploadSuccess", function (evt) {
+  const data = evt.detail;
+  // Clear file info on successful upload
+  updateFileInfo(null);
 });
 
 // Tab switching functionality
@@ -308,75 +292,52 @@ serviceTab.addEventListener("click", () => {
   fileContent.classList.remove("active");
 });
 
-// Upload service form handler
-document
-  .getElementById("upload-service-form")
-  .addEventListener("submit", function (e) {
-    e.preventDefault();
-
-    const formData = new FormData(this);
+// HTMX upload service event handlers
+document.addEventListener("htmx:beforeRequest", function (evt) {
+  if (evt.detail.target.id === "upload-service-result") {
     const serviceButton = document.getElementById("upload-service-button");
-
-    // Convert FormData to JSON
-    const data = {
-      token: formData.get("token"),
-      url: formData.get("url"),
-      metadata: {
-        filename: formData.get("filename"),
-      },
-    };
-
-    // Disable button during request
     serviceButton.disabled = true;
     serviceButton.value = "Submitting...";
+  }
+});
 
-    fetch("/upload_service", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(data),
-    })
-      .then((response) => response.json())
-      .then((responseData) => {
-        // Immediately show retrieving status if we got a job ID
-        if (responseData.job_id) {
-          // Create a retrieving status entry
-          const historyContainer = document.getElementById("history-container");
-          const retrievingItem = document.createElement("div");
-          retrievingItem.className = "status-box history-item processing";
-          retrievingItem.innerHTML = `
-                        <div class="spinner"></div>
-                        <span><b>Retrieving:</b> ${formData.get("filename")}</span>
-                    `;
+document.addEventListener("htmx:afterRequest", function (evt) {
+  if (evt.detail.target.id === "upload-service-result") {
+    const serviceButton = document.getElementById("upload-service-button");
+    serviceButton.disabled = false;
+    serviceButton.value = "Submit";
 
-          // Insert at the beginning
-          historyContainer.insertBefore(
-            retrievingItem,
-            historyContainer.firstChild,
-          );
-        }
+    // Clear form on successful request
+    if (evt.detail.xhr.status >= 200 && evt.detail.xhr.status < 300) {
+      document.getElementById("upload-service-form").reset();
+      clearCurlForm();
+    }
 
-        updateStatus({
-          ...responseData,
-          queue: responseData.queue || {},
-        });
-        // Clear form after successful submission
-        document.getElementById("upload-service-form").reset();
-      })
-      .catch((error) => {
-        console.error("Upload service error:", error);
-        updateStatus({
-          status: "error",
-          error: "Upload service request failed",
-        });
-      })
-      .finally(() => {
-        // Re-enable button
-        serviceButton.disabled = false;
-        serviceButton.value = "Submit";
-      });
-  });
+    // Trigger immediate status poll for updates
+    setTimeout(() => htmx.trigger(document.body, "statusPoll"), 100);
+  }
+});
+
+document.addEventListener("htmx:responseError", function (evt) {
+  if (evt.detail.target.id === "upload-service-result") {
+    const serviceButton = document.getElementById("upload-service-button");
+    serviceButton.disabled = false;
+    serviceButton.value = "Submit";
+
+    // Trigger immediate status poll for updates
+    setTimeout(() => htmx.trigger(document.body, "statusPoll"), 100);
+  }
+});
+
+// Handle service upload success trigger
+document.addEventListener("serviceUploadSuccess", function (evt) {
+  const data = evt.detail;
+  // Clear form after successful service upload
+  document.getElementById("upload-service-form").reset();
+  clearCurlForm();
+});
+
+// Upload service form now handles form data directly - no JSON conversion needed
 
 // Curl command parsing
 const textareaCurl = document.getElementById("curl-command");

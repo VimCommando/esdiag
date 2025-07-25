@@ -6,7 +6,7 @@ use esdiag::{
     exporter::{DirectoryExporter, Exporter},
     processor::{Collector, Diagnostic, Identifiers, JobFailed, JobNew, Product},
     receiver::Receiver,
-    server::ApiServer,
+    server::Server,
     setup,
 };
 use eyre::{Result, eyre};
@@ -186,7 +186,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     .unwrap_or_else(|_| "http://localhost:5601".to_string())
             });
 
-            let mut server = ApiServer::new(port, exporter.to_string(), kibana_url);
+            let mut server = Server::new(port, exporter.to_string(), kibana_url);
 
             let rx = match &server.rx {
                 Some(rx) => rx.clone(),
