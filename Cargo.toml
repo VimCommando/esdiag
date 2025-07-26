@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
+askama = "0.14.0"
 axum = { version = "^0.8.4", features = ["multipart"] }
 axum-htmx = { version = "0.8.1", features = ["tokio", "serde"] }
 axum-server = "^0.7.0"

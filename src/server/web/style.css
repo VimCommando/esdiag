@@ -403,6 +403,7 @@ h2 {
     white-space: nowrap;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     text-decoration: none;
     border-bottom: 1px solid #e3e8f2;
 }

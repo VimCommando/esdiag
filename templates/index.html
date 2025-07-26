@@ -56,7 +56,7 @@
                             </defs></svg
                     ></a>
                     <div class="user-menu">
-                        <div class="user-menu-item">Loading...</div>
+                        <div class="user-menu-item">{{ kibana_url }}</div>
                     </div>
                 </div>
                 <div id="github" class="github icon">
@@ -72,9 +72,11 @@
                 <div id="user-circle" class="user-circle">
                     _
                     <div class="user-menu">
-                        <div class="user-menu-header">ESDiag v0.8.1</div>
+                        <div class="user-menu-header">
+                            <span>ESDiag</span> <span>v {{ version }}</span>
+                        </div>
                         <div id="username-display" class="user-menu-item">
-                            Loading...
+                            {{ user }}
                         </div>
                     </div>
                 </div>
@@ -258,7 +260,7 @@
                 hx-swap="innerHTML"
             >
                 <div id="ready-status" class="status-box ready">
-                    ⏹️ Connecting...
+                    ⏹️ Connecting to {{ exporter }}
                 </div>
                 <div
                     id="current-status"

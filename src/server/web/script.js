@@ -20,6 +20,26 @@ function updateKibanaUrl(kibanaUrl) {
   }
 }
 
+// Tab switching functionality
+const fileTab = document.getElementById("file-tab");
+const serviceTab = document.getElementById("service-tab");
+const fileContent = document.getElementById("file-content");
+const serviceContent = document.getElementById("service-content");
+
+fileTab.addEventListener("click", () => {
+  fileTab.classList.add("active");
+  serviceTab.classList.remove("active");
+  fileContent.classList.add("active");
+  serviceContent.classList.remove("active");
+});
+
+serviceTab.addEventListener("click", () => {
+  serviceTab.classList.add("active");
+  fileTab.classList.remove("active");
+  serviceContent.classList.add("active");
+  fileContent.classList.remove("active");
+});
+
 // File upload handling
 const dropArea = document.getElementById("drop-area");
 const fileInput = document.getElementById("file-input");
@@ -238,26 +258,6 @@ document.addEventListener("htmx:responseError", function (evt) {
     updateFileInfo(null);
     document.getElementById("drop-area").style.pointerEvents = "";
   }
-});
-
-// Tab switching functionality
-const fileTab = document.getElementById("file-tab");
-const serviceTab = document.getElementById("service-tab");
-const fileContent = document.getElementById("file-content");
-const serviceContent = document.getElementById("service-content");
-
-fileTab.addEventListener("click", () => {
-  fileTab.classList.add("active");
-  serviceTab.classList.remove("active");
-  fileContent.classList.add("active");
-  serviceContent.classList.remove("active");
-});
-
-serviceTab.addEventListener("click", () => {
-  serviceTab.classList.add("active");
-  fileTab.classList.remove("active");
-  serviceContent.classList.add("active");
-  fileContent.classList.remove("active");
 });
 
 // HTMX upload service event handlers
