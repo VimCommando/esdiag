@@ -1,0 +1,150 @@
+<div id="tab-content" class="tab-content">
+    <form id="upload-service-form" enctype="multipart/form-data">
+        <p class="info">
+            Forward a file from the Elastic upload service:
+            <a href="https://upload.elastic.co" target="_blank">https://upload.elastic.co</a>
+        </p>
+        <div class="form-group">
+            <label for="curl-command" class="form-label">Curl Command (Optional) </label>
+            <textarea
+                id="curl-command"
+                class="curl-textarea"
+                placeholder="Paste your curl command to auto-fill the form..."
+            ></textarea>
+            <div id="clear-curl" class="clear-curl-link">Clear</div>
+        </div>
+        <div class="form-group">
+            <label for="service-token" class="form-label">Token</label>
+            <input
+                type="text"
+                id="service-token"
+                name="token"
+                class="form-input"
+                required
+                placeholder="Enter authentication token"
+            />
+        </div>
+        <div class="form-group">
+            <label for="service-url" class="form-label">URL</label>
+            <input
+                type="url"
+                id="service-url"
+                name="url"
+                class="form-input"
+                required
+                placeholder="https://example.com/path/to/diagnostic.zip"
+            />
+        </div>
+        <div class="form-group">
+            <label for="service-filename" class="form-label">Filename</label>
+            <input
+                type="text"
+                id="service-filename"
+                name="filename"
+                class="form-input"
+                required
+                placeholder="diagnostic.zip"
+            />
+        </div>
+        <input
+            id="upload-service-button"
+            class="button"
+            type="submit"
+            value="Submit"
+            data-on-click="@post('/upload_service',{contentType: 'form'})"
+        />
+    </form>
+    <script>
+        // Curl command parsing
+        const textareaCurl = document.getElementById("curl-command");
+        const linkClearCurl = document.getElementById("clear-curl");
+        const inputToken = document.getElementById("service-token");
+        const inputUrl = document.getElementById("service-url");
+        const inputFilename = document.getElementById("service-filename");
+
+        function parseCurlCommand(curlCommand) {
+            // Extract token from Authorization header
+            const tokenMatch =
+                curlCommand.match(/-H\s+['"]Authorization:\s*([^'"]+)['"]/) ||
+                curlCommand.match(/--header\s+['"]Authorization:\s*([^'"]+)['"]/);
+
+            // Extract filename from -o option
+            const filenameMatch =
+                curlCommand.match(/-o\s+['"]([^'"]+)['"]/) ||
+                curlCommand.match(/-o\s+(\S+)/) ||
+                curlCommand.match(/--output\s+['"]([^'"]+)['"]/) ||
+                curlCommand.match(/--output\s+(\S+)/);
+
+            // Extract URL (last argument that starts with http)
+            const urlMatch = curlCommand.match(/https?:\/\/\S+/);
+
+            const parsed = {
+                token: tokenMatch ? tokenMatch[1] : null,
+                filename: filenameMatch ? filenameMatch[1] : null,
+                url: urlMatch ? urlMatch[0] : null,
+            };
+
+            // Check if parsing was successful
+            parsed.hasError = !(parsed.token && parsed.filename && parsed.url);
+
+            return parsed;
+        }
+
+        function fillFormFromCurl(parsed) {
+            // Clear error state first
+            textareaCurl.classList.remove("error");
+
+            if (parsed.hasError) {
+                // Show error state if parsing failed
+                textareaCurl.classList.add("error");
+                return;
+            }
+
+            if (parsed.token) {
+                inputToken.value = parsed.token;
+                inputToken.readOnly = true;
+            }
+            if (parsed.url) {
+                inputUrl.value = parsed.url;
+                inputUrl.readOnly = true;
+            }
+            if (parsed.filename) {
+                inputFilename.value = parsed.filename;
+                inputFilename.readOnly = true;
+            }
+
+            // Show clear link if any field was filled
+            if (parsed.token || parsed.url || parsed.filename) {
+                linkClearCurl.classList.add("visible");
+            }
+        }
+
+        function clearCurlForm() {
+            textareaCurl.value = "";
+            textareaCurl.classList.remove("error");
+            inputToken.value = "";
+            inputUrl.value = "";
+            inputFilename.value = "";
+            inputToken.readOnly = false;
+            inputUrl.readOnly = false;
+            inputFilename.readOnly = false;
+            linkClearCurl.classList.remove("visible");
+        }
+
+        textareaCurl.addEventListener("input", function () {
+            const curlCommand = this.value.trim();
+
+            if (curlCommand && curlCommand.startsWith("curl")) {
+                const parsed = parseCurlCommand(curlCommand);
+                fillFormFromCurl(parsed);
+            } else if (!curlCommand) {
+                clearCurlForm();
+            } else {
+                textareaCurl.classList.add("error");
+                linkClearCurl.classList.add("visible");
+            }
+        });
+
+        linkClearCurl.addEventListener("click", clearCurlForm);
+    </script>
+</div>

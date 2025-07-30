@@ -5,17 +5,13 @@
         <link rel="stylesheet" href="style.css" />
         <link rel="icon" type="image/svg+xml" href="esdiag.svg" />
         <link rel="apple-touch-icon" href="esdiag.svg" />
-        <script src="htmx.js"></script>
+        <script type="module" src="datastar.js"></script>
     </head>
 
     <body>
-        <div class="header">
+        <header class="header">
             <div>
-                <img
-                    class="logo"
-                    src="/esdiag.svg"
-                    alt="Elastic Stack Diagnostics Logo"
-                />
+                <img class="logo" src="/esdiag.svg" alt="Elastic Stack Diagnostics Logo" />
                 <h1>Elastic Stack Diagnostics</h1>
             </div>
             <div class="links">
@@ -75,202 +71,58 @@
                 <div id="user-circle" class="user-circle">
                     {{ user_initial }}
                     <div class="user-menu">
-                        <div class="user-menu-header">
-                            <span>ESDiag</span> <span>v {{ version }}</span>
-                        </div>
-                        <div id="username-display" class="user-menu-item">
-                            {{ user }}
-                        </div>
+                        <div class="user-menu-header"><span>ESDiag</span> <span>v {{ version }}</span></div>
+                        <div id="username-display" class="user-menu-item">{{ user }}</div>
                     </div>
                 </div>
             </div>
-        </div>
+        </header>
         <div class="content">
             <h2>Process Diagnostics</h2>
             <div class="upload-form" id="input-form">
-                <div class="tabs">
-                    <button class="tab active" id="file-tab">
+                <div class="tabs" data-signals-tab__case.kebab="'file_upload'">
+                    <button
+                        id="tab-file_upload"
+                        class="tab"
+                        data-on-click="@put('/tab/file_upload')"
+                        data-class-active="$tab=='file_upload'"
+                    >
                         File Upload
                     </button>
-                    <button class="tab" id="service-tab">Service Link</button>
-                </div>
-
-                <div class="tab-content active" id="file-content">
-                    <form
-                        id="upload-form"
-                        hx-encoding="multipart/form-data"
-                        hx-post="/upload"
-                        hx-swap="innerHTML"
-                        hx-target="#upload-result"
+                    <button
+                        id="tab-service_link"
+                        class="tab"
+                        data-on-click="@put('/tab/service_link')"
+                        data-class-active="$tab=='service_link'"
                     >
-                        <p class="info">
-                            Upload a file from your local computer
-                        </p>
-                        <div class="drop-area" id="drop-area">
-                            <div class="file-icon">
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                >
-                                    <path
-                                        d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
-                                    ></path>
-                                    <polyline
-                                        points="14 2 14 8 20 8"
-                                    ></polyline>
-                                    <line
-                                        x1="12"
-                                        y1="18"
-                                        x2="12"
-                                        y2="12"
-                                    ></line>
-                                    <line x1="9" y1="15" x2="15" y2="15"></line>
-                                </svg>
-                            </div>
-                            <div id="upload-instructions">
-                                <p>
-                                    Select or drag and drop a
-                                    <code>.zip</code> file
-                                </p>
-                            </div>
-                            <div id="file-info" class="file-info hidden">
-                                <span id="file-name" class="file-name"></span>
-                                <span id="clear-file" class="clear-button"
-                                    >✕</span
-                                >
-                            </div>
-                            <input
-                                type="file"
-                                name="file"
-                                id="file-input"
-                                class="file-input"
-                                accept=".zip"
-                                required
-                            />
-                            <div
-                                class="upload-progress-container"
-                                id="upload-progress-container"
-                            >
-                                <div
-                                    class="upload-progress-bar"
-                                    id="upload-progress-bar"
-                                ></div>
-                            </div>
-                            <div
-                                class="upload-progress-text"
-                                id="upload-progress-text"
-                            >
-                                0%
-                            </div>
-                        </div>
-                        <input
-                            type="submit"
-                            value="Upload"
-                            class="button"
-                            id="upload-button"
-                            disabled
-                        />
-                    </form>
-                    <div id="upload-result"></div>
-                </div>
-
-                <div class="tab-content" id="service-content">
-                    <form
-                        id="upload-service-form"
-                        enctype="multipart/form-data"
-                        hx-encoding="multipart/form-data"
-                        hx-post="/upload_service"
-                        hx-swap="innerHTML"
-                        hx-target="#upload-service-result"
+                        Service Link
+                    </button>
+                    <button
+                        id="tab-api_key"
+                        class="tab"
+                        data-on-click="@put('/tab/api_key')"
+                        data-class-active="$tab=='api_key'"
                     >
-                        <p class="info">
-                            Forward a file from the Elastic upload service:
-                            <a href="https://upload.elastic.co" target="_blank"
-                                >https://upload.elastic.co</a
-                            >
-                        </p>
-                        <div class="form-group">
-                            <label for="curl-command" class="form-label"
-                                >Curl Command (Optional)
-                            </label>
-                            <textarea
-                                id="curl-command"
-                                class="curl-textarea"
-                                placeholder="Paste your curl command to auto-fill the form..."
-                            ></textarea>
-                            <div id="clear-curl" class="clear-curl-link">
-                                Clear
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label for="service-token" class="form-label"
-                                >Token</label
-                            >
-                            <input
-                                type="text"
-                                id="service-token"
-                                name="token"
-                                class="form-input"
-                                required
-                                placeholder="Enter authentication token"
-                            />
-                        </div>
-                        <div class="form-group">
-                            <label for="service-url" class="form-label"
-                                >URL</label
-                            >
-                            <input
-                                type="url"
-                                id="service-url"
-                                name="url"
-                                class="form-input"
-                                required
-                                placeholder="https://example.com/path/to/diagnostic.zip"
-                            />
-                        </div>
-                        <div class="form-group">
-                            <label for="service-filename" class="form-label"
-                                >Filename</label
-                            >
-                            <input
-                                type="text"
-                                id="service-filename"
-                                name="filename"
-                                class="form-input"
-                                required
-                                placeholder="diagnostic.zip"
-                            />
-                        </div>
-                        <input
-                            type="submit"
-                            value="Submit"
-                            class="button"
-                            id="upload-service-button"
-                        />
-                    </form>
-                    <div id="upload-service-result"></div>
+                        API Key
+                    </button>
                 </div>
+                <div id="tab-content" data-on-load="@put('/tab/file_upload')"></div>
             </div>
-            <div
-                id="status-box"
-                hx-get="/status"
-                hx-trigger="load, mousemove delay:1s throttle:5s from:body"
-                hx-swap="innerHTML"
-            >
-                <div id="ready-status" class="status-box ready">
-                    ⏹️ Connecting to {{ exporter }}
-                </div>
-                <div
-                    id="current-status"
-                    class="status-box processing hidden"
-                ></div>
+
+            <div id="job-feed">
+                <div id="current-status" class="status-box processing hidden"></div>
+                <div id="history-container" class="hidden"></div>
             </div>
         </div>
+
+        <footer>
+            <span id="exporter" class="text-left">Output: {{ exporter }}</span>
+            <span class="text-center">ESDiag {{ version }}</span>
+            <span class="text-right">
+                <span id="status">Ready</span>
+                | <span>0</span> queued | <span>1,000</span> diags | <span>1,000,000</span> docs
+            </span>
+        </footer>
 
         <script src="script.js"></script>
     </body>

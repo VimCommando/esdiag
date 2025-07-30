@@ -10,130 +10,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
 };
-use bytes::Bytes;
 use std::sync::Arc;
 use url::Url;
 
-pub async fn upload_handler(
-    headers: HeaderMap,
-    mut multipart: Multipart,
-    state: Arc<ServerState>,
-) -> impl IntoResponse {
-    // Extract authenticated user email from header
-    let username = headers
-        .get("X-Goog-Authenticated-User-Email")
-        .and_then(|value| value.to_str().ok())
-        .map(|email| {
-            // Google auth headers are typically in format "accounts.google.com:email"
-            email.split(':').last().unwrap_or(email).to_string()
-        });
-
-    // Process the multipart form
-    while let Ok(Some(field)) = multipart.next_field().await {
-        if field.name() == Some("file") {
-            // Check if the file has a valid filename
-            let filename = match field.file_name() {
-                Some(filename) if !filename.ends_with(".zip") => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Html(format!(
-                            r#"<div class="status-box error">
-                                🛑 <b>Error:</b> Invalid file type. Only .zip files are allowed.
-                            </div>"#
-                        )),
-                    )
-                        .into_response();
-                }
-                Some(file_name) => file_name.to_string(),
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Html(format!(
-                            r#"<div class="status-box error">
-                                🛑 <b>Error:</b> No file name provided
-                            </div>"#
-                        )),
-                    )
-                        .into_response();
-                }
-            };
-            // Get the file data
-            match field.bytes().await {
-                Ok(data) => {
-                    let message = format!("Received upload: {} ({} bytes)", filename, data.len());
-                    log::info!("{}", message);
-
-                    // Clone the data to avoid ownership issues
-                    let bytes = Bytes::copy_from_slice(&data);
-                    let identifiers = Identifiers {
-                        account: None,
-                        case_number: None,
-                        filename: Some(filename.clone()),
-                        user: username,
-                        opportunity: None,
-                    };
-
-                    // Send the bytes through the channel
-                    if state.upload_tx.send((identifiers, bytes)).await.is_ok() {
-                        let trigger_data = serde_json::json!({
-                            "uploadSuccess": {
-                                "message": message,
-                                "filename": filename
-                            }
-                        });
-                        return (
-                            StatusCode::OK,
-                            [("HX-Trigger", trigger_data.to_string())],
-                            Html(format!(
-                                r#"<div class="status-box success">
-                                    ✅ Upload successful! Processing: {}
-                                </div>"#,
-                                filename
-                            )),
-                        )
-                            .into_response();
-                    } else {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Html(format!(
-                                r#"<div class="status-box error">
-                                    🛑 <b>Error:</b> Failed to process the upload
-                                </div>"#
-                            )),
-                        )
-                            .into_response();
-                    }
-                }
-                Err(e) => {
-                    let error_msg = format!("Failed to read upload data: {}", e);
-                    log::error!("{}", error_msg);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Html(format!(
-                            r#"<div class="status-box error">
-                                🛑 <b>Error:</b> {}
-                            </div>"#,
-                            error_msg
-                        )),
-                    )
-                        .into_response();
-                }
-            }
-        }
-    }
-
-    (
-        StatusCode::BAD_REQUEST,
-        Html(format!(
-            r#"<div class="status-box error">
-                🛑 <b>Error:</b> No file part in the request
-            </div>"#
-        )),
-    )
-        .into_response()
-}
-
-pub async fn upload_service_handler(
+pub async fn handler(
     headers: HeaderMap,
     mut multipart: Multipart,
     state: Arc<ServerState>,
@@ -279,7 +159,6 @@ pub async fn upload_service_handler(
     };
 
     let job = JobNew::new(&exporter.identifiers(), receiver);
-    let job_id = job.id.clone();
 
     let job_ready = match job.ready(exporter).await {
         Ok(job_ready) => job_ready,
@@ -309,18 +188,10 @@ pub async fn upload_service_handler(
 
     log::info!("Added elastic uploader job to queue (size: {})", queue_size);
 
-    let trigger_data = serde_json::json!({
-        "serviceUploadSuccess": {
-            "job_id": job_id,
-            "queue_size": queue_size,
-            "filename": filename
-        }
-    });
     (
         StatusCode::OK,
-        [("HX-Trigger", trigger_data.to_string())],
         Html(format!(
-            r#"<div class="status-box success">
+            r#"<div id="current-status" class="status-box processing">
                 ✅ Service upload successful! Retrieving: {}
             </div>"#,
             filename.as_deref().unwrap_or("diagnostic")

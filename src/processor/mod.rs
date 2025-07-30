@@ -139,8 +139,8 @@ pub struct JobReady {
 #[derive(Clone, Serialize)]
 pub struct JobProcessing {
     pub id: String,
-    filename: String,
-    user: Option<String>,
+    pub filename: String,
+    pub user: Option<String>,
     #[serde(skip_serializing)]
     diagnostic: Diagnostic,
 }
@@ -148,9 +148,9 @@ pub struct JobProcessing {
 #[derive(Serialize)]
 pub struct JobCompleted {
     pub id: String,
-    filename: String,
-    user: Option<String>,
-    report: DiagnosticReport,
+    pub filename: String,
+    pub user: Option<String>,
+    pub report: DiagnosticReport,
 }
 
 impl JobCompleted {

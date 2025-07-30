@@ -186,7 +186,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     .unwrap_or_else(|_| "http://localhost:5601".to_string())
             });
 
-            let mut server = Server::new(port, exporter.to_string(), kibana_url);
+            let mut server = Server::new(port, exporter, kibana_url);
 
             let rx = match &server.rx {
                 Some(rx) => rx.clone(),
@@ -206,39 +206,39 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     log::info!("Shutting down server (SIGTERM)...");
                     Ok::<_, eyre::Report>(())
                 } => {}
-                _ = async {
-                    loop {
-                        // Only receive the diagnostic - processing happens in a separate worker thread
-                        let mut rx = rx.write().await;
-                        match rx.recv().await {
-                            Some((identifiers, bytes)) => {
-                                let receiver = match Receiver::try_from(bytes) {
-                                    Ok(receiver) => receiver,
-                                    Err(e) => {
-                                        let error = format!("Failed to create receiver: {}", e);
-                                        log::error!("{}", error);
-                                        server.job_record_failure(JobFailed::from(error)).await;
-                                        continue;
-                                    }
-                                };
+                // _ = async {
+                //     loop {
+                //         // Only receive the diagnostic - processing happens in a separate worker thread
+                //         let mut rx = rx.write().await;
+                //         match rx.recv().await {
+                //             Some((identifiers, bytes)) => {
+                //                 let receiver = match Receiver::try_from(bytes) {
+                //                     Ok(receiver) => receiver,
+                //                     Err(e) => {
+                //                         let error = format!("Failed to create receiver: {}", e);
+                //                         log::error!("{}", error);
+                //                         server.job_record_failure(JobFailed::from(error)).await;
+                //                         continue;
+                //                     }
+                //                 };
 
-                                let exporter = exporter.clone().with_identifiers(identifiers.clone().default_user(user.as_ref()));
-                                // Create job and push to queue for the worker thread to handle
-                                match JobNew::new(&exporter.identifiers(), receiver).ready(exporter).await {
-                                    Ok(job) => server.job_push(job.start()).await,
-                                    Err(job) => server.job_record_failure(job).await,
-                                };
-                            }
-                            None => {
-                                let message = format!("Failed receiving archive bytes");
-                                log::error!("{}", message);
-                            }
-                        }
-                        log::debug!("Waiting for next diagnostic...");
-                    }
-                    #[allow(unreachable_code)]
-                    Ok::<_, eyre::Report>(())
-                } => {}
+                //                 let exporter = exporter.clone().with_identifiers(identifiers.clone().default_user(user.as_ref()));
+                //                 // Create job and push to queue for the worker thread to handle
+                //                 match JobNew::new(&exporter.identifiers(), receiver).ready(exporter).await {
+                //                     Ok(job) => server.job_push(job.start()).await,
+                //                     Err(job) => server.job_record_failure(job).await,
+                //                 };
+                //             }
+                //             None => {
+                //                 let message = format!("Failed receiving archive bytes");
+                //                 log::error!("{}", message);
+                //             }
+                //         }
+                //         log::debug!("Waiting for next diagnostic...");
+                //     }
+                //     #[allow(unreachable_code)]
+                //     Ok::<_, eyre::Report>(())
+                // } => {}
             }
 
             // Perform graceful shutdown of the server and worker thread

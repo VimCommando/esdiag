@@ -1,4 +1,4 @@
-use esdiag::server::Server;
+use esdiag::{exporter::Exporter, server::Server};
 use reqwest::{StatusCode, multipart};
 use serde_json::Value;
 use std::time::Duration;
@@ -7,8 +7,11 @@ use std::time::Duration;
 async fn upload_non_zip_extension_returns_bad_request() {
     // Create a server instance
     let port = 9879;
-    let exporter = "-".to_string(); // "-" uses stdout
-    let _server = Server::new(port, exporter.clone(), "http://localhost:5601".to_string());
+    let _server = Server::new(
+        port,
+        Exporter::default(),
+        "http://localhost:5601".to_string(),
+    );
 
     // Allow server time to start
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -56,8 +59,11 @@ async fn upload_non_zip_extension_returns_bad_request() {
 async fn upload_without_filename_returns_bad_request() {
     // Create a server instance
     let port = 9880;
-    let exporter = "-".to_string(); // "-" uses stdout
-    let _server = Server::new(port, exporter.clone(), "http://localhost:5601".to_string());
+    let _server = Server::new(
+        port,
+        Exporter::default(),
+        "http://localhost:5601".to_string(),
+    );
 
     // Allow server time to start
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -99,8 +105,11 @@ async fn upload_without_filename_returns_bad_request() {
 async fn upload_invalid_zip_processes_and_returns_ready() {
     // Create a server instance
     let port = 9881;
-    let exporter = "-".to_string(); // "-" uses stdout
-    let mut server = Server::new(port, exporter.clone(), "http://localhost:5601".to_string());
+    let mut server = Server::new(
+        port,
+        Exporter::default(),
+        "http://localhost:5601".to_string(),
+    );
 
     // Allow time for server to start
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -188,8 +197,11 @@ async fn upload_invalid_zip_processes_and_returns_ready() {
 async fn status_with_auth_header_returns_user() {
     // Create a server instance
     let port = 9882;
-    let exporter = "-".to_string(); // "-" uses stdout
-    let mut server = Server::new(port, exporter.clone(), "http://localhost:5601".to_string());
+    let mut server = Server::new(
+        port,
+        Exporter::default(),
+        "http://localhost:5601".to_string(),
+    );
 
     // Allow time for server to start
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -247,7 +259,11 @@ async fn status_with_auth_header_returns_user() {
 async fn auth_header_filters_job_history() {
     // Create a server instance for testing
     let port = 9883;
-    let mut server = Server::new(port, "-".to_string(), "http://localhost:5601".to_string());
+    let mut server = Server::new(
+        port,
+        Exporter::default(),
+        "http://localhost:5601".to_string(),
+    );
 
     // Allow time for server to start
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -266,7 +282,9 @@ async fn auth_header_filters_job_history() {
 
         // Add jobs with no user (visible without auth)
         server
-            .job_record_failure(JobFailed {
+            .state
+            .job
+            .record_failure(JobFailed {
                 id: "job1".to_string(),
                 filename: "public_file1.zip".to_string(),
                 user: None,
@@ -275,7 +293,9 @@ async fn auth_header_filters_job_history() {
             .await;
 
         server
-            .job_record_failure(JobFailed {
+            .state
+            .job
+            .record_failure(JobFailed {
                 id: "job2".to_string(),
                 filename: "public_file2.zip".to_string(),
                 user: None,
@@ -285,7 +305,9 @@ async fn auth_header_filters_job_history() {
 
         // Add user-specific jobs
         server
-            .job_record_failure(JobFailed {
+            .state
+            .job
+            .record_failure(JobFailed {
                 id: "job3".to_string(),
                 filename: "user1_specific.zip".to_string(),
                 user: Some("user1@example.com".to_string()),
@@ -294,7 +316,9 @@ async fn auth_header_filters_job_history() {
             .await;
 
         server
-            .job_record_failure(JobFailed {
+            .state
+            .job
+            .record_failure(JobFailed {
                 id: "job4".to_string(),
                 filename: "user2_specific.zip".to_string(),
                 user: Some("user2@example.com".to_string()),
