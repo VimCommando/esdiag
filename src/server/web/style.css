@@ -398,7 +398,6 @@ h2 {
 .clear-curl-link {
     color: #1339ab;
     cursor: pointer;
-    display: none;
     font-size: 14px;
     font-weight: 500;
     text-decoration: none;

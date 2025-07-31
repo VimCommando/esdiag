@@ -100,7 +100,7 @@ pub struct CurrentStatusProcessing {
 pub struct CurrentStatusIdle {}
 
 #[derive(Template)]
-#[template(path = "job_completed.html")]
+#[template(path = "job/completed.html")]
 pub struct JobCompleted<'a> {
     pub job_id: u64,
     pub diagnostic_id: &'a str,
@@ -111,7 +111,7 @@ pub struct JobCompleted<'a> {
 }
 
 #[derive(Template)]
-#[template(path = "job_failed.html")]
+#[template(path = "job/failed.html")]
 pub struct JobFailed<'a> {
     pub job_id: u64,
     pub error: &'a str,
@@ -119,7 +119,7 @@ pub struct JobFailed<'a> {
 }
 
 #[derive(Template)]
-#[template(path = "job_processing.html")]
+#[template(path = "job/processing.html")]
 pub struct JobProcessing<'a> {
     pub job_id: u64,
     pub filename: &'a str,

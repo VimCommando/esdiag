@@ -80,33 +80,312 @@
         <div class="content">
             <h2>Process Diagnostics</h2>
             <div class="upload-form" id="input-form">
-                <div class="tabs" data-signals-tab__case.kebab="'file_upload'">
+                <div class="tabs" data-signals-_tab="'file-upload'">
                     <button
-                        id="tab-file_upload"
+                        id="tab-file-upload"
                         class="tab"
-                        data-on-click="@put('/tab/file_upload')"
-                        data-class-active="$tab=='file_upload'"
+                        data-on-click="$_tab = 'file-upload'"
+                        data-class-active="$_tab === 'file-upload'"
                     >
                         File Upload
                     </button>
                     <button
-                        id="tab-service_link"
+                        id="tab-service-link"
                         class="tab"
-                        data-on-click="@put('/tab/service_link')"
-                        data-class-active="$tab=='service_link'"
+                        data-on-click="$_tab = 'service-link'"
+                        data-class-active="$_tab === 'service-link'"
                     >
                         Service Link
                     </button>
                     <button
-                        id="tab-api_key"
+                        id="tab-api-key"
                         class="tab"
-                        data-on-click="@put('/tab/api_key')"
-                        data-class-active="$tab=='api_key'"
+                        data-on-click="$_tab = 'api-key'"
+                        data-class-active="$_tab === 'api-key'"
                     >
                         API Key
                     </button>
                 </div>
-                <div id="tab-content" data-on-load="@put('/tab/file_upload')"></div>
+                <div id="tab-content" class="tab-content">
+                    <form
+                        id="upload-form"
+                        data-show="$_tab === 'file-upload'"
+                        data-signals-uploading="false"
+                        enctype="multipart/form-data"
+                    >
+                        <p class="info">Upload a file from your local computer</p>
+                        <input
+                            type="file"
+                            id="file-input"
+                            data-show="true"
+                            data-bind-files
+                            data-computed-file_selected="$files && $files.length > 0"
+                            name="file"
+                            accept=".zip"
+                            required
+                            value=""
+                        />
+                        <div id="drop-area" class="drop-area">
+                            <div class="file-icon">
+                                <!--- upload icon -->
+                                <svg
+                                    data-show="!$file_selected"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                >
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                                </svg>
+                                <!--- checkmark icon -->
+                                <svg
+                                    data-show="$file_selected"
+                                    style="color: #0b64dd"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                >
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                    <path d="M9 15L11 17L15 13"></path>
+                                </svg>
+                            </div>
+                            <div id="upload-instructions" data-show="!$file_selected">
+                                <p>
+                                    Select or drag and drop a
+                                    <code>.zip</code> file
+                                </p>
+                            </div>
+                            <div id="file-info" class="file-info" data-show="$file_selected">
+                                <span id="file-name" class="file-name" data-text="$filesNames[0] || ''"></span>
+                                <span
+                                    id="clear-file"
+                                    class="clear-button"
+                                    data-on-click="$files = []; $filesNames = []; $filesMimes = []"
+                                    >✕
+                                </span>
+                            </div>
+                            <div
+                                id="upload-progress-container"
+                                data-show="$uploading"
+                                class="upload-progress-container"
+                            >
+                                <div id="upload-progress-bar" class="upload-progress-bar"></div>
+                            </div>
+                            <div id="upload-progress-text" class="upload-progress-text">0%</div>
+                        </div>
+                        <input
+                            id="upload-button"
+                            data-on-click="@post('/upload', {contentType: 'form'})"
+                            data-attr-disabled="$uploading || !$file_selected"
+                            data-attr-value="$uploading ? 'Uploading' : '&nbsp;Upload&nbsp;'"
+                            class="button"
+                            type="submit"
+                        />
+                        <script>
+                            // File upload handling
+                            const dropArea = document.getElementById("drop-area");
+
+                            // Prevent default drag behaviors
+                            ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
+                                dropArea.addEventListener(eventName, preventDefaults, false);
+                                document.body.addEventListener(eventName, preventDefaults, false);
+                            });
+
+                            function preventDefaults(e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                            }
+
+                            // Highlight drop area when item is dragged over it
+                            ["dragenter", "dragover"].forEach((eventName) => {
+                                dropArea.addEventListener(eventName, highlight, false);
+                            });
+
+                            ["dragleave", "drop"].forEach((eventName) => {
+                                dropArea.addEventListener(eventName, unhighlight, false);
+                            });
+
+                            function highlight() {
+                                dropArea.classList.add("drag-over");
+                            }
+
+                            function unhighlight() {
+                                dropArea.classList.remove("drag-over");
+                            }
+
+                            dropArea.addEventListener("drop", handleDrop, false);
+
+                            // Handle dropped files
+                            const fileInput = document.getElementById("file-input");
+
+                            function handleDrop(e) {
+                                const files = e.dataTransfer.files;
+                                console.log(files);
+                                fileInput.files = files;
+                            }
+
+                            // HTMX upload event handlers
+                            document.addEventListener("htmx:beforeRequest", function (evt) {
+                                if (evt.detail.target.id === "upload-result") {
+                                    updateStatus({ status: "uploading" });
+
+                                    // Show progress elements
+                                    progressContainer.classList.add("active");
+                                    progressText.classList.add("active");
+                                }
+                            });
+
+                            document.addEventListener("htmx:afterRequest", function (evt) {
+                                if (evt.detail.target.id === "upload-result") {
+                                    const progressContainer = document.getElementById("upload-progress-container");
+                                    const progressText = document.getElementById("upload-progress-text");
+                                    const progressBar = document.getElementById("upload-progress-bar");
+
+                                    // Hide progress elements after upload
+                                    setTimeout(() => {
+                                        progressContainer.classList.remove("active");
+                                        progressText.classList.remove("active");
+                                        progressBar.style.width = "0%";
+                                        progressText.textContent = "0%";
+                                    }, 1000);
+                                }
+                            });
+
+                            document.addEventListener("htmx:responseError", function (evt) {
+                                if (evt.detail.target.id === "upload-result") {
+                                    const progressContainer = document.getElementById("upload-progress-container");
+                                    const progressText = document.getElementById("upload-progress-text");
+
+                                    // Hide progress elements on error
+                                    progressContainer.classList.remove("active");
+                                    progressText.classList.remove("active");
+                                    document.getElementById("drop-area").style.pointerEvents = "";
+                                }
+                            });
+                        </script>
+                    </form>
+
+                    <form id="service-link-form" enctype="multipart/form-data" data-show="$_tab === 'service-link'">
+                        <p class="info">
+                            Forward a file from the Elastic upload service:
+                            <a href="https://upload.elastic.co" target="_blank">https://upload.elastic.co</a>
+                        </p>
+                        <div class="form-group">
+                            <label for="curl-command" class="form-label">Curl Command (Optional)</label>
+                            <textarea
+                                id="curl-command"
+                                class="curl-textarea"
+                                placeholder="Paste your curl command to auto-fill the form..."
+                                data-bind-service.curl
+                                data-on-input="{
+                                    $service.url = parseUrl($service.curl),
+                                    $service.token = parseToken($service.curl),
+                                    $service.filename = parseFilename($service.curl)
+                                }"
+                            ></textarea>
+                            <div
+                                id="curl-command-clear"
+                                data-show="$service.curl !== ''"
+                                data-on-click="{
+                                    $service.curl = '';
+                                    $service.url = '';
+                                    $service.token = '';
+                                    $service.filename = '';
+                                }"
+                                class="clear-curl-link"
+                                style="display: none"
+                            >
+                                Clear
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="service-token" class="form-label">Token</label>
+                            <input
+                                type="text"
+                                id="service-token"
+                                name="token"
+                                data-bind-service.token
+                                data-attr-readonly="$service.curl !== ''"
+                                class="form-input"
+                                required
+                                placeholder="Enter authentication token"
+                            />
+                        </div>
+                        <div class="form-group">
+                            <label for="service-url" class="form-label">URL</label>
+                            <input
+                                type="url"
+                                id="service-url"
+                                name="url"
+                                data-bind-service.url
+                                data-attr-readonly="$service.curl !== ''"
+                                class="form-input"
+                                required
+                                placeholder="https://example.com/path/to/diagnostic.zip"
+                            />
+                        </div>
+                        <div class="form-group">
+                            <label for="service-filename" class="form-label">Filename</label>
+                            <input
+                                type="text"
+                                id="service-filename"
+                                name="filename"
+                                data-bind-service.filename
+                                data-attr-readonly="$service.curl !== ''"
+                                class="form-input"
+                                required
+                                placeholder="diagnostic.zip"
+                            />
+                        </div>
+                        <input
+                            id="service-link-button"
+                            class="button"
+                            type="submit"
+                            value="Submit"
+                            data-on-click="@post('/upload_service',{contentType: 'form'})"
+                        />
+                        <script>
+                            // Extract token from Authorization header
+                            const parseToken = (cmd) => {
+                                const token =
+                                    cmd.match(/-H\s+['"]Authorization:\s*([^'"]+)['"]/) ||
+                                    cmd.match(/--header\s+['"]Authorization:\s*([^'"]+)['"]/);
+                                return token ? token[1] : null;
+                            };
+
+                            // Extract filename from -o option
+                            const parseFilename = (cmd) => {
+                                const filename =
+                                    cmd.match(/-o\s+['"]([^'"]+)['"]/) ||
+                                    cmd.match(/-o\s+(\S+)/) ||
+                                    cmd.match(/--output\s+['"]([^'"]+)['"]/) ||
+                                    cmd.match(/--output\s+(\S+)/);
+                                return filename ? filename[1] : null;
+                            };
+
+                            // Extract URL
+                            const parseUrl = (cmd) => {
+                                const url = cmd.match(/https?:\/\/\S+/);
+                                return url ? url[0] : null;
+                            };
+                        </script>
+                    </form>
+
+                    <form id="api-key-form" enctype="multipart/form-data" data-show="$_tab === 'api-key'">
+                        <p>To be implemented...</p>
+                    </form>
+                </div>
             </div>
 
             <div id="job-feed">

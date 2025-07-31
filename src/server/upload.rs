@@ -1,4 +1,4 @@
-use super::{ServerState, get_iap_email, template};
+use super::{ServerState, get_user_email, template};
 use crate::{data::diagnostic::report::Identifiers, processor::JobNew, receiver::Receiver};
 use askama::Template;
 use async_stream::stream;
@@ -19,7 +19,7 @@ pub async fn handler(
     state: Arc<ServerState>,
 ) -> impl IntoResponse {
     // Extract authenticated user email from header
-    let user_email = get_iap_email(&headers);
+    let user_email = get_user_email(&headers);
 
     Sse::new(stream! {
         let signal = r#"{"uploading":true}"#;
