@@ -1,3 +1,4 @@
+use crate::processor::new_job_id;
 use askama::Template;
 
 #[derive(Template)]
@@ -116,6 +117,19 @@ pub struct JobFailed<'a> {
     pub job_id: u64,
     pub error: &'a str,
     pub filename: &'a str,
+}
+
+impl<'a> JobFailed<'a> {
+    pub fn element(job_id: Option<u64>, error: &'a str, filename: &'a str) -> String {
+        let job_id = job_id.unwrap_or(new_job_id());
+        Self {
+            job_id,
+            error,
+            filename,
+        }
+        .render()
+        .expect("Failed to render JobFailed template")
+    }
 }
 
 #[derive(Template)]

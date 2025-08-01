@@ -91,18 +91,27 @@ h2 {
 .button:disabled {
     background-color: #ecebf9;
     color: #798eaf;
-    cursor: wait;
+    cursor: not-allowed;
 }
 
 #job-feed {
     margin-top: 12px;
 }
+
 .status-box {
     padding: 16px;
     border-radius: 4px;
     max-width: 640px;
     margin: 8px auto;
 }
+
+.status-box {
+    transition:
+        background-color 0.3s ease,
+        color 0.3s ease,
+        transform 0.2s ease;
+}
+
 @keyframes pushIn {
     0% {
         transform: translateY(-20px);
@@ -115,36 +124,27 @@ h2 {
     }
 }
 
-#ready-status {
+.uploading {
     background-color: #e3e8f2;
     color: #516381;
     font-weight: 500;
 }
-#current-status {
-    background-color: #cfeef7;
-    color: #0f658a;
-}
-#current-status.hidden {
-    display: none;
-}
+
 .success {
     background-color: #c9f3e3;
     color: #09724d;
 }
+
 .error {
     background-color: #fdddd8;
     color: #a71627;
 }
+
 .processing {
     background-color: #cfeef7;
     color: #0f658a;
 }
-.status-box {
-    transition:
-        background-color 0.3s ease,
-        color 0.3s ease,
-        transform 0.2s ease;
-}
+
 .spinner {
     animation: spin 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
     border-radius: 50%;
@@ -168,7 +168,7 @@ h2 {
     }
 }
 
-.drop-area {
+.dropzone {
     border-radius: 8px;
     border: 2px dashed #e3e8f2;
     cursor: pointer;
@@ -179,10 +179,7 @@ h2 {
     transition: all 0.3s ease;
 }
 
-.drop-area-idle {
-}
-
-.drop-area.drag-over {
+.drag-over {
     background-color: #f0f5ff;
     border-color: #1339ab;
 }

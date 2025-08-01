@@ -1,4 +1,4 @@
-use super::{ServerState, get_user_email, template};
+use super::{ServerState, get_user_email, patch_signals, template};
 use crate::{
     data::{Uri, diagnostic::report::Identifiers},
     processor::JobNew,
@@ -11,10 +11,7 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Sse},
 };
-use datastar::{
-    consts::ElementPatchMode,
-    prelude::{PatchElements, PatchSignals},
-};
+use datastar::{consts::ElementPatchMode, prelude::PatchElements};
 use std::{convert::Infallible, sync::Arc};
 use url::Url;
 
@@ -28,7 +25,7 @@ pub async fn handler(
 
     let mut token = String::new();
     let mut url = String::new();
-    let mut filename: Option<String> = None;
+    let mut filename = String::new();
 
     // Process the multipart form
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -41,18 +38,16 @@ pub async fn handler(
                 url = field.text().await.unwrap_or_default();
             }
             "filename" => {
-                filename = Some(field.text().await.unwrap_or_default());
+                filename = field.text().await.unwrap_or_default();
             }
             _ => {} // Ignore other fields
         }
     }
 
-    log::info!("Received elastic uploader request for: {}", url);
+    log::info!("Received Elastic upload service request for: {}", url);
 
     Sse::new(stream! {
-        let signal = r#"{"uploading":true}"#;
-        let sse_event = PatchSignals::new(signal).write_as_axum_sse_event();
-        yield Ok::<_, Infallible>(sse_event);
+        yield patch_signals(r#"{"uploading":true}"#);
 
         // Construct the URL with token authentication
         let uploader_service_url = match Url::parse(&url) {
@@ -66,6 +61,7 @@ pub async fn handler(
                     );
                     let sse_event = PatchElements::new(element).write_as_axum_sse_event();
                     yield Ok::<_, Infallible>(sse_event);
+                    yield patch_signals(r#"{"uploading":false}"#);
                 }
                 if url.set_password(Some(&token)).is_err() {
                     let element = template::Error::new(
@@ -75,6 +71,7 @@ pub async fn handler(
                     );
                     let sse_event = PatchElements::new(element).write_as_axum_sse_event();
                     yield Ok::<_, Infallible>(sse_event);
+                    yield patch_signals(r#"{"uploading":false}"#);
                 }
                 url
             }
@@ -88,6 +85,7 @@ pub async fn handler(
                 );
                 let sse_event = PatchElements::new(element).write_as_axum_sse_event();
                 yield Ok::<_, Infallible>(sse_event);
+                yield patch_signals(r#"{"uploading":false}"#);
                 return
             }
         };
@@ -105,6 +103,7 @@ pub async fn handler(
                 );
                 let sse_event = PatchElements::new(element).write_as_axum_sse_event();
                 yield Ok::<_, Infallible>(sse_event);
+                yield patch_signals(r#"{"uploading":false}"#);
                 return
             }
         };
@@ -113,15 +112,14 @@ pub async fn handler(
         let receiver = match Receiver::try_from(uri) {
             Ok(receiver) => receiver,
             Err(e) => {
+                state.record_failure().await;
                 let error_msg = format!("Failed to create receiver: {}", e);
                 log::error!("Failed to create receiver: {}", e);
-                let element = template::Error::new(
-                    "error-receiver",
-                    "Upload Service",
-                    &error_msg
-                );
-                let sse_event = PatchElements::new(element).write_as_axum_sse_event();
+                let element = template::JobFailed::element(None, &error_msg, &filename);
+                let sse_event = PatchElements::new(element).selector("#job-feed")
+                    .mode(ElementPatchMode::After).write_as_axum_sse_event();
                 yield Ok::<_, Infallible>(sse_event);
+                yield patch_signals(r#"{"uploading":false}"#);
                 return
             }
         };
@@ -129,7 +127,7 @@ pub async fn handler(
         let identifiers = Identifiers {
             account: None,
             case_number: None,
-            filename: filename.clone(),
+            filename: Some(filename.clone()),
             opportunity: None,
             user: username,
         };
@@ -147,6 +145,7 @@ pub async fn handler(
                 }.render().expect("Failed to render JobProcessing template");
                 let sse_event = PatchElements::new(element).selector("#job-feed")
                     .mode(ElementPatchMode::After).write_as_axum_sse_event();
+                yield patch_signals(r#"{"uploading":false,"processing":true}"#);
                 yield Ok::<_, Infallible>(sse_event);
 
                 let elements = match job.process().await {
@@ -174,6 +173,7 @@ pub async fn handler(
                 };
                 let sse_event = PatchElements::new(elements).write_as_axum_sse_event();
                 yield Ok::<_, Infallible>(sse_event);
+                yield patch_signals(r#"{"processing":false}"#);
             },
             Err(job) => {
                 state.record_failure().await;
@@ -186,12 +186,11 @@ pub async fn handler(
                 let sse_event = PatchElements::new(element).selector("#job-feed")
                     .mode(ElementPatchMode::After).write_as_axum_sse_event();
                 yield Ok::<_, Infallible>(sse_event);
+                yield patch_signals(r#"{"processing":false}"#);
             },
         };
 
-        let stats = state.get_stats().await;
-        let signal = format!(r#"{{"processing":false,"stats":{stats}}}"#);
-        let sse_event = PatchSignals::new(signal).write_as_axum_sse_event();
-        yield Ok::<_, Infallible>(sse_event);
+        let signals = format!(r#"{{"processing":false,"stats":{}}}"#, state.get_stats().await);
+        yield patch_signals(&signals);
     })
 }

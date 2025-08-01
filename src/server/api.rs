@@ -112,7 +112,7 @@ pub async fn upload_handler(
         .into_response()
 }
 
-pub async fn upload_service_handler(
+pub async fn service_link_handler(
     headers: HeaderMap,
     Json(payload): Json<UploadServiceRequest>,
     state: Arc<ServerState>,
