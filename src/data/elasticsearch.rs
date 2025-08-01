@@ -6,6 +6,8 @@ mod cluster_settings;
 mod data_streams;
 /// Data types the `_ilm/explain` API
 mod ilm_explain;
+/// Data types the `_ilm/policy` API
+mod ilm_policies;
 /// Data types the `_settings` API
 mod indices_settings;
 /// Data types the `_stats` API
@@ -27,6 +29,7 @@ pub use aliases::*;
 pub use cluster_settings::*;
 pub use data_streams::*;
 pub use ilm_explain::*;
+pub use ilm_policies::*;
 pub use indices_settings::*;
 pub use indices_stats::*;
 pub use nodes::*;

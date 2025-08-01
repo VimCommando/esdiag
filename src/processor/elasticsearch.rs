@@ -1,5 +1,7 @@
 /// Processor for the `_cluster/settings` API
 mod cluster_settings;
+/// Processor for the `_ilm/policies` API
+mod ilm_policies;
 /// Processor for the `_settings` API
 mod index_settings;
 /// Processor for the `_stats` API
@@ -27,7 +29,7 @@ use crate::{
         },
         elasticsearch::{
             Alias, AliasList, Cluster, ClusterSettings, DataStream, DataStreams, IlmExplain,
-            IlmStats, IndexSettings, IndicesSettings, IndicesStats, Nodes, NodesStats,
+            IlmPolicies, IlmStats, IndexSettings, IndicesSettings, IndicesStats, Nodes, NodesStats,
             SearchableSnapshotsCacheStats, SharedCacheStats, Tasks,
         },
     },
@@ -150,6 +152,10 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             (
                 DataSet::NodesStats,
                 spawn_processor::<NodesStats>(diag.clone()),
+            ),
+            (
+                DataSet::IlmPolicies,
+                spawn_processor::<IlmPolicies>(diag.clone()),
             ),
             // Temporarily omitting in favor of an include/exclude/diag_type filter to
             // prevent the expected error
