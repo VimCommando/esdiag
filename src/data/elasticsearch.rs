@@ -20,6 +20,8 @@ mod nodes_stats;
 mod searchable_snapshots_cache_stats;
 /// Data types the `_searchable_snapshots/stats` API
 mod searchable_snapshots_stats;
+/// Data types the `_slm/policy` API
+mod slm_policies;
 /// Data types the `_tasks` API
 mod tasks;
 /// Data types the root `/` API
@@ -36,5 +38,6 @@ pub use nodes::*;
 pub use nodes_stats::*;
 pub use searchable_snapshots_cache_stats::*;
 pub use searchable_snapshots_stats::*;
+pub use slm_policies::*;
 pub use tasks::*;
 pub use version::*;

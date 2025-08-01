@@ -18,6 +18,7 @@ pub enum DataSet {
     NodesStats,
     SearchableSnapshotsCacheStats,
     SearchableSnapshotsStats,
+    SlmPolicies,
     Tasks,
     Version,
 }
@@ -38,6 +39,7 @@ impl std::fmt::Display for DataSet {
                 write!(fmt, "searchable_snapshots_cache_stats")
             }
             DataSet::SearchableSnapshotsStats => write!(fmt, "searchable_snapshots_stats"),
+            DataSet::SlmPolicies => write!(fmt, "slm_policies"),
             DataSet::Tasks => write!(fmt, "tasks"),
             DataSet::Version => write!(fmt, "version"),
         }

@@ -1,0 +1,165 @@
+{
+  "_meta": {
+    "description": "ESDiag Elasticsearch Snapshot Lifecycle Management (SLM) policies"
+  },
+  "index_patterns": ["settings-slm-esdiag*"],
+  "composed_of": ["esdiag@mappings", "esdiag@metadata", "esdiag@settings"],
+  "allow_auto_create": true,
+  "data_stream": {
+    "hidden": false,
+    "allow_custom_routing": false
+  },
+  "priority": 300,
+  "template": {
+    "mappings": {
+      "properties": {
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "dataset": {
+              "type": "constant_keyword",
+              "value": "slm"
+            },
+            "type": {
+              "type": "constant_keyword",
+              "value": "settings"
+            }
+          }
+        },
+        "slm": {
+          "properties": {
+            "last_failure": {
+              "properties": {
+                "details": {
+                  "type": "keyword"
+                },
+                "snapshot_name": {
+                  "type": "keyword"
+                },
+                "time": {
+                  "type": "long",
+                  "index": false
+                },
+                "time_string": {
+                  "type": "object",
+                  "enabled": false
+                }
+              }
+            },
+            "last_success": {
+              "properties": {
+                "snapshot_name": {
+                  "type": "keyword"
+                },
+                "start_time": {
+                  "type": "object",
+                  "enabled": false
+                },
+                "start_time_string": {
+                  "type": "object",
+                  "enabled": false
+                },
+                "time": {
+                  "type": "long",
+                  "index": false
+                },
+                "time_string": {
+                  "type": "object",
+                  "enabled": false
+                }
+              }
+            },
+            "modified_date": {
+              "type": "date",
+              "format": "strict_date_optional_time"
+            },
+            "modified_date_millis": {
+              "type": "long",
+              "index": false
+            },
+            "name": {
+              "type": "keyword"
+            },
+            "next_execution": {
+              "type": "date",
+              "format": "strict_date_optional_time"
+            },
+            "next_execution_millis": {
+              "type": "long",
+              "index": false
+            },
+            "policy": {
+              "properties": {
+                "config": {
+                  "properties": {
+                    "ignore_unavailable": {
+                      "type": "boolean"
+                    },
+                    "include_global_state": {
+                      "type": "boolean"
+                    },
+                    "indices": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "name": {
+                  "type": "keyword"
+                },
+                "repository": {
+                  "type": "keyword"
+                },
+                "retention": {
+                  "properties": {
+                    "expire_after": {
+                      "type": "keyword"
+                    },
+                    "max_count": {
+                      "type": "long",
+                      "index": false
+                    },
+                    "min_count": {
+                      "type": "long",
+                      "index": false
+                    }
+                  }
+                },
+                "schedule": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "stats": {
+              "properties": {
+                "policy": {
+                  "type": "keyword"
+                },
+                "snapshot_deletion_failures": {
+                  "type": "long",
+                  "index": false
+                },
+                "snapshots_deleted": {
+                  "type": "long",
+                  "index": false
+                },
+                "snapshots_failed": {
+                  "type": "long",
+                  "index": false
+                },
+                "snapshots_taken": {
+                  "type": "long",
+                  "index": false
+                }
+              }
+            },
+            "version": {
+              "type": "long",
+              "index": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "version": 2
+}
