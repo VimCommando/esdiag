@@ -9,6 +9,14 @@
       }
     },
     {
+      "set": {
+        "ignore_failure": true,
+        "if": "ctx?.diagnostic?.account == null",
+        "field": "diagnostic.account",
+        "value": "{{diagnostic.license.issued_to}}"
+      }
+    },
+    {
       "reroute": {}
     }
   ]
