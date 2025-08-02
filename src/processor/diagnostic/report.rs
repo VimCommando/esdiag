@@ -1,3 +1,4 @@
+use super::super::elasticsearch::License as ElasticsearchLicense;
 use super::{DiagnosticManifest, DiagnosticMetadata, Lookup, Product};
 use eyre::{OptionExt, Report, Result, eyre};
 use serde::Serialize;
@@ -77,10 +78,17 @@ impl Default for Identifiers {
 }
 
 #[derive(Serialize, Clone)]
+#[serde(untagged)]
+pub enum License {
+    Elasticsearch(ElasticsearchLicense),
+}
+
+#[derive(Serialize, Clone)]
 pub struct DiagnosticReport {
     pub product: Product,
     origin: Origin,
     pub docs: Docs,
+    pub license: Option<License>,
     lookup: NestedStats<LookupSummary>,
     processor: NestedStats<ProcessorSummary>,
     #[serde(flatten)]
@@ -97,6 +105,10 @@ impl DiagnosticReport {
 
     pub fn add_identifiers(&mut self, identifiers: Identifiers) {
         self.identifiers = identifiers;
+    }
+
+    pub fn add_license(&mut self, license: Option<ElasticsearchLicense>) {
+        self.license = license.map(License::Elasticsearch);
     }
 }
 
@@ -156,6 +168,7 @@ impl TryFrom<DiagnosticReportBuilder> for DiagnosticReport {
                 errors: 0,
                 total: 0,
             },
+            license: None,
             lookup: NestedStats::<LookupSummary> {
                 count: 0,
                 errors: 0,

@@ -14,6 +14,8 @@ mod ilm_policies;
 mod indices_settings;
 /// The `_stats` API
 mod indices_stats;
+/// The `_license` API
+mod licenses;
 /// Elasticsearch diagnostics metadata
 mod metadata;
 /// The `_nodes` API
@@ -32,7 +34,10 @@ mod tasks;
 mod version;
 
 pub use metadata::{ElasticsearchMetadata, ElasticsearchVersion};
-pub use version::{Cluster, Version};
+pub use {
+    licenses::License,
+    version::{Cluster, Version},
+};
 
 use super::{
     DataProcessor, DiagnosticProcessor, Metadata,
@@ -48,6 +53,21 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::{pin::Pin, sync::Arc};
 use tokio::{sync::RwLock, task::JoinHandle};
+use {
+    alias::{Alias, AliasList},
+    cluster_settings::ClusterSettings,
+    data_stream::{DataStream, DataStreams},
+    ilm_explain::{IlmExplain, IlmStats},
+    ilm_policies::IlmPolicies,
+    indices_settings::{IndexSettings, IndicesSettings},
+    indices_stats::IndicesStats,
+    licenses::Licenses,
+    nodes::{NodeDocument, Nodes},
+    nodes_stats::NodesStats,
+    searchable_snapshots_cache_stats::{SearchableSnapshotsCacheStats, SharedCacheStats},
+    slm_policies::SlmPolicies,
+    tasks::Tasks,
+};
 
 type ExporterDocumentQueue = Arc<RwLock<Vec<(String, Vec<Value>)>>>;
 
@@ -104,18 +124,20 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             .build()?;
 
         let lookups = Lookups {
-            alias: Lookup::from(receiver.get::<alias::AliasList>().await),
-            data_stream: Lookup::from(receiver.get::<data_stream::DataStreams>().await),
-            index_settings: Lookup::from(receiver.get::<indices_settings::IndicesSettings>().await),
-            node: Lookup::from(receiver.get::<nodes::Nodes>().await),
-            ilm_explain: Lookup::from(receiver.get::<ilm_explain::IlmExplain>().await),
-            shared_cache: Lookup::from(
-                receiver
-                    .get::<searchable_snapshots_cache_stats::SearchableSnapshotsCacheStats>()
-                    .await,
-            ),
+            alias: Lookup::from(receiver.get::<AliasList>().await),
+            data_stream: Lookup::from(receiver.get::<DataStreams>().await),
+            index_settings: Lookup::from(receiver.get::<IndicesSettings>().await),
+            node: Lookup::from(receiver.get::<Nodes>().await),
+            ilm_explain: Lookup::from(receiver.get::<IlmExplain>().await),
+            shared_cache: Lookup::from(receiver.get::<SearchableSnapshotsCacheStats>().await),
         };
+        let license = receiver
+            .get::<Licenses>()
+            .await
+            .map(|licenses| licenses.license)
+            .ok();
 
+        report.add_license(license);
         report.add_lookup("alias", &lookups.alias);
         report.add_lookup("data_stream", &lookups.data_stream);
         report.add_lookup("index_settings", &lookups.index_settings);
@@ -147,17 +169,17 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
 
         let futures = FuturesUnordered::new();
         let mut tasks = vec![
-            spawn_processor::<cluster_settings::ClusterSettings>(diag.clone()),
-            spawn_processor::<indices_settings::IndicesSettings>(diag.clone()),
-            spawn_processor::<indices_stats::IndicesStats>(diag.clone()),
-            spawn_processor::<nodes::Nodes>(diag.clone()),
-            spawn_processor::<nodes_stats::NodesStats>(diag.clone()),
-            spawn_processor::<ilm_policies::IlmPolicies>(diag.clone()),
-            spawn_processor::<slm_policies::SlmPolicies>(diag.clone()),
+            spawn_processor::<ClusterSettings>(diag.clone()),
+            spawn_processor::<IndicesSettings>(diag.clone()),
+            spawn_processor::<IndicesStats>(diag.clone()),
+            spawn_processor::<Nodes>(diag.clone()),
+            spawn_processor::<NodesStats>(diag.clone()),
+            spawn_processor::<IlmPolicies>(diag.clone()),
+            spawn_processor::<SlmPolicies>(diag.clone()),
             // Temporarily omitting in favor of an include/exclude/diag_type filter to
             // prevent the expected error
             // spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
-            spawn_processor::<tasks::Tasks>(diag.clone()),
+            spawn_processor::<Tasks>(diag.clone()),
         ];
         tasks.drain(..).map(|task| futures.push(task)).count();
 
@@ -205,10 +227,10 @@ where
 
 #[derive(Serialize)]
 pub struct Lookups {
-    pub alias: Lookup<alias::Alias>,
-    pub data_stream: Lookup<data_stream::DataStream>,
-    pub index_settings: Lookup<indices_settings::IndexSettings>,
-    pub node: Lookup<nodes::NodeDocument>,
-    pub ilm_explain: Lookup<ilm_explain::IlmStats>,
-    pub shared_cache: Lookup<searchable_snapshots_cache_stats::SharedCacheStats>,
+    pub alias: Lookup<Alias>,
+    pub data_stream: Lookup<DataStream>,
+    pub ilm_explain: Lookup<IlmStats>,
+    pub index_settings: Lookup<IndexSettings>,
+    pub node: Lookup<NodeDocument>,
+    pub shared_cache: Lookup<SharedCacheStats>,
 }

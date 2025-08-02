@@ -1,17 +1,14 @@
-use super::super::collector::CollectionResult;
+use super::super::{collector::CollectionResult, diagnostic::PathType};
 use super::{
-    alias::AliasList, cluster_settings::ClusterSettings, data_stream::DataStreams,
-    ilm_explain::IlmExplain, ilm_policies::IlmPolicies, indices_settings::IndicesSettings,
-    indices_stats::IndicesStats, nodes::Nodes, nodes_stats::NodesStats,
+    DataSource, DiagnosticManifest, Product, alias::AliasList, cluster_settings::ClusterSettings,
+    data_stream::DataStreams, ilm_explain::IlmExplain, ilm_policies::IlmPolicies,
+    indices_settings::IndicesSettings, indices_stats::IndicesStats, licenses::Licenses,
+    nodes::Nodes, nodes_stats::NodesStats,
     searchable_snapshots_cache_stats::SearchableSnapshotsCacheStats,
     searchable_snapshots_stats::SearchableSnapshotsStats, slm_policies::SlmPolicies, tasks::Tasks,
     version::Cluster,
 };
-use crate::{
-    exporter::DirectoryExporter,
-    processor::diagnostic::{DataSource, DiagnosticManifest, Product, data_source::PathType},
-    receiver::Receiver,
-};
+use crate::{exporter::DirectoryExporter, receiver::Receiver};
 use eyre::Result;
 use std::path::PathBuf;
 
@@ -41,6 +38,7 @@ impl ElasticsearchCollector {
         result.success += self.save::<IlmPolicies>().await?;
         result.success += self.save::<IndicesSettings>().await?;
         result.success += self.save::<IndicesStats>().await?;
+        result.success += self.save::<Licenses>().await?;
         result.success += self.save::<Nodes>().await?;
         result.success += self.save::<NodesStats>().await?;
         result.success += self.save::<SearchableSnapshotsCacheStats>().await?;
