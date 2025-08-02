@@ -27,6 +27,16 @@
           }
         },
         {
+          "dont_index_human_time_string": {
+            "mapping": {
+              "type": "object",
+              "enabled": false
+            },
+            "match": "*time_string",
+            "match_mapping_type": "*"
+          }
+        },
+        {
           "dont_index_human_size": {
             "mapping": {
               "type": "object",

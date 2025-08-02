@@ -1,0 +1,264 @@
+{
+  "_meta": {
+    "description": "ESDiag Elasticsearch Index Lifecycle Management (ILM) policies"
+  },
+  "index_patterns": ["settings-ilm-esdiag*"],
+  "composed_of": ["esdiag@mappings", "esdiag@metadata", "esdiag@settings"],
+  "allow_auto_create": true,
+  "data_stream": {
+    "hidden": false,
+    "allow_custom_routing": false
+  },
+  "priority": 300,
+  "template": {
+    "mappings": {
+      "properties": {
+        "data_stream": {
+          "type": "object",
+          "properties": {
+            "dataset": {
+              "type": "constant_keyword",
+              "value": "ilm"
+            },
+            "type": {
+              "type": "constant_keyword",
+              "value": "settings"
+            }
+          }
+        },
+        "ilm": {
+          "properties": {
+            "in_use_by": {
+              "properties": {
+                "composable_templates": {
+                  "type": "keyword"
+                },
+                "data_streams": {
+                  "type": "keyword"
+                },
+                "indices": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "modified_date": {
+              "type": "date",
+              "format": "strict_date_optional_time"
+            },
+            "name": {
+              "type": "keyword"
+            },
+            "policy": {
+              "properties": {
+                "_meta": {
+                  "properties": {
+                    "defaults": {
+                      "properties": {
+                        "delete_min_age": {
+                          "type": "keyword"
+                        }
+                      }
+                    },
+                    "description": {
+                      "type": "keyword"
+                    },
+                    "managed": {
+                      "type": "boolean"
+                    },
+                    "managed_by": {
+                      "type": "keyword"
+                    },
+                    "package": {
+                      "properties": {
+                        "name": {
+                          "type": "keyword"
+                        }
+                      }
+                    }
+                  }
+                },
+                "phases": {
+                  "properties": {
+                    "cold": {
+                      "properties": {
+                        "actions": {
+                          "properties": {
+                            "allocate": {
+                              "properties": {
+                                "exclude": {
+                                  "type": "object"
+                                },
+                                "include": {
+                                  "type": "object"
+                                },
+                                "number_of_replicas": {
+                                  "type": "long",
+                                  "index": false
+                                },
+                                "require": {
+                                  "properties": {
+                                    "data": {
+                                      "type": "keyword"
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "freeze": {
+                              "type": "object"
+                            },
+                            "set_priority": {
+                              "properties": {
+                                "priority": {
+                                  "type": "long",
+                                  "index": false
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "min_age": {
+                          "type": "keyword"
+                        }
+                      }
+                    },
+                    "delete": {
+                      "properties": {
+                        "actions": {
+                          "properties": {
+                            "delete": {
+                              "properties": {
+                                "delete_searchable_snapshot": {
+                                  "type": "boolean"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "min_age": {
+                          "type": "keyword"
+                        }
+                      }
+                    },
+                    "hot": {
+                      "properties": {
+                        "actions": {
+                          "properties": {
+                            "rollover": {
+                              "properties": {
+                                "max_age": {
+                                  "type": "keyword"
+                                },
+                                "max_docs": {
+                                  "type": "long",
+                                  "index": false
+                                },
+                                "max_primary_shard_size": {
+                                  "type": "object",
+                                  "enabled": false
+                                },
+                                "max_size": {
+                                  "type": "object",
+                                  "enabled": false
+                                }
+                              }
+                            },
+                            "set_priority": {
+                              "properties": {
+                                "priority": {
+                                  "type": "long",
+                                  "index": false
+                                }
+                              }
+                            },
+                            "shrink": {
+                              "properties": {
+                                "allow_write_after_shrink": {
+                                  "type": "boolean"
+                                },
+                                "number_of_shards": {
+                                  "type": "long",
+                                  "index": false
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "min_age": {
+                          "type": "keyword"
+                        }
+                      }
+                    },
+                    "warm": {
+                      "properties": {
+                        "actions": {
+                          "properties": {
+                            "allocate": {
+                              "properties": {
+                                "exclude": {
+                                  "type": "object"
+                                },
+                                "include": {
+                                  "type": "object"
+                                },
+                                "number_of_replicas": {
+                                  "type": "long",
+                                  "index": false
+                                },
+                                "require": {
+                                  "type": "object"
+                                }
+                              }
+                            },
+                            "forcemerge": {
+                              "properties": {
+                                "max_num_segments": {
+                                  "type": "long",
+                                  "index": false
+                                }
+                              }
+                            },
+                            "readonly": {
+                              "type": "object"
+                            },
+                            "set_priority": {
+                              "properties": {
+                                "priority": {
+                                  "type": "long",
+                                  "index": false
+                                }
+                              }
+                            },
+                            "shrink": {
+                              "properties": {
+                                "allow_write_after_shrink": {
+                                  "type": "boolean"
+                                },
+                                "number_of_shards": {
+                                  "type": "long",
+                                  "index": false
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "min_age": {
+                          "type": "keyword"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "version": {
+              "type": "long",
+              "index": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "version": 2
+}
