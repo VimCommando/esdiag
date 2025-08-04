@@ -12,6 +12,8 @@ use directory::DirectoryReceiver;
 pub use elasticsearch::ElasticsearchReceiver;
 use upload_service::UploadServiceDownloader;
 
+use crate::client::KnownHost;
+
 use super::{
     data::Uri,
     processor::{DataSource, DiagnosticManifest, ElasticsearchCluster, Manifest, ManifestBuilder},
@@ -163,6 +165,15 @@ impl TryFrom<Uri> for Receiver {
             _ => return Err(eyre!("Unsupported URI: {uri}")),
         };
         Ok(receiver)
+    }
+}
+
+impl TryFrom<KnownHost> for Receiver {
+    type Error = eyre::Report;
+    fn try_from(host: KnownHost) -> std::result::Result<Self, Self::Error> {
+        Ok(Receiver::Elasticsearch(ElasticsearchReceiver::try_from(
+            host,
+        )?))
     }
 }
 

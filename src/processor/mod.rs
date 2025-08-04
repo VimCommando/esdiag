@@ -27,8 +27,7 @@ use eyre::{Result, eyre};
 use kubernetes_platform::KubernetesPlatformDiagnostic;
 use logstash::LogstashDiagnostic;
 use serde::Serialize;
-use std::sync::Arc;
-use uuid::Uuid;
+use std::{sync::Arc, time::UNIX_EPOCH};
 
 #[derive(Clone)]
 pub enum Diagnostic {
@@ -105,6 +104,7 @@ trait DataProcessor<T, U> {
     fn generate_docs(self, lookups: Arc<T>, metadata: Arc<U>) -> (String, Vec<serde_json::Value>);
 }
 
+#[allow(dead_code)]
 trait DiagnosticProcessor {
     async fn new(
         manifest: DiagnosticManifest,
@@ -112,6 +112,7 @@ trait DiagnosticProcessor {
         exporter: Exporter,
     ) -> Result<Box<Self>>;
     async fn run(self) -> Result<DiagnosticReport>;
+    fn id(&self) -> &str;
 }
 
 trait Metadata {
@@ -120,8 +121,8 @@ trait Metadata {
 
 #[derive(Serialize)]
 pub struct JobNew {
-    pub id: String,
-    filename: String,
+    pub id: u64,
+    filename: Option<String>,
     user: Option<String>,
     #[serde(skip_serializing)]
     receiver: Receiver,
@@ -129,8 +130,8 @@ pub struct JobNew {
 
 #[derive(Serialize)]
 pub struct JobReady {
-    pub id: String,
-    filename: String,
+    pub id: u64,
+    filename: Option<String>,
     user: Option<String>,
     #[serde(skip_serializing)]
     diagnostic: Diagnostic,
@@ -138,8 +139,8 @@ pub struct JobReady {
 
 #[derive(Clone, Serialize)]
 pub struct JobProcessing {
-    pub id: String,
-    pub filename: String,
+    pub id: u64,
+    pub filename: Option<String>,
     pub user: Option<String>,
     #[serde(skip_serializing)]
     diagnostic: Diagnostic,
@@ -147,8 +148,8 @@ pub struct JobProcessing {
 
 #[derive(Serialize)]
 pub struct JobCompleted {
-    pub id: String,
-    pub filename: String,
+    pub id: u64,
+    pub filename: Option<String>,
     pub user: Option<String>,
     pub report: DiagnosticReport,
 }
@@ -165,8 +166,8 @@ impl JobCompleted {
 
 #[derive(Serialize)]
 pub struct JobFailed {
-    pub id: String,
-    pub filename: String,
+    pub id: u64,
+    pub filename: Option<String>,
     pub user: Option<String>,
     pub error: String,
 }
@@ -174,8 +175,8 @@ pub struct JobFailed {
 impl From<String> for JobFailed {
     fn from(error: String) -> Self {
         JobFailed {
-            id: uuid::Uuid::new_v4().to_string(),
-            filename: String::new(),
+            id: new_job_id(),
+            filename: None,
             user: None,
             error,
         }
@@ -193,7 +194,10 @@ pub enum Job {
 
 impl JobNew {
     pub fn with_filename(self, filename: String) -> Self {
-        JobNew { filename, ..self }
+        JobNew {
+            filename: Some(filename),
+            ..self
+        }
     }
 
     pub async fn ready(self, exporter: Exporter) -> Result<JobReady, JobFailed> {
@@ -229,14 +233,10 @@ impl JobNew {
 
 impl JobNew {
     pub fn new(identifiers: &Identifiers, receiver: Receiver) -> Self {
-        let id = Uuid::new_v4().to_string();
+        let id = new_job_id();
         JobNew {
             id,
-            filename: identifiers
-                .filename
-                .as_ref()
-                .expect("missing filename")
-                .clone(),
+            filename: identifiers.filename.clone(),
             user: identifiers.user.clone(),
             receiver,
         }
@@ -274,8 +274,8 @@ impl JobProcessing {
 }
 
 impl Job {
-    pub fn new(filename: String, user: Option<String>, receiver: Receiver) -> Self {
-        let id = Uuid::new_v4().to_string();
+    pub fn new(filename: Option<String>, user: Option<String>, receiver: Receiver) -> Self {
+        let id = new_job_id();
         Job::New(JobNew {
             id,
             filename,
@@ -284,17 +284,17 @@ impl Job {
         })
     }
 
-    pub fn id(&self) -> String {
+    pub fn id(&self) -> u64 {
         match self {
-            Job::New(job) => job.id.clone(),
-            Job::Ready(job) => job.id.clone(),
-            Job::Processing(job) => job.id.clone(),
-            Job::Completed(job) => job.id.clone(),
-            Job::Failed(job) => job.id.clone(),
+            Job::New(job) => job.id,
+            Job::Ready(job) => job.id,
+            Job::Processing(job) => job.id,
+            Job::Completed(job) => job.id,
+            Job::Failed(job) => job.id,
         }
     }
 
-    pub fn filename(&self) -> String {
+    pub fn filename(&self) -> Option<String> {
         match self {
             Job::New(job) => job.filename.clone(),
             Job::Ready(job) => job.filename.clone(),
@@ -329,4 +329,12 @@ impl Job {
             }))
         }
     }
+}
+
+pub fn new_job_id() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        % 100000
 }

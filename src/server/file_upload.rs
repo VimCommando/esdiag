@@ -1,6 +1,7 @@
-use super::{ServerState, Signals, get_user_email, patch_signals, patch_template, template};
+use super::{
+    Identifiers, ServerState, Signals, get_user_email, patch_signals, patch_template, template,
+};
 use crate::{
-    data::diagnostic::report::Identifiers,
     processor::{JobNew, new_job_id},
     receiver::Receiver,
 };
@@ -172,6 +173,7 @@ pub async fn process_hanlder(
                             job_id: job_id,
                             diagnostic_id: &job.report.metadata.id,
                             docs_created: &job.report.docs.created,
+                            duration: &format!("{:.3}", job.report.processing_duration as f64 / 1000.0),
                             filename: job.filename.as_deref().unwrap_or(""),
                             kibana_link: job.report.kibana_link.as_ref().unwrap_or(&"#".to_string()),
                             product: &job.report.product.to_string(),

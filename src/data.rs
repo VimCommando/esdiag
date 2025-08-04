@@ -2,7 +2,7 @@ use super::client::KnownHost;
 use crate::env;
 use eyre::Result;
 use eyre::{OptionExt, Report, eyre};
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     fs::OpenOptions,
     io::Write,
@@ -43,6 +43,35 @@ pub enum Uri {
     File(PathBuf),
     /// An input/output stream (stdin/stdout)
     Stream,
+}
+
+impl<'de> Deserialize<'de> for Uri {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Uri::try_from(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Default for Uri {
+    fn default() -> Self {
+        Uri::Stream
+    }
+}
+
+impl Into<Url> for Uri {
+    fn into(self) -> Url {
+        match self {
+            Uri::Stream => Url::parse("stdin://").unwrap(),
+            Uri::KnownHost(host) => host.into(),
+            Uri::ElasticUploader(url) => url,
+            Uri::Url(url) => url,
+            Uri::Directory(path) => Url::from_directory_path(path).unwrap(),
+            Uri::File(path) => Url::from_file_path(path).unwrap(),
+        }
+    }
 }
 
 impl TryFrom<&str> for Uri {

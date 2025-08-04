@@ -1,10 +1,5 @@
-use super::{ServerState, UploadServiceRequest};
-use crate::{
-    data::{Uri, diagnostic::report::Identifiers},
-    exporter::Exporter,
-    processor::JobNew,
-    receiver::Receiver,
-};
+use super::{Identifiers, ServerState, UploadServiceRequest};
+use crate::{data::Uri, exporter::Exporter, processor::JobNew, receiver::Receiver};
 use axum::{
     Json,
     extract::Multipart,

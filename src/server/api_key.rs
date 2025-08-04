@@ -1,9 +1,9 @@
 use super::{
-    ServerState, Signals, get_user_email, patch_job_feed, patch_signals, patch_template, template,
+    Identifiers, ServerState, Signals, get_user_email, patch_job_feed, patch_signals,
+    patch_template, template,
 };
 use crate::{
     client::KnownHostBuilder,
-    data::diagnostic::report::Identifiers,
     processor::{JobNew, new_job_id},
     receiver::Receiver,
 };
@@ -83,6 +83,7 @@ pub async fn handler(
                             job_id: job.id,
                             diagnostic_id: &job.report.metadata.id,
                             docs_created: &job.report.docs.created,
+                            duration: &format!("{:.3}", job.report.processing_duration as f64 / 1000.0),
                             filename: job.filename.as_deref().unwrap_or(""),
                             kibana_link: job.report.kibana_link.as_ref().unwrap_or(&"#".to_string()),
                             product: &job.report.product.to_string(),

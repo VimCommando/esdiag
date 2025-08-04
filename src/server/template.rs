@@ -79,6 +79,7 @@ pub struct JobCompleted<'a> {
     pub job_id: u64,
     pub diagnostic_id: &'a str,
     pub docs_created: &'a u32,
+    pub duration: &'a str,
     pub filename: &'a str,
     pub kibana_link: &'a str,
     pub product: &'a str,
