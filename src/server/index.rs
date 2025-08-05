@@ -1,11 +1,12 @@
 use super::{ServerState, get_user_email, template};
 use askama::Template;
 use axum::{
+    extract::Query,
     http::HeaderMap,
     response::{Html, IntoResponse},
 };
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use serde::{Deserialize, Deserializer, Serialize, de};
+use std::{str::FromStr, sync::Arc};
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,7 +26,33 @@ impl std::fmt::Display for Tab {
     }
 }
 
-pub async fn handler(headers: HeaderMap, state: Arc<ServerState>) -> impl IntoResponse {
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct Params {
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    link_id: Option<u64>,
+    upload_id: Option<u64>,
+}
+
+/// Serde deserialization decorator to map empty Strings to None,
+fn empty_string_as_none<'de, D, T>(de: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    let opt = Option::<String>::deserialize(de)?;
+    match opt.as_deref() {
+        None | Some("") => Ok(None),
+        Some(s) => FromStr::from_str(s).map_err(de::Error::custom).map(Some),
+    }
+}
+
+pub async fn handler(
+    Query(params): Query<Params>,
+    headers: HeaderMap,
+    state: Arc<ServerState>,
+) -> impl IntoResponse {
     let (user_initial, user_email) = match get_user_email(&headers) {
         Some(email) => (email.chars().next().unwrap_or('_'), email),
         None => ('_', "Anonymous".to_string()),
@@ -37,6 +64,8 @@ pub async fn handler(headers: HeaderMap, state: Arc<ServerState>) -> impl IntoRe
         debug: log::max_level() == log::Level::Debug,
         user_initial,
         user: user_email,
+        link_id: params.link_id,
+        upload_id: params.upload_id,
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
 

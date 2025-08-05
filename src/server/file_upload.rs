@@ -132,14 +132,6 @@ pub async fn process_hanlder(
             }
         };
 
-        let identifiers = Identifiers {
-            account: None,
-            case_number: None,
-            filename: Some(filename.clone()),
-            user: user_email.clone(),
-            opportunity: None,
-        };
-
         let receiver = match Receiver::try_from(data) {
             Ok(receiver) => receiver,
             Err(e) => {
@@ -155,7 +147,11 @@ pub async fn process_hanlder(
         };
 
         let exporter = {
-            state.exporter.read().await.clone().with_identifiers(identifiers)
+            state.exporter.read().await.clone().with_identifiers(Identifiers {
+                user: user_email,
+                filename: Some(filename.clone()),
+                ..signals.metadata
+            })
         };
 
         match JobNew::new(&exporter.identifiers(), receiver).ready(exporter).await {
@@ -169,6 +165,7 @@ pub async fn process_hanlder(
 
                 match job.process().await {
                     Ok(job) => {
+                        state.record_success(job.report.docs.total, job.report.docs.errors).await;
                         yield patch_template(template::JobCompleted {
                             job_id: job_id,
                             diagnostic_id: &job.report.metadata.id,
@@ -178,31 +175,28 @@ pub async fn process_hanlder(
                             kibana_link: job.report.kibana_link.as_ref().unwrap_or(&"#".to_string()),
                             product: &job.report.product.to_string(),
                         });
-                        state.record_success(job.report.docs.total, job.report.docs.errors).await;
                     },
                     Err(job) => {
+                        state.record_failure().await;
                         yield patch_template(template::JobFailed {
                             job_id: job_id,
                             error: &job.error,
                             source: job.filename.as_deref().unwrap_or(""),
                         });
-                        state.record_failure().await;
-                        state.job.record_failure(job).await;
+                        yield patch_signals(r#"{"processing":false}"#);
                     }
                 };
             },
             Err(job) => {
+                state.record_failure().await;
                 yield patch_template(template::JobFailed {
                     job_id: job_id,
                     error: &job.error,
                     source: job.filename.as_deref().unwrap_or(""),
                 });
-                state.record_failure().await;
-                state.job.record_failure(job).await;
             },
         };
 
-        let stats = state.get_stats().await;
-        yield patch_signals(&format!(r#"{{"processing":false,"stats":{stats}}}"#));
+        yield patch_signals(&format!(r#"{{"processing":false,"file_upload":{{"job_id":""}},"stats":{}}}"#, state.get_stats().await));
     })
 }

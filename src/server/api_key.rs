@@ -21,7 +21,7 @@ pub async fn handler(
     state: Arc<ServerState>,
 ) -> impl IntoResponse {
     // Extract authenticated user email from header
-    let username = get_user_email(&headers);
+    let user_email = get_user_email(&headers);
     let uri = signals.es_api.url.to_string();
 
     Sse::new(stream! {
@@ -56,16 +56,11 @@ pub async fn handler(
             }
         };
 
-        let identifiers = Identifiers {
-            account: None,
-            case_number: None,
-            filename: None,
-            opportunity: None,
-            user: username,
-        };
-
         let exporter = {
-            state.exporter.read().await.clone().with_identifiers(identifiers)
+            state.exporter.read().await.clone().with_identifiers(Identifiers {
+                user: user_email,
+                ..signals.metadata
+            })
         };
 
         match JobNew::new(&exporter.identifiers(), receiver).ready(exporter).await {
@@ -79,6 +74,7 @@ pub async fn handler(
 
                 match job.process().await {
                     Ok(job) => {
+                        state.record_success(job.report.docs.total, job.report.docs.errors).await;
                         yield patch_template(template::JobCompleted {
                             job_id: job.id,
                             diagnostic_id: &job.report.metadata.id,
@@ -88,33 +84,29 @@ pub async fn handler(
                             kibana_link: job.report.kibana_link.as_ref().unwrap_or(&"#".to_string()),
                             product: &job.report.product.to_string(),
                         });
-                        state.record_success(job.report.docs.total, job.report.docs.errors).await;
                     },
                     Err(job) => {
+                        state.record_failure().await;
                         yield patch_template(template::JobFailed {
                             job_id: job.id,
                             error: &job.error,
                             source: job.filename.as_deref().unwrap_or(""),
                         });
-                        state.record_failure().await;
-                        state.job.record_failure(job).await;
                     }
                 };
-                yield patch_signals(r#"{"es_api":{"url":"","key":""},"processing":false}"#);
+                yield patch_signals(&format!(r#"{{"es_api":{{"url":"","key":""}},"processing":false,"stats":{}}}"#, state.get_stats().await));
             },
             Err(job) => {
+                state.record_failure().await;
                 yield patch_job_feed(template::JobFailed {
                     job_id: job.id,
                     error: &job.error,
                     source: job.filename.as_deref().unwrap_or(""),
                 });
-                yield patch_signals(r#"{"processing":false}"#);
-                state.record_failure().await;
-                state.job.record_failure(job).await;
+                yield patch_signals(&format!(r#"{{"processing":false,"stats":{}}}"#, state.get_stats().await));
             },
         };
 
-        let signals = format!(r#"{{"processing":false,"stats":{}}}"#, state.get_stats().await);
-        yield patch_signals(&signals);
+        yield patch_signals(&format!(r#"{{"processing":false,"stats":{}}}"#, state.get_stats().await));
     })
 }

@@ -1,5 +1,5 @@
 body {
-    font-family: "Inter", BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+    font-family: 'Inter', BlinkMacSystemFont, Helvetica, Arial, sans-serif;
     padding: 0px;
     margin: 0px;
 }
@@ -13,7 +13,7 @@ code {
     background-color: rgb(246, 249, 252);
     border-radius: 4px;
     color: rgb(107, 60, 159);
-    font-family: "Roboto Mono", Menlo, Courier, monospace;
+    font-family: 'Roboto Mono', Menlo, Courier, monospace;
     font-size: 0.9em;
     font-weight: 600;
     padding-block: 0.2em;
@@ -24,7 +24,16 @@ h2 {
     color: rgb(17, 28, 44);
     font-weight: 600;
     word-break: break-word;
-    font-size: 1.1429rem;
+    font-size: 1.125rem;
+    line-height: 40px;
+    margin: 0px;
+}
+
+h3 {
+    color: rgb(17, 28, 44);
+    font-weight: 600;
+    word-break: break-word;
+    font-size: 1rem;
     line-height: 40px;
     margin: 0px;
 }
@@ -62,15 +71,32 @@ h2 {
 }
 
 .content {
-    max-width: 640px;
+    max-width: 800px;
+    display: block;
     margin: 0 auto;
     padding: 24px 12px;
 }
 
-.upload-form {
+.input-form {
+    display: flex;
+    justify-content: space-evenly;
     background-color: #ffffff;
     border-radius: 4px;
     border: 1px solid #e3e8f2;
+}
+
+.metadata-form {
+    display: block;
+    width: 40%;
+    background-color: #ffffff;
+    padding: 16px;
+    border-left: 1px solid #e3e8f2;
+}
+
+.diagnostic-form {
+    display: block;
+    width: 60%;
+    background-color: #ffffff;
     padding: 16px;
 }
 
@@ -101,11 +127,8 @@ h2 {
 .status-box {
     padding: 16px;
     border-radius: 4px;
-    max-width: 640px;
+    max-width: 800px;
     margin: 8px auto;
-}
-
-.status-box {
     transition:
         background-color 0.3s ease,
         color 0.3s ease,
@@ -245,6 +268,7 @@ h2 {
 }
 
 .file-info {
+    text-size: 0.8em;
     align-items: center;
     background-color: rgb(246, 249, 252);
     border-radius: 4px;
@@ -255,11 +279,9 @@ h2 {
 }
 
 .file-name {
-    margin-right: 10px;
-    max-width: 80%;
-    overflow: hidden;
+    overflow: scroll;
     text-overflow: ellipsis;
-    word-break: break-all;
+    word-break: break-word;
 }
 
 .clear-button {
@@ -312,7 +334,7 @@ h2 {
 .tab.active::after {
     background-color: #1339ab;
     bottom: -1px;
-    content: "";
+    content: '';
     height: 2px;
     left: 0;
     position: absolute;
@@ -342,7 +364,7 @@ h2 {
     color: #17284c;
     font-size: 14px;
     padding: 8px 12px;
-    width: 95%;
+    width: 85%;
 }
 
 .form-input:focus {
@@ -361,12 +383,12 @@ h2 {
     border: 1px solid #d3dae6;
     border-radius: 4px;
     color: #047471;
-    font-family: "Roboto Mono", Menlo, Courier, monospace;
+    font-family: 'Roboto Mono', Menlo, Courier, monospace;
     font-size: 13px;
     min-height: 80px;
     padding: 12px;
     resize: vertical;
-    width: 95%;
+    width: 85%;
 }
 
 .curl-textarea:focus {
@@ -392,7 +414,7 @@ h2 {
     cursor: not-allowed;
 }
 
-.clear-curl-link {
+.clear-link {
     color: #1339ab;
     cursor: pointer;
     font-size: 14px;
@@ -497,7 +519,7 @@ h2 {
     position: absolute;
     right: 8px;
     top: 48px;
-    width: 25%;
+    width: 20%;
     overflow: scroll;
 }
 

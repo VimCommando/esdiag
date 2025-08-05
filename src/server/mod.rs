@@ -6,11 +6,7 @@ mod service_link;
 mod template;
 
 use super::processor::Identifiers;
-use crate::{
-    data::Uri,
-    exporter::Exporter,
-    processor::{Job, JobFailed, JobProcessing},
-};
+use crate::{data::Uri, exporter::Exporter};
 use askama::Template;
 use axum::{
     Json, Router,
@@ -22,12 +18,7 @@ use axum::{
 use bytes::Bytes;
 use datastar::prelude::{ElementPatchMode, PatchElements, PatchSignals};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{HashMap, VecDeque},
-    convert::Infallible,
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
 use tokio::sync::{RwLock, mpsc, oneshot};
 
 static DATASTAR_JS: &str = include_str!("web/datastar.js");
@@ -66,33 +57,28 @@ pub struct Server {
 
 impl Server {
     pub fn new(port: u16, exporter: Exporter, kibana: String) -> Self {
-        let (tx, rx) = mpsc::channel::<(Identifiers, Bytes)>(1);
+        let (_, rx) = mpsc::channel::<(Identifiers, Bytes)>(1);
         let rx = Arc::new(RwLock::new(rx));
         let rx_clone = rx.clone();
 
         // Create shared state
         let state = Arc::new(ServerState {
-            upload_tx: tx.clone(),
-            job: JobState {
-                current: Arc::new(RwLock::new(None)),
-                history: Arc::new(RwLock::new(Vec::with_capacity(100))),
-                queue: Arc::new(RwLock::new(VecDeque::with_capacity(10))),
-            },
             signals: Arc::new(RwLock::new(Signals::default())),
             exporter: Arc::new(RwLock::new(exporter)),
             kibana,
             stats: Arc::new(RwLock::new(Stats::default())),
             uploads: Arc::new(RwLock::new(HashMap::new())),
+            links: Arc::new(RwLock::new(HashMap::new())),
         });
 
         // State pointers to move into closures
         let state_index = state.clone();
         let state_upload_submit = state.clone();
         let state_upload_process = state.clone();
-        let state_upload_service = state.clone();
+        let state_service_link = state.clone();
+        let state_service_link_job = state.clone();
         let state_api_key = state.clone();
-        let state_api_upload = state.clone();
-        let state_api_upload_service = state.clone();
+        let state_api_service_link = state.clone();
 
         // Start the Axum server
         let handle = tokio::spawn(async move {
@@ -108,8 +94,13 @@ impl Server {
                 }
             };
             let service_link_handler = {
-                move |headers, multipart: Multipart| async move {
-                    service_link::handler(headers, multipart, state_upload_service).await
+                move |headers, signals| async move {
+                    service_link::handler(headers, signals, state_service_link).await
+                }
+            };
+            let service_link_job_handler = {
+                move |headers, id| async move {
+                    service_link::job_handler(headers, id, state_service_link_job).await
                 }
             };
             let api_key_handler = {
@@ -119,16 +110,16 @@ impl Server {
             };
 
             // API Hanlders
-            let api_upload_handler = {
-                move |headers, multipart: Multipart| async move {
-                    api::upload_handler(headers, multipart, state_api_upload).await
-                }
-            };
             let api_service_link_handler = {
                 move |headers, json: Json<UploadServiceRequest>| async move {
-                    api::service_link_handler(headers, json, state_api_upload_service).await
+                    api::service_link_handler(headers, json, state_api_service_link).await
                 }
             };
+
+            let index_handler = {
+                move |params, headers| async move { index::handler(params, headers, state_index).await }
+            };
+
             let datastar_handler = async move || {
                 (
                     StatusCode::OK,
@@ -144,9 +135,6 @@ impl Server {
                     DATASTAR_JS_MAP,
                 )
             };
-
-            let index_handler =
-                { move |headers| async move { index::handler(headers, state_index).await } };
 
             let logo_handler = async move || {
                 (
@@ -179,9 +167,9 @@ impl Server {
                 .route("/upload/submit", post(upload_submit_handler))
                 .route("/upload/process", post(upload_process_handler))
                 .route("/service_link", post(service_link_handler))
+                .route("/service_link/{id}", post(service_link_job_handler))
                 .route("/api_key", post(api_key_handler))
                 .route("/api/service_link", post(api_service_link_handler))
-                .route("/api/upload", post(api_upload_handler))
                 .layer(DefaultBodyLimit::max(ONE_GIBIBYTE));
 
             let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -194,7 +182,7 @@ impl Server {
             }
         });
 
-        let mut server = Self {
+        let server = Self {
             server_handle: Some(Arc::new(handle)),
             worker_handle: None,
             shutdown_signal: None,
@@ -202,7 +190,6 @@ impl Server {
             state,
         };
 
-        server.start_worker();
         server
     }
 
@@ -240,35 +227,6 @@ impl Server {
             log::debug!("Server thread aborted");
         }
     }
-
-    // Start a thread to process diagnostics in the background
-    fn start_worker(&mut self) {
-        let state = self.state.clone();
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-
-        self.shutdown_signal = Some(Arc::new(shutdown_tx));
-
-        let handle = tokio::spawn(async move {
-            log::info!("Starting diagnostic worker thread");
-
-            loop {
-                tokio::select! {
-                    _ = &mut shutdown_rx => {
-                        log::debug!("Worker thread received shutdown signal");
-                        break;
-                    }
-                    _ = async {
-                        if state.job.process().await == false {
-                            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                        }
-                    } => {}
-                }
-            }
-        });
-
-        self.worker_handle = Some(Arc::new(handle));
-        log::debug!("Diagnostic worker thread started");
-    }
 }
 
 impl Default for Server {
@@ -298,11 +256,10 @@ impl Drop for Server {
 pub struct ServerState {
     pub exporter: Arc<RwLock<Exporter>>,
     pub kibana: String,
-    pub job: JobState,
     pub signals: Arc<RwLock<Signals>>,
     pub uploads: Arc<RwLock<HashMap<u64, (String, Bytes)>>>,
+    pub links: Arc<RwLock<HashMap<u64, (Identifiers, Uri)>>>,
     stats: Arc<RwLock<Stats>>,
-    upload_tx: mpsc::Sender<(Identifiers, Bytes)>,
 }
 
 impl ServerState {
@@ -324,27 +281,34 @@ impl ServerState {
         self.stats.read().await.clone()
     }
 
+    pub async fn push_link(
+        &self,
+        id: u64,
+        identifiers: Identifiers,
+        uri: Uri,
+    ) -> Option<(Identifiers, Uri)> {
+        log::debug!("Pushing service link id: {id}");
+        self.links.write().await.insert(id, (identifiers, uri))
+    }
+
+    pub async fn pop_link(&self, id: u64) -> Option<(Identifiers, Uri)> {
+        log::debug!("Popping service link id: {id}");
+        self.links.write().await.remove(&id)
+    }
+
     pub async fn push_upload(
         &self,
         id: u64,
         filename: String,
         data: Bytes,
     ) -> Option<(String, Bytes)> {
+        log::debug!("Pushing file upload id: {id}");
         self.uploads.write().await.insert(id, (filename, data))
     }
 
     pub async fn pop_upload(&self, id: u64) -> Option<(String, Bytes)> {
+        log::debug!("Popping file upload id: {id}");
         self.uploads.write().await.remove(&id)
-    }
-}
-
-impl ServerState {
-    pub async fn is_processing(&self) -> bool {
-        self.job.current.read().await.is_some()
-    }
-
-    pub async fn queue_size(&self) -> usize {
-        self.job.queue.read().await.len()
     }
 }
 
@@ -393,77 +357,15 @@ pub struct JobStats {
     pub failed: u64,
 }
 
-pub struct JobState {
-    current: Arc<RwLock<Option<JobProcessing>>>,
-    history: Arc<RwLock<Vec<Job>>>,
-    queue: Arc<RwLock<VecDeque<JobProcessing>>>,
-}
-
-impl JobState {
-    pub async fn process(&self) -> bool {
-        let job = match self.queue.write().await.pop_front() {
-            Some(job) => {
-                log::info!("Processing job {} from queue", job.id);
-                job
-            }
-            None => {
-                log::trace!("No jobs in queue");
-                return false;
-            }
-        };
-
-        {
-            self.current.write().await.replace(job.clone());
-        }
-
-        match job.process().await {
-            Ok(job_completed) => {
-                log::info!(
-                    "Job {} completed in {:.3} seconds",
-                    job_completed.id,
-                    job_completed.processing_seconds()
-                );
-                let mut history = self.history.write().await;
-                history.push(Job::Completed(job_completed));
-                let mut current = self.current.write().await;
-                *current = None;
-                true
-            }
-            Err(job_failed) => {
-                log::error!(
-                    "Job {} failed with error: {}",
-                    job_failed.id,
-                    job_failed.error
-                );
-                let mut history = self.history.write().await;
-                history.push(Job::Failed(job_failed));
-                let mut current = self.current.write().await;
-                *current = None;
-                false
-            }
-        }
-    }
-
-    pub async fn push(&self, job: JobProcessing) {
-        let mut queue = self.queue.write().await;
-        log::debug!("Adding job {} to queue {}", job.id, queue.len());
-        queue.push_back(job);
-    }
-
-    pub async fn record_failure(&self, job: JobFailed) {
-        log::error!("Job {} failed with error: {}", job.id, job.error);
-        self.history.write().await.push(Job::Failed(job));
-    }
-}
-
 #[derive(Debug, Deserialize)]
 pub struct Signals {
     pub processing: bool,
     pub uploading: bool,
-    pub es_api: EsApiKey,
-    pub service_link: ServiceLink,
-    pub stats: Stats,
+    pub metadata: Identifiers,
     pub file_upload: FileUpload,
+    pub service_link: ServiceLink,
+    pub es_api: EsApiKey,
+    pub stats: Stats,
 }
 
 impl Default for Signals {
@@ -471,17 +373,18 @@ impl Default for Signals {
         Signals {
             processing: false,
             uploading: false,
-            es_api: EsApiKey {
-                key: String::new(),
-                url: Uri::default(),
-            },
+            metadata: Identifiers::default(),
+            file_upload: FileUpload { job_id: 0 },
             service_link: ServiceLink {
                 url: Uri::default(),
                 token: String::new(),
                 filename: String::new(),
             },
+            es_api: EsApiKey {
+                key: String::new(),
+                url: Uri::default(),
+            },
             stats: Stats::default(),
-            file_upload: FileUpload { job_id: 0 },
         }
     }
 }

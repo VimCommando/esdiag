@@ -1,7 +1,7 @@
 use super::client::KnownHost;
 use crate::env;
 use eyre::Result;
-use eyre::{OptionExt, Report, eyre};
+use eyre::{OptionExt, Report};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     fs::OpenOptions,
@@ -34,7 +34,9 @@ pub enum Uri {
     /// Known host saved in the ~/.esdiag/hosts.yml by default
     KnownHost(KnownHost),
     /// An Elastic Uploader service URL, embed the auth token as `token:<value>@` instead of `username:password` in the URL
-    ElasticUploader(Url),
+    ServiceLink(Url),
+    /// An Elastic Uploader service URL, without authentication
+    ServiceLinkNoAuth(Url),
     /// A standard URL
     Url(Url),
     /// Directory on the local file system
@@ -66,7 +68,8 @@ impl Into<Url> for Uri {
         match self {
             Uri::Stream => Url::parse("stdin://").unwrap(),
             Uri::KnownHost(host) => host.into(),
-            Uri::ElasticUploader(url) => url,
+            Uri::ServiceLink(url) => url,
+            Uri::ServiceLinkNoAuth(url) => url,
             Uri::Url(url) => url,
             Uri::Directory(path) => Url::from_directory_path(path).unwrap(),
             Uri::File(path) => Url::from_file_path(path).unwrap(),
@@ -94,11 +97,11 @@ impl TryFrom<&str> for Uri {
             match (domain, url.username(), url.password()) {
                 ("upload.elastic.co", "token", Some(_)) => {
                     log::debug!("Creating Uri::ElasticUploader");
-                    return Ok(Uri::ElasticUploader(url));
+                    return Ok(Uri::ServiceLink(url));
                 }
                 ("upload.elastic.co", _, None) => {
                     log::debug!("Missing auth token for Elastic Uploader");
-                    return Err(eyre!("Elastic Uploader URLs require an auth token"));
+                    return Ok(Uri::ServiceLinkNoAuth(url));
                 }
                 _ => {
                     log::debug!("Creating Uri::Url");
@@ -146,7 +149,10 @@ impl std::fmt::Display for Uri {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Uri::KnownHost(host) => write!(f, "{}", host),
-            Uri::ElasticUploader(url) => {
+            Uri::ServiceLink(url) => {
+                write!(f, "{}{}", url.domain().expect("No domain"), url.path())
+            }
+            Uri::ServiceLinkNoAuth(url) => {
                 write!(f, "{}{}", url.domain().expect("No domain"), url.path())
             }
             Uri::Url(url) => write!(f, "{}", url),

@@ -159,7 +159,7 @@ impl TryFrom<Uri> for Receiver {
             Uri::Directory(dir) => Receiver::Directory(DirectoryReceiver::try_from(dir)?),
             Uri::File(file) => Receiver::ArchiveFile(ArchiveFileReceiver::try_from(file)?),
             Uri::KnownHost(host) => Receiver::Elasticsearch(ElasticsearchReceiver::try_from(host)?),
-            Uri::ElasticUploader(url) => {
+            Uri::ServiceLink(url) => {
                 Receiver::ArchiveBytes(UploadServiceDownloader::try_from(url)?.download()?)
             }
             _ => return Err(eyre!("Unsupported URI: {uri}")),

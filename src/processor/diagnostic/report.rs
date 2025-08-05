@@ -59,7 +59,7 @@ impl TryFrom<DiagnosticManifest> for DiagnosticReportBuilder {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Identifiers {
     pub account: Option<String>,
-    pub case_number: Option<u64>,
+    pub case_number: Option<String>,
     pub filename: Option<String>,
     pub opportunity: Option<String>,
     pub user: Option<String>,
@@ -71,6 +71,10 @@ impl Identifiers {
             user: self.user.or_else(|| username.cloned()),
             ..self
         }
+    }
+
+    pub fn filename_as_str(&self) -> &str {
+        self.filename.as_deref().unwrap_or("none")
     }
 }
 
