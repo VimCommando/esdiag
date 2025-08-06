@@ -1,18 +1,13 @@
 use super::{ServerState, UploadServiceRequest};
 use crate::{data::Uri, processor::new_job_id};
-use axum::{
-    Json,
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 use std::sync::Arc;
 use url::Url;
 
 pub async fn service_link_handler(
-    _headers: HeaderMap,
+    State(state): State<Arc<ServerState>>,
     Json(payload): Json<UploadServiceRequest>,
-    state: Arc<ServerState>,
 ) -> impl IntoResponse {
     log::info!(
         "Received JSON elastic uploader request for: {}",

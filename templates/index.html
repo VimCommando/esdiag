@@ -72,9 +72,13 @@
                     {{ user_initial }}
                     <div class="user-menu">
                         <div class="user-menu-header"><span>ESDiag</span> <span>v {{ version }}</span></div>
-                        <div id="username-display" data-signals-metadata.user="'{{ user }}'" class="user-menu-item">
-                            {{ user }}
-                        </div>
+                        <div
+                            id="username-display"
+                            data-signals-auth.header="{{ auth_header }}"
+                            data-signals-metadata.user="'{{ user }}'"
+                            data-text="$metadata.user"
+                            class="user-menu-item"
+                        ></div>
                     </div>
                 </div>
             </div>
@@ -445,7 +449,7 @@
                             <div class="form-group">
                                 <label for="api-key" class="form-label">Elasticsearch API Key</label>
                                 <input
-                                    type="text"
+                                    type="password"
                                     id="api-key"
                                     name="api-key"
                                     data-bind-es_api.key
@@ -468,6 +472,18 @@
                 </div>
                 <div id="metadata" class="metadata-form">
                     <h3>Metadata</h3>
+                    <div class="form-group">
+                        <label for="username" class="form-label">User</label>
+                        <input
+                            type="text"
+                            id="username"
+                            name="username"
+                            data-bind-metadata.user
+                            placeholder="Username"
+                            class="form-input"
+                            data-attr-disabled="$auth.header"
+                        />
+                    </div>
                     <div class="form-group">
                         <label for="account" class="form-label">Account</label>
                         <input

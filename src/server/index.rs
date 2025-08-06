@@ -1,7 +1,7 @@
 use super::{ServerState, get_user_email, template};
 use askama::Template;
 use axum::{
-    extract::Query,
+    extract::{Query, State},
     http::HeaderMap,
     response::{Html, IntoResponse},
 };
@@ -49,23 +49,25 @@ where
 }
 
 pub async fn handler(
+    State(state): State<Arc<ServerState>>,
     Query(params): Query<Params>,
     headers: HeaderMap,
-    state: Arc<ServerState>,
 ) -> impl IntoResponse {
-    let (user_initial, user_email) = match get_user_email(&headers) {
-        Some(email) => (email.chars().next().unwrap_or('_'), email),
-        None => ('_', "Anonymous".to_string()),
+    let (auth_header, user_initial, user_email) = match get_user_email(&headers) {
+        (auth_header, Some(email)) => (auth_header, email.chars().next().unwrap_or('_'), email),
+        _ => (false, '_', "Anonymous".to_string()),
     };
+
     let exporter_target = { state.exporter.read().await.to_string() };
     let index_html = template::Index {
+        auth_header,
+        debug: log::max_level() == log::Level::Debug,
         exporter: exporter_target,
         kibana_url: state.kibana.clone(),
-        debug: log::max_level() == log::Level::Debug,
-        user_initial,
-        user: user_email,
         link_id: params.link_id,
         upload_id: params.upload_id,
+        user: user_email,
+        user_initial,
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
 

@@ -21,6 +21,7 @@ pub struct Status<'s> {
 #[derive(Template)]
 #[template(path = "index.html")]
 pub struct Index {
+    pub auth_header: bool,
     pub debug: bool,
     pub exporter: String,
     pub kibana_url: String,

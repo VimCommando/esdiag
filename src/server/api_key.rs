@@ -1,6 +1,5 @@
 use super::{
-    Identifiers, ServerState, Signals, get_user_email, patch_job_feed, patch_signals,
-    patch_template, template,
+    Identifiers, ServerState, Signals, patch_job_feed, patch_signals, patch_template, template,
 };
 use crate::{
     client::KnownHostBuilder,
@@ -9,19 +8,17 @@ use crate::{
 };
 use async_stream::stream;
 use axum::{
-    http::HeaderMap,
+    extract::State,
     response::{IntoResponse, Sse},
 };
 use datastar::axum::ReadSignals;
 use std::sync::Arc;
 
 pub async fn handler(
-    headers: HeaderMap,
+    State(state): State<Arc<ServerState>>,
     ReadSignals(signals): ReadSignals<Signals>,
-    state: Arc<ServerState>,
 ) -> impl IntoResponse {
     // Extract authenticated user email from header
-    let user_email = get_user_email(&headers);
     let uri = signals.es_api.url.to_string();
 
     Sse::new(stream! {
@@ -58,7 +55,7 @@ pub async fn handler(
 
         let exporter = {
             state.exporter.read().await.clone().with_identifiers(Identifiers {
-                user: user_email,
+                user: signals.metadata.user,
                 ..signals.metadata
             })
         };

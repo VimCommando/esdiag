@@ -1,6 +1,5 @@
 use super::{
-    Identifiers, ServerState, Signals, get_user_email, patch_job_feed, patch_signals,
-    patch_template, template,
+    Identifiers, ServerState, Signals, patch_job_feed, patch_signals, patch_template, template,
 };
 use crate::{
     data::Uri,
@@ -9,21 +8,16 @@ use crate::{
 };
 use async_stream::stream;
 use axum::{
-    extract::Path,
-    http::HeaderMap,
+    extract::{Path, State},
     response::{IntoResponse, Sse},
 };
 use datastar::axum::ReadSignals;
 use std::sync::Arc;
 
 pub async fn handler(
-    headers: HeaderMap,
+    State(state): State<Arc<ServerState>>,
     ReadSignals(signals): ReadSignals<Signals>,
-    state: Arc<ServerState>,
 ) -> impl IntoResponse {
-    // Extract authenticated user email from header
-    let user_email = get_user_email(&headers);
-
     log::info!(
         "Received Elastic upload service request for: {}",
         signals.service_link.url
@@ -51,7 +45,6 @@ pub async fn handler(
                 });
                 yield patch_signals(r#"{"uploading":false}"#);
             }
-            log::debug!("Tokenized URI: {}", url);
             Uri::ServiceLink(url)
         } else {
             let error_msg = format!("Unsupported URL: {}", service_link.url);
@@ -86,7 +79,6 @@ pub async fn handler(
 
         let exporter = {
             state.exporter.read().await.clone().with_identifiers(Identifiers {
-                user: user_email,
                 filename: Some(signals.service_link.filename),
                 ..signals.metadata
             })
@@ -142,17 +134,14 @@ pub async fn handler(
 }
 
 pub async fn job_handler(
-    headers: HeaderMap,
+    State(state): State<Arc<ServerState>>,
     Path(id): Path<u64>,
-    state: Arc<ServerState>,
+    ReadSignals(signals): ReadSignals<Signals>,
 ) -> impl IntoResponse {
-    // Extract authenticated user email from header
-    let username = get_user_email(&headers);
-
     Sse::new(stream! {
         let (identifiers, uri): (Identifiers, Uri) = match state.pop_link(id).await{
             Some((mut identifiers, uri)) => {
-                identifiers.user = username;
+                identifiers.user = signals.metadata.user;
                 (identifiers, uri)
             },
             None => {

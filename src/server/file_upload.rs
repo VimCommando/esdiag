@@ -1,14 +1,11 @@
-use super::{
-    Identifiers, ServerState, Signals, get_user_email, patch_signals, patch_template, template,
-};
+use super::{Identifiers, ServerState, Signals, patch_signals, patch_template, template};
 use crate::{
     processor::{JobNew, new_job_id},
     receiver::Receiver,
 };
 use async_stream::stream;
 use axum::{
-    extract::Multipart,
-    http::HeaderMap,
+    extract::{Multipart, State},
     response::{Html, IntoResponse, Sse},
 };
 use bytes::Bytes;
@@ -17,12 +14,9 @@ use reqwest::StatusCode;
 use std::sync::Arc;
 
 pub async fn submit_handler(
-    headers: HeaderMap,
+    State(state): State<Arc<ServerState>>,
     mut multipart: Multipart,
-    state: Arc<ServerState>,
 ) -> impl IntoResponse {
-    // Extract authenticated user email from header
-    let _user_email = get_user_email(&headers);
     let job_id = new_job_id();
 
     // Process the multipart form
@@ -106,13 +100,10 @@ pub async fn submit_handler(
     }
 }
 
-pub async fn process_hanlder(
-    headers: HeaderMap,
+pub async fn process_handler(
+    State(state): State<Arc<ServerState>>,
     ReadSignals(signals): ReadSignals<Signals>,
-    state: Arc<ServerState>,
 ) -> impl IntoResponse {
-    // Extract authenticated user email from header
-    let user_email = get_user_email(&headers);
     log::debug!("Signals: {:?}", signals);
 
     // Use the signal job_id to override the job.id created in this function
@@ -148,7 +139,7 @@ pub async fn process_hanlder(
 
         let exporter = {
             state.exporter.read().await.clone().with_identifiers(Identifiers {
-                user: user_email,
+                user: signals.metadata.user,
                 filename: Some(filename.clone()),
                 ..signals.metadata
             })

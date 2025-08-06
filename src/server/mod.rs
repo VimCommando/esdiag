@@ -9,8 +9,8 @@ use super::processor::Identifiers;
 use crate::{data::Uri, exporter::Exporter};
 use askama::Template;
 use axum::{
-    Json, Router,
-    extract::{DefaultBodyLimit, Multipart},
+    Router,
+    extract::DefaultBodyLimit,
     http::{HeaderMap, StatusCode},
     response::sse::Event,
     routing::{get, post},
@@ -52,7 +52,6 @@ pub struct Server {
     worker_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
     shutdown_signal: Option<Arc<oneshot::Sender<()>>>,
     pub rx: Option<Arc<RwLock<mpsc::Receiver<(Identifiers, Bytes)>>>>,
-    pub state: Arc<ServerState>,
 }
 
 impl Server {
@@ -71,55 +70,8 @@ impl Server {
             links: Arc::new(RwLock::new(HashMap::new())),
         });
 
-        // State pointers to move into closures
-        let state_index = state.clone();
-        let state_upload_submit = state.clone();
-        let state_upload_process = state.clone();
-        let state_service_link = state.clone();
-        let state_service_link_job = state.clone();
-        let state_api_key = state.clone();
-        let state_api_service_link = state.clone();
-
         // Start the Axum server
         let handle = tokio::spawn(async move {
-            // Handlers
-            let upload_submit_handler = {
-                move |headers, multipart: Multipart| async move {
-                    file_upload::submit_handler(headers, multipart, state_upload_submit).await
-                }
-            };
-            let upload_process_handler = {
-                move |headers, signals| async move {
-                    file_upload::process_hanlder(headers, signals, state_upload_process).await
-                }
-            };
-            let service_link_handler = {
-                move |headers, signals| async move {
-                    service_link::handler(headers, signals, state_service_link).await
-                }
-            };
-            let service_link_job_handler = {
-                move |headers, id| async move {
-                    service_link::job_handler(headers, id, state_service_link_job).await
-                }
-            };
-            let api_key_handler = {
-                move |headers, signals| async move {
-                    api_key::handler(headers, signals, state_api_key).await
-                }
-            };
-
-            // API Hanlders
-            let api_service_link_handler = {
-                move |headers, json: Json<UploadServiceRequest>| async move {
-                    api::service_link_handler(headers, json, state_api_service_link).await
-                }
-            };
-
-            let index_handler = {
-                move |params, headers| async move { index::handler(params, headers, state_index).await }
-            };
-
             let datastar_handler = async move || {
                 (
                     StatusCode::OK,
@@ -157,26 +109,29 @@ impl Server {
 
             const ONE_GIBIBYTE: usize = 1024 * 1024 * 1024;
             let app = Router::new()
-                .route("/", get(index_handler))
+                .route("/", get(index::handler))
                 .route("/style.css", get(style_handler))
                 .route("/script.js", get(script_handler))
                 .route("/datastar.js", get(datastar_handler))
                 .route("/datastar.js.map", get(datastar_map_handler))
                 .route("/favicon.ico", get(logo_handler))
                 .route("/esdiag.svg", get(logo_handler))
-                .route("/upload/submit", post(upload_submit_handler))
-                .route("/upload/process", post(upload_process_handler))
-                .route("/service_link", post(service_link_handler))
-                .route("/service_link/{id}", post(service_link_job_handler))
-                .route("/api_key", post(api_key_handler))
-                .route("/api/service_link", post(api_service_link_handler))
+                .route("/upload/submit", post(file_upload::submit_handler))
+                .route("/upload/process", post(file_upload::process_handler))
+                .route("/service_link", post(service_link::handler))
+                .route("/service_link/{id}", post(service_link::job_handler))
+                .route("/api_key", post(api_key::handler))
+                .route("/api/service_link", post(api::service_link_handler))
                 .layer(DefaultBodyLimit::max(ONE_GIBIBYTE));
 
             let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
             // Start the server
             log::info!("Listening on port {}", port);
-            match axum_server::bind(addr).serve(app.into_make_service()).await {
+            match axum_server::bind(addr)
+                .serve(app.with_state(state).into_make_service())
+                .await
+            {
                 Ok(_) => log::info!("Server shutdown"),
                 Err(e) => log::error!("Server error: {}", e),
             }
@@ -187,7 +142,6 @@ impl Server {
             worker_handle: None,
             shutdown_signal: None,
             rx: Some(rx_clone),
-            state,
         };
 
         server
@@ -359,6 +313,7 @@ pub struct JobStats {
 
 #[derive(Debug, Deserialize)]
 pub struct Signals {
+    pub auth: Auth,
     pub processing: bool,
     pub uploading: bool,
     pub metadata: Identifiers,
@@ -371,6 +326,7 @@ pub struct Signals {
 impl Default for Signals {
     fn default() -> Self {
         Signals {
+            auth: Auth { header: false },
             processing: false,
             uploading: false,
             metadata: Identifiers::default(),
@@ -387,6 +343,11 @@ impl Default for Signals {
             stats: Stats::default(),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Auth {
+    pub header: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -427,15 +388,19 @@ pub fn patch_job_feed(template: impl Template) -> Result<Event, Infallible> {
     Ok(sse_event)
 }
 
-fn get_user_email(headers: &HeaderMap) -> Option<String> {
+fn get_user_email(headers: &HeaderMap) -> (bool, Option<String>) {
     match std::env::var("ESDIAG_USER").ok() {
-        Some(user) => Some(user),
-        None => headers
-            .get("X-Goog-Authenticated-User-Email")
-            .and_then(|value| value.to_str().ok())
-            .map(|email| {
-                // Google auth headers are typically in format "accounts.google.com:email"
-                email.split(':').last().unwrap_or(email).to_string()
-            }),
+        Some(user) => (false, Some(user)),
+        None => {
+            let has_header = headers.contains_key("X-Goog-Authenticated-User-Email");
+            let email = headers
+                .get("X-Goog-Authenticated-User-Email")
+                .and_then(|value| value.to_str().ok())
+                .map(|email| {
+                    // Google auth headers are typically in format "accounts.google.com:email"
+                    email.split(':').last().unwrap_or(email).to_string()
+                });
+            (has_header, email)
+        }
     }
 }
