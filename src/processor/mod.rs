@@ -104,7 +104,6 @@ trait DataProcessor<T, U> {
     fn generate_docs(self, lookups: Arc<T>, metadata: Arc<U>) -> (String, Vec<serde_json::Value>);
 }
 
-#[allow(dead_code)]
 trait DiagnosticProcessor {
     async fn new(
         manifest: DiagnosticManifest,
@@ -112,6 +111,7 @@ trait DiagnosticProcessor {
         exporter: Exporter,
     ) -> Result<Box<Self>>;
     async fn run(self) -> Result<DiagnosticReport>;
+    #[allow(dead_code)]
     fn id(&self) -> &str;
 }
 

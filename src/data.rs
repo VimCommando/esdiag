@@ -63,9 +63,9 @@ impl Default for Uri {
     }
 }
 
-impl Into<Url> for Uri {
-    fn into(self) -> Url {
-        match self {
+impl From<Uri> for Url {
+    fn from(uri: Uri) -> Self {
+        match uri {
             Uri::Stream => Url::parse("stdin://").unwrap(),
             Uri::KnownHost(host) => host.into(),
             Uri::ServiceLink(url) => url,

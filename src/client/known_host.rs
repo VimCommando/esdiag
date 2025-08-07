@@ -369,12 +369,12 @@ impl FromStr for KnownHost {
     }
 }
 
-impl Into<Url> for KnownHost {
-    fn into(self) -> Url {
-        match self {
-            Self::ApiKey { url, .. } => url.clone(),
-            Self::Basic { url, .. } => url.clone(),
-            Self::NoAuth { url, .. } => url.clone(),
+impl From<KnownHost> for Url {
+    fn from(host: KnownHost) -> Url {
+        match host {
+            KnownHost::ApiKey { url, .. } => url.clone(),
+            KnownHost::Basic { url, .. } => url.clone(),
+            KnownHost::NoAuth { url, .. } => url.clone(),
         }
     }
 }
