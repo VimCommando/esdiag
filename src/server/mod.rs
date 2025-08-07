@@ -1,5 +1,6 @@
 mod api;
 mod api_key;
+mod assets;
 mod file_upload;
 mod index;
 mod service_link;
@@ -11,7 +12,7 @@ use askama::Template;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::sse::Event,
     routing::{get, post},
 };
@@ -20,12 +21,6 @@ use datastar::prelude::{ElementPatchMode, PatchElements, PatchSignals};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
 use tokio::sync::{RwLock, mpsc, oneshot};
-
-static DATASTAR_JS: &str = include_str!("web/datastar.js");
-static DATASTAR_JS_MAP: &str = include_str!("web/datastar.js.map");
-static ESDIAG_SVG: &str = include_str!("web/esdiag.svg");
-static SCRIPT_JS: &str = include_str!("web/script.js");
-static STYLE_CSS: &str = include_str!("web/style.css");
 
 #[derive(Debug, Deserialize, Serialize)]
 struct UploadServiceRequest {
@@ -72,50 +67,14 @@ impl Server {
 
         // Start the Axum server
         let handle = tokio::spawn(async move {
-            let datastar_handler = async move || {
-                (
-                    StatusCode::OK,
-                    [("Content-Type", "text/javascript")],
-                    DATASTAR_JS,
-                )
-            };
-
-            let datastar_map_handler = async move || {
-                (
-                    StatusCode::OK,
-                    [("Content-Type", "application/json")],
-                    DATASTAR_JS_MAP,
-                )
-            };
-
-            let logo_handler = async move || {
-                (
-                    StatusCode::OK,
-                    [("Content-Type", "image/svg+xml")],
-                    ESDIAG_SVG,
-                )
-            };
-
-            let script_handler = async move || {
-                (
-                    StatusCode::OK,
-                    [("Content-Type", "application/javascript")],
-                    SCRIPT_JS,
-                )
-            };
-
-            let style_handler =
-                async move || (StatusCode::OK, [("Content-Type", "text/css")], STYLE_CSS);
-
             const ONE_GIBIBYTE: usize = 1024 * 1024 * 1024;
             let app = Router::new()
                 .route("/", get(index::handler))
-                .route("/style.css", get(style_handler))
-                .route("/script.js", get(script_handler))
-                .route("/datastar.js", get(datastar_handler))
-                .route("/datastar.js.map", get(datastar_map_handler))
-                .route("/favicon.ico", get(logo_handler))
-                .route("/esdiag.svg", get(logo_handler))
+                .route("/style.css", get(assets::style))
+                .route("/datastar.js", get(assets::datastar))
+                .route("/datastar.js.map", get(assets::datastar_map))
+                .route("/favicon.ico", get(assets::logo))
+                .route("/esdiag.svg", get(assets::logo))
                 .route("/upload/submit", post(file_upload::submit_handler))
                 .route("/upload/process", post(file_upload::process_handler))
                 .route("/service_link", post(service_link::handler))
