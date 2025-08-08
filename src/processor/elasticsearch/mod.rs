@@ -6,6 +6,8 @@ mod cluster_settings;
 pub mod collector;
 /// The `_data_stream` API
 mod data_stream;
+/// The `_health_report` API
+mod health_report;
 /// The `_ilm/explain` API
 mod ilm_explain;
 /// The `_ilm/policy` API
@@ -48,7 +50,10 @@ use super::{
         report::ProcessorSummary,
     },
 };
-use crate::{data, exporter::Exporter, receiver::Receiver};
+use crate::{
+    data, exporter::Exporter, processor::elasticsearch::health_report::HealthReport,
+    receiver::Receiver,
+};
 use eyre::{Result, eyre};
 use futures::{future::join_all, stream::FuturesUnordered};
 use serde::{Serialize, de::DeserializeOwned};
@@ -175,6 +180,7 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             spawn_processor::<ClusterSettings>(diag.clone()),
             spawn_processor::<IndicesSettings>(diag.clone()),
             spawn_processor::<IndicesStats>(diag.clone()),
+            spawn_processor::<HealthReport>(diag.clone()),
             spawn_processor::<Nodes>(diag.clone()),
             spawn_processor::<NodesStats>(diag.clone()),
             spawn_processor::<IlmPolicies>(diag.clone()),
