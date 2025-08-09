@@ -39,7 +39,10 @@ pub async fn handler(
             };
 
         let receiver = match Receiver::try_from(host) {
-            Ok(receiver) => receiver,
+            Ok(receiver) => {
+                log::info!("Created receiver: {}", receiver);
+                receiver
+            }
             Err(e) => {
                 state.record_failure().await;
                 let error_msg = format!("Failed to create receiver: {}", e);
