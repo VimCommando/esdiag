@@ -92,6 +92,9 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
         self.exporter.save_report(&*report).await?;
         // For now, we will return only the Elasticsearch report for the UI
         // TODO: Implement processor iterators - https://github.com/elastic/esdiag/issues/148#issuecomment-3172865628
+        if reports.is_empty() {
+            return Err(eyre::eyre!("No reports were collected. At least one diagnostic report is required."));
+        }
         Ok(reports[0].clone())
     }
 
