@@ -70,7 +70,7 @@ pub async fn handler(
                     job_id: job.id,
                     filename: job.filename.as_deref().unwrap_or(""),
                 });
-                yield patch_signals(r#"{"uploading":false,"processing":true}"#);
+                yield patch_signals(r#"{"loading":false,"processing":true}"#);
 
                 match job.process().await {
                     Ok(job) => {
