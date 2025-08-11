@@ -77,8 +77,11 @@ impl Receive for ElasticCloudAdminReceiver {
         // Get the API URL path for the provided type
         let path = T::source(PathType::Url)?;
         // Prepend the API proxy base path
-        let path = format!("{}/{}", self.url.path(), path);
-        let url = self.url.join(&path)?;
+        let path = match path {
+            "/" => &format!("{}/", self.url.path()),
+            _ => &format!("{}/{}", self.url.path(), path),
+        };
+        let url = self.url.join(path)?;
         log::debug!("Getting API: {}", url);
         let response = self.client.get(url).send().await?;
 
@@ -107,7 +110,10 @@ impl ReceiveRaw for ElasticCloudAdminReceiver {
         // Get the API URL path for the provided type
         let path = T::source(PathType::Url)?;
         // Prepend the API proxy base path
-        let path = format!("{}/{}", self.url.path(), path);
+        let path = match path {
+            "/" => &format!("{}/", self.url.path()),
+            _ => &format!("{}/{}", self.url.path(), path),
+        };
         let url = self.url.join(&path)?;
         log::debug!("Getting API: {}", url);
         let response = self.client.get(url).send().await?;
