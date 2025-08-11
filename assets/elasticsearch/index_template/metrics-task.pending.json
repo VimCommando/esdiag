@@ -2,7 +2,7 @@
   "_meta": {
     "description": "ESDiag Elasticsearch pending tasks stats"
   },
-  "index_patterns": ["metrics-pending_task-esdiag*"],
+  "index_patterns": ["metrics-task.pending-esdiag*"],
   "composed_of": [
     "esdiag@node",
     "esdiag@mappings",
