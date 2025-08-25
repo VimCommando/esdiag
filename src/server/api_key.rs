@@ -127,8 +127,8 @@ pub async fn id(
             None => {
                 yield patch_template(template::JobFailed {
                     job_id,
-                    error: &format!("Link id {} not found", job_id),
-                    source: "Forwarded service link job"
+                    error: &format!("API key id {} not found", job_id),
+                    source: "API key processing"
                 });
                 yield patch_signals(r#"{"loading":false}"#);
                 return
