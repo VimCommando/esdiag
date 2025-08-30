@@ -255,12 +255,17 @@ function kibana_objects_import() {
     local http_status=0
     while [[ $http_status -ne 200 ]]; do
         http_status=$(curl --silent \
+            --max-time 5 \
             --header "${auth_header}" \
             --write-out "%{http_code}"\
             --output /dev/null "${kibana_url}/app/home"
         )
-        if (( http_status >= 400 )); then
+        if [[ $http_status -ge 400 || $http_status == "000" ]]; then
             log_error "$(magenta Kibana) returned HTTP status code $(magenta "${http_status}")"
+            error_message=$("${container}" logs esdiag-kibana | tail -n 20 | grep ERROR | sed -e 's/.*ERROR]//')
+            if [[ -n $error_message ]]; then
+                log_error "${error_message}"
+            fi
             exit 1
         elif [[ $http_status -ne 200 ]]; then
             log_info "Waiting on $(magenta Kibana)..."
@@ -442,11 +447,26 @@ function command_auth() {
         --header "elastic-api-version: 2023-10-31" \
         --location "${kibana_url}/api/spaces/space/${kibana_space}"
     )
+
     log_debug "Kibana response: ${response}"
-    local status_code && status_code=$(echo "${response}" | jq --raw-output '.statusCode')
-    if [[ $status_code != "null" ]]; then
-        local error && error=$(echo "${response}" | jq --raw-output '.error')
-        local message && message=$(echo "${response}" | jq --raw-output '.message')
+
+    local status_code
+    local message
+    local error
+    if [[ "${response}" == "Kibana server is not ready yet" ]]; then
+        message="${response}"
+        error="Bad Gateway"
+        status_code=503
+        failure="true"
+    else
+        status_code=$(echo "${response}" | jq --raw-output '.statusCode')
+    fi
+
+    if (( status_code >= 400 )); then
+        if [[ -z $message ]]; then
+            error=$(echo "${response}" | jq --raw-output '.error')
+            message=$(echo "${response}" | jq --raw-output '.message')
+        fi
         log_error "Request to space $(magenta "${kibana_space}") $(red failed): ${status_code} - ${error}"
         log_error "${message}"
         failure="true"

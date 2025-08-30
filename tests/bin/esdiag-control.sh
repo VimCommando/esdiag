@@ -60,6 +60,7 @@ function log_debug() {
 # ----- Utility -----
 
 function test_start() {
+    log_debug "$(cyan start) ${*}"
     log_info "$(cyan start) ${*}" >> ${test_log}
     tests_total=$((tests_total + 1))
 }
@@ -147,8 +148,8 @@ function command_buildx_creates_multi_platform_images() {
 function command_auth_returns_success() {
     test_start "command_auth_returns_success"
     esdiag_control auth
-    elasticsearch_auth=$(grep "esdiag-control.*You Know, for Search" ${test_log} | wc -l)
-    kibana_auth=$(grep "esdiag-control] Kibana space" target/test-esdiag-control.log | grep -v "failed" | wc -l)
+    elasticsearch_auth=$(tail -n 20 ${test_log} | grep "esdiag-control.*You Know, for Search" | wc -l)
+    kibana_auth=$(tail -n 20 ${test_log} | grep "esdiag-control] Kibana space" | grep -v "failed" | wc -l)
     log_debug "Elasticsearch auth: $(white "${elasticsearch_auth}") Kibana auth: $(white "${kibana_auth}")"
 
     if [[ ${elasticsearch_auth} -eq 1 && ${kibana_auth} -eq 1 ]]; then
@@ -191,7 +192,7 @@ function command_remove_removes_containers {
     esdiag_control remove
     containers=$("$container" ps -a | grep esdiag | wc -l)
 
-    log_debug "Remove containers: $(white "${containers}")"
+    log_debug "Remove remaining containers: $(white "${containers}")"
     if [[ ${containers} -eq 0 ]]; then
         test_pass command_remove_removes_containers
     else
