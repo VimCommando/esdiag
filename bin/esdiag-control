@@ -5,23 +5,46 @@
 # Run `esdiag-control help <command>` for usage details
 
 # ----- Logging Functions -----
+
 declare log_name="esdiag-control"
 
+# Only print colors if output is a terminal
+declare colorize=false
+if [[ -t 1 ]]; then
+    colorize=true
+fi
+
+function echo_color() {
+    local color=$1; shift
+    if [[ $colorize == true ]]; then
+        echo -e -n "\033[${color}m${*}\033[39m"
+    else
+        echo -n "${*}"
+    fi
+}
+
 # Colorized echo statements
-function blue()    { echo -e -n "\033[94m${*}\033[39m"; }
-function cyan()    { echo -e -n "\033[36m${*}\033[39m"; }
-function gray()    { echo -e -n "\033[90m${*}\033[39m"; }
-function green()   { echo -e -n "\033[32m${*}\033[39m"; }
-function magenta() { echo -e -n "\033[35m${*}\033[39m"; }
-function red()     { echo -e -n "\033[31m${*}\033[39m"; }
-function white()   { echo -e -n "\033[97m${*}\033[39m"; }
-function yellow()  { echo -e -n "\033[33m${*}\033[39m"; }
+function black()     { echo_color 30 "${@}"; }
+function red()       { echo_color 31 "${@}"; }
+function green()     { echo_color 32 "${@}"; }
+function yellow()    { echo_color 33 "${@}"; }
+function blue()      { echo_color 34 "${@}"; }
+function magenta()   { echo_color 35 "${@}"; }
+function cyan()      { echo_color 36 "${@}"; }
+function gray()      { echo_color 90 "${@}"; }
+function lt_red()    { echo_color 91 "${@}"; }
+function lt_green()  { echo_color 92 "${@}"; }
+function lt_yellow() { echo_color 93 "${@}"; }
+function lt_blue()   { echo_color 94 "${@}"; }
+function lt_magenta(){ echo_color 95 "${@}"; }
+function lt_cyan()   { echo_color 96 "${@}"; }
+function white()     { echo_color 97 "${@}"; }
 
 # Colorized log messages
 function timestamp() { echo -n "$(date -u +"%Y-%m-%d %H:%M:%S")"; }
 function log_error() { echo "[$(timestamp) $(red Error) ${log_name}] ${*}"; }
-function log_warn()  { echo "[$(timestamp) $(yellow Warn) ${log_name}] ${*}"; }
-function log_info()  { echo "[$(timestamp) $(green Info) ${log_name}] ${*}"; }
+function log_warn()  { echo "[$(timestamp) $(yellow Warn)  ${log_name}] ${*}"; }
+function log_info()  { echo "[$(timestamp) $(green Info)  ${log_name}] ${*}"; }
 function log_debug() {
     if [[ $LOG_LEVEL == "debug" ]]; then
         echo "[$(timestamp) $(blue Debug) ${log_name}] ${*}"
@@ -226,6 +249,7 @@ function set_auth_header() {
 function kibana_objects_import() {
     local kibana_space="${kibana_space:-esdiag}"
     local response_file="target/kibana_import.json"
+    log_debug "Importing Kibana objects to space $(cyan "${kibana_space}")"
 
     # Wait for Kibana to be ready
     local http_status=0
@@ -236,7 +260,7 @@ function kibana_objects_import() {
             --output /dev/null "${kibana_url}/app/home"
         )
         if (( http_status >= 400 )); then
-            log_error "Kibana returned HTTP status code $(magenta "${http_status}")"
+            log_error "$(magenta Kibana) returned HTTP status code $(magenta "${http_status}")"
             exit 1
         elif [[ $http_status -ne 200 ]]; then
             log_info "Waiting on $(magenta Kibana)..."

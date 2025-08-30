@@ -14,15 +14,37 @@ truncate -s 0 ${test_log}
 
 declare log_name="test-esdiag-control"
 
+# Only print colors if output is a terminal
+declare colorize=false
+if [[ -t 1 ]]; then
+    colorize=true
+fi
+
+function echo_color() {
+    local color=$1; shift
+    if [[ $colorize == true ]]; then
+        echo -e -n "\033[${color}m${*}\033[39m"
+    else
+        echo -n "${*}"
+    fi
+}
+
 # Colorized echo statements
-function blue()    { echo -e -n "\033[94m${*}\033[39m"; }
-function cyan()    { echo -e -n "\033[36m${*}\033[39m"; }
-function gray()    { echo -e -n "\033[90m${*}\033[39m"; }
-function green()   { echo -e -n "\033[32m${*}\033[39m"; }
-function magenta() { echo -e -n "\033[35m${*}\033[39m"; }
-function red()     { echo -e -n "\033[31m${*}\033[39m"; }
-function white()   { echo -e -n "\033[97m${*}\033[39m"; }
-function yellow()  { echo -e -n "\033[33m${*}\033[39m"; }
+function black()     { echo_color 30 "${@}"; }
+function red()       { echo_color 31 "${@}"; }
+function green()     { echo_color 32 "${@}"; }
+function yellow()    { echo_color 33 "${@}"; }
+function blue()      { echo_color 34 "${@}"; }
+function magenta()   { echo_color 35 "${@}"; }
+function cyan()      { echo_color 36 "${@}"; }
+function gray()      { echo_color 90 "${@}"; }
+function lt_red()    { echo_color 91 "${@}"; }
+function lt_green()  { echo_color 92 "${@}"; }
+function lt_yellow() { echo_color 93 "${@}"; }
+function lt_blue()   { echo_color 94 "${@}"; }
+function lt_magenta(){ echo_color 95 "${@}"; }
+function lt_cyan()   { echo_color 96 "${@}"; }
+function white()     { echo_color 97 "${@}"; }
 
 # Colorized log messages
 function timestamp() { echo -n "$(date -u +"%Y-%m-%d %H:%M:%S")"; }
@@ -34,6 +56,8 @@ function log_debug() {
         echo "[$(timestamp) $(blue Debug) ${log_name}] ${*}"
     fi
 }
+
+# ----- Utility -----
 
 function test_start() {
     log_info "$(cyan start) ${*}" >> ${test_log}
