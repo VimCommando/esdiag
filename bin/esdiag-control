@@ -194,6 +194,9 @@ function apikey_setup() {
         export ESDIAG_OUTPUT_APIKEY="${apikey}"
         export apikey
         log_debug "API key generated $(cyan "${apikey:0:5}...") for ${elasticsearch_url}"
+        # Container has to be rebuilt to pick up the new API key environment variable
+        ${container} compose --env-file "${env_file}" --file "${compose_file}" down esdiag-webui
+        ${container} compose --env-file "${env_file}" --file "${compose_file}" up esdiag-webui --detach
     else
         log_debug "Using given API key $(cyan "${ESDIAG_OUTPUT_APIKEY:0:5}...")"
     fi
@@ -310,27 +313,6 @@ function set_auth_header() {
     else
         log_info "Using $(cyan Authorization: None)"
         export auth_header="Authorization: None"
-    fi
-}
-
-function kibana_password_setup () {
-    if [[ "${security}" == "false" ]]; then
-        log_info "Skipping $(magenta Kibana) security setup"
-    else
-        log_info "Setting up $(magenta Kibana) security"
-        local status=$(curl --silent -X POST \
-            --header "Authorization: Basic $(echo -n "elastic:${ELASTIC_PASSWORD}" | base64)" \
-            --header "Content-Type: application/json" \
-            --output /dev/null \
-            --write-out "%{http_code}" \
-            --data "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}" \
-            "${elasticsearch_url}/_security/user/kibana_system/_password"
-        )
-
-        if [[ $status -ne 200 ]]; then
-            log_error "Failed to set $(magenta kibana_system) password"
-            exit 1
-        fi
     fi
 }
 
@@ -686,44 +668,19 @@ function command_launch() {
     fi
 
     security_setup
-    log_info "Starting Elasticsearch $(white "${container} compose up esdiag-elasticsearch")"
+    log_info "Starting containers $(white "${container} compose up --detach")"
     ${container} compose \
         --env-file "${env_file}" \
         --file "${compose_file}" \
-        up esdiag-elasticsearch --detach > /dev/null 2>&1 &
+        up --detach > /dev/null 2>&1 &
     wait $!
     # shellcheck disable=SC2181
     if [[ $? -ne 0 ]]; then
-        log_error "$(white "${container} compose up esdiag-elasticsearch") $(red failed) with exit status ${?}"
+        log_error "$(white "${container} compose up") $(red failed) with exit status ${?}"
         ${container} compose --env-file "${env_file}" --file "${compose_file}" logs | tail -n10
         exit $?
     fi
     apikey_setup
-    kibana_password_setup
-    log_info "Starting Kibana $(white "${container} compose up esdiag-kibana")"
-    # shellcheck disable=SC2181
-    ${container} compose \
-        --env-file "${env_file}" \
-        --file "${compose_file}" \
-        up esdiag-kibana --detach > /dev/null 2>&1 &
-    wait $!
-    if [[ $? -ne 0 ]]; then
-        log_error "$(white "${container} compose up esdiag-kibana") $(red failed) with exit status ${?}"
-        ${container} compose --env-file "${env_file}" --file "${compose_file}" logs | tail -n10
-        exit $?
-    fi
-    log_info "Starting ESDiag $(white "${container} compose up esdiag-webui")"
-    ${container} compose \
-        --env-file "${env_file}" \
-        --file "${compose_file}" \
-        up esdiag-webui --detach > /dev/null 2>&1 &
-    wait $!
-    # shellcheck disable=SC2181
-    if [[ $? -ne 0 ]]; then
-        log_error "$(white "${container} compose up esdiag-webui") $(red failed) with exit status ${?}"
-        ${container} compose --env-file "${env_file}" --file "${compose_file}" logs | tail -n10
-        exit $?
-    fi
 }
 
 # ----- Command: remove -----

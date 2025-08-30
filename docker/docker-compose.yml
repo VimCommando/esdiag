@@ -19,6 +19,7 @@ services:
         condition: service_healthy
     environment:
       ESDIAG_OUTPUT_URL: http://esdiag-elasticsearch:9200
+      ESDIAG_OUTPUT_APIKEY: ${ESDIAG_OUTPUT_APIKEY}
       ESDIAG_KIBANA_URL: ${ESDIAG_KIBANA_URL}/s/${ESDIAG_KIBANA_SPACE}
       LOG_LEVEL: info
     command: ["serve"]
@@ -63,18 +64,42 @@ services:
       timeout: 10s
       retries: 30
 
+  esdiag-kibana-setup:
+    depends_on:
+      esdiag-elasticsearch:
+        condition: service_healthy
+    image: ${ELASTIC_CONTAINER_REGISTRY}/elasticsearch/elasticsearch:${ELASTIC_VERSION}
+    container_name: esdiag-kibana-setup
+    restart: "no"
+    networks:
+      - net
+    command: >
+      bash -c '
+        echo "Setup the kibana_system password";
+        start_time=$$(date +%s);
+        timeout=60;
+        until curl -s -u "elastic:${ELASTIC_PASSWORD}" -X POST http://esdiag-elasticsearch:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}" -H "Content-Type: application/json" | grep -q "^{}"; do
+          if [ $$(($$(date +%s) - $$start_time)) -ge $$timeout ]; then
+            echo "Error: Elasticsearch timeout";
+            exit 1;
+          fi;
+          sleep 2;
+        done;
+      '
+
   esdiag-kibana:
     container_name: esdiag-kibana
     image: ${ELASTIC_CONTAINER_REGISTRY}/kibana/kibana:${ELASTIC_VERSION}
     depends_on:
-      esdiag-elasticsearch:
-        condition: service_healthy
+      esdiag-kibana-setup:
+        condition: service_completed_successfully
     environment:
       - SERVER_NAME=kibana
       - ELASTICSEARCH_HOSTS=http://esdiag-elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
       - ELASTICSEARCH_PASSWORD=${KIBANA_SYSTEM_PASSWORD}
       - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
-      - ELASTICSEARCH_PUBLICBASEURL=${ESDIAG_KIBANA_URL}
+      - ELASTICSEARCH_PUBLICBASEURL=${ESDIAG_OUTPUT_URL}
     volumes:
       - data:/usr/share/kibana/data
     networks:
@@ -85,7 +110,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -s -I http://kibana:5601 | grep -q 'HTTP/1.1 302 Found'",
+          "curl -s -I http://esdiag-kibana:5601 | grep -q 'HTTP/1.1 302 Found'",
         ]
       interval: 10s
       timeout: 10s
