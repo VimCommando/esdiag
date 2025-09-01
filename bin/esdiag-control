@@ -67,8 +67,9 @@ function print_help_main() {
     white "Commands:\n"
     echo "    $(green build)    Build an ESDiag container image for the local host's platform"
     echo "    $(green buildx)   Build a multi-platform ESDiag container image with buildx"
-    echo "    $(green launch)   Generate and launch a full Elastic Stack deployment using Docker compose"
+    echo "    $(green launch)   Generate and launch a full Elastic Stack deployment using compose"
     echo "    $(green setup)    Setup the target Elasticsearch and Kibana instances with ESDiag assets"
+    echo "    $(green remove)   Remove down the Elasticsearch, Kibana and ESDiag contaiers"
     echo "    $(green help)     To get detailed <command> help, use a command name as the <argument>"
     echo
     white "Options:\n"
@@ -94,7 +95,7 @@ function env_file_source() {
 
     # Set default space
     export kibana_space=${kibana_space_arg:-${ESDIAG_KIBANA_SPACE:-esdiag}}
-    log_debug "Using space $(cyan "${kibana_space}")"
+    log_debug "Space: $(cyan "${kibana_space}")"
 }
 
 function environment_setup() {
@@ -109,6 +110,7 @@ function environment_setup() {
     export esdiag_image="${esdiag_registry}/esdiag/esdiag:${version}"
     export esdiag_image_latest="${esdiag_registry}/esdiag/esdiag:latest"
 
+    export security=${security:-${ELASTIC_SECURITY_ENABLED:-"true"}}
     # Use ESDIAG_OUTPUT* environment variables to configure Elastic Stack authentication
     export apikey=${ESDIAG_OUTPUT_APIKEY}
     export username=${ESDIAG_OUTPUT_USERNAME}
@@ -143,22 +145,23 @@ function password_reset() {
 
 function security_setup() {
     if [[ "${security}" == "false" ]]; then
-        log_info "$(yellow --insecure) disabling security"
+        log_info "$(yellow disabling) security: $(white '--insecure')"
         export ELASTIC_SECURITY_ENABLED=false
         sed -i -e 's/^export ELASTIC_SECURITY_ENABLED=.*/export ELASTIC_SECURITY_ENABLED=false/' "${env_file}"
+    elif [[ ! -z "${ELASTIC_PASSWORD}" ]]; then
+        log_info "$(green found) $(gray "${env_file}") with system passwords and encryption key"
     else
-        local status_code
         log_info "Generating $(cyan elastic) superuser password"
-        local elastic_password="$(random_password)"
+        elastic_password="$(random_password)"
         sed -i -e "s/ELASTIC_PASSWORD=.*/ELASTIC_PASSWORD='${elastic_password}'/" "${env_file}"
         export ELASTIC_PASSWORD="${elastic_password}"
 
-        local kibana_password="$(random_password)"
+        kibana_password="$(random_password)"
         log_info "Generating $(cyan kibana_system) user password";
         sed -i -e "s/KIBANA_SYSTEM_PASSWORD=.*/KIBANA_SYSTEM_PASSWORD='${kibana_password}'/" "${env_file}"
         export KIBANA_SYSTEM_PASSWORD="${kibana_password}"
 
-        local kibana_encryption_key="$(random_password)"
+        kibana_encryption_key="$(random_password)"
         log_info "Generating Kibana $(cyan encryption key)";
         sed -i -e "s/KIBANA_ENCRYPTION_KEY=.*/KIBANA_ENCRYPTION_KEY='${kibana_encryption_key}'/" "${env_file}"
         export KIBANA_ENCRYPTION_KEY="${kibana_encryption_key}"
@@ -198,7 +201,7 @@ function apikey_setup() {
         ${container} compose --env-file "${env_file}" --file "${compose_file}" down esdiag-webui
         ${container} compose --env-file "${env_file}" --file "${compose_file}" up esdiag-webui --detach
     else
-        log_debug "Using given API key $(cyan "${ESDIAG_OUTPUT_APIKEY:0:5}...")"
+        log_debug "$(green found) existing API key $(cyan "${ESDIAG_OUTPUT_APIKEY:0:5}...")"
     fi
 }
 
@@ -213,9 +216,9 @@ function github_token_check() {
         "${esdiag_github_url}")
 
     if [[ $token_status == "200" ]]; then
-        log_info "GitHub token is $(green valid): http ${token_status}"
+        log_info "$(green validated) GitHub token: http ${token_status}"
     else
-        log_error "GitHub token is $(red invalid): http ${token_status}"
+        log_error "$(red invalid) GitHub token: http ${token_status}"
         exit 1
     fi
 }
@@ -293,7 +296,16 @@ function dashboards_latest_release_download() {
 # ----- Kibana Functions -----
 
 function set_auth_header() {
-    log_debug "Setting authorization header"
+    log_debug "$(green setting) authorization header"
+
+    if [[ ! -z $auth_header ]]; then
+        log_debug "$(green reusing) auth header $(cyan "${auth_header}")"
+        return 0
+    elif [[ "${security}" == "false" ]]; then
+        log_info "$(green setting) header $(cyan Authorization: None)"
+        export auth_header="Authorization: None"
+        return 0
+    fi
 
     if [[ -z $kibana_url ]]; then
         log_error "Kibana URL is not defined"
@@ -304,14 +316,15 @@ function set_auth_header() {
     fi
 
     if [[ ! -z $apikey ]]; then
-        log_info "Using $(cyan Authorization: ApiKey)"
+        log_info "$(green set) header $(cyan Authorization: ApiKey)"
         export auth_header="Authorization: ApiKey ${apikey}"
     elif [[ ! -z $password ]]; then
-        log_info "Using $(cyan Authorization: Basic) for $(cyan "${username}")"
+        log_info "$(green set) header $(cyan Authorization: Basic) for $(cyan "${username}")"
         auth_header="Authorization: Basic $(echo -n "${username}:${password}" | base64)"
         export auth_header
     else
-        log_info "Using $(cyan Authorization: None)"
+        log_warn "$(yellow missing) security credentials"
+        log_info "$(green setting) header $(cyan Authorization: None)"
         export auth_header="Authorization: None"
     fi
 }
@@ -319,7 +332,7 @@ function set_auth_header() {
 function kibana_objects_import() {
     local kibana_space="${kibana_space:-esdiag}"
     local response_file="target/kibana_import.json"
-    log_debug "Importing Kibana objects to space $(cyan "${kibana_space}")"
+    log_debug "$(green starting) import Kibana objects into space $(cyan "${kibana_space}")"
 
     # Wait for Kibana to be ready
     local http_status=0
@@ -346,13 +359,13 @@ function kibana_objects_import() {
             local container_status
             container_status=$(${container} inspect esdiag-kibana --format '{{.State.Status}}')
             if [[ $container_status == "exited" ]]; then
-                log_info "$(blue Kibana) container $(red exited)!"
+                log_info "$(green exited) $(magenta Kibana) container"
                 ${container} logs esdiag-kibana | tail -n 10
                 exit 1
             fi
         fi
     done
-    log_info "$(magenta Kibana) is $(green ready)!"
+    log_info "$(green serving) $(magenta Kibana) at $(blue "${kibana_url}")"
     # Kibana's "ready" is overly optimistic and imports may fail, so give it another second
     sleep 1
 
@@ -360,7 +373,7 @@ function kibana_objects_import() {
     set_auth_header
     # check for a 404, if it is not found, create it:
     # https://esdiag-prod.kb.us-west-2.aws.found.io/api/spaces/space/esdiag
-    log_info "Creating Kibana space $(cyan "${kibana_space}") on $(blue "${kibana_url}")"
+    log_info "$(green creating) $(magenta Kibana) space $(cyan "${kibana_space}")"
     curl -X POST "${kibana_url}/api/spaces/space" \
         --header "${auth_header}" \
         --header "kbn-xsrf: true" \
@@ -369,7 +382,7 @@ function kibana_objects_import() {
         --data @"assets/kibana/space.json" \
         | jq > "${response_file}"
 
-    log_info "Importing $(gray "$dashboard_file") to $(blue "${kibana_url}") in the $(cyan "${kibana_space}") space"
+    log_info "$(green importing) $(magenta Kibana) objects into space: $(cyan "${kibana_space}")"
     curl -X POST "${kibana_url}/s/${kibana_space}/api/saved_objects/_import?overwrite=true" \
         --header "${auth_header}" \
         --header "kbn-xsrf: true" \
@@ -384,25 +397,28 @@ function kibana_objects_import() {
         exit 1
     fi
     success_count=$(jq -r .successCount "${response_file}")
-    export success_count
+    log_debug "$(green success) $(magenta Kibana) objects imported: $(cyan "${success_count}")"
 }
 
 function browser_open() {
-    log_info "Opening web browser to $(blue "${esdiag_url}")"
     if [[ $(command -v explorer.exe) ]]; then
         # Windows Subsystem for Linux (WSL)
+        log_info "$(green running) $(white explorer.exe "${esdiag_url}")"
         explorer.exe "${esdiag_url}"
     elif [[ $(command -v open) ]]; then
         # MacOS
+        log_info "$(green running) $(white open "${esdiag_url}")"
         open "${esdiag_url}"
     elif [[ $(command -v gnome-open) ]]; then
         # Linux with Gnome
+        log_info "$(green running) $(white gnome-open "${esdiag_url}")"
         gnome-open "${esdiag_url}"
     elif [[ $(command -v xdg-open) ]]; then
         # Linux, more generic
+        log_info "$(green running) $(white xdg-open "${esdiag_url}")"
         xdg-open "${esdiag_url}"
     else
-        log_warn "No browser launcher found"
+        log_info "No browser launcher found"
     fi
 }
 
@@ -431,14 +447,16 @@ function validate_dependencies() {
     local failures=0
 
     if command -v podman &> /dev/null; then
+        # Supresses warning message for external compose provider
+        export PODMAN_COMPOSE_WARNING_LOGS=false
         container="podman"
     elif command -v docker &> /dev/null; then
         container="docker"
     else
-        log_error "Required container runtime $(magenta docker) or $(magenta podman) is not found"
+        log_error "$(red missing) container runtime, neither $(magenta docker) nor $(magenta podman) found"
         failures=$((failures + 1))
     fi
-    log_info "Using $(white "${container}") container runtime"
+    log_debug "$(green using) $(white "${container}") container runtime"
     export container
 
     if ! command -v curl &> /dev/null; then
@@ -573,7 +591,7 @@ function command_build() {
     if [[ $(${container} image ls --quiet "${esdiag_image}" 2> /dev/null) == "" ]]; then
         log_info "Building $(cyan "esdiag:${version}") container image"
     else
-        log_info "Skipping $(white "${container} build"), found current container image $(cyan "esdiag:${version}")"
+        log_info "$(green skipping) build, found current container image $(cyan "esdiag:${version}")"
         return
     fi
 
@@ -617,7 +635,7 @@ function command_buildx() {
 
     # shellcheck disable=SC2181
     if [[ $? -eq 0 ]]; then
-        log_info "$(white "${container} buildx") is $(green complete)"
+        log_debug "$(white "${container} buildx") is $(green complete)"
     else
         log_error "$(white "${container} buildx") $(red failed) with exit status ${?}"
         exit $?
@@ -635,12 +653,24 @@ function print_help_launch () {
     echo "    -e, --env <NAME|FILE>  - The $(gray .env.NAME) or $(gray FILE) to source credentials from (default $(gray .env))"
     echo "    -i, --insecure         - Setup the Elasticsearch cluster with security disabled"
     echo "    -r, --registry <URL>   - Elastic container registry URL"
-    echo "    -s, --space            - Kibana space id (default $(gray esdiag)"
+    echo "    -s, --space            - Kibana space id (default $(gray esdiag))"
     echo
     white "Environment Variables:\n"
     echo "    ELASTIC_CONTAINER_REGISTRY - Elastic container registry (default $(gray "docker.elastic.co"))"
     echo "    ESDIAG_REGISTRY            - Private container registry (default $(gray "localhost"))"
     echo
+}
+
+function compose_file_select() {
+    if [[ -f "${compose_file}" ]]; then
+        log_debug "$(green found) compose file: $(gray "${compose_file}")"
+    elif [[ "${security}" == "false" ]]; then
+        log_debug "Using $(yellow insecure) compose file"
+        cp docker/docker-compose-insecure.yml target/docker-compose.yml
+    else
+        log_debug "Using $(cyan secure) compose file"
+        cp docker/docker-compose.yml target/docker-compose.yml
+    fi
 }
 
 function command_launch() {
@@ -658,7 +688,7 @@ function command_launch() {
         memory=$(( $(docker info --format '{{.MemTotal}}') / 1024 / 1024 ))
     fi
 
-    log_info "$(white "${container}") machine $(gray "${machine}") allocated with $(cyan "${cpus} CPUs") and $(cyan "${memory}MB") memory"
+    log_info "$(green found) machine $(cyan "${machine}") allocated with $(cyan "${cpus} CPUs") and $(cyan "${memory}MB") memory"
     if [[ $memory -lt 8192 ]]; then
         log_error "Required minimum container engine memory is $(magenta 8192MB)"
         exit 1
@@ -668,12 +698,12 @@ function command_launch() {
     fi
 
     security_setup
-    log_info "Starting containers $(white "${container} compose up --detach")"
+    compose_file_select
+    log_info "$(green running) $(white "${container} compose up --detach")"
     ${container} compose \
         --env-file "${env_file}" \
         --file "${compose_file}" \
-        up --detach > /dev/null 2>&1 &
-    wait $!
+        up --detach
     # shellcheck disable=SC2181
     if [[ $? -ne 0 ]]; then
         log_error "$(white "${container} compose up") $(red failed) with exit status ${?}"
@@ -691,21 +721,30 @@ function print_help_remove () {
     echo "    Remove all containers with $(white "${container}" compose down), optionally also delete the volume"
     echo
     white "Options:\n"
+    echo "    --remove-file          - Also remove the currently-configured $(gray target/docker-compose.yml) file"
     echo "    --remove-image         - Also remove the ESDiag image, will require re-building or re-downloading for next $(white launch)"
-    echo "    --remove-volume        - Also remove the volume $(yellow WARNING:) Permenantly erases all data off the cluster!"
+    echo "    --remove-volume        - Also remove the volume $(yellow WARNING:) Permenantly all data from the cluster and invalidates security configuration!"
+    echo "    --remove-all           - Remove the containers, image, volume, and compose file"
     echo
 }
 
 function command_remove() {
-    log_info "Removing containers with $(white "${container}" compose down)"
+    log_info "$(green running) $(white "${container}" compose down)"
     ${container} compose --env-file "${env_file}" --file "${compose_file}" down
     if [[ "${remove_image}" == "true" ]]; then
         log_info "Removing image $(magenta "${esdiag_image}")"
         ${container} image rm "${esdiag_image}" "${esdiag_image_latest}"
     fi
     if [[ "${remove_volume}" == "true" ]]; then
-        log_info "Removing volume $(magenta esdiag_data)"
+        log_info "$(green running) $(white volume rm esdiag_data)"
         ${container} volume rm esdiag_data
+        if [[ "${?}" -eq 0  && -f "${env_file}" ]]; then
+            log_warn "The security configured in $(gray "${env_file}") is now $(red invalid)"
+        fi
+    fi
+    if [[ "${remove_file}" == "true" ]]; then
+        log_info "$(green running) $(white rm "${compose_file}")"
+        rm "${compose_file}"
     fi
 }
 
@@ -759,12 +798,13 @@ function elasticsearch_templates_setup() {
             fi
         fi
     done
-    log_info "$(blue Elasticsearch) is $(green ready)!"
+    log_info "$(green serving) $(blue Elasticsearch) at $(blue "${elasticsearch_url}")"
 
+    log_debug "$(green running) $(white "esdiag setup")"
     # If we already have a running container from compose, use it
     local compose_status && compose_status=$(${container} inspect esdiag --format '{{.State.Status}}')
     if [[ "${compose_status}" == "running" ]]; then
-        log_debug "Using existing $(cyan esdiag) compose container"
+        log_debug "$(green found) existing $(cyan esdiag) container"
         ${container} compose --env-file "${env_file}" --file "${compose_file}" run --rm esdiag-webui setup &> /dev/null
     else
         ${container} run --rm --name="esdiag-setup" \
@@ -778,9 +818,9 @@ function elasticsearch_templates_setup() {
 
     # shellcheck disable=SC2181
     if [[ $? -eq 0 ]]; then
-        log_info "$(white "esdiag setup") is $(green complete)!"
+        log_debug "$(green completed) $(white "esdiag setup")"
     else
-        log_error "$(white "esdiag setup") $(red failed) with exit status ${?}"
+        log_error "$(red failed) $(white "esdiag setup") with exit status ${?}"
         exit $?
     fi
 }
@@ -788,7 +828,7 @@ function elasticsearch_templates_setup() {
 function command_setup() {
     # If we have a GitHub token, try to download the latest dashboard file
     if [[ -z $GITHUB_TOKEN ]]; then
-        log_info "No GitHub token, $(green skipping) version checks and building with local version $(cyan "${version}")"
+        log_info "$(green skipping) GitHub version checks (no access token), building from local version $(cyan "${version}")"
     else
         github_token_check \
         && esdiag_version_check \
@@ -798,7 +838,7 @@ function command_setup() {
     set_auth_header
     # If we have a dashboard file, proceed with setup
     if [[ -f $dashboard_file ]]; then
-        log_debug "$(green found) dashboard file $(cyan "${dashboard_file}")"
+        log_debug "$(green found) dashboard file $(gray "${dashboard_file}")"
         elasticsearch_templates_setup \
         && kibana_objects_import
     else
@@ -813,8 +853,7 @@ validate_dependencies
 
 # Validate and set command
 declare command="${1}" && shift
-log_debug "Command: ${command}"
-if [[ ! $command =~ ^(auth|build|buildx|launch|remove|setup|-?-?h(elp)?)?$ ]]; then
+if [[ ! ${command} =~ ^(auth|build|buildx|launch|remove|setup|-?-?h(elp)?)?$ ]]; then
     log_error "Invalid command $(magenta "$command")"
     print_help_main
     exit 1
@@ -862,6 +901,16 @@ while [[ $# -gt 0 ]]; do
             declare security="false"
             shift
         ;;
+        --remove-all)
+            declare remove_file=true
+            declare remove_image=true
+            declare remove_volume=true
+            shift
+        ;;
+        --remove-file)
+            declare remove_file=true
+            shift
+        ;;
         --remove-image)
             declare remove_image=true
             shift
@@ -890,7 +939,7 @@ done
 # ----- Execute command -----
 
 env_file_source && environment_setup
-log_debug "Executing command $(green "${command}")"
+log_debug "Input command: $(white "${command}")"
 case $command in
     "help" )
         case "${1}" in
@@ -906,45 +955,49 @@ case $command in
     ;;
     "auth" )
         if [[ $help == "true" ]]; then print_help_auth && exit 0; fi
-        log_info "$(green authorization) checks"
+        log_info "$(white authorization) checks"
         command_auth && \
-        log_info "$(green auth) complete"
+        log_debug "$(white auth) complete"
     ;;
     "build" )
         if [[ $help == true ]]; then print_help_build && exit 0; fi
-        log_info "$(green build) esdiag container for $(white "linux/$(uname -m)")"
+        log_info "$(white build) esdiag container for $(white "linux/$(uname -m)")"
         command_build && \
-        log_info "$(green build) complete"
+        log_debug "$(white build) complete"
     ;;
     "buildx" )
         if [[ $help == true ]]; then print_help_buildx && exit 0; fi
-        log_info "$(green buildx) esdiag container for $(white "linux/x86_64") and $(white "linux/arm64")"
+        log_info "$(white buildx) esdiag container for $(white "linux/x86_64") and $(white "linux/arm64")"
         command_buildx && \
-        log_info "$(green buildx) complete"
+        log_debug "$(white buildx) complete"
     ;;
     "launch" )
         if [[ $help == true ]]; then print_help_launch && exit 0; fi
-        declare compose_file="${1:-docker/docker-compose.yml}"
-        log_info "$(green launch) ${container} compose from $(gray "${compose_file}")"
+        declare compose_file="target/docker-compose.yml"
+        compose_file_select
+        log_info "$(white launch) ${container} compose with $(gray "${compose_file}")"
         command_build && \
         command_launch && \
         command_setup && \
+        log_info "$(green serving) $(cyan ESDiag) at $(blue "${esdiag_url}")" && \
         browser_open && \
-        log_info "$(green launch) complete"
+        log_debug "$(white launch) complete"
     ;;
     "remove" )
         if [[ $help == true ]]; then print_help_remove && exit 0; fi
-        declare compose_file="${1:-docker/docker-compose.yml}"
-        log_info "$(green remove) containers${remove_image:+ image}${remove_volume:+ volume}"
+        declare compose_file="target/docker-compose.yml"
+        compose_file_select
+        log_info "$(white remove) containers${remove_image:+ image}${remove_volume:+ volume}"
         command_remove && \
-        log_info "$(green remove) complete"
+        log_debug "$(white remove) complete"
     ;;
     "setup" )
         if [[ $help == true ]]; then print_help_setup && exit 0; fi
-        declare compose_file="${1:-docker/docker-compose.yml}"
-        log_info "$(green setup) Elasticsearch $(gray "${elasticsearch_url}") and Kibana $(gray "${kibana_url}")"
+        declare compose_file="target/docker-compose.yml"
+        compose_file_select
+        log_info "$(white setup) Elasticsearch $(gray "${elasticsearch_url}") and Kibana $(gray "${kibana_url}")"
         command_setup && \
-        log_info "$(green setup) complete"
+        log_debug "$(white setup) complete"
     ;;
     * )
         if [[ $# == 0 ]]; then

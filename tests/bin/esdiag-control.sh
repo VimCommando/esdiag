@@ -3,7 +3,8 @@
 # ----- Environment -----
 
 declare esdiag_dir="${1:-.}"
-declare version=$(grep -o '^version = ".*"' Cargo.toml | sed -E 's/^version = "(.*)"/\1/')
+declare version
+version=$(grep --only-matching '^version = ".*"' Cargo.toml | sed -E 's/^version = "(.*)"/\1/')
 declare tests_passed=0
 declare tests_failed=0
 declare tests_total=0
@@ -79,7 +80,7 @@ function test_pass() {
 
 function esdiag_control() {
     local command=$1; shift
-    ${esdiag_dir}/bin/esdiag-control $command --env .env.test ${*} >> ${test_log} 2>&1
+    "${esdiag_dir}/bin/esdiag-control" "${command}" --env .env.test "${@}" >> ${test_log} 2>&1
 }
 
 # ----- Tests -----
@@ -90,14 +91,14 @@ function shellcheck_returns_zero_issues() {
     if (( lines == 0 )); then
         test_pass shellcheck_returns_zero_issues
     else
-        test_fail shellcheck_returns_zero_issues returned ${lines} lines
+        test_fail shellcheck_returns_zero_issues returned "${lines}" lines
     fi
 }
 
 function command_help_prints_usage() {
     test_start "command_help_prints_usage"
     esdiag_control help
-    lines=$(grep "Usage:" ${test_log} | wc -l)
+    lines=$(grep --count "Usage:" "${test_log}")
     if (( lines > 0 )); then
         test_pass command_help_prints_usage
     else
@@ -107,18 +108,18 @@ function command_help_prints_usage() {
 
 function command_build_creates_container_image() {
     test_start "command_build_creates_container_image"
-    local image_id && image_id=$(${container} image ls --quiet esdiag:${version})
+    local image_id && image_id=$(${container} image ls --quiet "esdiag:${version}")
 
-    # make sure the esdiag:version image doesn't exist
+    # make sure the esdiag:latest and esdiag:version images don't exist
     if [[ -n ${image_id} ]]; then
-        log_debug "Removing existing image ${image_id}"
-        ${container} rmi ${image_id} >> ${test_log} 2>&1 \
-        || log_warn "$(yellow failed) to remove existing image ${image_id}"
+        log_debug "Removing existing image: $(cyan esdiag esdiag:${version})"
+        ${container} image rm esdiag "esdiag:${version}" >> "${test_log}" 2>&1 \
+        || log_error "$(red failed) to remove existing image ${image_id}"
     fi
 
     # Build the esdiag image
     if esdiag_control build; then
-        image_id=$(${container} image ls --quiet esdiag:${version})
+        image_id=$(${container} image ls --quiet "esdiag:${version}")
         test_pass command_build_creates_container_image
     else
         test_fail command_build_creates_container_image with exit code "${?}"
@@ -127,18 +128,18 @@ function command_build_creates_container_image() {
 
 function command_buildx_creates_multi_platform_images() {
     test_start "command_buildx_creates_multi_platform_images"
-    local image_id && image_id=$(${container} image ls --quiet esdiag:${version})
+    local image_id && image_id=$(${container} image ls --quiet "esdiag:${version}")
 
-    # make sure the esdiag:version image doesn't exist
+    # make sure the esdiag:latest and esdiag:version images don't exist
     if [[ -n ${image_id} ]]; then
-        log_debug "Removing existing image ${image_id}"
-        ${container} rmi ${image_id} >> ${test_log} 2>&1 \
+        log_debug "Removing existing image: $(cyan esdiag esdiag:${version})"
+        ${container} image rm esdiag "esdiag:${version}" >> "${test_log}" 2>&1 \
         || log_error "$(red failed) to remove existing image ${image_id}"
     fi
 
     # Build the esdiag image
-    if esdiag_control buildx >> ${test_log} 2>&1; then
-        image_id=$(${container} image ls --quiet esdiag:${version})
+    if esdiag_control buildx >> "${test_log}" 2>&1; then
+        image_id=$(${container} image ls --quiet "esdiag:${version}")
         test_pass command_buildx_creates_multi_platform_images "${image_id}"
     else
         test_fail command_buildx_creates_multi_platform_images with exit code "${?}"
@@ -148,8 +149,8 @@ function command_buildx_creates_multi_platform_images() {
 function command_auth_returns_success() {
     test_start "command_auth_returns_success"
     esdiag_control auth
-    elasticsearch_auth=$(tail -n 20 ${test_log} | grep "esdiag-control.*You Know, for Search" | wc -l)
-    kibana_auth=$(tail -n 20 ${test_log} | grep "esdiag-control] Kibana space" | grep -v "failed" | wc -l)
+    elasticsearch_auth=$(tail -n 20 ${test_log} | grep --count "esdiag-control.*You Know, for Search")
+    kibana_auth=$(tail -n 20 ${test_log} | grep "esdiag-control] Kibana space" | grep --count --invert-match "failed")
     log_debug "Elasticsearch auth: $(white "${elasticsearch_auth}") Kibana auth: $(white "${kibana_auth}")"
 
     if [[ ${elasticsearch_auth} -eq 1 && ${kibana_auth} -eq 1 ]]; then
@@ -177,7 +178,7 @@ function command_launch_insecure_starts_stack_containers() {
 function command_setup_completes_successfully() {
     test_start "command_setup_completes_successfully"
     esdiag_control setup
-    success=$(tail -n 20 ${test_log} | grep "esdiag-control].*esdiag setup.*is.*complete.*!$" | wc -l)
+    success=$(tail -n 20 ${test_log} | grep --count "importing Kibana objects into space:")
 
     log_debug "Setup success: $(white "${success}")"
     if [[ ${success} -eq 1 ]]; then
@@ -189,14 +190,15 @@ function command_setup_completes_successfully() {
 
 function command_remove_removes_containers {
     test_start "command_remove_removes_containers"
+    before=$("$container" ps -a | grep --count esdiag)
     esdiag_control remove
-    containers=$("$container" ps -a | grep esdiag | wc -l)
+    after=$("$container" ps -a | grep --count esdiag)
 
-    log_debug "Remove remaining containers: $(white "${containers}")"
-    if [[ ${containers} -eq 0 ]]; then
+    log_debug "Remove remaining containers: $(white "${before}")"
+    if [[ ${before} -gt 0 && ${after} -eq 0 ]]; then
         test_pass command_remove_removes_containers
     else
-        test_fail command_remove_removes_containers found $(magenta "${containers}") $(gray esdiag-*) containers
+        test_fail command_remove_removes_containers found "$(magenta "${before}")" "$(gray esdiag-*)" containers
     fi
 }
 
@@ -212,7 +214,7 @@ function command_launch_secure_starts_stack_containers {
     if [[ ${elasticsearch_status} == "running" && ${kibana_status} == "running" && ${esdiag_status} == "running" ]]; then
         test_pass command_launch_secure_starts_stack_containers
     else
-        test_fail command_launch_secure_starts_stack_containers Elasticsearch: $(magenta "${elasticsearch_status}") Kibana: $(magenta "${kibana_status}") ESDiag: $(magenta "${esdiag_status}")
+        test_fail command_launch_secure_starts_stack_containers Elasticsearch: "$(magenta "${elasticsearch_status}")" Kibana: "$(magenta "${kibana_status}")" ESDiag: "$(magenta "${esdiag_status}")"
     fi
 }
 
@@ -242,6 +244,12 @@ function env_setup() {
     export container
 }
 
+function env_teardown() {
+    if [[ -f .env.test ]]; then
+        rm .env.test
+    fi
+}
+
 function tests_summary() {
     if (( tests_failed > 0 )); then
         log_info "Tests run: $(cyan "${tests_total}") passed: $(green "${tests_passed}") failed: $(red "${tests_failed}")"
@@ -262,8 +270,12 @@ function tests_run() {
     # Second launch and with security enabled
     command_launch_secure_starts_stack_containers
     command_auth_returns_success
+    command_setup_completes_successfully
+    # Tear down environment
+    command_remove_removes_containers
 }
 
 env_setup
 tests_run
 tests_summary
+env_teardown
