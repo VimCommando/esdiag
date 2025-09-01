@@ -45,12 +45,7 @@ Build a multi-platform container image, pushing it to the container registry
 esdiag-control buildx --push
 ```
 
-Generate a `target/esdiag-compose.yml` compose file for a full Elastic Stack
-```sh
-esdiag-control compose
-```
-
-Generate a `target/esdiag-compose.yml` compose file, with security disabled, and open a browser to it
+Generate and launch a full Elastic Stack deployment, with security disabled, and open a browser to it
 ```sh
 esdiag-control launch --insecure
 ```
@@ -86,8 +81,9 @@ Commands:
     auth     Test the authentication for ESDIAG_OUTPUT_URL and ESDIAG_KIBANA_URL
     build    Build an ESDiag container image for the local host's platform
     buildx   Build a multi-platform ESDiag container image with buildx
-    launch   Generate and launch a full Elastic Stack deployment using Docker compose
+    launch   Generate and launch a full Elastic Stack deployment using compose
     setup    Setup the target Elasticsearch and Kibana instances with ESDiag assets
+    remove   Remove down the Elasticsearch, Kibana and ESDiag contaiers
     help     To get detailed <command> help, use a command name as the <argument>
 
 Options:
@@ -126,7 +122,7 @@ Options:
     -p, --push             - Push the container image to the registry
 
 Environment Variables:
-    ESDIAG_REGISTRY - Private container registry to publish to
+    ESDIAG_REGISTRY        - Private container registry to publish to (default localhost)
 ```
 
 ### buildx
@@ -141,14 +137,14 @@ Options:
     -p, --push             - Push the container image to the registry
 
 Environment Variables:
-    ESDIAG_REGISTRY - Private container registry to publish to
+    ESDIAG_REGISTRY        - Private container registry to publish to (default localhost)
 ```
 
 ### launch
 
 ```
-Command: launch [input_file] [output_file]
-    Generate, launch, and setup a full Elastic Stack deployment with docker compose up -d
+Command: launch [options]
+    Generate, launch, and setup a full Elastic Stack deployment with podman compose up -d
 
 Options:
     -e, --env <NAME|FILE>  - The .env.NAME or FILE to source credentials from (default .env)
@@ -156,31 +152,29 @@ Options:
     -r, --registry <URL>   - Elastic container registry URL
     -s, --space            - Kibana space id (default esdiag)
 
-Arguments:
-    [input_file]           - Compose file to read in (default docker/docker-compose.yml)
-    [output_file]          - Compose file to save out (default target/esdiag-compose.yml)
-
 Environment Variables:
     ELASTIC_CONTAINER_REGISTRY - Elastic container registry (default docker.elastic.co)
-    ESDIAG_REGISTRY            - Private container registry (default $ELASTIC_CONTAINER_REGISTRY)
+    ESDIAG_REGISTRY            - Private container registry (default localhost)
 ```
 
 ### remove
 
 ```
 Command: remove
-    Remove all containers with podman compose down), optionally also delete the volume
+    Remove all containers with podman compose down, optionally also delete the volume
 
 Options:
+    --remove-file          - Also remove the currently-configured target/docker-compose.yml file
     --remove-image         - Also remove the ESDiag image, will require re-building or re-downloading for next launch
-    --remove-volume        - Also remove the volume WARNING: Permenantly erases all data off the cluster!
+    --remove-volume        - Also remove the volume WARNING: Permenantly all data from the cluster and invalidates security configuration!
+    --remove-all           - Remove the containers, image, volume, and compose file
 ```
 
 ### setup
 
 ```
 Command: setup
-    Generate, launch, and setup a full Elastic Stack deployment with docker compose up -d
+    Generate, launch, and setup a full Elastic Stack deployment with compose up -d
 
 Options:
     -e, --env <NAME|FILE>  - The .env.NAME or FILE to source credentials from (default .env)
@@ -190,7 +184,7 @@ Options:
 
 Environment Variables:
     ELASTIC_CONTAINER_REGISTRY - Elastic container registry (default docker.elastic.co)
-    ESDIAG_REGISTRY            - Private container registry (default $ELASTIC_CONTAINER_REGISTRY)
+    ESDIAG_REGISTRY            - Private container registry (default localhost)
     ESDIAG_KIBANA_URL          - Kibana URL (default http://localhost:5601)
     ESDIAG_OUTPUT_URL          - Elasticsearch URL (default http://localhost:9200)
     ESDIAG_OUTPUT_APIKEY       - Elasticsearch API key , takes precedence over username/password
@@ -203,7 +197,7 @@ Environment Variables:
 ### podman/docker compose up failed with exit status 0
 
 If you have used Docker compose with Docker Desktop on your machine in the past, you may see an error like this:
-```sh
+```
 [2025-08-24 18:22:44 Info esdiag-control] Running podman compose up --detach
 [2025-08-24 18:23:27 Error esdiag-control] podman compose up failed with exit status 0
 
