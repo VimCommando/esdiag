@@ -1,3 +1,7 @@
+// Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
+// or more contributor license agreements. Licensed under the Elastic License 2.0;
+// you may not use this file except in compliance with the Elastic License 2.0.
+
 use super::{ApiKeyRequest, ServerState, UploadServiceRequest};
 use crate::{client::KnownHostBuilder, data::Uri, processor::new_job_id};
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};

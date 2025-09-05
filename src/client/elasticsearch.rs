@@ -1,3 +1,7 @@
+// Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
+// or more contributor license agreements. Licensed under the Elastic License 2.0;
+// you may not use this file except in compliance with the Elastic License 2.0.
+
 use super::{auth::Auth, known_host::KnownHost};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use elasticsearch::{

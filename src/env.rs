@@ -1,3 +1,7 @@
+// Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
+// or more contributor license agreements. Licensed under the Elastic License 2.0;
+// you may not use this file except in compliance with the Elastic License 2.0.
+
 pub const ESDIAG_ES_BULK_SIZE: usize = 5_000;
 pub const ESDIAG_ES_WORKERS: usize = 4;
 pub static ESDIAG_HOME: &str = ".esdiag";
