@@ -4,13 +4,10 @@
 
 use super::super::{collector::CollectionResult, diagnostic::PathType};
 use super::{
-    DataSource, DiagnosticManifest, Product, alias::AliasList, cluster_settings::ClusterSettings,
-    data_stream::DataStreams, health_report::HealthReport, ilm_explain::IlmExplain,
-    ilm_policies::IlmPolicies, indices_settings::IndicesSettings, indices_stats::IndicesStats,
-    licenses::Licenses, nodes::Nodes, nodes_stats::NodesStats, pending_tasks::PendingTasks,
-    searchable_snapshots_cache_stats::SearchableSnapshotsCacheStats,
-    searchable_snapshots_stats::SearchableSnapshotsStats, slm_policies::SlmPolicies, tasks::Tasks,
-    version::Cluster,
+    AliasList, Cluster, ClusterSettings, DataSource, DataStreams, DiagnosticManifest, HealthReport,
+    IlmExplain, IlmPolicies, IndicesSettings, IndicesStats, Licenses, Nodes, NodesStats,
+    PendingTasks, Product, SearchableSnapshotsCacheStats, SearchableSnapshotsStats, SlmPolicies,
+    Tasks,
 };
 use crate::{exporter::DirectoryExporter, receiver::Receiver};
 use eyre::Result;

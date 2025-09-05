@@ -77,6 +77,7 @@ use {
     nodes_stats::NodesStats,
     pending_tasks::PendingTasks,
     searchable_snapshots_cache_stats::{SearchableSnapshotsCacheStats, SharedCacheStats},
+    searchable_snapshots_stats::SearchableSnapshotsStats,
     slm_policies::SlmPolicies,
     tasks::Tasks,
 };
