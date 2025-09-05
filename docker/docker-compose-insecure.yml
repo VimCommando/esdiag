@@ -10,14 +10,6 @@
 # Ensure you've allocated your container runtime virtual machine at least 8 GB
 # of memory and as many CPU cores as you can spare for fast ingest performance.
 # Diagnostics with over 100k shards or 100 nodes may require more memory.
-# The bin/stack-local-setup.sh builds the required esdiag container and
-# runs a minimal, security-disabled Elasticsearch and Kibana stack.
-#
-# Only use this for running esdiag on a local machine!
-#
-# Ensure you've allocated your container runtime virtual machine at least 8 GB
-# of memory and as many CPU cores as you can spare for fast ingest performance.
-# Diagnostics with over 100k shards or 100 nodes may require more memory.
 
 name: esdiag
 services:

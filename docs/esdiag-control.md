@@ -119,7 +119,7 @@ Command: down
 Options:
     --remove-file          - Also remove the currently-configured target/docker-compose.yml file
     --remove-image         - Also remove the ESDiag image, will require re-building or re-downloading for a new container
-    --remove-volume        - Also remove the volume WARNING: Permenantly all data from the cluster and invalidates security configuration!
+    --remove-volume        - Also remove the volume WARNING: Permanently deletes all data from the cluster and invalidates security configuration!
     --remove-all           - Remove the containers, image, volume, and compose file
 ```
 

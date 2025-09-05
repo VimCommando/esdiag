@@ -59,7 +59,7 @@ or with security disabled:
 Once the script is complete, you will have:
 1. A single Elasticsearch node with all index templates installed.
 2. A fully-configured Kibana instance with dashboards, data views, and saved searches imported.
-3. An `esdiag:latest` container container serving the web interface.
+3. An `esdiag:latest` container serving the web interface.
 4. A web browser opened to the ESDiag web interface at http://localhost:3000
 5. If you configured `automated` dashboard updates, re-running the script will update and re-import the dashboards.
 
