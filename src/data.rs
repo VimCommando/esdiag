@@ -91,8 +91,6 @@ impl From<Uri> for Url {
 }
 
 fn identify_elastic_host(host: KnownHost) -> Uri {
-    // https://admin.us-gov-east-1.aws.elastic-cloud.com/api/v1/deployments/2492c05b8d1f4c4d8c1ecb05ec59e4c0/elasticsearch/elasticsearch/proxy/
-    // https://admin.us-gov-east-1.aws.elastic-cloud.com/deployments/2492c05b8d1f4c4d8c1ecb05ec59e4c0
     match host.get_url().as_str() {
         url if url.contains("admin.us-gov-east-1.aws.elastic-cloud.com") => {
             log::debug!("Creating Uri::ElasticGovCloudAdmin");
