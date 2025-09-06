@@ -98,26 +98,6 @@ pub struct ElasticsearchDiagnostic {
     queue: ExporterDocumentQueue,
 }
 
-impl ElasticsearchDiagnostic {
-    async fn process_queue(&self, name: String) -> Option<ProcessorSummary> {
-        let queue = self.queue.clone();
-        let exporter = self.exporter.clone();
-
-        let mut queue_guard = queue.write().await;
-        if let Some((index, docs)) = queue_guard.pop() {
-            log::debug!("Processing queue {index}");
-            exporter
-                .write(index, docs)
-                .await
-                .ok()
-                .map(|summary| summary.rename(name).was_parsed())
-        } else {
-            log::warn!("Queue was empty");
-            None
-        }
-    }
-}
-
 impl DiagnosticProcessor for ElasticsearchDiagnostic {
     async fn new(
         manifest: DiagnosticManifest,
@@ -170,7 +150,7 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
 
     async fn run(self) -> Result<DiagnosticReport> {
         log::debug!("Running Elasticsearch diagnostic processors");
-        if let false = self.exporter.is_connected().await {
+        if self.exporter.is_connected().await == false {
             return Err(eyre!("Exporter is not connected"));
         }
 
@@ -180,8 +160,8 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
 
         let diag = Arc::new(self);
 
-        let futures = FuturesUnordered::new();
-        let mut tasks = vec![
+        let mut futures = FuturesUnordered::new();
+        let tasks = vec![
             spawn_processor::<ClusterSettings>(diag.clone()),
             spawn_processor::<IndicesSettings>(diag.clone()),
             spawn_processor::<IndicesStats>(diag.clone()),
@@ -190,30 +170,33 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             spawn_processor::<NodesStats>(diag.clone()),
             spawn_processor::<IlmPolicies>(diag.clone()),
             spawn_processor::<SlmPolicies>(diag.clone()),
-            // Temporarily omitting in favor of an include/exclude/diag_type filter to
-            // prevent the expected error
-            // spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
+            //spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
             spawn_processor::<Tasks>(diag.clone()),
             spawn_processor::<PendingTasks>(diag.clone()),
         ];
-        tasks.drain(..).map(|task| futures.push(task)).count();
+        futures.extend(tasks);
 
-        let mut report = diag.report.write().await;
-        report.add_identifiers(diag.exporter.identifiers());
-        join_all(futures)
-            .await
-            .into_iter()
-            .filter_map(Result::ok)
-            .flatten()
-            .for_each(|summary| report.add_processor_summary(summary));
+        {
+            let mut report = diag.report.write().await;
+            report.add_identifiers(diag.exporter.identifiers());
+            join_all(futures)
+                .await
+                .into_iter()
+                .filter_map(Result::ok)
+                .flatten()
+                .for_each(|summary| report.add_processor_summary(summary));
 
-        report.add_origin(
-            Some(diag.metadata.cluster.display_name.clone()),
-            Some(diag.metadata.cluster.uuid.clone()),
-            Some("cluster".to_string()),
-        );
-        diag.exporter.save_report(&*report).await?;
-        Ok(report.clone())
+            report.add_origin(
+                Some(diag.metadata.cluster.display_name.clone()),
+                Some(diag.metadata.cluster.uuid.clone()),
+                Some("cluster".to_string()),
+            );
+            diag.exporter.save_report(&*report).await?;
+        }
+
+        // Clone the report after releasing the write lock
+        let report = diag.report.read().await.clone();
+        Ok(report)
     }
 
     fn id(&self) -> &str {
@@ -227,18 +210,33 @@ fn spawn_processor<T>(diagnostic: Arc<ElasticsearchDiagnostic>) -> DataProcessor
 where
     T: DataSource + DataProcessor<Lookups, ElasticsearchMetadata> + DeserializeOwned + Send + Sync,
 {
+    let exporter = diagnostic.exporter.clone();
     let lookups = diagnostic.lookups.clone();
     let metadata = diagnostic.metadata.clone();
+    let queue = diagnostic.queue.clone();
+    let receiver = diagnostic.receiver.clone();
+
     Box::pin(tokio::task::spawn(async move {
-        let docs = diagnostic
-            .receiver
+        let docs = receiver
             .get::<T>()
             .await
             .map(|data| data.generate_docs(lookups, metadata));
         match docs {
             Ok(docs) => {
-                diagnostic.queue.write().await.push(docs);
-                diagnostic.process_queue(T::name()).await
+                queue.write().await.push(docs);
+                // Process queue directly instead of calling diagnostic.process_queue
+                let mut queue_guard = queue.write().await;
+                if let Some((index, docs)) = queue_guard.pop() {
+                    log::debug!("Processing queue {index}");
+                    exporter
+                        .write(index, docs)
+                        .await
+                        .ok()
+                        .map(|summary| summary.rename(T::name()).was_parsed())
+                } else {
+                    log::warn!("Queue was empty");
+                    None
+                }
             }
             Err(e) => {
                 log::warn!("No {} data found: {e}", T::name());
