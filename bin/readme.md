@@ -1,5 +1,5 @@
-ESDiag Additional Executables
-=============================
+Elastic Stack Diagnostics Additional Executables
+================================================
 
 1. [esdiag-control](#esdiag-control)
 2. [min-diag.sh](#min-diagsh)
