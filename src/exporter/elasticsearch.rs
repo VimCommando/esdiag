@@ -14,6 +14,7 @@ use elasticsearch::{
 };
 use eyre::{Result, eyre};
 use futures::stream::FuturesUnordered;
+use serde::Serialize;
 use serde_json::{Value, json};
 use url::Url;
 
@@ -103,7 +104,10 @@ impl Export for ElasticsearchExporter {
         status_code == 200
     }
 
-    async fn write(&self, index: String, mut docs: Vec<Value>) -> Result<ProcessorSummary> {
+    async fn write<T>(&self, index: String, mut docs: Vec<T>) -> Result<ProcessorSummary>
+    where
+        T: Serialize + Send + Sized,
+    {
         use futures::{FutureExt, StreamExt};
         let client = self.client.clone();
         let workers = 4;
@@ -115,7 +119,7 @@ impl Export for ElasticsearchExporter {
         while !docs.is_empty() || !in_flight.is_empty() {
             while in_flight.len() < workers && !docs.is_empty() {
                 let batch_size = docs.len().min(bulk_size);
-                let mut batch: Vec<BulkOperation<Value>> = Vec::with_capacity(batch_size);
+                let mut batch: Vec<BulkOperation<T>> = Vec::with_capacity(batch_size);
                 for doc in docs.drain(..batch_size) {
                     batch.push(BulkOperation::create(doc).pipeline("esdiag").into());
                 }

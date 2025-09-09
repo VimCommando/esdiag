@@ -24,6 +24,9 @@ use super::{
 use crate::{data, exporter::Exporter, receiver::Receiver};
 use eyre::Result;
 use metadata::LogstashMetadata;
+use node::Node;
+use node_stats::NodeStats;
+use plugins::Plugins;
 use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(Serialize)]
@@ -82,9 +85,9 @@ impl DiagnosticProcessor for LogstashDiagnostic {
             data::save_file("diagnostic.json", &self)?;
         }
 
-        self.process::<node::Node>().await?;
-        self.process::<node_stats::NodeStats>().await?;
-        self.process::<plugins::Plugins>().await?;
+        self.process::<Node>().await?;
+        self.process::<NodeStats>().await?;
+        self.process::<Plugins>().await?;
         self.report.add_identifiers(self.exporter.identifiers());
         self.report.add_origin(
             Some(self.metadata.node.name.clone()),

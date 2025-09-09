@@ -4,19 +4,28 @@
 
 use super::super::super::diagnostic::data_source::PathType;
 use super::super::DataSource;
+use crate::data::i64_from_string;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_with::skip_serializing_none;
 use std::collections::HashMap;
 
 #[derive(Deserialize)]
 pub struct IndicesStats {
-    _shards: Value,
-    _all: Value,
+    _shards: ShardsStats,
+    // _all: Value,
     pub indices: HashMap<String, IndexStats>,
 }
 
+#[skip_serializing_none]
+#[derive(Deserialize, Serialize)]
+pub struct ShardsStats {
+    total: Option<u32>,
+    successful: Option<u32>,
+    failed: Option<u32>,
+}
+
+#[skip_serializing_none]
 #[derive(Deserialize)]
 pub struct IndexStats {
     pub uuid: Option<String>,
@@ -26,17 +35,56 @@ pub struct IndexStats {
     pub shards: Option<HashMap<u16, Vec<ShardEntry>>>,
 }
 
+#[skip_serializing_none]
 #[derive(Deserialize)]
 pub struct ShardEntry {
     pub routing: ShardRouting,
-    pub commit: Value,
-    pub seq_no: Value,
-    pub retention_leases: Value,
-    pub shard_path: Value,
+    pub commit: ShardCommit,
+    pub seq_no: SequenceNumber,
+    pub retention_leases: RetentionLeases,
+    pub shard_path: Option<ShardPath>,
     pub search_idle: Option<bool>,
     pub search_idle_time: Option<u64>,
     #[serde(flatten)]
     pub stats: Stats,
+}
+
+#[skip_serializing_none]
+#[derive(Deserialize, Serialize)]
+pub struct SequenceNumber {
+    max_seq_no: Option<i64>,
+    local_checkpoint: Option<i64>,
+    global_checkpoint: Option<i64>,
+}
+
+#[skip_serializing_none]
+#[derive(Deserialize, Serialize)]
+pub struct ShardPath {
+    state_path: Option<String>,
+    data_path: Option<String>,
+    is_custom_data_path: Option<bool>,
+}
+
+#[skip_serializing_none]
+#[derive(Deserialize, Serialize)]
+pub struct RetentionLeases {
+    primary_term: Option<u64>,
+    version: Option<u64>,
+}
+
+#[skip_serializing_none]
+#[derive(Deserialize, Serialize)]
+pub struct VectorCount {
+    pub value_count: Option<u64>,
+}
+
+#[skip_serializing_none]
+#[derive(Deserialize, Serialize)]
+pub struct ShardCommit {
+    id: Option<String>,
+    generation: Option<u64>,
+    user_data: Option<HashMap<String, String>>,
+    num_docs: Option<u64>,
 }
 
 #[skip_serializing_none]
@@ -53,7 +101,7 @@ pub struct ShardRouting {
 pub struct Stats {
     pub bulk: Option<Bulk>,
     pub completion: Option<Completion>,
-    pub dense_vector: Option<DenseVector>,
+    pub dense_vector: Option<VectorCount>,
     pub docs: Option<Docs>,
     pub fielddata: Option<Fielddata>,
     pub flush: Option<Flush>,
@@ -67,7 +115,7 @@ pub struct Stats {
     pub search: Option<Search>,
     pub segments: Option<Segments>,
     pub shard_stats: ShardStats,
-    pub sparse_vector: Option<SparseVector>,
+    pub sparse_vector: Option<VectorCount>,
     pub store: Option<StoreStats>,
     pub translog: Option<Translog>,
     pub warmer: Option<Warmer>,
@@ -214,7 +262,13 @@ pub struct QueryCache {
 pub struct Fielddata {
     memory_size_in_bytes: Option<u64>,
     evictions: Option<u64>,
-    global_ordinals: Option<Value>,
+    global_ordinals: Option<GlobalOrdinals>,
+}
+
+#[skip_serializing_none]
+#[derive(Deserialize, Serialize)]
+pub struct GlobalOrdinals {
+    build_time_in_millis: Option<u64>,
 }
 
 #[skip_serializing_none]
@@ -231,6 +285,7 @@ pub struct Segments {
     // file_sizes
     fixed_bit_set_memory_in_bytes: Option<u64>,
     index_writer_memory_in_bytes: Option<u64>,
+    #[serde(deserialize_with = "i64_from_string")]
     max_unsafe_auto_id_timestamp: Option<i64>,
     memory_in_bytes: Option<u64>,
     norms_memory_in_bytes: Option<u64>,
@@ -280,18 +335,6 @@ pub struct Bulk {
     pub avg_bytes_sec: Option<u64>,
     pub compression_ratio: Option<f32>,
     pub storage_ratio: Option<f32>,
-}
-
-#[skip_serializing_none]
-#[derive(Deserialize, Serialize)]
-pub struct DenseVector {
-    value_count: Option<u64>,
-}
-
-#[skip_serializing_none]
-#[derive(Deserialize, Serialize)]
-pub struct SparseVector {
-    value_count: Option<u64>,
 }
 
 impl DataSource for IndicesStats {

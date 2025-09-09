@@ -20,13 +20,16 @@ pub use directory::DirectoryExporter;
 use elasticsearch::ElasticsearchExporter;
 use eyre::{Result, eyre};
 use file::FileExporter;
+use serde::Serialize;
 use serde_json::Value;
 use stream::StreamExporter;
 use url::Url;
 
 trait Export {
     async fn is_connected(&self) -> bool;
-    async fn write(&self, index: String, docs: Vec<Value>) -> Result<ProcessorSummary>;
+    async fn write<T>(&self, index: String, docs: Vec<T>) -> Result<ProcessorSummary>
+    where
+        T: Sized + Serialize + Send;
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()>;
     fn with_identifiers(self, identifiers: Identifiers) -> Self;
 }

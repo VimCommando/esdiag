@@ -7,6 +7,7 @@ use crate::env;
 use eyre::Result;
 use eyre::{OptionExt, Report};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::{
     fs::OpenOptions,
     io::Write,
@@ -204,5 +205,43 @@ impl std::fmt::Display for Uri {
             Uri::Stream => write!(f, "-"),
             Uri::Url(url) => write!(f, "{}", url),
         }
+    }
+}
+
+/// The standard deserializer from serde_json does not deserializing u64 from
+/// strings. Unfortunately the _settings API frequently wraps numbers in quotes.
+
+pub fn u64_from_string<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+
+    match value {
+        Value::Number(num) => Ok(num.as_u64()),
+        Value::String(s) => Ok(s.parse::<u64>().ok()),
+        Value::Null => Ok(None),
+        _ => Err(serde::de::Error::custom(
+            "expected a number or a string representing a number",
+        )),
+    }
+}
+
+/// The standard deserializer from serde_json does not deserializing i64 from
+/// strings. Unfortunately the _settings API frequently wraps numbers in quotes.
+
+pub fn i64_from_string<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+
+    match value {
+        Value::Number(num) => Ok(num.as_i64()),
+        Value::String(s) => Ok(s.parse::<i64>().ok()),
+        Value::Null => Ok(None),
+        _ => Err(serde::de::Error::custom(
+            "expected a number or a string representing a number",
+        )),
     }
 }

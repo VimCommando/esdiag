@@ -6,7 +6,7 @@ use crate::processor::{BatchResponse, DiagnosticReport, Identifiers, ProcessorSu
 
 use super::Export;
 use eyre::Result;
-use serde_json::Value;
+use serde::Serialize;
 use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
@@ -61,7 +61,10 @@ impl Export for FileExporter {
         is_file
     }
 
-    async fn write(&self, index: String, docs: Vec<Value>) -> Result<ProcessorSummary> {
+    async fn write<T>(&self, index: String, docs: Vec<T>) -> Result<ProcessorSummary>
+    where
+        T: Sized + Serialize,
+    {
         let start_time = std::time::Instant::now();
         let mut summary = ProcessorSummary::new(index.clone());
         let mut batch = BatchResponse::new(docs.len() as u32);

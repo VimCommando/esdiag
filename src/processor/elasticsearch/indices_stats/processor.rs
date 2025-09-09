@@ -279,14 +279,14 @@ impl TryFrom<IndexStats> for EnrichedIndexStats {
 #[skip_serializing_none]
 #[derive(Deserialize, Serialize)]
 struct EnrichedShardStats {
-    pub commit: Value,
+    pub commit: ShardCommit,
     pub number: u16,
-    pub retention_leases: Value,
+    pub retention_leases: RetentionLeases,
     pub routing: ShardRouting,
     pub search_idle: Option<bool>,
     pub search_idle_time: Option<u64>,
-    pub seq_no: Value,
-    pub shard_path: Value,
+    pub seq_no: SequenceNumber,
+    pub shard_path: Option<ShardPath>,
     #[serde(flatten)]
     pub stats: Stats,
 }
@@ -438,7 +438,7 @@ impl ShardDocument {
 struct EnrichedStats {
     bulk: EnrichedBulk,
     completion: Option<Completion>,
-    dense_vector: Option<DenseVector>,
+    dense_vector: Option<VectorCount>,
     docs: Option<EnrichedDocs>,
     fielddata: Option<Fielddata>,
     flush: Option<Flush>,
@@ -452,7 +452,7 @@ struct EnrichedStats {
     search: Option<Search>,
     segments: Option<Segments>,
     shard_stats: ShardStats,
-    sparse_vector: Option<SparseVector>,
+    sparse_vector: Option<VectorCount>,
     store: EnrichedStoreStats,
     translog: Option<Translog>,
     warmer: Option<Warmer>,

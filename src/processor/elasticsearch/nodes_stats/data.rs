@@ -12,9 +12,16 @@ use std::collections::HashMap;
 
 #[derive(Deserialize, Serialize)]
 pub struct NodesStats {
-    _nodes: Value,
+    _nodes: NodeCount,
     //cluster_name: String,
     pub nodes: HashMap<String, NodeStats>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct NodeCount {
+    total: u32,
+    successful: u32,
+    failed: u32,
 }
 
 #[skip_serializing_none]
