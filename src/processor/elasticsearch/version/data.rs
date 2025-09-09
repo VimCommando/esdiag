@@ -49,7 +49,7 @@ impl Cluster {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Version {
     pub number: semver::Version,
-    pub build_flavor: String,
+    pub build_flavor: Option<String>,
     pub build_type: String,
     pub build_hash: String,
     pub build_date: String,
