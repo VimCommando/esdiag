@@ -6,18 +6,22 @@ use super::{
     super::{ElasticsearchMetadata, Lookups, nodes::NodeDocument},
     NodeTasks, ParentTask, Task, Tasks,
 };
-use crate::processor::{DataProcessor, Metadata};
+use crate::{
+    exporter::Exporter,
+    processor::{DocumentExporter, Metadata, ProcessorSummary},
+};
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
 use serde_with::skip_serializing_none;
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for Tasks {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for Tasks {
+    async fn documents_export(
         self,
+        exporter: &Exporter,
         lookups: &Lookups,
         metadata: &ElasticsearchMetadata,
-    ) -> (String, Vec<Value>) {
+    ) -> ProcessorSummary {
         log::debug!("processing tasks");
         let data_stream = "metrics-task-esdiag".to_string();
         let lookup_node = &lookups.node;
@@ -43,7 +47,11 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for Tasks {
             .collect();
 
         log::debug!("task docs: {}", tasks.len());
-        (data_stream, tasks)
+        let mut summary = ProcessorSummary::new(data_stream);
+        if let Err(err) = exporter.write(&mut summary, tasks).await {
+            log::error!("Failed to write tasks: {}", err);
+        }
+        summary
     }
 }
 

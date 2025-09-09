@@ -254,7 +254,7 @@ pub struct ProcessorSummary {
     doc_errors: u32,
     #[serde(skip_serializing)]
     pub processor: String,
-    index: String,
+    pub index: String,
     pub source: Source,
 }
 

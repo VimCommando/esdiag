@@ -2,15 +2,22 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, LogstashMetadata, Lookups, Metadata},
+    super::{DocumentExporter, LogstashMetadata, Lookups, Metadata},
     Plugin, Plugins,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 
-impl DataProcessor<Lookups, LogstashMetadata> for Plugins {
-    fn generate_docs(self, _: &Lookups, metadata: &LogstashMetadata) -> (String, Vec<Value>) {
+impl DocumentExporter<Lookups, LogstashMetadata> for Plugins {
+    async fn documents_export(
+        self,
+        exporter: &Exporter,
+        _: &Lookups,
+        metadata: &LogstashMetadata,
+    ) -> ProcessorSummary {
         let data_stream = "settings-logstash.plugin-esdiag".to_string();
         let metadata_doc = metadata.for_data_stream(&data_stream).as_meta_doc();
         let docs: Vec<Value> = self
@@ -18,7 +25,11 @@ impl DataProcessor<Lookups, LogstashMetadata> for Plugins {
             .into_iter()
             .map(|plugin| json!(PluginDoc::new(plugin, metadata_doc.clone())))
             .collect();
-        (data_stream, docs)
+        let mut summary = ProcessorSummary::new(data_stream);
+        if let Err(err) = exporter.write(&mut summary, docs).await {
+            log::error!("Failed to write plugins: {}", err);
+        }
+        summary
     }
 }
 

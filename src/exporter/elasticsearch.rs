@@ -104,7 +104,7 @@ impl Export for ElasticsearchExporter {
         status_code == 200
     }
 
-    async fn write<T>(&self, index: String, mut docs: Vec<T>) -> Result<ProcessorSummary>
+    async fn write<T>(&self, summary: &mut ProcessorSummary, mut docs: Vec<T>) -> Result<()>
     where
         T: Serialize + Send + Sized,
     {
@@ -112,7 +112,6 @@ impl Export for ElasticsearchExporter {
         let client = self.client.clone();
         let workers = 4;
         let bulk_size = 5_000;
-        let mut summary = ProcessorSummary::new(index.clone());
 
         let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
 
@@ -123,7 +122,7 @@ impl Export for ElasticsearchExporter {
                 for doc in docs.drain(..batch_size) {
                     batch.push(BulkOperation::create(doc).pipeline("esdiag").into());
                 }
-                let batch_index = index.clone();
+                let batch_index = summary.index.clone();
                 let batch_client = client.clone();
                 let fut = async move {
                     let response = batch_client
@@ -146,8 +145,7 @@ impl Export for ElasticsearchExporter {
                 }
             }
         }
-
-        Ok(summary)
+        Ok(())
     }
 
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {

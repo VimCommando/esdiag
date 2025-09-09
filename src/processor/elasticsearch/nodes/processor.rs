@@ -2,8 +2,10 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, ElasticsearchMetadata, Lookups, Metadata},
+    super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata},
     Node, Nodes,
 };
 use json_patch::merge;
@@ -11,12 +13,13 @@ use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for Nodes {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for Nodes {
+    async fn documents_export(
         self,
+        exporter: &Exporter,
         lookups: &Lookups,
         metadata: &ElasticsearchMetadata,
-    ) -> (String, Vec<Value>) {
+    ) -> ProcessorSummary {
         let mut nodes = self.nodes;
         log::debug!("nodes: {}", nodes.len());
         let data_stream = "settings-node-esdiag".to_string();
@@ -54,7 +57,11 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for Nodes {
             .collect();
 
         log::debug!("node settings docs: {}", node_docs.len());
-        (data_stream, node_docs)
+        let mut summary = ProcessorSummary::new(data_stream);
+        if let Err(err) = exporter.write(&mut summary, node_docs).await {
+            log::error!("Failed to write node settings: {}", err);
+        }
+        summary
     }
 }
 

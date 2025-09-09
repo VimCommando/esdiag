@@ -8,8 +8,10 @@ mod http_clients;
 mod ingest_pipelines;
 mod transport_actions;
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, ElasticsearchMetadata, Lookups, Metadata},
+    super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata},
     NodesStats,
 };
 use json_patch::merge;
@@ -19,12 +21,13 @@ use std::sync::LazyLock;
 
 static INGEST_ROLE: LazyLock<String> = LazyLock::new(|| String::from("ingest"));
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for NodesStats {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for NodesStats {
+    async fn documents_export(
         self,
+        exporter: &Exporter,
         lookups: &Lookups,
         metadata: &ElasticsearchMetadata,
-    ) -> (String, Vec<Value>) {
+    ) -> ProcessorSummary {
         let mut nodes_stats = self.nodes;
         log::debug!("nodes: {}", nodes_stats.len());
         let data_stream = "metrics-node-esdiag".to_string();
@@ -112,6 +115,10 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for NodesStats {
             .collect();
 
         log::debug!("node_stats docs: {}", node_stats_docs.len());
-        (data_stream, node_stats_docs)
+        let mut summary = ProcessorSummary::new(data_stream);
+        if let Err(err) = exporter.write(&mut summary, node_stats_docs).await {
+            log::error!("Failed to write node_stats: {}", err);
+        }
+        summary
     }
 }

@@ -32,13 +32,12 @@ impl Export for StreamExporter {
         true
     }
 
-    async fn write<T>(&self, index: String, docs: Vec<T>) -> Result<ProcessorSummary>
+    async fn write<T>(&self, summary: &mut ProcessorSummary, docs: Vec<T>) -> Result<()>
     where
         T: Sized + Serialize,
     {
         let doc_count = docs.len() as u32;
         let start_time = std::time::Instant::now();
-        let mut summary = ProcessorSummary::new(index);
         let mut batch = BatchResponse::new(doc_count);
         log::debug!("Writing {} docs to stdout", doc_count);
         for doc in docs {
@@ -49,7 +48,7 @@ impl Export for StreamExporter {
         batch.time = start_time.elapsed().as_secs() as u32;
         batch.time = start_time.elapsed().as_millis() as u32;
         summary.add_batch(batch);
-        Ok(summary)
+        Ok(())
     }
 
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {

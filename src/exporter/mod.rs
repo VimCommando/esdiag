@@ -27,7 +27,7 @@ use url::Url;
 
 trait Export {
     async fn is_connected(&self) -> bool;
-    async fn write<T>(&self, index: String, docs: Vec<T>) -> Result<ProcessorSummary>
+    async fn write<T>(&self, summary: &mut ProcessorSummary, docs: Vec<T>) -> Result<()>
     where
         T: Sized + Serialize + Send;
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()>;
@@ -54,11 +54,11 @@ pub enum Exporter {
 }
 
 impl Exporter {
-    pub async fn write(&self, index: String, docs: Vec<Value>) -> Result<ProcessorSummary> {
+    pub async fn write(&self, summary: &mut ProcessorSummary, docs: Vec<Value>) -> Result<()> {
         match self {
-            Exporter::Elasticsearch(exporter) => exporter.write(index, docs).await,
-            Exporter::File(exporter) => exporter.write(index, docs).await,
-            Exporter::Stream(exporter) => exporter.write(index, docs).await,
+            Exporter::Elasticsearch(exporter) => exporter.write(summary, docs).await,
+            Exporter::File(exporter) => exporter.write(summary, docs).await,
+            Exporter::Stream(exporter) => exporter.write(summary, docs).await,
         }
     }
 

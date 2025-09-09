@@ -2,20 +2,23 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, ElasticsearchMetadata, Lookups, Metadata},
+    super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata},
     IlmPolicies, IlmPolicy,
 };
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for IlmPolicies {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for IlmPolicies {
+    async fn documents_export(
         self,
+        exporter: &Exporter,
         _lookups: &Lookups,
         metadata: &ElasticsearchMetadata,
-    ) -> (String, Vec<Value>) {
+    ) -> ProcessorSummary {
         log::debug!("processing ILM policies");
         let data_stream = "settings-ilm-esdiag".to_string();
         let metadata = metadata.for_data_stream(&data_stream).as_meta_doc();
@@ -34,7 +37,11 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for IlmPolicies {
             .collect();
 
         log::debug!("ilm policy docs: {}", policies.len());
-        (data_stream, policies)
+        let mut summary = ProcessorSummary::new(data_stream);
+        if let Err(err) = exporter.write(&mut summary, policies).await {
+            log::error!("Failed to write ILM policies: {}", err);
+        }
+        summary
     }
 }
 

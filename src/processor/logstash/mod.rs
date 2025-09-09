@@ -16,7 +16,7 @@ mod plugins;
 mod version;
 
 use super::{
-    DataProcessor, DiagnosticProcessor, Metadata,
+    DiagnosticProcessor, DocumentExporter, Metadata,
     diagnostic::{
         DataSource, DiagnosticManifest, DiagnosticReport, DiagnosticReportBuilder, Product,
     },
@@ -44,11 +44,16 @@ pub struct LogstashDiagnostic {
 impl LogstashDiagnostic {
     async fn process<T>(&mut self) -> Result<()>
     where
-        T: DataSource + DataProcessor<Lookups, LogstashMetadata> + DeserializeOwned + Send + Sync,
+        T: DataSource
+            + DocumentExporter<Lookups, LogstashMetadata>
+            + DeserializeOwned
+            + Send
+            + Sync,
     {
         let data = self.receiver.get::<T>().await?;
-        let (index, docs) = data.generate_docs(&self.lookups, &self.metadata);
-        let summary = self.exporter.write(index, docs).await?;
+        let summary = data
+            .documents_export(&self.exporter, &self.lookups, &self.metadata)
+            .await;
         self.report.add_processor_summary(summary);
         Ok(())
     }

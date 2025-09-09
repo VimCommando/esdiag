@@ -2,9 +2,11 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
     super::{
-        DataProcessor, ElasticsearchMetadata, Lookups,
+        DocumentExporter, ElasticsearchMetadata, Lookups,
         alias::Alias,
         indices_settings::{IndexSettingsDocument, StoreSettings},
         metadata::MetadataDoc,
@@ -20,12 +22,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use serde_with::skip_serializing_none;
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for IndicesStats {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesStats {
+    async fn documents_export(
         self,
+        exporter: &Exporter,
         lookups: &Lookups,
         metadata: &ElasticsearchMetadata,
-    ) -> (String, Vec<Value>) {
+    ) -> ProcessorSummary {
         let mut indices_stats = self.indices;
         log::debug!("index_stats indices: {}", indices_stats.len());
         let index_metadata = metadata.for_data_stream("metrics-index-esdiag");
@@ -90,7 +93,11 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for IndicesStats {
             .collect();
 
         log::debug!("index_stats docs: {}", index_stats_docs.len());
-        (index_metadata.data_stream.to_string(), index_stats_docs)
+        let mut summary = ProcessorSummary::new(index_metadata.data_stream.to_string());
+        if let Err(err) = exporter.write(&mut summary, index_stats_docs).await {
+            log::error!("Failed to write cluster settings: {}", err);
+        }
+        summary
     }
 }
 

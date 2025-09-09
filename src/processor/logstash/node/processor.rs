@@ -2,20 +2,23 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, LogstashMetadata, Lookups, Metadata},
+    super::{DocumentExporter, LogstashMetadata, Lookups, Metadata},
     Node, Pipeline,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-impl DataProcessor<Lookups, LogstashMetadata> for Node {
-    fn generate_docs(
+impl DocumentExporter<Lookups, LogstashMetadata> for Node {
+    async fn documents_export(
         mut self,
+        exporter: &Exporter,
         lookups: &Lookups,
         metadata: &LogstashMetadata,
-    ) -> (String, Vec<Value>) {
+    ) -> ProcessorSummary {
         let mut docs: Vec<Value> = Vec::new();
         let data_stream = "settings-logstash.node-esdiag".to_string();
         let mut pipeline_docs = generate_pipeline_docs(metadata.clone(), self.take_pipelines());
@@ -29,7 +32,11 @@ impl DataProcessor<Lookups, LogstashMetadata> for Node {
         ));
         docs.push(node_doc);
 
-        (data_stream, docs)
+        let mut summary = ProcessorSummary::new(data_stream);
+        if let Err(err) = exporter.write(&mut summary, docs).await {
+            log::error!("Failed to write node settings: {}", err);
+        }
+        summary
     }
 }
 

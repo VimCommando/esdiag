@@ -103,8 +103,13 @@ impl Diagnostic {
     }
 }
 
-trait DataProcessor<T, U> {
-    fn generate_docs(self, lookups: &T, metadata: &U) -> (String, Vec<serde_json::Value>);
+trait DocumentExporter<T, U> {
+    async fn documents_export(
+        self,
+        exporter: &Exporter,
+        lookups: &T,
+        metadata: &U,
+    ) -> ProcessorSummary;
 }
 
 trait DiagnosticProcessor {
