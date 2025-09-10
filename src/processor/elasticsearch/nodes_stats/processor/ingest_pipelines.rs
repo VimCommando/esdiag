@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 pub fn extract(
     pipelines: Option<IngestPipelines>,
     metadata: &ElasticsearchMetadata,
-    node_summary: Option<&NodeDocument>,
+    node_metadata: Option<&NodeDocument>,
 ) -> Vec<Value> {
     let ingest_pipeline_metadata = metadata
         .for_data_stream("metrics-ingest.pipeline-esdiag")
@@ -32,11 +32,11 @@ pub fn extract(
                     &name,
                     pipeline.processors.take(),
                     metadata,
-                    node_summary.cloned(),
+                    node_metadata.cloned(),
                 );
 
                 let mut doc = json!({
-                    "node": node_summary,
+                    "node": node_metadata,
                     "ingest": {
                         "pipeline": pipeline,
                     },

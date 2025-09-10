@@ -258,6 +258,19 @@ pub struct ProcessorSummary {
     pub source: Source,
 }
 
+impl ProcessorSummary {
+    pub fn merge(self, other: ProcessorSummary) -> Self {
+        Self {
+            batch: self.batch.merge(other.batch),
+            docs: self.docs + other.docs,
+            doc_errors: self.doc_errors + other.doc_errors,
+            processor: self.processor,
+            index: self.index,
+            source: self.source,
+        }
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct BatchStats {
     count: u32,
@@ -265,6 +278,26 @@ pub struct BatchStats {
     status_codes: HashMap<u16, u32>,
     #[serde(skip_serializing)]
     pub responses: Vec<BatchResponse>,
+}
+
+impl BatchStats {
+    pub fn merge(self, other: BatchStats) -> Self {
+        Self {
+            count: self.count + other.count,
+            retries: self.retries + other.retries,
+            status_codes: {
+                let mut merged = self.status_codes;
+                for (code, count) in other.status_codes {
+                    merged
+                        .entry(code)
+                        .and_modify(|c| *c += count)
+                        .or_insert(count);
+                }
+                merged
+            },
+            responses: self.responses.into_iter().chain(other.responses).collect(),
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]

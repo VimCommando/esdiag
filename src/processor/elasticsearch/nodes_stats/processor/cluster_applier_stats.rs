@@ -3,37 +3,40 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::super::nodes::NodeDocument;
-use super::{ElasticsearchMetadata, Metadata};
+use super::{ElasticsearchMetadata, Metadata, ProcessorSummary};
+use crate::exporter::Exporter;
+use eyre::{OptionExt, Result};
 use json_patch::merge;
-use rayon::prelude::*;
 use serde_json::{Value, json};
 
 /// Extract discovery.cluster_applier_stats.recordings dataset
-pub fn extract(
-    cluster_applier_stats: Value,
+pub async fn extract(
+    exporter: &Exporter,
+    summary: &mut ProcessorSummary,
+    mut cluster_applier_stats: Value,
     metadata: &ElasticsearchMetadata,
-    node_summary: Option<&NodeDocument>,
-) -> Vec<Value> {
+    node_metadata: Option<&NodeDocument>,
+) -> Result<()> {
     let metadata = metadata
         .for_data_stream("metrics-node.discovery.cluster_applier-esdiag")
         .as_meta_doc();
+    let recordings = cluster_applier_stats["recordings"]
+        .as_array_mut()
+        .ok_or_eyre("Error extracting node.discovery.cluster_applier data")?;
 
-    let recordings: Vec<_> = match cluster_applier_stats["recordings"].as_array() {
-        Some(recordings) => recordings
-            .par_iter()
-            .map(|recording| {
-                let mut doc = json!({
-                    "cluster_applier_stats": recording,
-                    "node": node_summary,
-                });
+    let mut docs = Vec::<Value>::with_capacity(200);
 
-                merge(&mut doc, &metadata);
-                doc
-            })
-            .collect(),
-        None => Vec::new(),
-    };
+    docs.extend(recordings.drain(..).map(|recording| {
+        let mut doc = json!({
+            "cluster_applier_stats": recording,
+            "node": node_metadata,
+        });
 
-    log::trace!("recordings: {}", recordings.len());
-    recordings
+        merge(&mut doc, &metadata);
+        doc
+    }));
+
+    exporter.write(summary, &mut docs).await?;
+    log::trace!("recordings: {}", summary.docs);
+    Ok(())
 }

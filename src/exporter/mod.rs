@@ -22,6 +22,7 @@ use eyre::{Result, eyre};
 use file::FileExporter;
 use serde::Serialize;
 use stream::StreamExporter;
+use tokio::sync::mpsc;
 use url::Url;
 
 trait Export {
@@ -53,6 +54,51 @@ pub enum Exporter {
 }
 
 impl Exporter {
+    /// Consume a channel of documents and export them in batches.
+    ///
+    /// This helper continuously receives documents from the provided
+    /// `tokio::sync::mpsc::Receiver`, accumulating them until `batch_size`
+    /// is reached, then flushing the batch via the underlying exporter
+    /// implementation (`Elasticsearch`, `File`, or `Stream`).
+    ///
+    /// - A new `ProcessorSummary` is created for the provided `index`.
+    /// - Documents are buffered up to `batch_size`; when the threshold is met
+    ///   `write` is invoked and the accumulator is cleared.
+    /// - When the sending side of the channel closes, any remaining (partial)
+    ///   batch is also written.
+    /// - Errors from batch writes do not abort processing; they are logged
+    ///   with `log::warn!` and the loop continues.
+    /// - The final (possibly partially updated) `ProcessorSummary` is returned.
+    pub async fn document_channel<T: Serialize + Send + Sync + 'static>(
+        self,
+        mut rx: mpsc::Receiver<T>,
+        index: String,
+        batch_size: usize,
+    ) -> ProcessorSummary {
+        let mut summary = ProcessorSummary::new(index);
+        let mut accumulator = Vec::<T>::with_capacity(batch_size);
+
+        while let Some(doc) = rx.recv().await {
+            accumulator.push(doc);
+
+            if accumulator.len() >= batch_size {
+                if let Err(err) = self.write(&mut summary, &mut accumulator).await {
+                    log::warn!("Failed to write document batch: {}", err);
+                }
+                accumulator.clear();
+            }
+        }
+
+        // Write final partial batch
+        if !accumulator.is_empty() {
+            if let Err(err) = self.write(&mut summary, &mut accumulator).await {
+                log::warn!("Failed to write final index documents batch: {}", err);
+            }
+        }
+
+        summary
+    }
+
     pub async fn write<T>(&self, summary: &mut ProcessorSummary, docs: &mut Vec<T>) -> Result<()>
     where
         T: Serialize + Send + Sized,
