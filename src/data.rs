@@ -245,3 +245,23 @@ where
         )),
     }
 }
+
+pub fn map_as_vec_entries<'de, D, T>(deserializer: D) -> Result<Vec<(String, T)>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+
+    match value {
+        Value::Object(map) => {
+            let mut result = Vec::new();
+            for (key, value) in map {
+                let deserialized_value = T::deserialize(value).map_err(serde::de::Error::custom)?;
+                result.push((key, deserialized_value));
+            }
+            Ok(result)
+        }
+        _ => Err(serde::de::Error::custom("expected an object")),
+    }
+}

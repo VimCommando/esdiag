@@ -2,8 +2,6 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use crate::{exporter::Exporter, processor::ProcessorSummary};
-
 use super::{
     super::{
         DocumentExporter, ElasticsearchMetadata, Lookups,
@@ -15,11 +13,12 @@ use super::{
     IndicesStats,
     data::*,
 };
+use crate::{exporter::Exporter, processor::ProcessorSummary};
 use eyre::Report;
+
 //use json_patch::merge;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use serde_with::skip_serializing_none;
 
 impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesStats {
@@ -29,89 +28,101 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesStats {
         lookups: &Lookups,
         metadata: &ElasticsearchMetadata,
     ) -> ProcessorSummary {
+        log::debug!("index_stats indices: {}", self.indices.len());
         let mut indices_stats = self.indices;
-        log::debug!("index_stats indices: {}", indices_stats.len());
         let index_metadata = metadata.for_data_stream("metrics-index-esdiag");
         let shard_metadata = metadata.for_data_stream("metrics-shard-esdiag");
-
-        let index_stats_docs: Vec<Value> = indices_stats
-            .par_drain()
-            .flat_map(|(index, mut index_stats)| {
-                let shard_stats = index_stats.shards.take();
-                let index_settings =
-                    lookups
-                        .index_settings
-                        .by_name(&index)
-                        .cloned()
-                        .map(|settings| {
-                            settings
-                                .data_stream(lookups.data_stream.by_id(&index).cloned())
-                                .age(index_metadata.diagnostic.collection_date)
-                        });
-
-                let index_settings = index_settings.map(|settings| {
-                    IndexSettingsDocument::from(settings)
-                        .ilm(lookups.ilm_explain.by_name(&index).cloned())
-                });
-
-                let index_stats = EnrichedIndexStats::try_from(index_stats)
-                    .expect("Failed to parse index stats")
-                    .alias(lookups.alias.by_name(&index).cloned())
-                    .with_settings(index_settings.clone());
-
-                let index_document =
-                    IndexDocument::new(index_stats, index_metadata.clone()).calculate();
-                let index_settings = index_settings
-                    .map(|s| s.write_phase(index_document.index.stats.write_phase_sec));
-
-                let shard_docs = shard_stats.map(|mut shards| {
-                    shards
-                        .par_drain()
-                        .flat_map(|(number, mut shard_stats)| {
-                            shard_stats
-                                .par_drain(..)
-                                .filter_map(|shard_entry| {
-                                    let stats = EnrichedShardStats::try_from(shard_entry)
-                                        .expect("Failed to parse shard stats")
-                                        .with_id(number);
-                                    let node = lookups.node.by_id(&stats.routing.node).cloned();
-                                    let doc = ShardDocument::new(stats, shard_metadata.clone())
-                                        .index_settings(index_settings.clone())
-                                        .node(node)
-                                        .calculate();
-                                    serde_json::to_value(doc).ok()
-                                })
-                                .collect::<Vec<Value>>()
-                        })
-                        .collect::<Vec<Value>>()
-                });
-
-                let mut documents: Vec<Value> = vec![json!(index_document)];
-                shard_docs.map(|docs| documents.extend(docs));
-                documents
-            })
-            .collect();
-
-        log::debug!("index_stats docs: {}", index_stats_docs.len());
         let mut summary = ProcessorSummary::new(index_metadata.data_stream.to_string());
-        if let Err(err) = exporter.write(&mut summary, index_stats_docs).await {
-            log::error!("Failed to write cluster settings: {}", err);
+        let batch_size = 1000;
+        let mut index_stats_docs = Vec::<IndexStatsDocument>::with_capacity(batch_size);
+        let mut shard_stats_docs = Vec::<ShardStatsDocument>::with_capacity(batch_size * 5);
+
+        while !indices_stats.is_empty() {
+            indices_stats
+                .par_drain(..batch_size.min(indices_stats.len()))
+                .map(|(index, mut index_stats)| {
+                    let shards_stats = index_stats.shards.take();
+                    let index_settings =
+                        lookups
+                            .index_settings
+                            .by_name(&index)
+                            .cloned()
+                            .map(|settings| {
+                                settings
+                                    .data_stream(lookups.data_stream.by_id(&index).cloned())
+                                    .age(index_metadata.diagnostic.collection_date)
+                            });
+
+                    let index_settings = index_settings.map(|settings| {
+                        IndexSettingsDocument::from(settings)
+                            .ilm(lookups.ilm_explain.by_name(&index).cloned())
+                    });
+
+                    let index_stats = EnrichedIndexStats::try_from(index_stats)
+                        .expect("Failed to parse index stats")
+                        .alias(lookups.alias.by_name(&index).cloned())
+                        .with_settings(index_settings.clone());
+
+                    let index_doc =
+                        IndexStatsDocument::new(index_stats, index_metadata.clone()).calculate();
+                    let index_settings = index_settings
+                        .map(|s| s.write_phase(index_doc.index.stats.write_phase_sec));
+                    let shard_docs = match shards_stats {
+                        Some(mut shards) => shards
+                            .drain()
+                            .flat_map(|(number, mut shard_stats)| {
+                                shard_stats
+                                    .drain(..)
+                                    .map(|shard_entry| {
+                                        let stats = EnrichedShardStats::try_from(shard_entry)
+                                            .expect("Failed to parse shard stats")
+                                            .with_id(number);
+                                        let node = lookups.node.by_id(&stats.routing.node).cloned();
+                                        ShardStatsDocument::new(stats, shard_metadata.clone())
+                                            .index_settings(index_settings.clone())
+                                            .node(node)
+                                            .calculate()
+                                    })
+                                    .collect::<Vec<ShardStatsDocument>>()
+                            })
+                            .collect::<Vec<ShardStatsDocument>>(),
+                        None => Vec::new(),
+                    };
+                    (index_doc, shard_docs)
+                })
+                .collect::<Vec<(IndexStatsDocument, Vec<ShardStatsDocument>)>>()
+                .into_iter()
+                .for_each(|(index_doc, shard_docs)| {
+                    index_stats_docs.push(index_doc);
+                    shard_stats_docs.extend(shard_docs);
+                });
+
+            if let Err(err) = exporter.write(&mut summary, &mut index_stats_docs).await {
+                log::error!("Failed to write index_stats: {}", err);
+            }
+            index_stats_docs.clear();
+
+            if let Err(err) = exporter.write(&mut summary, &mut shard_stats_docs).await {
+                log::error!("Failed to write shard stats: {}", err);
+            }
+            shard_stats_docs.clear();
         }
+        log::debug!("indices_stats processed: {}", summary.docs);
         summary
     }
 }
 
 #[skip_serializing_none]
 #[derive(Serialize)]
-struct IndexDocument {
+struct IndexStatsDocument {
     index: EnrichedIndexStatsWithSettings,
     #[serde(flatten)]
     metadata: MetadataDoc,
 }
 
-impl IndexDocument {
+impl IndexStatsDocument {
     fn new(index: EnrichedIndexStatsWithSettings, metadata: MetadataDoc) -> Self {
-        IndexDocument { index, metadata }
+        IndexStatsDocument { index, metadata }
     }
 
     fn calculate(mut self) -> Self {
@@ -324,7 +335,7 @@ impl TryFrom<ShardEntry> for EnrichedShardStats {
 
 #[skip_serializing_none]
 #[derive(Serialize)]
-struct ShardDocument {
+struct ShardStatsDocument {
     shard: EnrichedShardStats,
     index: Option<IndexSettingsDocument>,
     node: Option<NodeDocument>,
@@ -332,9 +343,9 @@ struct ShardDocument {
     metadata: MetadataDoc,
 }
 
-impl ShardDocument {
+impl ShardStatsDocument {
     pub fn new(shard: EnrichedShardStats, metadata: MetadataDoc) -> Self {
-        ShardDocument {
+        ShardStatsDocument {
             shard,
             metadata,
             node: None,

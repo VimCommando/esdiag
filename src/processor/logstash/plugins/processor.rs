@@ -20,13 +20,13 @@ impl DocumentExporter<Lookups, LogstashMetadata> for Plugins {
     ) -> ProcessorSummary {
         let data_stream = "settings-logstash.plugin-esdiag".to_string();
         let metadata_doc = metadata.for_data_stream(&data_stream).as_meta_doc();
-        let docs: Vec<Value> = self
+        let mut docs: Vec<Value> = self
             .plugins
             .into_iter()
             .map(|plugin| json!(PluginDoc::new(plugin, metadata_doc.clone())))
             .collect();
         let mut summary = ProcessorSummary::new(data_stream);
-        if let Err(err) = exporter.write(&mut summary, docs).await {
+        if let Err(err) = exporter.write(&mut summary, &mut docs).await {
             log::error!("Failed to write plugins: {}", err);
         }
         summary

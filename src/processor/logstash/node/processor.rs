@@ -33,7 +33,7 @@ impl DocumentExporter<Lookups, LogstashMetadata> for Node {
         docs.push(node_doc);
 
         let mut summary = ProcessorSummary::new(data_stream);
-        if let Err(err) = exporter.write(&mut summary, docs).await {
+        if let Err(err) = exporter.write(&mut summary, &mut docs).await {
             log::error!("Failed to write node settings: {}", err);
         }
         summary

@@ -61,7 +61,7 @@ impl Export for FileExporter {
         is_file
     }
 
-    async fn write<T>(&self, summary: &mut ProcessorSummary, docs: Vec<T>) -> Result<()>
+    async fn write<T>(&self, summary: &mut ProcessorSummary, docs: &mut Vec<T>) -> Result<()>
     where
         T: Sized + Serialize,
     {

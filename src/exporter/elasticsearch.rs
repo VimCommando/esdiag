@@ -104,7 +104,7 @@ impl Export for ElasticsearchExporter {
         status_code == 200
     }
 
-    async fn write<T>(&self, summary: &mut ProcessorSummary, mut docs: Vec<T>) -> Result<()>
+    async fn write<T>(&self, summary: &mut ProcessorSummary, docs: &mut Vec<T>) -> Result<()>
     where
         T: Serialize + Send + Sized,
     {

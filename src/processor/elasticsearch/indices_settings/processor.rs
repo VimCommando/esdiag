@@ -23,9 +23,9 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesSettings {
         let index_metadata = metadata.for_data_stream("settings-index-esdiag");
         let collection_date = metadata.timestamp;
 
-        let index_settings: Vec<Value> = self
+        let mut index_settings: Vec<EnrichedIndexSettings> = self
             .par_drain()
-            .filter_map(|(name, settings)| {
+            .map(|(name, settings)| {
                 let index_settings = settings
                     .settings
                     .index
@@ -34,17 +34,16 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesSettings {
                     .name(name)
                     .build();
 
-                serde_json::to_value(EnrichedIndexSettings {
+                EnrichedIndexSettings {
                     index: index_settings,
                     metadata: index_metadata.as_meta_doc(),
-                })
-                .ok()
+                }
             })
             .collect();
 
         log::debug!("index setting docs: {}", index_settings.len());
         let mut summary = ProcessorSummary::new(index_metadata.data_stream.to_string());
-        if let Err(err) = exporter.write(&mut summary, index_settings).await {
+        if let Err(err) = exporter.write(&mut summary, &mut index_settings).await {
             log::error!("Failed to write index settings: {}", err);
         }
         summary

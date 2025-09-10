@@ -4,7 +4,7 @@
 
 use super::super::super::diagnostic::data_source::PathType;
 use super::super::DataSource;
-use crate::data::i64_from_string;
+use crate::data::{i64_from_string, map_as_vec_entries};
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
@@ -14,7 +14,8 @@ use std::collections::HashMap;
 pub struct IndicesStats {
     _shards: ShardsStats,
     // _all: Value,
-    pub indices: HashMap<String, IndexStats>,
+    #[serde(deserialize_with = "map_as_vec_entries")]
+    pub indices: Vec<(String, IndexStats)>,
 }
 
 #[skip_serializing_none]

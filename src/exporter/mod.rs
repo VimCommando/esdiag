@@ -21,13 +21,12 @@ use elasticsearch::ElasticsearchExporter;
 use eyre::{Result, eyre};
 use file::FileExporter;
 use serde::Serialize;
-use serde_json::Value;
 use stream::StreamExporter;
 use url::Url;
 
 trait Export {
     async fn is_connected(&self) -> bool;
-    async fn write<T>(&self, summary: &mut ProcessorSummary, docs: Vec<T>) -> Result<()>
+    async fn write<T>(&self, summary: &mut ProcessorSummary, docs: &mut Vec<T>) -> Result<()>
     where
         T: Sized + Serialize + Send;
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()>;
@@ -54,7 +53,10 @@ pub enum Exporter {
 }
 
 impl Exporter {
-    pub async fn write(&self, summary: &mut ProcessorSummary, docs: Vec<Value>) -> Result<()> {
+    pub async fn write<T>(&self, summary: &mut ProcessorSummary, docs: &mut Vec<T>) -> Result<()>
+    where
+        T: Serialize + Send + Sized,
+    {
         match self {
             Exporter::Elasticsearch(exporter) => exporter.write(summary, docs).await,
             Exporter::File(exporter) => exporter.write(summary, docs).await,

@@ -35,7 +35,7 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for NodesStats {
         let lookup_node = &lookups.node;
         let lookup_shared_cache = &lookups.shared_cache;
 
-        let node_stats_docs: Vec<Value> = nodes_stats
+        let mut node_stats_docs: Vec<Value> = nodes_stats
             .par_drain()
             .flat_map(|(node_id, mut node_stats)| {
                 let node_summary = lookup_node.by_id(&node_id);
@@ -116,7 +116,7 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for NodesStats {
 
         log::debug!("node_stats docs: {}", node_stats_docs.len());
         let mut summary = ProcessorSummary::new(data_stream);
-        if let Err(err) = exporter.write(&mut summary, node_stats_docs).await {
+        if let Err(err) = exporter.write(&mut summary, &mut node_stats_docs).await {
             log::error!("Failed to write node_stats: {}", err);
         }
         summary
