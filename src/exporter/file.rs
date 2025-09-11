@@ -7,6 +7,7 @@ use crate::processor::{BatchResponse, DiagnosticReport, Identifiers, ProcessorSu
 use super::Export;
 use eyre::Result;
 use serde::Serialize;
+use std::sync::{Arc, RwLock};
 use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
@@ -16,6 +17,7 @@ use std::{
 pub struct FileExporter {
     file: File,
     path: PathBuf,
+    writer: Arc<RwLock<BufWriter<File>>>,
     pub identifiers: Identifiers,
 }
 
@@ -24,6 +26,7 @@ impl Clone for FileExporter {
         Self {
             file: self.file.try_clone().expect("Failed to clone file"),
             path: self.path.clone(),
+            writer: self.writer.clone(),
             identifiers: self.identifiers.clone(),
         }
     }
@@ -39,8 +42,9 @@ impl TryFrom<PathBuf> for FileExporter {
             .write(true)
             .open(&path)?;
         Ok(Self {
-            file,
+            file: file.try_clone().expect("Failed to clone file"),
             path,
+            writer: Arc::new(RwLock::new(BufWriter::new(file))),
             identifiers: Identifiers::default(),
         })
     }
@@ -76,14 +80,19 @@ impl Export for FileExporter {
                 log::debug!("File {} exists", &self.path.display());
             }
         }
-        let mut writer = BufWriter::new(&self.file);
         let mut doc_count = 0;
-        for doc in docs {
-            serde_json::to_writer(&mut writer, &doc)?;
-            writeln!(&mut writer)?;
-            doc_count += 1;
+        {
+            let mut writer = self
+                .writer
+                .write()
+                .map_err(|e| eyre::eyre!("Failed to acquire write lock: {}", e))?;
+            for doc in docs {
+                serde_json::to_writer(&mut *writer, &doc)?;
+                writeln!(&mut writer)?;
+                doc_count += 1;
+            }
+            writer.flush()?;
         }
-        writer.flush()?;
         #[cfg(target_os = "macos")]
         {
             use std::os::unix::fs::MetadataExt;

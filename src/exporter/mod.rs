@@ -75,7 +75,7 @@ impl Exporter {
         index: String,
         batch_size: usize,
     ) -> ProcessorSummary {
-        let mut summary = ProcessorSummary::new(index);
+        let mut summary = ProcessorSummary::new(index.clone());
         let mut accumulator = Vec::<T>::with_capacity(batch_size);
 
         while let Some(doc) = rx.recv().await {
@@ -96,6 +96,7 @@ impl Exporter {
             }
         }
 
+        log::debug!("document_channel {} sent: {}", index, summary.docs);
         summary
     }
 
