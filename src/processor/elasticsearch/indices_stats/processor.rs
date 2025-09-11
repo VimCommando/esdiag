@@ -27,7 +27,8 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesStats {
     ) -> ProcessorSummary {
         log::debug!("index_stats indices: {}", self.indices.len());
         let indices_stats = self.indices;
-        let index_metadata = metadata.for_data_stream("metrics-index-esdiag");
+        let data_stream_name = "metrics-index-esdiag".to_string();
+        let index_metadata = metadata.for_data_stream(&data_stream_name);
         let shard_metadata = metadata.for_data_stream("metrics-shard-esdiag");
 
         // Tune batch sizes and channel buffers for memory usage and write frequency
@@ -123,25 +124,10 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesStats {
         let (index_result, shard_result) = tokio::join!(index_processor, shard_processor);
 
         // Merge summaries
-        let summary = match (index_result, shard_result) {
-            (Ok(index_summary), Ok(shard_summary)) => index_summary.merge(shard_summary),
-            (Ok(index_summary), Err(err)) => {
-                log::warn!("Failed to process shard documents: {}", err);
-                index_summary
-            }
-            (Err(err), Ok(shard_summary)) => {
-                log::warn!("Failed to process index documents: {}", err);
-                shard_summary
-            }
-            (Err(err1), Err(err2)) => {
-                log::warn!(
-                    "Failed to process index and shard documents: {} and {}",
-                    err1,
-                    err2
-                );
-                ProcessorSummary::new(index_metadata.data_stream.to_string())
-            }
-        };
+
+        let mut summary = ProcessorSummary::new(data_stream_name);
+        summary.merge(index_result.map_err(|err| eyre::Report::new(err)));
+        summary.merge(shard_result.map_err(|err| eyre::Report::new(err)));
 
         log::debug!("indices_stats processed: {}", summary.docs);
         summary

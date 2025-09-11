@@ -54,7 +54,9 @@ use super::{
     },
 };
 use crate::{
-    data, exporter::Exporter, processor::elasticsearch::health_report::HealthReport,
+    data,
+    exporter::Exporter,
+    processor::{ProcessorSummary, elasticsearch::health_report::HealthReport},
     receiver::Receiver,
 };
 use eyre::{Result, eyre};
@@ -98,10 +100,16 @@ impl ElasticsearchDiagnostic {
             + Send
             + Sync,
     {
-        let data = self.receiver.get::<T>().await?;
-        let summary = data
-            .documents_export(&self.exporter, &self.lookups, &self.metadata)
-            .await;
+        let summary = match self.receiver.get::<T>().await {
+            Ok(data) => {
+                data.documents_export(&self.exporter, &self.lookups, &self.metadata)
+                    .await
+            }
+            Err(err) => {
+                log::warn!("{}", err);
+                ProcessorSummary::new(T::name())
+            }
+        };
         self.report.add_processor_summary(summary);
         Ok(())
     }

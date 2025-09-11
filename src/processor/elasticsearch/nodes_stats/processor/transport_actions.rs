@@ -3,25 +3,19 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::super::nodes::NodeDocument;
-use super::{ElasticsearchMetadata, Metadata, ProcessorSummary};
-use crate::exporter::Exporter;
 use eyre::{OptionExt, Result};
 use json_patch::merge;
 use serde_json::{Value, json};
+use tokio::sync::mpsc::Sender;
 
 /// Extract transport.actions
 
 pub async fn extract(
-    exporter: &Exporter,
-    summary: &mut ProcessorSummary,
+    sender: &Sender<Value>,
     mut actions: Value,
-    metadata: &ElasticsearchMetadata,
+    metadata: &Value,
     node_metadata: Option<&NodeDocument>,
 ) -> Result<()> {
-    let metadata = metadata
-        .for_data_stream("metrics-node.transport.actions-esdiag")
-        .as_meta_doc();
-
     let actions = actions
         .as_object_mut()
         .ok_or_eyre("Error extracting node transport.actions data")?;
@@ -54,7 +48,8 @@ pub async fn extract(
             }),
     );
 
-    exporter.write(summary, &mut docs).await?;
-    log::trace!("transport_actions: {}", summary.docs);
+    for doc in docs {
+        sender.send(doc).await?;
+    }
     Ok(())
 }

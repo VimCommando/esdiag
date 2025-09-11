@@ -36,11 +36,22 @@ impl TryFrom<PathBuf> for FileExporter {
     type Error = eyre::Report;
 
     fn try_from(path: PathBuf) -> Result<Self> {
+        match path.is_file() {
+            false => {
+                log::info!("Creating file {}", path.display());
+                File::create(&path)?;
+            }
+            true => {
+                log::debug!("File {} exists", path.display());
+            }
+        }
+
         let file = OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
             .open(&path)?;
+
         Ok(Self {
             file: file.try_clone().expect("Failed to clone file"),
             path,
@@ -71,15 +82,6 @@ impl Export for FileExporter {
     {
         let start_time = std::time::Instant::now();
         let mut batch = BatchResponse::new(docs.len() as u32);
-        match &self.path.is_file() {
-            false => {
-                log::info!("Creating file {}", &self.path.display());
-                std::fs::File::create(&self.path)?;
-            }
-            true => {
-                log::debug!("File {} exists", &self.path.display());
-            }
-        }
         let mut doc_count = 0;
         {
             let mut writer = self

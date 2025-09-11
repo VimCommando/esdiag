@@ -4,6 +4,7 @@
 
 use super::super::super::diagnostic::data_source::PathType;
 use super::super::DataSource;
+use crate::data::option_map_as_vec_entries;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -142,13 +143,13 @@ pub struct FilesystemTotal {
     pub used_percent: usize,
 }
 
-pub type IngestPipelines = HashMap<String, IngestPipeline>;
+pub type IngestPipelines = Vec<(String, IngestPipeline)>;
 
 #[derive(Deserialize, Serialize)]
 pub struct Ingest {
     total: Value,
-    #[serde(skip_serializing)] // Docs split into separate datastream
-    pub pipelines: Option<IngestPipelines>,
+    #[serde(deserialize_with = "option_map_as_vec_entries", skip_serializing)]
+    pub pipelines: Option<Vec<(String, IngestPipeline)>>,
 }
 
 pub type IngestProcessors = Vec<HashMap<String, IngestProcessor>>;

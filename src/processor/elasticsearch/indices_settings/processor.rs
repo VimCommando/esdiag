@@ -22,6 +22,7 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesSettings {
         log::debug!("processing indices: {}", self.len());
         let index_metadata = metadata.for_data_stream("settings-index-esdiag");
         let collection_date = metadata.timestamp;
+        let metadata_doc = index_metadata.as_meta_doc();
 
         let mut index_settings: Vec<EnrichedIndexSettings> = self
             .par_drain()
@@ -36,7 +37,7 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesSettings {
 
                 EnrichedIndexSettings {
                     index: index_settings,
-                    metadata: index_metadata.as_meta_doc(),
+                    metadata: metadata_doc.clone(),
                 }
             })
             .collect();

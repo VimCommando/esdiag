@@ -259,14 +259,16 @@ pub struct ProcessorSummary {
 }
 
 impl ProcessorSummary {
-    pub fn merge(self, other: ProcessorSummary) -> Self {
-        Self {
-            batch: self.batch.merge(other.batch),
-            docs: self.docs + other.docs,
-            doc_errors: self.doc_errors + other.doc_errors,
-            processor: self.processor,
-            index: self.index,
-            source: self.source,
+    pub fn merge(&mut self, other: Result<ProcessorSummary>) {
+        match other {
+            Ok(other) => {
+                self.batch.merge(other.batch);
+                self.docs += other.docs;
+                self.doc_errors += other.doc_errors;
+            }
+            Err(err) => {
+                log::warn!("processor summary was err: {}", err);
+            }
         }
     }
 }
@@ -281,22 +283,16 @@ pub struct BatchStats {
 }
 
 impl BatchStats {
-    pub fn merge(self, other: BatchStats) -> Self {
-        Self {
-            count: self.count + other.count,
-            retries: self.retries + other.retries,
-            status_codes: {
-                let mut merged = self.status_codes;
-                for (code, count) in other.status_codes {
-                    merged
-                        .entry(code)
-                        .and_modify(|c| *c += count)
-                        .or_insert(count);
-                }
-                merged
-            },
-            responses: self.responses.into_iter().chain(other.responses).collect(),
+    pub fn merge(&mut self, other: BatchStats) {
+        self.count += other.count;
+        self.retries += other.retries;
+        for (code, count) in other.status_codes {
+            self.status_codes
+                .entry(code)
+                .and_modify(|c| *c += count)
+                .or_insert(count);
         }
+        self.responses.extend(other.responses);
     }
 }
 

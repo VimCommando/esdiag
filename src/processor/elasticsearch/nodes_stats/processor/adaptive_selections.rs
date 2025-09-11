@@ -3,25 +3,19 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::super::{Lookup, nodes::NodeDocument};
-use super::{ElasticsearchMetadata, Metadata, ProcessorSummary};
-use crate::exporter::Exporter;
 use eyre::Result;
 use json_patch::merge;
 use serde_json::{Value, json};
+use tokio::sync::mpsc::Sender;
 
 /// Extract adaptive_selection
 pub async fn extract(
-    exporter: &Exporter,
-    summary: &mut ProcessorSummary,
+    sender: &Sender<Value>,
     adaptive_selection: Option<Value>,
-    metadata: &ElasticsearchMetadata,
+    metadata: &Value,
     node_metadata: Option<&NodeDocument>,
     lookup_node: &Lookup<NodeDocument>,
 ) -> Result<()> {
-    let adaptive_selection_metadata = metadata
-        .for_data_stream("metrics-node.adaptive_selection-esdiag")
-        .as_meta_doc();
-
     let adaptive_selection = match adaptive_selection {
         Some(Value::Object(data)) => data,
         _ => return Err(eyre::eyre!("Error extracting node.adaptive_selection data")),
@@ -46,11 +40,13 @@ pub async fn extract(
                 });
 
                 merge(&mut doc, &peer_node_patch);
-                merge(&mut doc, &adaptive_selection_metadata);
+                merge(&mut doc, &metadata);
                 doc
             }),
     );
-    exporter.write(summary, &mut docs).await?;
-    log::trace!("adaptive_selections: {}", summary.docs);
+
+    for doc in docs {
+        sender.send(doc).await?;
+    }
     Ok(())
 }

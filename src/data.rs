@@ -265,3 +265,30 @@ where
         _ => Err(serde::de::Error::custom("expected an object")),
     }
 }
+
+pub fn option_map_as_vec_entries<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Vec<(String, T)>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    // Deserialize into an Option<Value> so we can distinguish missing / null
+    let opt_value: Option<Value> = Option::deserialize(deserializer)?;
+
+    match opt_value {
+        None => Ok(None),
+        Some(Value::Null) => Ok(None),
+        Some(Value::Object(map)) => {
+            let mut result = Vec::with_capacity(map.len());
+            for (key, value) in map {
+                let deserialized_value = T::deserialize(value).map_err(serde::de::Error::custom)?;
+                result.push((key, deserialized_value));
+            }
+            Ok(Some(result))
+        }
+        Some(_) => Err(serde::de::Error::custom(
+            "expected an object, null, or missing field",
+        )),
+    }
+}

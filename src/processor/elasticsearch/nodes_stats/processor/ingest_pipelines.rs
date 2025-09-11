@@ -7,75 +7,77 @@ use super::super::super::{
     nodes::NodeDocument,
     nodes_stats::{IngestPipelines, IngestProcessor, IngestProcessorStats, IngestProcessors},
 };
+use eyre::Result;
 use json_patch::merge;
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
+use tokio::sync::mpsc::Sender;
 
 /// Extract ingest.pipelines
-pub fn extract(
-    pipelines: Option<IngestPipelines>,
-    metadata: &ElasticsearchMetadata,
+pub async fn extract(
+    sender_pipelines: &Sender<Value>,
+    sender_processors: &Sender<Value>,
+    mut pipelines: Option<IngestPipelines>,
+    metadata: ElasticsearchMetadata,
     node_metadata: Option<&NodeDocument>,
-) -> Vec<Value> {
+) -> Result<()> {
     let ingest_pipeline_metadata = metadata
         .for_data_stream("metrics-ingest.pipeline-esdiag")
         .as_meta_doc();
 
-    let pipelines: Vec<Value> = match pipelines {
-        Some(pipelines) => pipelines
-            .into_iter()
-            .collect::<Vec<_>>()
-            .par_drain(..)
-            .flat_map(|(name, mut pipeline)| {
-                let processors = extract_ingest_processors(
-                    &name,
-                    pipeline.processors.take(),
-                    metadata,
-                    node_metadata.cloned(),
-                );
-
-                let mut doc = json!({
-                    "node": node_metadata,
-                    "ingest": {
-                        "pipeline": pipeline,
-                    },
-                });
-
-                let pipeline = json!({
-                    "ingest": {
-                        "pipeline": {
-                            "processors": null,
-                            "name": name,
-                        }
-                    }
-                });
-
-                merge(&mut doc, &pipeline);
-                merge(&mut doc, &ingest_pipeline_metadata);
-                let mut docs: Vec<Value> = vec![doc];
-                docs.extend(processors);
-                docs
-            })
-            .collect(),
-        None => Vec::new(),
-    };
-
-    log::trace!("pipelines: {}", pipelines.len());
-    pipelines
-}
-
-/// Extract ingest.processors
-fn extract_ingest_processors(
-    pipeline_name: &str,
-    processors: Option<IngestProcessors>,
-    metadata: &ElasticsearchMetadata,
-    node_summary: Option<NodeDocument>,
-) -> Vec<Value> {
     let ingest_processor_metadata = metadata
         .for_data_stream("metrics-ingest.processor-esdiag")
         .as_meta_doc();
-    let processors: Vec<Value> = match processors {
+
+    if let Some(pipelines) = pipelines.take() {
+        for (name, mut pipeline) in pipelines {
+            if let Err(e) = extract_ingest_processors(
+                sender_processors,
+                pipeline.processors.take(),
+                &name,
+                ingest_processor_metadata.clone(),
+                node_metadata.cloned(),
+            )
+            .await
+            {
+                log::error!("Error extracting ingest pipelines stats: {}", e);
+            };
+
+            let mut doc = json!({
+                "node": node_metadata,
+                "ingest": {
+                    "pipeline": pipeline,
+                },
+            });
+
+            let pipeline = json!({
+                "ingest": {
+                    "pipeline": {
+                        "processors": null,
+                        "name": name,
+                    }
+                }
+            });
+
+            merge(&mut doc, &pipeline);
+            merge(&mut doc, &ingest_pipeline_metadata);
+            sender_pipelines.send(doc).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract ingest.processors
+async fn extract_ingest_processors(
+    sender: &Sender<Value>,
+    processors: Option<IngestProcessors>,
+    pipeline_name: &str,
+    metadata: Value,
+    node_summary: Option<NodeDocument>,
+) -> Result<()> {
+    let docs: Vec<Value> = match processors {
         Some(mut processors) => processors
             .par_drain(..)
             .enumerate()
@@ -90,7 +92,7 @@ fn extract_ingest_processors(
                     })
                     .unwrap();
                 serde_json::to_value(IngestDoc {
-                    metadata: ingest_processor_metadata.clone(),
+                    metadata: metadata.clone(),
                     node: node_summary.clone(),
                     ingest: IngestProcessorDoc {
                         pipeline: IngestPipelineName {
@@ -105,8 +107,10 @@ fn extract_ingest_processors(
         None => Vec::new(),
     };
 
-    log::trace!("processors: {}", processors.len());
-    processors
+    for doc in docs {
+        sender.send(doc).await?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
