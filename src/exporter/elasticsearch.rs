@@ -15,15 +15,17 @@ use elasticsearch::{
 use eyre::{Result, eyre};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
+use std::sync::Arc;
+use tokio::sync::{Semaphore, oneshot};
 use url::Url;
 
 /// An exporter that sends documents to an Elasticsearch cluster.
 #[derive(Clone)]
 pub struct ElasticsearchExporter {
     client: Elasticsearch,
-    url: Url,
     pub identifiers: Identifiers,
+    tx_limit: Arc<Semaphore>,
+    url: Url,
 }
 
 impl ElasticsearchExporter {
@@ -34,10 +36,18 @@ impl ElasticsearchExporter {
             .auth(auth)
             .build()?;
 
+        let limit = std::env::var("ESDIAG_OUTPUT_TASK_LIMIT")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(10);
+
+        log::info!("Elasticsearch task limit set to {}", limit);
+
         Ok(Self {
             client,
-            url,
             identifiers: Identifiers::default(),
+            tx_limit: Arc::new(Semaphore::new(limit)),
+            url,
         })
     }
 
@@ -78,10 +88,18 @@ impl TryFrom<KnownHost> for ElasticsearchExporter {
     fn try_from(host: KnownHost) -> Result<Self> {
         let url = host.get_url();
         let client = Elasticsearch::try_from(host)?;
+        let limit = std::env::var("ESDIAG_OUTPUT_TASK_LIMIT")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(10);
+
+        log::debug!("Elasticsearch output task limit: {}", limit);
+
         Ok(Self {
             client,
-            url,
             identifiers: Identifiers::default(),
+            tx_limit: Arc::new(Semaphore::new(limit)),
+            url,
         })
     }
 }
@@ -133,7 +151,7 @@ impl Export for ElasticsearchExporter {
         parse_response(index, response).await
     }
 
-    /// Transmits a single batch of documents in an async task
+    /// Transmits a single batch of documents with semaphore-based connection limiting
     /// Returns a one-shot channel for the BatchResponse
     async fn tx<T>(&self, index: String, docs: Vec<T>) -> Result<oneshot::Receiver<BatchResponse>>
     where
@@ -141,8 +159,15 @@ impl Export for ElasticsearchExporter {
     {
         let (tx, rx) = oneshot::channel();
         let client = self.client.clone();
+        let semaphore = self.tx_limit.clone();
 
         tokio::spawn(async move {
+            // Acquire semaphore permit inside task - blocks if at limit (backpressure)
+            let _permit = semaphore
+                .acquire()
+                .await
+                .expect("Failed to acquire semaphore permit");
+
             let batch: Vec<BulkOperation<T>> = docs
                 .into_iter()
                 .map(|doc| BulkOperation::create(doc).pipeline("esdiag").into())

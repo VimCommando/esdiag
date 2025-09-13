@@ -37,7 +37,11 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for PendingTasks {
             .collect();
 
         log::debug!("pending task docs: {}", pending_tasks.len());
-        let mut summary = ProcessorSummary::new(data_stream.clone());
+
+        let mut summary = match pending_tasks.is_empty() {
+            false => ProcessorSummary::new(data_stream.clone()),
+            true => return ProcessorSummary::new(data_stream.clone()),
+        };
         match exporter.send(data_stream, pending_tasks).await {
             Ok(batch) => summary.add_batch(batch),
             Err(err) => log::error!("Failed to send pending tasks: {}", err),
