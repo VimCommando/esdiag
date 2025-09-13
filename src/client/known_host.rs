@@ -156,15 +156,21 @@ impl KnownHost {
                     .nth(1)
                     .unwrap_or("");
                 let new_segments: Vec<&str> = match app {
-                    Product::Elasticsearch => vec![
-                        "api",
-                        "v1",
-                        "deployments",
-                        deployment_id,
-                        "elasticsearch",
-                        "elasticsearch",
-                        "proxy",
-                    ],
+                    Product::Elasticsearch => {
+                        let product = match url.domain() {
+                            Some(domain) if domain == "admin.found.no" => "main-elasticsearch",
+                            _ => "elasticsearch",
+                        };
+                        vec![
+                            "api",
+                            "v1",
+                            "deployments",
+                            deployment_id,
+                            "elasticsearch",
+                            product,
+                            "proxy",
+                        ]
+                    }
                     _ => Vec::new(),
                 };
                 // Only modify the path if we have new segments

@@ -2,21 +2,23 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, ElasticsearchMetadata, Lookups, Metadata},
+    super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata},
     HealthDiagnosis, HealthImpact, HealthIndicator, HealthReport,
 };
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Arc;
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for HealthReport {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for HealthReport {
+    async fn documents_export(
         self,
-        _lookups: Arc<Lookups>,
-        metadata: Arc<ElasticsearchMetadata>,
-    ) -> (String, Vec<Value>) {
+        exporter: &Exporter,
+        _lookups: &Lookups,
+        metadata: &ElasticsearchMetadata,
+    ) -> ProcessorSummary {
         log::debug!("processing pending tasks");
         let metadata_indicator = metadata
             .for_data_stream(&"health-indicator-esdiag".to_string())
@@ -79,7 +81,15 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for HealthReport {
             .collect();
 
         log::debug!("Health report docs: {}", health_docs.len());
-        ("health-indicator-esdiag".to_string(), health_docs)
+        let mut summary = ProcessorSummary::new("health-indicator-esdiag".to_string());
+        match exporter
+            .send("health-indicator-esdiag".to_string(), health_docs)
+            .await
+        {
+            Ok(batch) => summary.add_batch(batch),
+            Err(err) => log::error!("Failed to send health report: {}", err),
+        }
+        summary
     }
 }
 
@@ -87,7 +97,7 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for HealthReport {
 struct NamedHealthIndicator {
     status: String,
     symptom: String,
-    details: Value,
+    details: Option<Value>,
     indicator: String,
 }
 

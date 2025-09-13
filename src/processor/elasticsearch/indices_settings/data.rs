@@ -4,6 +4,7 @@
 
 use super::super::super::diagnostic::data_source::PathType;
 use super::super::{DataSource, data_stream::DataStream};
+use crate::data::u64_from_string;
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
@@ -20,7 +21,7 @@ pub struct IndexSettings {
     pub blocks: Option<Value>,
     #[serde(default = "default_to_default", deserialize_with = "deserialize_codec")]
     pub codec: String,
-    #[serde(deserialize_with = "number_from_string")]
+    #[serde(deserialize_with = "u64_from_string")]
     pub creation_date: Option<u64>,
     pub default_pipeline: Option<String>,
     pub final_pipeline: Option<String>,
@@ -31,9 +32,9 @@ pub struct IndexSettings {
     pub mapping: Option<Value>,
     #[serde(default = "default_to_standard")]
     pub mode: String,
-    #[serde(deserialize_with = "number_from_string")]
+    #[serde(deserialize_with = "u64_from_string")]
     pub number_of_replicas: Option<u64>,
-    #[serde(deserialize_with = "number_from_string")]
+    #[serde(deserialize_with = "u64_from_string")]
     pub number_of_shards: Option<u64>,
     pub priority: Option<String>,
     pub provided_name: Option<String>,
@@ -210,25 +211,6 @@ where
         Some(Value::Null) => Ok(default_to_default()),
         Some(_) => Err(serde::de::Error::custom("codec expects a string or null")),
         None => Ok(default_to_default()),
-    }
-}
-
-/// The standard deserializer from serde_json does not deserializing numbers from
-/// strings. Unfortunately the _settings API frequently wraps numbers in quotes.
-
-fn number_from_string<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Value = Deserialize::deserialize(deserializer)?;
-
-    match value {
-        Value::Number(num) => Ok(num.as_u64()),
-        Value::String(s) => Ok(s.parse::<u64>().ok()),
-        Value::Null => Ok(None),
-        _ => Err(serde::de::Error::custom(
-            "expected a number or a string representing a number",
-        )),
     }
 }
 

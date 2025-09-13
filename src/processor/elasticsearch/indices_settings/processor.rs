@@ -2,28 +2,31 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, ElasticsearchMetadata, Lookups, Metadata},
+    super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata},
     IndexSettings, IndicesSettings,
 };
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Arc;
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for IndicesSettings {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesSettings {
+    async fn documents_export(
         mut self,
-        lookups: Arc<Lookups>,
-        metadata: Arc<ElasticsearchMetadata>,
-    ) -> (String, Vec<Value>) {
+        exporter: &Exporter,
+        lookups: &Lookups,
+        metadata: &ElasticsearchMetadata,
+    ) -> ProcessorSummary {
         log::debug!("processing indices: {}", self.len());
         let index_metadata = metadata.for_data_stream("settings-index-esdiag");
         let collection_date = metadata.timestamp;
+        let metadata_doc = index_metadata.as_meta_doc();
 
-        let index_settings: Vec<Value> = self
+        let index_settings: Vec<EnrichedIndexSettings> = self
             .par_drain()
-            .filter_map(|(name, settings)| {
+            .map(|(name, settings)| {
                 let index_settings = settings
                     .settings
                     .index
@@ -32,16 +35,23 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for IndicesSettings {
                     .name(name)
                     .build();
 
-                serde_json::to_value(EnrichedIndexSettings {
+                EnrichedIndexSettings {
                     index: index_settings,
-                    metadata: index_metadata.as_meta_doc(),
-                })
-                .ok()
+                    metadata: metadata_doc.clone(),
+                }
             })
             .collect();
 
-        log::debug!("index setting docs: {}", index_settings.len());
-        (index_metadata.data_stream.to_string(), index_settings)
+        log::debug!("index settings docs: {}", index_settings.len());
+        let mut summary = ProcessorSummary::new(index_metadata.data_stream.to_string());
+        match exporter
+            .send(index_metadata.data_stream.to_string(), index_settings)
+            .await
+        {
+            Ok(batch) => summary.add_batch(batch),
+            Err(err) => log::error!("Failed to send index settings: {}", err),
+        }
+        summary
     }
 }
 

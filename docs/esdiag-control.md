@@ -1,10 +1,12 @@
-# Elastic Stack Diagnostics Control
+Elastic Stack Diagnostics Control
+=================================
 
 The `esdiag-control` script helps build, configure and deploys Elastic Stack Diagnostics (ESDiag) to a target environment.
 
 You can use either Podman (preferred) or Docker to build and run ESDiag along the Elastic Stack inside containers.
 
-## Quickstart: MacOS Installation with Homebrew and Podman
+Quickstart: MacOS Installation with Homebrew and Podman
+-------------------------------------------------------
 
 1. Install [Homebrew package manager](https://brew.sh/)
   ```bash
@@ -33,7 +35,8 @@ You can use either Podman (preferred) or Docker to build and run ESDiag along th
   ./bin/esdiag-control up --insecure
   ```
 
-## Examples
+Examples
+--------
 
 Build a container image for the current host's platform
 ```sh
@@ -63,7 +66,8 @@ export ESDIAG_REGISTRY="registry.example.co"
 esdiag-control buildx --push
 ```
 
-## Commands
+Commands
+--------
 
 ### help
 
@@ -192,7 +196,8 @@ Environment Variables:
     ESDIAG_OUTPUT_PASSWORD     - Elasticsearch password
 ```
 
-## Troubleshooting and Errors
+Troubleshooting and Errors
+--------------------------
 
 ### podman/docker compose up failed with exit status 0
 

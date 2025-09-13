@@ -48,22 +48,19 @@ pub use {
 };
 
 use super::{
-    DataProcessor, DiagnosticProcessor, Metadata,
+    DiagnosticProcessor, DocumentExporter, Metadata,
     diagnostic::{
         DataSource, DiagnosticManifest, DiagnosticReport, DiagnosticReportBuilder, Lookup, Product,
-        report::ProcessorSummary,
     },
 };
 use crate::{
-    data, exporter::Exporter, processor::elasticsearch::health_report::HealthReport,
+    data,
+    exporter::Exporter,
+    processor::{ProcessorSummary, elasticsearch::health_report::HealthReport},
     receiver::Receiver,
 };
 use eyre::{Result, eyre};
-use futures::{future::join_all, stream::FuturesUnordered};
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::Value;
-use std::{pin::Pin, sync::Arc};
-use tokio::{sync::RwLock, task::JoinHandle};
 use {
     alias::{Alias, AliasList},
     cluster_settings::ClusterSettings,
@@ -77,43 +74,43 @@ use {
     nodes_stats::NodesStats,
     pending_tasks::PendingTasks,
     searchable_snapshots_cache_stats::{SearchableSnapshotsCacheStats, SharedCacheStats},
+    searchable_snapshots_stats::SearchableSnapshotsStats,
     slm_policies::SlmPolicies,
     tasks::Tasks,
 };
 
-type ExporterDocumentQueue = Arc<RwLock<Vec<(String, Vec<Value>)>>>;
-
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 pub struct ElasticsearchDiagnostic {
-    lookups: Arc<Lookups>,
-    metadata: Arc<ElasticsearchMetadata>,
+    lookups: Lookups,
+    metadata: ElasticsearchMetadata,
     #[serde(skip)]
-    exporter: Arc<Exporter>,
+    exporter: Exporter,
     #[serde(skip)]
-    receiver: Arc<Receiver>,
+    receiver: Receiver,
     #[serde(skip)]
-    report: Arc<RwLock<DiagnosticReport>>,
-    #[serde(skip)]
-    queue: ExporterDocumentQueue,
+    report: DiagnosticReport,
 }
 
 impl ElasticsearchDiagnostic {
-    async fn process_queue(&self, name: String) -> Option<ProcessorSummary> {
-        let queue = self.queue.clone();
-        let exporter = self.exporter.clone();
-
-        let mut queue_guard = queue.write().await;
-        if let Some((index, docs)) = queue_guard.pop() {
-            log::debug!("Processing queue {index}");
-            exporter
-                .write(index, docs)
+    async fn process<T>(&self) -> Result<ProcessorSummary>
+    where
+        T: DataSource
+            + DocumentExporter<Lookups, ElasticsearchMetadata>
+            + DeserializeOwned
+            + Send
+            + Sync,
+    {
+        let summary = match self.receiver.get::<T>().await {
+            Ok(data) => data
+                .documents_export(&self.exporter, &self.lookups, &self.metadata)
                 .await
-                .ok()
-                .map(|summary| summary.rename(name).was_parsed())
-        } else {
-            log::warn!("Queue was empty");
-            None
-        }
+                .was_parsed(),
+            Err(err) => {
+                log::warn!("{}", err);
+                ProcessorSummary::new(T::name())
+            }
+        };
+        Ok(summary)
     }
 }
 
@@ -158,18 +155,17 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
         report.add_lookup("shared_cache", &lookups.shared_cache);
 
         Ok(Box::new(Self {
-            exporter: Arc::new(exporter),
-            lookups: Arc::new(lookups),
-            metadata: Arc::new(metadata.clone()),
-            queue: Arc::new(RwLock::new(Vec::<(String, Vec<Value>)>::new())),
-            receiver: Arc::new(receiver),
-            report: Arc::new(RwLock::new(report)),
+            exporter,
+            lookups,
+            metadata,
+            receiver,
+            report,
         }))
     }
 
-    async fn run(self) -> Result<DiagnosticReport> {
+    async fn run(mut self) -> Result<DiagnosticReport> {
         log::debug!("Running Elasticsearch diagnostic processors");
-        if let false = self.exporter.is_connected().await {
+        if self.exporter.is_connected().await == false {
             return Err(eyre!("Exporter is not connected"));
         }
 
@@ -177,74 +173,64 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             data::save_file("diagnostic.json", &self)?;
         }
 
-        let diag = Arc::new(self);
+        self.report.add_identifiers(self.exporter.identifiers());
 
-        let futures = FuturesUnordered::new();
-        let mut tasks = vec![
-            spawn_processor::<ClusterSettings>(diag.clone()),
-            spawn_processor::<IndicesSettings>(diag.clone()),
-            spawn_processor::<IndicesStats>(diag.clone()),
-            spawn_processor::<HealthReport>(diag.clone()),
-            spawn_processor::<Nodes>(diag.clone()),
-            spawn_processor::<NodesStats>(diag.clone()),
-            spawn_processor::<IlmPolicies>(diag.clone()),
-            spawn_processor::<SlmPolicies>(diag.clone()),
-            // Temporarily omitting in favor of an include/exclude/diag_type filter to
-            // prevent the expected error
-            // spawn_processor::<SearchableSnapshotsStats>(diag.clone()),
-            spawn_processor::<Tasks>(diag.clone()),
-            spawn_processor::<PendingTasks>(diag.clone()),
-        ];
-        tasks.drain(..).map(|task| futures.push(task)).count();
+        let (thread1_summaries, thread2_summaries, thread3_summaries) = tokio::try_join!(
+            // Thread 1: IndicesStats
+            async {
+                let indices_stats = self.process::<IndicesStats>().await?;
+                Ok::<Vec<ProcessorSummary>, eyre::Error>(vec![indices_stats])
+            },
+            // Thread 2: NodesStats
+            async {
+                let nodes_stats = self.process::<NodesStats>().await?;
+                Ok::<Vec<ProcessorSummary>, eyre::Error>(vec![nodes_stats])
+            },
+            // Thread 3: Everything else
+            async {
+                let cluster_settings = self.process::<ClusterSettings>().await?;
+                let health_report = self.process::<HealthReport>().await?;
+                let ilm_policies = self.process::<IlmPolicies>().await?;
+                let indices_settings = self.process::<IndicesSettings>().await?;
+                let nodes = self.process::<Nodes>().await?;
+                let pending_tasks = self.process::<PendingTasks>().await?;
+                let slm_policies = self.process::<SlmPolicies>().await?;
+                let tasks = self.process::<Tasks>().await?;
+                Ok::<Vec<ProcessorSummary>, eyre::Error>(vec![
+                    cluster_settings,
+                    health_report,
+                    ilm_policies,
+                    indices_settings,
+                    nodes,
+                    pending_tasks,
+                    slm_policies,
+                    tasks,
+                ])
+            }
+        )?;
 
-        let mut report = diag.report.write().await;
-        report.add_identifiers(diag.exporter.identifiers());
-        join_all(futures)
-            .await
+        // Add all summaries to the report
+        for summary in thread1_summaries
             .into_iter()
-            .filter_map(Result::ok)
-            .flatten()
-            .for_each(|summary| report.add_processor_summary(summary));
+            .chain(thread2_summaries.into_iter())
+            .chain(thread3_summaries.into_iter())
+        {
+            self.report.add_processor_summary(summary);
+        }
 
-        report.add_origin(
-            Some(diag.metadata.cluster.display_name.clone()),
-            Some(diag.metadata.cluster.uuid.clone()),
+        self.report.add_origin(
+            Some(self.metadata.cluster.display_name.clone()),
+            Some(self.metadata.cluster.uuid.clone()),
             Some("cluster".to_string()),
         );
-        diag.exporter.save_report(&*report).await?;
-        Ok(report.clone())
+        self.exporter.save_report(&self.report).await?;
+
+        Ok(self.report)
     }
 
     fn id(&self) -> &str {
         &self.metadata.diagnostic.id
     }
-}
-
-type DataProcessorTask = Pin<Box<JoinHandle<Option<ProcessorSummary>>>>;
-
-fn spawn_processor<T>(diagnostic: Arc<ElasticsearchDiagnostic>) -> DataProcessorTask
-where
-    T: DataSource + DataProcessor<Lookups, ElasticsearchMetadata> + DeserializeOwned + Send + Sync,
-{
-    let lookups = diagnostic.lookups.clone();
-    let metadata = diagnostic.metadata.clone();
-    Box::pin(tokio::task::spawn(async move {
-        let docs = diagnostic
-            .receiver
-            .get::<T>()
-            .await
-            .map(|data| data.generate_docs(lookups, metadata));
-        match docs {
-            Ok(docs) => {
-                diagnostic.queue.write().await.push(docs);
-                diagnostic.process_queue(T::name()).await
-            }
-            Err(e) => {
-                log::warn!("No {} data found: {e}", T::name());
-                Some(ProcessorSummary::new(T::name()))
-            }
-        }
-    }))
 }
 
 #[derive(Serialize)]

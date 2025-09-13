@@ -2,22 +2,24 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, ElasticsearchMetadata, Lookups, Metadata},
+    super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata},
     Node, Nodes,
 };
 use json_patch::merge;
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for Nodes {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for Nodes {
+    async fn documents_export(
         self,
-        lookups: Arc<Lookups>,
-        metadata: Arc<ElasticsearchMetadata>,
-    ) -> (String, Vec<Value>) {
+        exporter: &Exporter,
+        lookups: &Lookups,
+        metadata: &ElasticsearchMetadata,
+    ) -> ProcessorSummary {
         let mut nodes = self.nodes;
         log::debug!("nodes: {}", nodes.len());
         let data_stream = "settings-node-esdiag".to_string();
@@ -54,8 +56,13 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for Nodes {
             })
             .collect();
 
-        log::debug!("node settings docs: {}", node_docs.len());
-        (data_stream, node_docs)
+        log::debug!("node docs: {}", node_docs.len());
+        let mut summary = ProcessorSummary::new(data_stream.clone());
+        match exporter.send(data_stream, node_docs).await {
+            Ok(batch) => summary.add_batch(batch),
+            Err(err) => log::error!("Failed to send nodes: {}", err),
+        }
+        summary
     }
 }
 

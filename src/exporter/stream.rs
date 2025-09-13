@@ -3,10 +3,12 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::Export;
-use crate::processor::{BatchResponse, DiagnosticReport, Identifiers, ProcessorSummary};
+use crate::processor::{BatchResponse, DiagnosticReport, Identifiers};
 use eyre::Result;
-use serde_json::Value;
+use serde::Serialize;
+use tokio::sync::oneshot;
 
+/// An exporter that writes documents to stdout.
 #[derive(Clone)]
 pub struct StreamExporter {
     pub identifiers: Identifiers,
@@ -21,6 +23,7 @@ impl StreamExporter {
 }
 
 impl Export for StreamExporter {
+    /// Adds identifiers to the exporter, which will be enriched on every document sent.
     fn with_identifiers(self, identifiers: Identifiers) -> Self {
         Self {
             identifiers,
@@ -28,29 +31,54 @@ impl Export for StreamExporter {
         }
     }
 
+    /// Returns true for compatibility, can stdout not exist?
     async fn is_connected(&self) -> bool {
         true
     }
 
-    async fn write(&self, index: String, docs: Vec<Value>) -> Result<ProcessorSummary> {
-        let doc_count = docs.len() as u32;
+    /// Writes the docs to stdout
+    async fn send<T>(&self, index: String, docs: Vec<T>) -> Result<BatchResponse>
+    where
+        T: Serialize + Sized + Send + Sync,
+    {
         let start_time = std::time::Instant::now();
-        let mut summary = ProcessorSummary::new(index);
+        let doc_count = docs.len() as u32;
         let mut batch = BatchResponse::new(doc_count);
-        log::debug!("Writing {} docs to stdout", doc_count);
+        log::debug!("{} wrote {} docs to stdout", index, doc_count);
         for doc in docs {
             serde_json::to_writer(std::io::stdout(), &doc)?;
             println!();
         }
         batch.size = doc_count;
-        batch.time = start_time.elapsed().as_secs() as u32;
         batch.time = start_time.elapsed().as_millis() as u32;
-        summary.add_batch(batch);
-        Ok(summary)
+        Ok(batch)
     }
 
+    /// Transmits a single batch of documents in an async task
+    /// Returns a one-shot channel for the BatchResponse
+    async fn tx<T>(&self, index: String, docs: Vec<T>) -> Result<oneshot::Receiver<BatchResponse>>
+    where
+        T: Serialize + Sized + Send + Sync + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+
+        // Stream exporter writes synchronously, so we just write and send the response
+        match self.send(index, docs).await {
+            Ok(batch_response) => {
+                if tx.send(batch_response).is_err() {
+                    log::error!("Failed to send batch response");
+                }
+            }
+            Err(e) => log::warn!("Stream write failed: {}", e),
+        }
+
+        Ok(rx)
+    }
+
+    /// Writes the final diagnostic report file to stdout
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
-        crate::data::save_file("report.json", report)
+        println!("{}", serde_json::to_string(report)?);
+        Ok(())
     }
 }
 

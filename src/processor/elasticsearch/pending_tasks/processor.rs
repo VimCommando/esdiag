@@ -2,21 +2,23 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, ElasticsearchMetadata, Lookups, Metadata},
+    super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata},
     PendingTask, PendingTasks,
 };
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Arc;
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for PendingTasks {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for PendingTasks {
+    async fn documents_export(
         self,
-        _lookups: Arc<Lookups>,
-        metadata: Arc<ElasticsearchMetadata>,
-    ) -> (String, Vec<Value>) {
+        exporter: &Exporter,
+        _lookups: &Lookups,
+        metadata: &ElasticsearchMetadata,
+    ) -> ProcessorSummary {
         log::debug!("processing pending tasks");
         let data_stream = "metrics-task.pending-esdiag".to_string();
         let metadata = metadata.for_data_stream(&data_stream).as_meta_doc();
@@ -35,7 +37,16 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for PendingTasks {
             .collect();
 
         log::debug!("pending task docs: {}", pending_tasks.len());
-        (data_stream, pending_tasks)
+
+        let mut summary = match pending_tasks.is_empty() {
+            false => ProcessorSummary::new(data_stream.clone()),
+            true => return ProcessorSummary::new(data_stream.clone()),
+        };
+        match exporter.send(data_stream, pending_tasks).await {
+            Ok(batch) => summary.add_batch(batch),
+            Err(err) => log::error!("Failed to send pending tasks: {}", err),
+        }
+        summary
     }
 }
 

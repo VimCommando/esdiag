@@ -110,39 +110,6 @@
         "http.pipelining": {
           "enabled": false
         },
-        "tribe.blocks.metadata": {
-          "enabled": false
-        },
-        "tribe.blocks.write": {
-          "enabled": false
-        },
-        "transport": {
-          "type": "object",
-          "properties": {
-            "port": {
-              "type": "keyword"
-            },
-            "type": {
-              "type": "object",
-              "properties": {
-                "current": {
-                  "type": "keyword"
-                },
-                "default": {
-                  "type": "keyword"
-                }
-              }
-            },
-            "tcp": {
-              "type": "object",
-              "properties": {
-                "port": {
-                  "type": "keyword"
-                }
-              }
-            }
-          }
-        },
         "http.type": {
           "type": "object",
           "properties": {
@@ -187,6 +154,50 @@
             },
             "split_bulk_threshold": {
               "type": "keyword"
+            }
+          }
+        },
+        "indices.merge.disk.watermark": {
+          "subobjects": false,
+          "properties": {
+            "high": {
+              "type": "keyword"
+            },
+            "high.max_headroom": {
+              "type": "keyword"
+            }
+          }
+        },
+        "tribe.blocks.metadata": {
+          "enabled": false
+        },
+        "tribe.blocks.write": {
+          "enabled": false
+        },
+        "transport": {
+          "type": "object",
+          "properties": {
+            "port": {
+              "type": "keyword"
+            },
+            "type": {
+              "type": "object",
+              "properties": {
+                "current": {
+                  "type": "keyword"
+                },
+                "default": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "tcp": {
+              "type": "object",
+              "properties": {
+                "port": {
+                  "type": "keyword"
+                }
+              }
             }
           }
         },

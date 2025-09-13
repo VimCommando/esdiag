@@ -31,9 +31,8 @@ use eyre::{Result, eyre};
 use kubernetes_platform::KubernetesPlatformDiagnostic;
 use logstash::LogstashDiagnostic;
 use serde::Serialize;
-use std::{sync::Arc, time::UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
-#[derive(Clone)]
 pub enum Diagnostic {
     Elasticsearch(Box<ElasticsearchDiagnostic>),
     ElasticCloudKubernetes(Box<ElasticCloudKubernetesDiagnostic>),
@@ -104,8 +103,13 @@ impl Diagnostic {
     }
 }
 
-trait DataProcessor<T, U> {
-    fn generate_docs(self, lookups: Arc<T>, metadata: Arc<U>) -> (String, Vec<serde_json::Value>);
+trait DocumentExporter<T, U> {
+    async fn documents_export(
+        self,
+        exporter: &Exporter,
+        lookups: &T,
+        metadata: &U,
+    ) -> ProcessorSummary;
 }
 
 trait DiagnosticProcessor {
@@ -141,7 +145,7 @@ pub struct JobReady {
     diagnostic: Diagnostic,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 pub struct JobProcessing {
     pub id: u64,
     pub filename: Option<String>,

@@ -2,23 +2,26 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, LogstashMetadata, Lookups, Metadata},
+    super::{DocumentExporter, LogstashMetadata, Lookups, Metadata},
     NodeStats, PipelinePlugins, PipelineStats,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-impl DataProcessor<Lookups, LogstashMetadata> for NodeStats {
-    fn generate_docs(
+impl DocumentExporter<Lookups, LogstashMetadata> for NodeStats {
+    async fn documents_export(
         mut self,
-        _: Arc<Lookups>,
-        metadata: Arc<LogstashMetadata>,
-    ) -> (String, Vec<Value>) {
+        exporter: &Exporter,
+        _: &Lookups,
+        metadata: &LogstashMetadata,
+    ) -> ProcessorSummary {
         let mut docs: Vec<Value> = Vec::new();
         self.take_pipelines().map(|pipelines| {
-            let mut pipeline_docs = generate_pipeline_docs(metadata.clone(), pipelines);
+            let mut pipeline_docs = generate_pipeline_docs(metadata, pipelines);
             docs.append(&mut pipeline_docs);
         });
 
@@ -27,7 +30,12 @@ impl DataProcessor<Lookups, LogstashMetadata> for NodeStats {
         let node_doc = json!(NodeStatsDoc::new(self, metadata_doc));
         docs.push(node_doc);
 
-        (data_stream, docs)
+        let mut summary = ProcessorSummary::new(data_stream.clone());
+        match exporter.send(data_stream, docs).await {
+            Ok(batch) => summary.add_batch(batch),
+            Err(err) => log::error!("Failed to send node stats: {}", err),
+        }
+        summary
     }
 }
 
@@ -51,7 +59,7 @@ impl NodeStatsDoc {
 }
 
 fn generate_pipeline_docs(
-    metadata: Arc<LogstashMetadata>,
+    metadata: &LogstashMetadata,
     pipelines: HashMap<String, PipelineStats>,
 ) -> Vec<Value> {
     let pipeline_metadata_doc = metadata
@@ -63,7 +71,7 @@ fn generate_pipeline_docs(
         .into_iter()
         .map(|(name, mut stats)| {
             stats.take_plugins().map(|plugins| {
-                let mut docs = generate_plugin_docs(metadata.clone(), plugins);
+                let mut docs = generate_plugin_docs(metadata, plugins);
                 plugin_docs.append(&mut docs);
             });
             json!(PipelineDoc::new(name, stats, pipeline_metadata_doc.clone()))
@@ -123,7 +131,7 @@ impl PluginDoc {
     }
 }
 
-fn generate_plugin_docs(metadata: Arc<LogstashMetadata>, plugins: PipelinePlugins) -> Vec<Value> {
+fn generate_plugin_docs(metadata: &LogstashMetadata, plugins: PipelinePlugins) -> Vec<Value> {
     let plugin_metadata_doc = metadata
         .for_data_stream("metrics-logstash.plugin-esdiag")
         .as_meta_doc();

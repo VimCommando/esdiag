@@ -4,7 +4,7 @@
 
 /// Write to a directory
 mod directory;
-/// Export to an Elasticsearch cluster with the `_bulk` API
+/// Send to an Elasticsearch cluster with the `_bulk` API
 mod elasticsearch;
 /// Write to an `.ndjson` file
 mod file;
@@ -20,13 +20,23 @@ pub use directory::DirectoryExporter;
 use elasticsearch::ElasticsearchExporter;
 use eyre::{Result, eyre};
 use file::FileExporter;
-use serde_json::Value;
+use serde::Serialize;
 use stream::StreamExporter;
+use tokio::sync::{mpsc, oneshot};
 use url::Url;
 
 trait Export {
     async fn is_connected(&self) -> bool;
-    async fn write(&self, index: String, docs: Vec<Value>) -> Result<ProcessorSummary>;
+    async fn send<T>(&self, index: String, docs: Vec<T>) -> Result<crate::processor::BatchResponse>
+    where
+        T: Serialize + Sized + Send + Sync;
+    async fn tx<T>(
+        &self,
+        index: String,
+        docs: Vec<T>,
+    ) -> Result<oneshot::Receiver<crate::processor::BatchResponse>>
+    where
+        T: Serialize + Sized + Send + Sync + 'static;
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()>;
     fn with_identifiers(self, identifiers: Identifiers) -> Self;
 }
@@ -51,11 +61,103 @@ pub enum Exporter {
 }
 
 impl Exporter {
-    pub async fn write(&self, index: String, docs: Vec<Value>) -> Result<ProcessorSummary> {
+    /// Consume a channel of documents and export them in batches with parallelism.
+    ///
+    /// This helper continuously receives documents from the provided
+    /// `tokio::sync::mpsc::Receiver`, accumulating them until `batch_size`
+    /// is reached, then sending the batch via the underlying exporter
+    /// implementation (`Elasticsearch`, `File`, or `Stream`) for parallel processing.
+    ///
+    /// - A new `ProcessorSummary` is created for the provided `index`.
+    /// - Documents are buffered up to `batch_size`; when the threshold is met
+    ///   `send` is invoked for parallel processing and the accumulator is cleared.
+    /// - When the sending side of the channel closes, any remaining (partial)
+    ///   batch is also sent.
+    /// - Batch responses are collected from parallel workers and merged into the summary.
+    /// - Errors from batch processing do not abort processing; they are logged
+    ///   with `log::warn!` and the loop continues.
+    /// - The final (possibly partially updated) `ProcessorSummary` is returned.
+    pub async fn document_channel<T: Serialize + Send + Sync + 'static>(
+        self,
+        mut rx: mpsc::Receiver<T>,
+        index: String,
+        batch_size: usize,
+    ) -> ProcessorSummary {
+        let mut summary = ProcessorSummary::new(index.clone());
+        let mut accumulator = Vec::<T>::with_capacity(batch_size);
+        let mut batch_receivers = Vec::new();
+        while let Some(doc) = rx.recv().await {
+            accumulator.push(doc);
+
+            if accumulator.len() >= batch_size {
+                let batch = std::mem::replace(&mut accumulator, Vec::with_capacity(batch_size));
+                match self.tx(index.clone(), batch).await {
+                    Ok(batch_rx) => batch_receivers.push(batch_rx),
+                    Err(err) => log::warn!("Failed to send document batch: {}", err),
+                }
+            }
+        }
+
+        // Send final partial batch
+        if !accumulator.is_empty() {
+            match self.tx(index.clone(), accumulator).await {
+                Ok(batch_rx) => batch_receivers.push(batch_rx),
+                Err(err) => log::warn!("Failed to send final document batch: {}", err),
+            }
+        }
+
+        // Collect all batch responses
+        for batch_rx in batch_receivers {
+            match batch_rx.await {
+                Ok(batch_response) => summary.add_batch(batch_response),
+                Err(_) => log::warn!("Batch response channel closed unexpectedly"),
+            }
+        }
+
+        log::debug!("document_channel {} sent: {}", index, summary.docs);
+        summary
+    }
+
+    pub async fn send<T>(
+        &self,
+        index: String,
+        docs: Vec<T>,
+    ) -> Result<crate::processor::BatchResponse>
+    where
+        T: Serialize + Sized + Send + Sync,
+    {
         match self {
-            Exporter::Elasticsearch(exporter) => exporter.write(index, docs).await,
-            Exporter::File(exporter) => exporter.write(index, docs).await,
-            Exporter::Stream(exporter) => exporter.write(index, docs).await,
+            Exporter::Elasticsearch(exporter) => exporter.send(index, docs).await,
+            Exporter::File(exporter) => exporter.send(index, docs).await,
+            Exporter::Stream(exporter) => exporter.send(index, docs).await,
+        }
+    }
+
+    pub async fn tx<T>(
+        &self,
+        index: String,
+        docs: Vec<T>,
+    ) -> Result<oneshot::Receiver<crate::processor::BatchResponse>>
+    where
+        T: Serialize + Sized + Send + Sync + 'static,
+    {
+        match self {
+            Exporter::Elasticsearch(exporter) => exporter.tx(index, docs).await,
+            Exporter::File(exporter) => exporter.tx(index, docs).await,
+            Exporter::Stream(exporter) => exporter.tx(index, docs).await,
+        }
+    }
+
+    pub async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        value: Option<&serde_json::Value>,
+    ) -> Result<::elasticsearch::http::response::Response> {
+        match self {
+            Exporter::Elasticsearch(exporter) => exporter.request(method, path, value).await,
+            Exporter::File(_) => Err(eyre!("request not supported for file exporter")),
+            Exporter::Stream(_) => Err(eyre!("request not supported for stream exporter")),
         }
     }
 

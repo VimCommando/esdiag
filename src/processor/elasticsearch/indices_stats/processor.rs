@@ -2,110 +2,193 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::{
-    super::{
-        DataProcessor, ElasticsearchMetadata, Lookups,
-        alias::Alias,
-        indices_settings::{IndexSettingsDocument, StoreSettings},
-        metadata::MetadataDoc,
-        nodes::NodeDocument,
-    },
-    IndicesStats,
-    data::*,
+use super::super::super::{Exporter, ProcessorSummary};
+use super::super::{
+    DocumentExporter, ElasticsearchMetadata, Lookup, Lookups,
+    alias::Alias,
+    indices_settings::{IndexSettingsDocument, StoreSettings},
+    metadata::MetadataDoc,
+    nodes::NodeDocument,
 };
+use super::{IndicesStats, data::*};
 use eyre::Report;
-//use json_patch::merge;
-use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use serde_with::skip_serializing_none;
-use std::sync::Arc;
 
-impl DataProcessor<Lookups, ElasticsearchMetadata> for IndicesStats {
-    fn generate_docs(
+//use json_patch::merge;
+use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
+use tokio::sync::mpsc;
+
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesStats {
+    async fn documents_export(
         self,
-        lookups: Arc<Lookups>,
-        metadata: Arc<ElasticsearchMetadata>,
-    ) -> (String, Vec<Value>) {
-        let mut indices_stats = self.indices;
-        log::debug!("index_stats indices: {}", indices_stats.len());
-        let index_metadata = metadata.for_data_stream("metrics-index-esdiag");
+        exporter: &Exporter,
+        lookups: &Lookups,
+        metadata: &ElasticsearchMetadata,
+    ) -> ProcessorSummary {
+        log::debug!("index_stats indices: {}", self.indices.len());
+        let indices_stats = self.indices;
+        let data_stream_name = "metrics-index-esdiag".to_string();
+        let index_metadata = metadata.for_data_stream(&data_stream_name);
         let shard_metadata = metadata.for_data_stream("metrics-shard-esdiag");
 
-        let index_stats_docs: Vec<Value> = indices_stats
-            .par_drain()
-            .flat_map(|(index, mut index_stats)| {
-                let shard_stats = index_stats.shards.take();
-                let index_settings =
-                    lookups
-                        .index_settings
-                        .by_name(&index)
-                        .cloned()
-                        .map(|settings| {
-                            settings
-                                .data_stream(lookups.data_stream.by_id(&index).cloned())
-                                .age(index_metadata.diagnostic.collection_date)
-                        });
+        // Tune batch sizes and channel buffers for memory usage and write frequency
+        let batch_size = 5000;
+        const BUFFER_SIZE: usize = 5000;
 
-                let index_settings = index_settings.map(|settings| {
-                    IndexSettingsDocument::from(settings)
-                        .ilm(lookups.ilm_explain.by_name(&index).cloned())
-                });
+        // Spawn document channels for concurrent processing with backpressure
+        let (index_tx, index_rx) = mpsc::channel::<IndexStatsDocument>(BUFFER_SIZE);
+        let index_processor =
+            tokio::spawn(exporter.clone().document_channel::<IndexStatsDocument>(
+                index_rx,
+                index_metadata.data_stream.to_string(),
+                batch_size,
+            ));
 
-                let index_stats = EnrichedIndexStats::try_from(index_stats)
-                    .expect("Failed to parse index stats")
-                    .alias(lookups.alias.by_name(&index).cloned())
-                    .with_settings(index_settings.clone());
+        let (shard_tx, shard_rx) = mpsc::channel::<ShardStatsDocument>(BUFFER_SIZE);
+        let shard_processor =
+            tokio::spawn(exporter.clone().document_channel::<ShardStatsDocument>(
+                shard_rx,
+                shard_metadata.data_stream.to_string(),
+                batch_size,
+            ));
 
-                let index_document =
-                    IndexDocument::new(index_stats, index_metadata.clone()).calculate();
-                let index_settings = index_settings
-                    .map(|s| s.write_phase(index_document.index.stats.write_phase_sec));
+        for (index_name, mut index_stats) in indices_stats {
+            let shards_stats = index_stats.shards.take();
+            let index_settings =
+                lookups
+                    .index_settings
+                    .by_name(&index_name)
+                    .cloned()
+                    .map(|settings| {
+                        settings
+                            .data_stream(lookups.data_stream.by_id(&index_name).cloned())
+                            .age(metadata.diagnostic.collection_date)
+                    });
 
-                let shard_docs = shard_stats.map(|mut shards| {
-                    shards
-                        .par_drain()
-                        .flat_map(|(number, mut shard_stats)| {
-                            shard_stats
-                                .par_drain(..)
-                                .filter_map(|shard_entry| {
-                                    let stats = EnrichedShardStats::try_from(shard_entry)
-                                        .expect("Failed to parse shard stats")
-                                        .with_id(number);
-                                    let node = lookups.node.by_id(&stats.routing.node).cloned();
-                                    let doc = ShardDocument::new(stats, shard_metadata.clone())
-                                        .index_settings(index_settings.clone())
-                                        .node(node)
-                                        .calculate();
-                                    serde_json::to_value(doc).ok()
-                                })
-                                .collect::<Vec<Value>>()
-                        })
-                        .collect::<Vec<Value>>()
-                });
+            let index_settings = index_settings.map(|settings| {
+                IndexSettingsDocument::from(settings)
+                    .ilm(lookups.ilm_explain.by_name(&index_name).cloned())
+            });
 
-                let mut documents: Vec<Value> = vec![json!(index_document)];
-                shard_docs.map(|docs| documents.extend(docs));
-                documents
-            })
-            .collect();
+            let write_phase_sec = match EnrichedIndexStats::try_from(index_stats) {
+                Ok(enriched_stats) => {
+                    let stats = enriched_stats
+                        .name(index_name.clone())
+                        .alias(lookups.alias.by_name(&index_name).cloned())
+                        .with_settings(index_settings.clone());
+                    let index_document =
+                        IndexStatsDocument::new(stats, index_metadata.clone()).calculate();
+                    let write_phase_sec = index_document.index.stats.write_phase_sec;
+                    if let Err(_) = index_tx.send(index_document).await {
+                        log::warn!("Index channel closed unexpectedly");
+                    }
+                    write_phase_sec
+                }
+                Err(_) => {
+                    log::warn!("Failed to create index document");
+                    None
+                }
+            };
 
-        log::debug!("index_stats docs: {}", index_stats_docs.len());
-        (index_metadata.data_stream.to_string(), index_stats_docs)
+            let index_settings = index_settings.map(|s| s.write_phase(write_phase_sec));
+
+            if let Some(shards) = shards_stats {
+                match extract_shard_documents(
+                    shards,
+                    &shard_metadata,
+                    index_name,
+                    index_settings,
+                    &lookups.node,
+                ) {
+                    Ok(docs) => {
+                        for doc in docs {
+                            if shard_tx.send(doc).await.is_err() {
+                                log::warn!("Shard channel closed unexpectedly");
+                                break;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        log::warn!("Failed to create shard documents: {}", err);
+                    }
+                }
+            }
+        }
+
+        // Close channels to signal completion
+        drop(index_tx);
+        drop(shard_tx);
+
+        // Wait for processors to complete
+        let (index_result, shard_result) = tokio::join!(index_processor, shard_processor);
+
+        // Merge summaries
+
+        let mut summary = ProcessorSummary::new(data_stream_name);
+        summary.merge(index_result.map_err(|err| eyre::Report::new(err)));
+        summary.merge(shard_result.map_err(|err| eyre::Report::new(err)));
+
+        log::debug!("indices_stats processed: {}", summary.docs);
+        summary
     }
+}
+
+fn extract_shard_documents(
+    mut shards: std::collections::HashMap<u16, Vec<ShardEntry>>,
+    shard_metadata: &MetadataDoc,
+    index_name: String,
+    index_settings: Option<IndexSettingsDocument>,
+    lookup_node: &Lookup<NodeDocument>,
+) -> Result<Vec<ShardStatsDocument>, eyre::Report> {
+    let shard_docs: Vec<ShardStatsDocument> = shards
+        .drain()
+        .flat_map(|(number, mut shard_stats)| {
+            shard_stats
+                .drain(..)
+                .filter_map(
+                    |shard_entry| match EnrichedShardStats::try_from(shard_entry) {
+                        Ok(stats) => {
+                            let enriched_stats = stats.with_id(number);
+                            let node = lookup_node.by_id(&enriched_stats.routing.node).cloned();
+                            Some(
+                                ShardStatsDocument::new(enriched_stats, shard_metadata.clone())
+                                    .index_settings(index_settings.clone())
+                                    .node(node)
+                                    .calculate(),
+                            )
+                        }
+                        Err(err) => {
+                            log::warn!(
+                                "Failed to parse shard stats for index {}, shard {}: {}",
+                                &index_name,
+                                number,
+                                err
+                            );
+                            None
+                        }
+                    },
+                )
+                .collect::<Vec<ShardStatsDocument>>()
+        })
+        .collect();
+
+    Ok(shard_docs)
 }
 
 #[skip_serializing_none]
 #[derive(Serialize)]
-struct IndexDocument {
+struct IndexStatsDocument {
     index: EnrichedIndexStatsWithSettings,
     #[serde(flatten)]
     metadata: MetadataDoc,
 }
 
-impl IndexDocument {
-    fn new(index: EnrichedIndexStatsWithSettings, metadata: MetadataDoc) -> Self {
-        IndexDocument { index, metadata }
+impl IndexStatsDocument {
+    fn new(index_stats: EnrichedIndexStatsWithSettings, metadata: MetadataDoc) -> Self {
+        IndexStatsDocument {
+            index: index_stats,
+            metadata,
+        }
     }
 
     fn calculate(mut self) -> Self {
@@ -154,7 +237,6 @@ impl IndexDocument {
                 0
             };
 
-            stats.age = Some(since_creation);
             stats.since_rollover = since_rollover;
             stats.write_phase_sec = Some(write_phase_sec);
         }
@@ -218,12 +300,12 @@ impl IndexDocument {
 #[skip_serializing_none]
 #[derive(Serialize)]
 struct EnrichedIndexStats {
-    pub age: Option<u64>,
     pub alias: Option<Alias>,
     pub health: Option<String>,
     pub is_write_index: bool,
     pub primaries: EnrichedStats,
     pub since_rollover: Option<u64>,
+    pub name: Option<String>,
     pub total: EnrichedStats,
     pub uuid: Option<String>,
     pub write_phase_sec: Option<u64>,
@@ -243,6 +325,13 @@ impl EnrichedIndexStats {
         Self { alias, ..self }
     }
 
+    fn name(self, name: String) -> Self {
+        Self {
+            name: Some(name),
+            ..self
+        }
+    }
+
     fn with_settings(
         self,
         settings: Option<IndexSettingsDocument>,
@@ -258,20 +347,18 @@ impl TryFrom<IndexStats> for EnrichedIndexStats {
     type Error = Report;
 
     fn try_from(stats: IndexStats) -> Result<Self, Self::Error> {
-        let health = stats.health;
         let primaries = EnrichedStats::try_from(stats.primaries)?;
         let total = EnrichedStats::try_from(stats.total)?;
-        let uuid = stats.uuid;
 
         Ok(EnrichedIndexStats {
-            age: None,
             alias: None,
-            health,
+            health: stats.health,
             is_write_index: false,
+            name: None,
             primaries,
             since_rollover: None,
             total,
-            uuid,
+            uuid: stats.uuid,
             write_phase_sec: None,
         })
     }
@@ -280,14 +367,14 @@ impl TryFrom<IndexStats> for EnrichedIndexStats {
 #[skip_serializing_none]
 #[derive(Deserialize, Serialize)]
 struct EnrichedShardStats {
-    pub commit: Value,
+    pub commit: ShardCommit,
     pub number: u16,
-    pub retention_leases: Value,
+    pub retention_leases: RetentionLeases,
     pub routing: ShardRouting,
     pub search_idle: Option<bool>,
     pub search_idle_time: Option<u64>,
-    pub seq_no: Value,
-    pub shard_path: Value,
+    pub seq_no: SequenceNumber,
+    pub shard_path: Option<ShardPath>,
     #[serde(flatten)]
     pub stats: Stats,
 }
@@ -318,7 +405,7 @@ impl TryFrom<ShardEntry> for EnrichedShardStats {
 
 #[skip_serializing_none]
 #[derive(Serialize)]
-struct ShardDocument {
+struct ShardStatsDocument {
     shard: EnrichedShardStats,
     index: Option<IndexSettingsDocument>,
     node: Option<NodeDocument>,
@@ -326,9 +413,9 @@ struct ShardDocument {
     metadata: MetadataDoc,
 }
 
-impl ShardDocument {
+impl ShardStatsDocument {
     pub fn new(shard: EnrichedShardStats, metadata: MetadataDoc) -> Self {
-        ShardDocument {
+        ShardStatsDocument {
             shard,
             metadata,
             node: None,
@@ -439,7 +526,7 @@ impl ShardDocument {
 struct EnrichedStats {
     bulk: EnrichedBulk,
     completion: Option<Completion>,
-    dense_vector: Option<DenseVector>,
+    dense_vector: Option<VectorCount>,
     docs: Option<EnrichedDocs>,
     fielddata: Option<Fielddata>,
     flush: Option<Flush>,
@@ -453,7 +540,7 @@ struct EnrichedStats {
     search: Option<Search>,
     segments: Option<Segments>,
     shard_stats: ShardStats,
-    sparse_vector: Option<SparseVector>,
+    sparse_vector: Option<VectorCount>,
     store: EnrichedStoreStats,
     translog: Option<Translog>,
     warmer: Option<Warmer>,

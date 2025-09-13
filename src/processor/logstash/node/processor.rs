@@ -2,23 +2,26 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, LogstashMetadata, Lookups, Metadata},
+    super::{DocumentExporter, LogstashMetadata, Lookups, Metadata},
     Node, Pipeline,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-impl DataProcessor<Lookups, LogstashMetadata> for Node {
-    fn generate_docs(
+impl DocumentExporter<Lookups, LogstashMetadata> for Node {
+    async fn documents_export(
         mut self,
-        lookups: Arc<Lookups>,
-        metadata: Arc<LogstashMetadata>,
-    ) -> (String, Vec<Value>) {
+        exporter: &Exporter,
+        lookups: &Lookups,
+        metadata: &LogstashMetadata,
+    ) -> ProcessorSummary {
         let mut docs: Vec<Value> = Vec::new();
         let data_stream = "settings-logstash.node-esdiag".to_string();
-        let mut pipeline_docs = generate_pipeline_docs(metadata.clone(), self.take_pipelines());
+        let mut pipeline_docs = generate_pipeline_docs(metadata, self.take_pipelines());
         docs.append(&mut pipeline_docs);
 
         let metadata_doc = metadata.for_data_stream(&data_stream).as_meta_doc();
@@ -29,7 +32,12 @@ impl DataProcessor<Lookups, LogstashMetadata> for Node {
         ));
         docs.push(node_doc);
 
-        (data_stream, docs)
+        let mut summary = ProcessorSummary::new(data_stream.clone());
+        match exporter.send(data_stream, docs).await {
+            Ok(batch) => summary.add_batch(batch),
+            Err(err) => log::error!("Failed to send node: {}", err),
+        }
+        summary
     }
 }
 
@@ -67,7 +75,7 @@ impl LogstashNodeDoc {
 }
 
 fn generate_pipeline_docs(
-    metadata: Arc<LogstashMetadata>,
+    metadata: &LogstashMetadata,
     pipelines: HashMap<String, Pipeline>,
 ) -> Vec<Value> {
     let metadata = metadata

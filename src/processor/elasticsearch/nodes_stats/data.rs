@@ -4,6 +4,7 @@
 
 use super::super::super::diagnostic::data_source::PathType;
 use super::super::DataSource;
+use crate::data::option_map_as_vec_entries;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -12,9 +13,16 @@ use std::collections::HashMap;
 
 #[derive(Deserialize, Serialize)]
 pub struct NodesStats {
-    _nodes: Value,
+    _nodes: NodeCount,
     //cluster_name: String,
     pub nodes: HashMap<String, NodeStats>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct NodeCount {
+    total: u32,
+    successful: u32,
+    failed: u32,
 }
 
 #[skip_serializing_none]
@@ -135,13 +143,13 @@ pub struct FilesystemTotal {
     pub used_percent: usize,
 }
 
-pub type IngestPipelines = HashMap<String, IngestPipeline>;
+pub type IngestPipelines = Vec<(String, IngestPipeline)>;
 
 #[derive(Deserialize, Serialize)]
 pub struct Ingest {
     total: Value,
-    #[serde(skip_serializing)] // Docs split into separate datastream
-    pub pipelines: Option<IngestPipelines>,
+    #[serde(deserialize_with = "option_map_as_vec_entries", skip_serializing)]
+    pub pipelines: Option<Vec<(String, IngestPipeline)>>,
 }
 
 pub type IngestProcessors = Vec<HashMap<String, IngestProcessor>>;

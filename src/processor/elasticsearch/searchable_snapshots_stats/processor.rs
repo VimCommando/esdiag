@@ -2,20 +2,22 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use crate::{exporter::Exporter, processor::ProcessorSummary};
+
 use super::{
-    super::{DataProcessor, ElasticsearchMetadata, Lookups, Metadata},
+    super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata},
     SearchableSnapshotsStats,
 };
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Arc;
-impl DataProcessor<Lookups, ElasticsearchMetadata> for SearchableSnapshotsStats {
-    fn generate_docs(
+impl DocumentExporter<Lookups, ElasticsearchMetadata> for SearchableSnapshotsStats {
+    async fn documents_export(
         self,
-        _lookups: Arc<Lookups>,
-        metadata: Arc<ElasticsearchMetadata>,
-    ) -> (String, Vec<Value>) {
+        exporter: &Exporter,
+        _lookups: &Lookups,
+        metadata: &ElasticsearchMetadata,
+    ) -> ProcessorSummary {
         let data_stream = "metrics-searchable_snapshot-esdiag".to_string();
         let searchable_snapshots_stats_metadata =
             metadata.for_data_stream(&data_stream).as_meta_doc();
@@ -48,7 +50,12 @@ impl DataProcessor<Lookups, ElasticsearchMetadata> for SearchableSnapshotsStats 
             searchable_snapshot_stats.len()
         );
 
-        (data_stream, searchable_snapshot_stats)
+        let mut summary = ProcessorSummary::new(data_stream.clone());
+        match exporter.send(data_stream, searchable_snapshot_stats).await {
+            Ok(batch) => summary.add_batch(batch),
+            Err(err) => log::error!("Failed to send searchable snapshots stats: {}", err),
+        }
+        summary
     }
 }
 

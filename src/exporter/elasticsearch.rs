@@ -6,24 +6,26 @@ use super::Export;
 use crate::{
     client::{Auth, ElasticsearchBuilder, KnownHost},
     data,
-    processor::{BatchResponse, DiagnosticReport, Identifiers, ProcessorSummary},
+    processor::{BatchResponse, DiagnosticReport, Identifiers},
 };
 use elasticsearch::{
     BulkOperation, BulkParts, Elasticsearch, IndexParts,
     http::{Method, headers, request::JsonBody, response::Response},
 };
 use eyre::{Result, eyre};
-use futures::{future::join_all, stream::FuturesUnordered};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, oneshot};
 use url::Url;
 
+/// An exporter that sends documents to an Elasticsearch cluster.
 #[derive(Clone)]
 pub struct ElasticsearchExporter {
     client: Elasticsearch,
-    url: Url,
     pub identifiers: Identifiers,
+    tx_limit: Arc<Semaphore>,
+    url: Url,
 }
 
 impl ElasticsearchExporter {
@@ -34,15 +36,28 @@ impl ElasticsearchExporter {
             .auth(auth)
             .build()?;
 
+        let limit = std::env::var("ESDIAG_OUTPUT_TASK_LIMIT")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(10);
+
+        log::info!("Elasticsearch task limit set to {}", limit);
+
         Ok(Self {
             client,
-            url,
             identifiers: Identifiers::default(),
+            tx_limit: Arc::new(Semaphore::new(limit)),
+            url,
         })
     }
 
-    /// Send a request to an arbitrary path on the Elasticsearch client
-    pub async fn send(&self, method: &str, path: &str, value: Option<&Value>) -> Result<Response> {
+    /// Request to an arbitrary path on the Elasticsearch client
+    pub async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        value: Option<&Value>,
+    ) -> Result<Response> {
         let method = match method {
             "POST" => Method::Post,
             "PUT" => Method::Put,
@@ -73,15 +88,24 @@ impl TryFrom<KnownHost> for ElasticsearchExporter {
     fn try_from(host: KnownHost) -> Result<Self> {
         let url = host.get_url();
         let client = Elasticsearch::try_from(host)?;
+        let limit = std::env::var("ESDIAG_OUTPUT_TASK_LIMIT")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(10);
+
+        log::debug!("Elasticsearch output task limit: {}", limit);
+
         Ok(Self {
             client,
-            url,
             identifiers: Identifiers::default(),
+            tx_limit: Arc::new(Semaphore::new(limit)),
+            url,
         })
     }
 }
 
 impl Export for ElasticsearchExporter {
+    /// Adds identifiers to the exporter, which will be enriched on every document sent.
     fn with_identifiers(self, identifiers: Identifiers) -> Self {
         Self {
             identifiers,
@@ -89,6 +113,7 @@ impl Export for ElasticsearchExporter {
         }
     }
 
+    /// Check if the exporter has a valid connection to Elasticsearch.
     async fn is_connected(&self) -> bool {
         let status_code = match self.client.info().send().await {
             Ok(res) => {
@@ -105,45 +130,71 @@ impl Export for ElasticsearchExporter {
         status_code == 200
     }
 
-    async fn write(&self, index: String, mut docs: Vec<Value>) -> Result<ProcessorSummary> {
-        let client = Arc::new(self.client.clone());
-        let workers = 4;
-        let bulk_size = 5000;
-        let semaphore = Arc::new(Semaphore::new(workers));
-        let mut summary = ProcessorSummary::new(index.clone());
-
-        let futures = FuturesUnordered::new();
-
-        while !docs.is_empty() {
-            let client = client.clone();
-            let batch_size = std::cmp::min(docs.len(), bulk_size);
-            let index = index.clone();
-            let ops: Vec<BulkOperation<serde_json::Value>> = docs
-                .drain(..batch_size)
-                .map(|doc| BulkOperation::create(doc).pipeline("esdiag").into())
-                .collect();
-            let semaphore = semaphore.clone();
-            let future = async move {
-                let _permit = semaphore.acquire().await;
-                let response = client.bulk(BulkParts::Index(&index)).body(ops).send().await;
-                parse_response(index, response).await
-            };
-
-            futures.push(tokio::spawn(future));
-        }
-
-        join_all(futures)
-            .await
+    /// Sends a single batch of documents directly to Elasticsearch with backpressure.
+    /// Returns a BatchResponse directly without spawning tasks.
+    async fn send<T>(&self, index: String, docs: Vec<T>) -> Result<BatchResponse>
+    where
+        T: Serialize + Sized + Send + Sync,
+    {
+        let batch: Vec<BulkOperation<T>> = docs
             .into_iter()
-            .filter_map(Result::ok)
-            .flatten()
-            .for_each(|response| {
-                summary.add_batch(response);
-            });
+            .map(|doc| BulkOperation::create(doc).pipeline("esdiag").into())
+            .collect();
 
-        Ok(summary)
+        let response = self
+            .client
+            .bulk(BulkParts::Index(&index))
+            .body(batch)
+            .send()
+            .await;
+
+        parse_response(index, response).await
     }
 
+    /// Transmits a single batch of documents with semaphore-based connection limiting
+    /// Returns a one-shot channel for the BatchResponse
+    async fn tx<T>(&self, index: String, docs: Vec<T>) -> Result<oneshot::Receiver<BatchResponse>>
+    where
+        T: Serialize + Sized + Send + Sync + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        let client = self.client.clone();
+        let semaphore = self.tx_limit.clone();
+
+        tokio::spawn(async move {
+            // Acquire semaphore permit inside task - blocks if at limit (backpressure)
+            let _permit = semaphore
+                .acquire()
+                .await
+                .expect("Failed to acquire semaphore permit");
+
+            let batch: Vec<BulkOperation<T>> = docs
+                .into_iter()
+                .map(|doc| BulkOperation::create(doc).pipeline("esdiag").into())
+                .collect();
+
+            let response = client
+                .bulk(BulkParts::Index(&index))
+                .body(batch)
+                .send()
+                .await;
+
+            match parse_response(index, response).await {
+                Ok(batch_response) => {
+                    if tx.send(batch_response).is_err() {
+                        log::error!("Failed to send batch response: receiver dropped");
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Bulk batch failed: {}", e);
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+
+    /// Sends the final diagnostic report document to Elasticsearch.
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
         data::save_file("report.json", report)?;
         let diagnostic_id = report.metadata.id.clone();
@@ -214,6 +265,21 @@ async fn parse_response(
     let error_count = error_items.len();
     let doc_count = item_count - error_count;
 
+    if (status_code != 200 && log::max_level() >= log::Level::Debug)
+        || (log::max_level() >= log::Level::Trace)
+    {
+        data::save_file(
+            "responses.ndjson",
+            &serde_json::json!({
+                "index": index,
+                "doc_count": doc_count,
+                "error_count": error_count,
+                "errors": error_items,
+                "body": body,
+            }),
+        )?;
+    }
+
     match status_code {
         200 if error_count == 0 => log::debug!("{}, created {} docs", index, doc_count),
         200 => log::warn!(
@@ -222,6 +288,7 @@ async fn parse_response(
             doc_count,
             error_count
         ),
+        400 => return Err(eyre!("{} - http 400 bad request", index)),
         401 => return Err(eyre!("{} - http 401 unauthorized", index)),
         403 => return Err(eyre!("{} - http 403 forbidden", index)),
         404 => return Err(eyre!("{} - http 404 not found", index)),

@@ -7,6 +7,7 @@ use crate::env;
 use eyre::Result;
 use eyre::{OptionExt, Report};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::{
     fs::OpenOptions,
     io::Write,
@@ -91,8 +92,6 @@ impl From<Uri> for Url {
 }
 
 fn identify_elastic_host(host: KnownHost) -> Uri {
-    // https://admin.us-gov-east-1.aws.elastic-cloud.com/api/v1/deployments/2492c05b8d1f4c4d8c1ecb05ec59e4c0/elasticsearch/elasticsearch/proxy/
-    // https://admin.us-gov-east-1.aws.elastic-cloud.com/deployments/2492c05b8d1f4c4d8c1ecb05ec59e4c0
     match host.get_url().as_str() {
         url if url.contains("admin.us-gov-east-1.aws.elastic-cloud.com") => {
             log::debug!("Creating Uri::ElasticGovCloudAdmin");
@@ -206,5 +205,90 @@ impl std::fmt::Display for Uri {
             Uri::Stream => write!(f, "-"),
             Uri::Url(url) => write!(f, "{}", url),
         }
+    }
+}
+
+/// The standard deserializer from serde_json does not deserializing u64 from
+/// strings. Unfortunately the _settings API frequently wraps numbers in quotes.
+
+pub fn u64_from_string<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+
+    match value {
+        Value::Number(num) => Ok(num.as_u64()),
+        Value::String(s) => Ok(s.parse::<u64>().ok()),
+        Value::Null => Ok(None),
+        _ => Err(serde::de::Error::custom(
+            "expected a number or a string representing a number",
+        )),
+    }
+}
+
+/// The standard deserializer from serde_json does not deserializing i64 from
+/// strings. Unfortunately the _settings API frequently wraps numbers in quotes.
+
+pub fn i64_from_string<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+
+    match value {
+        Value::Number(num) => Ok(num.as_i64()),
+        Value::String(s) => Ok(s.parse::<i64>().ok()),
+        Value::Null => Ok(None),
+        _ => Err(serde::de::Error::custom(
+            "expected a number or a string representing a number",
+        )),
+    }
+}
+
+pub fn map_as_vec_entries<'de, D, T>(deserializer: D) -> Result<Vec<(String, T)>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+
+    match value {
+        Value::Object(map) => {
+            let mut result = Vec::new();
+            for (key, value) in map {
+                let deserialized_value = T::deserialize(value).map_err(serde::de::Error::custom)?;
+                result.push((key, deserialized_value));
+            }
+            Ok(result)
+        }
+        _ => Err(serde::de::Error::custom("expected an object")),
+    }
+}
+
+pub fn option_map_as_vec_entries<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Vec<(String, T)>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    // Deserialize into an Option<Value> so we can distinguish missing / null
+    let opt_value: Option<Value> = Option::deserialize(deserializer)?;
+
+    match opt_value {
+        None => Ok(None),
+        Some(Value::Null) => Ok(None),
+        Some(Value::Object(map)) => {
+            let mut result = Vec::with_capacity(map.len());
+            for (key, value) in map {
+                let deserialized_value = T::deserialize(value).map_err(serde::de::Error::custom)?;
+                result.push((key, deserialized_value));
+            }
+            Ok(Some(result))
+        }
+        Some(_) => Err(serde::de::Error::custom(
+            "expected an object, null, or missing field",
+        )),
     }
 }

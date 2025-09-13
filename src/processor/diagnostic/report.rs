@@ -254,8 +254,23 @@ pub struct ProcessorSummary {
     doc_errors: u32,
     #[serde(skip_serializing)]
     pub processor: String,
-    index: String,
+    pub index: String,
     pub source: Source,
+}
+
+impl ProcessorSummary {
+    pub fn merge(&mut self, other: Result<ProcessorSummary>) {
+        match other {
+            Ok(other) => {
+                self.batch.merge(other.batch);
+                self.docs += other.docs;
+                self.doc_errors += other.doc_errors;
+            }
+            Err(err) => {
+                log::warn!("processor summary was err: {}", err);
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -265,6 +280,20 @@ pub struct BatchStats {
     status_codes: HashMap<u16, u32>,
     #[serde(skip_serializing)]
     pub responses: Vec<BatchResponse>,
+}
+
+impl BatchStats {
+    pub fn merge(&mut self, other: BatchStats) {
+        self.count += other.count;
+        self.retries += other.retries;
+        for (code, count) in other.status_codes {
+            self.status_codes
+                .entry(code)
+                .and_modify(|c| *c += count)
+                .or_insert(count);
+        }
+        self.responses.extend(other.responses);
+    }
 }
 
 #[derive(Serialize, Clone)]
