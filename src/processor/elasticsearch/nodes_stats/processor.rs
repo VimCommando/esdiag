@@ -95,7 +95,7 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for NodesStats {
         ));
 
         let (processors_tx, processors_rx) = mpsc::channel::<Value>(BUFFER_SIZE);
-        let processors_data_stream = "metrics-ingest.pipeline-esdiag".to_string();
+        let processors_data_stream = "metrics-ingest.processors-esdiag".to_string();
         let processors_processor = tokio::spawn(exporter.clone().document_channel::<Value>(
             processors_rx,
             processors_data_stream,
@@ -197,7 +197,7 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for NodesStats {
             merge(&mut doc, &node_summary_patch);
             merge(&mut doc, &omit_patch);
 
-            if let Err(_) = nodes_stats_tx.send(doc).await {
+            if nodes_stats_tx.send(doc).await.is_err() {
                 log::warn!("Nodes stats channel closed unexpectedly");
             }
         }

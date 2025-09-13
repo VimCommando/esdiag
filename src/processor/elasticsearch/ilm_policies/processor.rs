@@ -37,11 +37,8 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IlmPolicies {
             .collect();
 
         log::debug!("ILM policies docs: {}", policies.len());
-        let mut summary = ProcessorSummary::new("settings-ilm-policies-esdiag".to_string());
-        match exporter
-            .send("settings-ilm-policies-esdiag".to_string(), policies)
-            .await
-        {
+        let mut summary = ProcessorSummary::new(data_stream.clone());
+        match exporter.send(data_stream, policies).await {
             Ok(batch) => summary.add_batch(batch),
             Err(err) => log::error!("Failed to send ILM policies: {}", err),
         }
