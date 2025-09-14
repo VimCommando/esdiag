@@ -13,3 +13,8 @@
   method: "PUT"
   subdir: "index_template"
   suffix: "-esdiag"
+
+- name: "roles"
+  endpoint: "_security/role"
+  method: "PUT"
+  subdir: "role"
