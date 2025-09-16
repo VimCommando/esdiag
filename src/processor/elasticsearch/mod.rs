@@ -48,19 +48,15 @@ pub use {
 };
 
 use super::{
-    DiagnosticProcessor, DocumentExporter, Metadata,
-    diagnostic::{
-        DataSource, DiagnosticManifest, DiagnosticReport, DiagnosticReportBuilder, Lookup, Product,
-    },
+    DataSource, DiagnosticManifest, DiagnosticProcessor, DiagnosticReport, DocumentExporter,
+    Metadata, ProcessorSummary, Product,
+    diagnostic::{DiagnosticReportBuilder, Lookup},
+    elasticsearch::health_report::HealthReport,
 };
-use crate::{
-    data,
-    exporter::Exporter,
-    processor::{ProcessorSummary, elasticsearch::health_report::HealthReport},
-    receiver::Receiver,
-};
+use crate::{data, exporter::Exporter, receiver::Receiver};
 use eyre::{Result, eyre};
 use serde::{Serialize, de::DeserializeOwned};
+use std::sync::Arc;
 use {
     alias::{Alias, AliasList},
     cluster_settings::ClusterSettings,
@@ -84,9 +80,9 @@ pub struct ElasticsearchDiagnostic {
     lookups: Lookups,
     metadata: ElasticsearchMetadata,
     #[serde(skip)]
-    exporter: Exporter,
+    exporter: Arc<Exporter>,
     #[serde(skip)]
-    receiver: Receiver,
+    receiver: Arc<Receiver>,
     #[serde(skip)]
     report: DiagnosticReport,
 }
@@ -116,9 +112,9 @@ impl ElasticsearchDiagnostic {
 
 impl DiagnosticProcessor for ElasticsearchDiagnostic {
     async fn new(
+        receiver: Arc<Receiver>,
+        exporter: Arc<Exporter>,
         manifest: DiagnosticManifest,
-        receiver: Receiver,
-        exporter: Exporter,
     ) -> Result<Box<Self>> {
         let cluster = receiver.get::<version::Cluster>().await?;
         let display_name = receiver

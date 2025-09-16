@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     client::{KnownHost, KnownHostBuilder},
-    processor::{JobNew, new_job_id},
+    processor::new_job_id,
     receiver::Receiver,
 };
 use async_stream::stream;

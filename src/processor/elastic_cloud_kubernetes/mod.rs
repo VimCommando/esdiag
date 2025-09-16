@@ -25,11 +25,7 @@ pub struct ElasticCloudKubernetesDiagnostic {
 }
 
 impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
-    async fn new(
-        mut manifest: DiagnosticManifest,
-        receiver: Receiver,
-        exporter: Exporter,
-    ) -> Result<Box<Self>> {
+    async fn new(receiver: &Receiver, mut manifest: DiagnosticManifest) -> Result<Box<Self>> {
         let lookups = Arc::new(Lookups {
             k8s_node: Lookup::new(),
         });
@@ -51,7 +47,6 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
 
         Ok(Box::new(Self {
             lookups,
-            exporter: Arc::new(exporter),
             receiver: Arc::new(receiver),
             report: Arc::new(RwLock::new(report)),
             included_diagnostics,
@@ -71,9 +66,7 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
                     );
                     let receiver = self.receiver.clone_for_subdir(&diagnostic.diag_path)?;
                     let manifest = receiver.try_get_manifest().await?;
-                    let diagnostic =
-                        ElasticsearchDiagnostic::new(manifest, receiver, self.exporter.cloned())
-                            .await?;
+                    let diagnostic = ElasticsearchDiagnostic::new(&receiver, manifest).await?;
                     reports.push(diagnostic.run().await?);
                 }
                 _ => {
@@ -97,7 +90,9 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
         // For now, we will return only the Elasticsearch report for the UI
         // TODO: Implement processor iterators - https://github.com/elastic/esdiag/issues/148#issuecomment-3172865628
         if reports.is_empty() {
-            return Err(eyre::eyre!("No reports were collected. At least one diagnostic report is required."));
+            return Err(eyre::eyre!(
+                "No reports were collected. At least one diagnostic report is required."
+            ));
         }
         Ok(reports[0].clone())
     }

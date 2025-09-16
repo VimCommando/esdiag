@@ -28,15 +28,16 @@ use node::Node;
 use node_stats::NodeStats;
 use plugins::Plugins;
 use serde::{Serialize, de::DeserializeOwned};
+use std::sync::Arc;
 
 #[derive(Serialize)]
 pub struct LogstashDiagnostic {
     lookups: Lookups,
     metadata: LogstashMetadata,
     #[serde(skip)]
-    exporter: Exporter,
+    exporter: Arc<Exporter>,
     #[serde(skip)]
-    receiver: Receiver,
+    receiver: Arc<Receiver>,
     #[serde(skip)]
     report: DiagnosticReport,
 }
@@ -61,9 +62,9 @@ impl LogstashDiagnostic {
 
 impl DiagnosticProcessor for LogstashDiagnostic {
     async fn new(
+        receiver: Arc<Receiver>,
+        exporter: Arc<Exporter>,
         manifest: DiagnosticManifest,
-        receiver: Receiver,
-        exporter: Exporter,
     ) -> Result<Box<Self>> {
         let logstash_version = receiver.get::<version::Version>().await?;
         let metadata = LogstashMetadata::try_new(manifest, logstash_version)?;
@@ -77,9 +78,9 @@ impl DiagnosticProcessor for LogstashDiagnostic {
             lookups: Lookups {
                 plugin_count: plugins.total,
             },
-            metadata,
-            exporter,
             receiver,
+            exporter,
+            metadata,
             report,
         }))
     }

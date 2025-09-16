@@ -8,13 +8,12 @@ use esdiag::{
     data::Uri,
     env::LOG_LEVEL,
     exporter::{DirectoryExporter, Exporter},
-    processor::{Collector, Diagnostic, Product},
+    processor::{Collector, Identifiers, Processor, Product},
     receiver::Receiver,
-    server::Server,
+    //server::Server,
     setup,
 };
 use eyre::{Result, eyre};
-use tokio::signal::unix::{SignalKind, signal};
 use url::Url;
 
 // CLI Styling
@@ -48,28 +47,28 @@ enum Commands {
         #[arg(help = "An existing directory to create a diagnostic directory and files in")]
         output: String,
     },
-    /// Start a web server to receive diagnostic bundle uploads
-    Serve {
-        /// The port to bind the server to
-        #[arg(
-            help = "The port to bind the server to",
-            long,
-            short,
-            default_value = "3000"
-        )]
-        port: u16,
-        /// Target to send processed diagnostic documents to
-        #[arg(
-            long_help = "Target to send the processed diagnostic documents to (known host, file, stdout, or env). Strings will be checked against the known hosts stored in `~/.esdiag/hosts.yml` and will fallback to a filename if not found. Use `-` for stdout. If nothing is provided, the output will try using the environment variables: ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, and ESDIAG_OUTPUT_PASSWORD."
-        )]
-        output: Option<String>,
-        /// Kibana URL to display in the web interface
-        #[arg(
-            long,
-            long_help = "Kibana URL to display in the web interface. If not provided, will use the ESDIAG_KIBANA_URL environment variable."
-        )]
-        kibana: Option<String>,
-    },
+    // /// Start a web server to receive diagnostic bundle uploads
+    // Serve {
+    //     /// The port to bind the server to
+    //     #[arg(
+    //         help = "The port to bind the server to",
+    //         long,
+    //         short,
+    //         default_value = "3000"
+    //     )]
+    //     port: u16,
+    //     /// Target to send processed diagnostic documents to
+    //     #[arg(
+    //         long_help = "Target to send the processed diagnostic documents to (known host, file, stdout, or env). Strings will be checked against the known hosts stored in `~/.esdiag/hosts.yml` and will fallback to a filename if not found. Use `-` for stdout. If nothing is provided, the output will try using the environment variables: ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, and ESDIAG_OUTPUT_PASSWORD."
+    //     )]
+    //     output: Option<String>,
+    //     /// Kibana URL to display in the web interface
+    //     #[arg(
+    //         long,
+    //         long_help = "Kibana URL to display in the web interface. If not provided, will use the ESDIAG_KIBANA_URL environment variable."
+    //     )]
+    //     kibana: Option<String>,
+    // },
     /// Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
     Host {
         /// A name to identify this host
@@ -165,38 +164,38 @@ async fn main() -> Result<()> {
 
 async fn run(cli: Cli) -> Result<&'static str> {
     match cli.command {
-        Commands::Serve {
-            port,
-            output,
-            kibana,
-        } => {
-            log::info!("Starting ESDiag server");
+        // Commands::Serve {
+        //     port,
+        //     output,
+        //     kibana,
+        // } => {
+        //     log::info!("Starting ESDiag server");
 
-            let output_uri = output.and_then(|o| Uri::try_from(o).ok());
-            let exporter = Exporter::try_from(output_uri)?;
+        //     let output_uri = output.and_then(|o| Uri::try_from(o).ok());
+        //     let exporter = Exporter::try_from(output_uri)?;
 
-            let kibana_url = kibana.unwrap_or_else(|| {
-                esdiag::env::get_string("ESDIAG_KIBANA_URL")
-                    .unwrap_or_else(|_| "http://localhost:5601".to_string())
-            });
+        //     let kibana_url = kibana.unwrap_or_else(|| {
+        //         esdiag::env::get_string("ESDIAG_KIBANA_URL")
+        //             .unwrap_or_else(|_| "http://localhost:5601".to_string())
+        //     });
 
-            let mut server = Server::new(port, exporter, kibana_url);
+        //     let mut server = Server::new(port, exporter, kibana_url);
 
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    log::info!("Shutting down server (Ctrl+C)...");
-                }
-                _ = async {
-                    let mut term_signal = signal(SignalKind::terminate()).map_err(|e| eyre!("Failed to install SIGTERM handler: {}", e))?;
-                    term_signal.recv().await;
-                    log::info!("Shutting down server (SIGTERM)...");
-                    Ok::<_, eyre::Report>(())
-                } => {}
-            }
+        //     tokio::select! {
+        //         _ = tokio::signal::ctrl_c() => {
+        //             log::info!("Shutting down server (Ctrl+C)...");
+        //         }
+        //         _ = async {
+        //             let mut term_signal = signal(SignalKind::terminate()).map_err(|e| eyre!("Failed to install SIGTERM handler: {}", e))?;
+        //             term_signal.recv().await;
+        //             log::info!("Shutting down server (SIGTERM)...");
+        //             Ok::<_, eyre::Report>(())
+        //         } => {}
+        //     }
 
-            server.shutdown().await;
-            Ok("serve")
-        }
+        //     server.shutdown().await;
+        //     Ok("serve")
+        // }
         Commands::Collect { host, output } => {
             let known_host = Uri::try_from(host)?;
             let output = Uri::try_from(output)?;
@@ -276,16 +275,47 @@ async fn run(cli: Cli) -> Result<&'static str> {
             let receiver = Receiver::try_from(input_uri)?;
             let exporter = Exporter::try_from(output_uri)?;
 
-            let manifest = receiver.try_get_manifest().await?;
-            log::trace!("{}", serde_json::to_string(&manifest)?);
+            let identifiers = Identifiers::default();
+            let processor = Processor::try_new(receiver, exporter, identifiers).await?;
+            let (processor, mut rx_progress) = match processor.start().await {
+                Ok((processor, rx)) => (processor, rx),
+                Err(processor) => {
+                    return Err(eyre!("{}", processor));
+                }
+            };
 
-            let diagnostic = Diagnostic::try_new(manifest, receiver, exporter).await?;
-            let report = diagnostic.run().await?;
-            log::info!(
-                "Process complete in {:.3} seconds",
-                report.processing_duration as f64 / 1000.0
-            );
-            Ok("process")
+            // Spawn a non-blocking task to print progress updates as they are generated
+            let handle = tokio::spawn(async move {
+                while let Some(progress) = rx_progress.recv().await {
+                    // Print every time we receive a progress update
+                    log::debug!(
+                        "\r{:>5.1}% complete {:>10} processors {:>10} docs {:>10} errors",
+                        progress.percent,
+                        progress.processors,
+                        progress.docs,
+                        progress.errors
+                    );
+                }
+            });
+
+            match processor.process().await {
+                Ok(processor) => {
+                    handle.await?;
+                    log::info!(
+                        "Process complete in {:.3} seconds",
+                        processor.state.runtime as f64 / 1000.0
+                    );
+                    Ok("process")
+                }
+                Err(processor) => {
+                    handle.await?;
+                    log::info!(
+                        "Process failed in {:.3} seconds",
+                        processor.state.runtime as f64 / 1000.0
+                    );
+                    Err(eyre!("{}", processor))
+                }
+            }
         }
         Commands::Setup { host } => {
             let uri = match host {
