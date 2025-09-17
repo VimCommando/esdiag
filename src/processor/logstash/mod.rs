@@ -16,13 +16,13 @@ mod plugins;
 mod version;
 
 use super::{
-    BatchResponse, DiagnosticProcessor, DocumentExporter, Metadata, ProcessorSummary,
+    DiagnosticProcessor, DocumentExporter, Metadata, ProcessorSummary,
     diagnostic::{
         DataSource, DiagnosticManifest, DiagnosticReport, DiagnosticReportBuilder, Product,
     },
 };
 use crate::{data, exporter::Exporter, receiver::Receiver};
-use eyre::Result;
+use eyre::{Result, eyre};
 use metadata::LogstashMetadata;
 use node::Node;
 use node_stats::NodeStats;
@@ -30,7 +30,6 @@ use plugins::Plugins;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::Instant;
 
 #[derive(Serialize)]
 pub struct LogstashDiagnostic {
@@ -43,7 +42,10 @@ pub struct LogstashDiagnostic {
 }
 
 impl LogstashDiagnostic {
-    async fn process_datasource<T>(&mut self, batch_tx: mpsc::Sender<BatchResponse>) -> Result<()>
+    async fn process_datasource<T>(
+        &mut self,
+        summary_tx: mpsc::Sender<ProcessorSummary>,
+    ) -> Result<()>
     where
         T: DataSource
             + DocumentExporter<Lookups, LogstashMetadata>
@@ -53,9 +55,12 @@ impl LogstashDiagnostic {
     {
         let data = self.receiver.get::<T>().await?;
         let summary = data
-            .documents_export(&self.exporter, &self.lookups, &self.metadata, batch_tx)
+            .documents_export(&self.exporter, &self.lookups, &self.metadata)
             .await;
-        Ok(())
+        summary_tx.send(summary).await.map_err(|err| {
+            log::error!("Failed to send summary: {}", err);
+            eyre!(err)
+        })
     }
 }
 
@@ -86,36 +91,31 @@ impl DiagnosticProcessor for LogstashDiagnostic {
         ))
     }
 
-    async fn process(
-        mut self,
-        start_time: &Instant,
-        batch_tx: mpsc::Sender<BatchResponse>,
-        summary_tx: mpsc::Sender<ProcessorSummary>,
-    ) -> Result<()> {
+    async fn process(mut self, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()> {
         log::debug!("Running Logstash diagnostic processors");
         if log::max_level() >= log::Level::Debug {
             data::save_file("diagnostic.json", &self)?;
         }
 
-        self.process_datasource::<Node>(batch_tx.clone()).await?;
-        self.process_datasource::<NodeStats>(batch_tx.clone())
+        self.process_datasource::<Node>(summary_tx.clone()).await?;
+        self.process_datasource::<NodeStats>(summary_tx.clone())
             .await?;
-        self.process_datasource::<Plugins>(batch_tx.clone()).await?;
+        self.process_datasource::<Plugins>(summary_tx.clone())
+            .await?;
         // self.report.add_identifiers(self.exporter.identifiers());
-        // self.report.add_origin(
-        //     Some(self.metadata.node.name.clone()),
-        //     None,
-        //     Some("node".to_string()),
-        // );
-        // self.report
-        //     .add_processing_duration(start_time.elapsed().as_millis());
-
-        // self.exporter.save_report(&self.report).await?;
         Ok(())
     }
 
     fn id(&self) -> &str {
         &self.metadata.diagnostic.id
+    }
+
+    fn origin(&self) -> (String, String, String) {
+        (
+            self.metadata.node.name.clone(),
+            self.metadata.node.id.clone(),
+            "node".to_string(),
+        )
     }
 }
 

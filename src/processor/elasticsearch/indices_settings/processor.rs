@@ -5,11 +5,9 @@
 use super::super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata, ProcessorSummary};
 use super::{IndexSettings, IndicesSettings};
 use crate::exporter::Exporter;
-use crate::processor::BatchResponse;
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::sync::mpsc;
 
 impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesSettings {
     async fn documents_export(
@@ -17,7 +15,6 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesSettings {
         exporter: &Exporter,
         lookups: &Lookups,
         metadata: &ElasticsearchMetadata,
-        batch_tx: mpsc::Sender<BatchResponse>,
     ) -> ProcessorSummary {
         log::debug!("processing indices: {}", self.len());
         let index_metadata = metadata.for_data_stream("settings-index-esdiag");

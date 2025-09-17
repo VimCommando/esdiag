@@ -5,6 +5,8 @@
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use std::sync::RwLock;
 
+use crate::processor::Identifiers;
+
 use super::{DataSource, DiagPath, Manifest, Product, data_source::PathType};
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
@@ -28,6 +30,7 @@ pub struct DiagnosticManifest {
     pub name: String,
     #[serde(skip_deserializing)]
     diagnostic_id: RwLock<Option<String>>,
+    identifiers: Option<Identifiers>,
 }
 
 impl DiagnosticManifest {
@@ -53,6 +56,7 @@ impl DiagnosticManifest {
             diagnostic_id,
             flags,
             included_diagnostics,
+            identifiers: None,
             mode,
             name,
             product,
@@ -103,6 +107,13 @@ impl DiagnosticManifest {
 
     pub fn with_name(self, name: String) -> Self {
         Self { name, ..self }
+    }
+
+    pub fn with_identifiers(self, identifiers: Identifiers) -> Self {
+        Self {
+            identifiers: Some(identifiers),
+            ..self
+        }
     }
 }
 

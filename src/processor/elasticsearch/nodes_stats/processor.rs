@@ -8,8 +8,6 @@ mod http_clients;
 mod ingest_pipelines;
 mod transport_actions;
 
-use crate::processor::BatchResponse;
-
 use super::super::super::{Exporter, ProcessorSummary};
 use super::super::{DocumentExporter, ElasticsearchMetadata, Lookups, Metadata};
 use super::NodesStats;
@@ -26,7 +24,6 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for NodesStats {
         exporter: &Exporter,
         lookups: &Lookups,
         metadata: &ElasticsearchMetadata,
-        batch_tx: mpsc::Sender<BatchResponse>,
     ) -> ProcessorSummary {
         let nodes_stats = self.nodes;
         log::debug!("nodes: {}", nodes_stats.len());

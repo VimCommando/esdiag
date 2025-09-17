@@ -8,12 +8,10 @@ use super::super::{
 };
 use super::{NodeTasks, ParentTask, Task, Tasks};
 use crate::exporter::Exporter;
-use crate::processor::BatchResponse;
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
 use serde_with::skip_serializing_none;
-use tokio::sync::mpsc;
 
 impl DocumentExporter<Lookups, ElasticsearchMetadata> for Tasks {
     async fn documents_export(
@@ -21,7 +19,6 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for Tasks {
         exporter: &Exporter,
         lookups: &Lookups,
         metadata: &ElasticsearchMetadata,
-        batch_tx: mpsc::Sender<BatchResponse>,
     ) -> ProcessorSummary {
         log::debug!("processing tasks");
         let data_stream = "metrics-task-esdiag".to_string();

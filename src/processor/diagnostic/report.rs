@@ -84,12 +84,13 @@ impl Identifiers {
 
 impl Default for Identifiers {
     fn default() -> Self {
+        let user = std::env::var("ESDIAG_USER").ok();
         Self {
             account: None,
             case_number: None,
             filename: None,
             opportunity: None,
-            user: None,
+            user,
         }
     }
 }
@@ -133,10 +134,10 @@ impl DiagnosticReport {
         self.processing_duration = time;
     }
 
-    pub fn add_origin(&mut self, name: Option<String>, id: Option<String>, scope: Option<String>) {
-        self.origin.name = name;
-        self.origin.id = id;
-        self.origin.scope = scope;
+    pub fn add_origin(&mut self, (name, id, scope): (String, String, String)) {
+        self.origin.name = Some(name);
+        self.origin.id = Some(id);
+        self.origin.scope = Some(scope);
     }
 }
 
@@ -219,7 +220,7 @@ impl TryFrom<DiagnosticReportBuilder> for DiagnosticReport {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Copy)]
 pub struct BatchResponse {
     pub docs: u32,
     pub errors: u32,
@@ -246,7 +247,7 @@ impl std::fmt::Display for BatchResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Docs: {}, Errors: {}, Retries: {}, Size: {}, Status Code: {}, Time: {}",
+            "Batch: {:>8} docs {:>8} errors {:>8} retries {:>8} size http-{} time: {:>10}",
             self.docs, self.errors, self.retries, self.size, self.status_code, self.time
         )
     }
@@ -287,8 +288,8 @@ impl std::fmt::Display for ProcessorSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Processor: {}, Index: {}, Source {}, Docs: {}, Doc Errors: {}",
-            self.processor, self.index, self.source, self.docs, self.doc_errors
+            "Processor: {:<30} {}\t{:>7} docs {:>7} errors",
+            self.processor, self.source, self.docs, self.doc_errors
         )
     }
 }
@@ -323,7 +324,7 @@ pub struct Source {
 
 impl std::fmt::Display for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Parsed: {}", self.parsed)
+        write!(f, "parsed: {}", self.parsed)
     }
 }
 

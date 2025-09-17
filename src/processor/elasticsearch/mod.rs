@@ -42,7 +42,7 @@ mod tasks;
 mod version;
 
 pub use metadata::{ElasticsearchMetadata, ElasticsearchVersion};
-use tokio::{sync::mpsc, time::Instant};
+use tokio::sync::mpsc;
 pub use {
     licenses::License,
     version::{Cluster, Version},
@@ -54,7 +54,7 @@ use super::{
     diagnostic::{DiagnosticReportBuilder, Lookup},
     elasticsearch::health_report::HealthReport,
 };
-use crate::{data, exporter::Exporter, processor::BatchResponse, receiver::Receiver};
+use crate::{data, exporter::Exporter, receiver::Receiver};
 use eyre::{Result, eyre};
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
@@ -87,10 +87,7 @@ pub struct ElasticsearchDiagnostic {
 }
 
 impl ElasticsearchDiagnostic {
-    async fn process_datasource<T>(
-        &self,
-        batch_tx: mpsc::Sender<BatchResponse>,
-    ) -> Result<ProcessorSummary>
+    async fn process_datasource<T>(&self, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()>
     where
         T: DataSource
             + DocumentExporter<Lookups, ElasticsearchMetadata>
@@ -100,7 +97,7 @@ impl ElasticsearchDiagnostic {
     {
         let summary = match self.receiver.get::<T>().await {
             Ok(data) => data
-                .documents_export(&self.exporter, &self.lookups, &self.metadata, batch_tx)
+                .documents_export(&self.exporter, &self.lookups, &self.metadata)
                 .await
                 .was_parsed(),
             Err(err) => {
@@ -108,7 +105,10 @@ impl ElasticsearchDiagnostic {
                 ProcessorSummary::new(T::name())
             }
         };
-        Ok(summary)
+        summary_tx.send(summary).await.map_err(|err| {
+            log::error!("Failed to send summary: {}", err);
+            eyre!(err)
+        })
     }
 }
 
@@ -164,12 +164,7 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
         ))
     }
 
-    async fn process(
-        self,
-        start_time: &Instant,
-        batch_tx: mpsc::Sender<BatchResponse>,
-        summary_tx: mpsc::Sender<ProcessorSummary>,
-    ) -> Result<()> {
+    async fn process(self, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()> {
         log::debug!("Running Elasticsearch diagnostic processors");
         if self.exporter.is_connected().await == false {
             return Err(eyre!("Exporter is not connected"));
@@ -178,96 +173,62 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
         if log::max_level() >= log::Level::Debug {
             data::save_file("diagnostic.json", &self)?;
         }
-
         // self.report.add_identifiers(self.exporter.identifiers());
 
-        let (thread1_summaries, thread2_summaries, thread3_summaries) = tokio::try_join!(
-            // Thread 1: IndicesStats
-            async {
-                let indices_stats = self
-                    .process_datasource::<IndicesStats>(batch_tx.clone())
-                    .await?;
-                Ok::<Vec<ProcessorSummary>, eyre::Error>(vec![indices_stats])
-            },
-            // Thread 2: NodesStats
-            async {
-                let nodes_stats = self
-                    .process_datasource::<NodesStats>(batch_tx.clone())
-                    .await?;
-                Ok::<Vec<ProcessorSummary>, eyre::Error>(vec![nodes_stats])
-            },
-            // Thread 3: Everything else
-            async {
-                let cluster_settings = self
-                    .process_datasource::<ClusterSettings>(batch_tx.clone())
-                    .await?;
-                let health_report = self
-                    .process_datasource::<HealthReport>(batch_tx.clone())
-                    .await?;
-                let ilm_policies = self
-                    .process_datasource::<IlmPolicies>(batch_tx.clone())
-                    .await?;
-                let indices_settings = self
-                    .process_datasource::<IndicesSettings>(batch_tx.clone())
-                    .await?;
-                let nodes = self.process_datasource::<Nodes>(batch_tx.clone()).await?;
-                let pending_tasks = self
-                    .process_datasource::<PendingTasks>(batch_tx.clone())
-                    .await?;
-                let slm_policies = self
-                    .process_datasource::<SlmPolicies>(batch_tx.clone())
-                    .await?;
-                let tasks = self.process_datasource::<Tasks>(batch_tx.clone()).await?;
-                Ok::<Vec<ProcessorSummary>, eyre::Error>(vec![
-                    cluster_settings,
-                    health_report,
-                    ilm_policies,
-                    indices_settings,
-                    nodes,
-                    pending_tasks,
-                    slm_policies,
-                    tasks,
-                ])
-            }
-        )?;
+        let diag = Arc::new(self);
+        // Thread 1: IndicesStats
+        let (diag_idx, summary_tx_idx) = (diag.clone(), summary_tx.clone());
+        let thread1 = tokio::spawn(async move {
+            diag_idx
+                .process_datasource::<IndicesStats>(summary_tx_idx)
+                .await?;
+            Ok::<(), eyre::Error>(())
+        });
 
-        // Add all summaries to the report
-        for summary in thread1_summaries
-            .into_iter()
-            .chain(thread2_summaries.into_iter())
-            .chain(thread3_summaries.into_iter())
-        {
-            summary_tx.send(summary).await?;
+        // Thread 2: NodesStats
+        let (diag_nodes, summary_tx_nodes) = (diag.clone(), summary_tx.clone());
+        let thread2 = tokio::spawn(async move {
+            diag_nodes
+                .process_datasource::<NodesStats>(summary_tx_nodes)
+                .await?;
+            Ok::<(), eyre::Error>(())
+        });
+
+        // Thread 3: Everything else
+        let thread3 = tokio::spawn(async move {
+            diag.process_datasource::<ClusterSettings>(summary_tx.clone())
+                .await?;
+            diag.process_datasource::<HealthReport>(summary_tx.clone())
+                .await?;
+            diag.process_datasource::<IlmPolicies>(summary_tx.clone())
+                .await?;
+            diag.process_datasource::<IndicesSettings>(summary_tx.clone())
+                .await?;
+            diag.process_datasource::<Nodes>(summary_tx.clone()).await?;
+            diag.process_datasource::<PendingTasks>(summary_tx.clone())
+                .await?;
+            diag.process_datasource::<SlmPolicies>(summary_tx.clone())
+                .await?;
+            diag.process_datasource::<Tasks>(summary_tx.clone()).await?;
+            Ok::<(), eyre::Error>(())
+        });
+
+        match tokio::try_join!(thread1, thread2, thread3) {
+            Ok(_) => Ok(()),
+            Err(err) => Err(eyre!(err)),
         }
-
-        // self.report.add_origin(
-        // Some(self.metadata.cluster.display_name.clone()),
-        // Some(self.metadata.cluster.uuid.clone()),
-        // Some("cluster".to_string()),
-        // );
-        // self.exporter.save_report(&self.report).await?;
-
-        // log::info!(
-        // "Created {} documents for {} diagnostic: {}",
-        // self.report.docs.created,
-        // self.report.product,
-        // self.report.metadata.id,
-        // );
-        // if let Ok(kibana_url) = std::env::var("ESDIAG_KIBANA_URL") {
-        // let kibana_link = format!(
-        // "{}/app/dashboards#/view/4e0a26b2-e5f8-4b58-b617-86f5cdd0edad?_g=(filters:!(('$state':(store:globalState),meta:(disabled:!f,index:'4319ebc4-df81-4b18-b8bd-6aaa55a1fd13',key:diagnostic.id,negate:!f,params:(query:'{}'),type:phrase),query:(match_phrase:(diagnostic.id:'{}')))),refreshInterval:(pause:!t,value:60000),time:(from:now-90d,to:now))",
-        // kibana_url, self.report.metadata.id, self.report.metadata.id
-        // );
-        // log::info!("{}", kibana_link);
-        // self.report.add_kibana_link(kibana_link);
-        // }
-        // self.report
-        // .add_processing_duration(start_time.elapsed().as_millis());
-        Ok(())
     }
 
     fn id(&self) -> &str {
         &self.metadata.diagnostic.id
+    }
+
+    fn origin(&self) -> (String, String, String) {
+        (
+            self.metadata.cluster.display_name.clone(),
+            self.metadata.cluster.uuid.clone(),
+            "cluster".to_string(),
+        )
     }
 }
 

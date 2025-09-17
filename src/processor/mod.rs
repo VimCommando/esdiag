@@ -47,43 +47,19 @@ pub struct Ready {
     identifiers: Identifiers,
 }
 
-impl Ready {
-    fn fail(self, runtime: u128, error: String) -> Failed {
-        Failed { error, runtime }
-    }
-}
-
 /// The `Processing` state represents an active processing job
 pub struct Processing {
     diagnostic: Diagnostic,
-    batch_tx: mpsc::Sender<BatchResponse>,
+    identifiers: Identifiers,
     summary_tx: mpsc::Sender<ProcessorSummary>,
-    batch_rx: mpsc::Receiver<BatchResponse>,
     summary_rx: mpsc::Receiver<ProcessorSummary>,
     report: DiagnosticReport,
 }
 
 /// The `Completed` state represents a succesfull processing job
 pub struct Completed {
-    report: DiagnosticReport,
+    pub report: DiagnosticReport,
     pub runtime: u128,
-}
-
-/// The final totals for the completed processing job
-struct Stats {
-    docs: usize,
-    errors: usize,
-    processors: usize,
-}
-
-impl std::fmt::Display for Stats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Total: {}, errors: {}, processors: {}",
-            self.docs, self.errors, self.processors
-        )
-    }
 }
 
 /// The `Failed` state represents a failed processing job
@@ -124,7 +100,6 @@ impl Processor<Ready> {
     /// State transition from `Ready` to `Processing`, returning the progress channel
     pub async fn start(self) -> Result<Processor<Processing>, Processor<Failed>> {
         log::debug!("Transitioned: Processor<Processing>");
-        let (batch_tx, batch_rx) = mpsc::channel::<BatchResponse>(100);
         let (summary_tx, summary_rx) = mpsc::channel::<ProcessorSummary>(10);
 
         match Diagnostic::try_new(
@@ -142,8 +117,7 @@ impl Processor<Ready> {
                     start_time: self.start_time,
                     state: Processing {
                         diagnostic,
-                        batch_rx,
-                        batch_tx,
+                        identifiers: self.state.identifiers,
                         summary_rx,
                         summary_tx,
                         report,
@@ -170,15 +144,17 @@ impl Processor<Processing> {
     pub async fn process(mut self) -> Result<Processor<Completed>, Processor<Failed>> {
         log::debug!("Processing with async progress updates");
 
-        let process_result = self
-            .state
-            .diagnostic
-            .process(
-                &self.start_time,
-                self.state.batch_tx.clone(),
-                self.state.summary_tx.clone(),
-            )
-            .await;
+        let mut report = self.state.report;
+        let origin = self.state.diagnostic.origin();
+        let summary_handle = tokio::spawn(async move {
+            while let Some(summary) = self.state.summary_rx.recv().await {
+                log::debug!("{}", summary);
+                report.add_processor_summary(summary);
+            }
+            report
+        });
+
+        let process_result = self.state.diagnostic.process(self.state.summary_tx).await;
         if let Err(err) = process_result {
             return Err(Processor {
                 receiver: self.receiver,
@@ -192,26 +168,30 @@ impl Processor<Processing> {
             });
         }
 
-        // Spawn a non-blocking task to print progress updates as they are generated
-        let handle_summaries = tokio::spawn(async move {
-            while let Some(summary) = self.state.summary_rx.recv().await {
-                log::debug!("{}", summary);
+        let mut report = match summary_handle.await {
+            Ok(report) => report,
+            Err(err) => {
+                log::error!("Failed to await summary handle: {}", err);
+                return Err(Processor {
+                    receiver: self.receiver,
+                    exporter: self.exporter,
+                    start_time: self.start_time,
+                    id: self.id,
+                    state: Failed {
+                        runtime: self.start_time.elapsed().as_millis(),
+                        error: err.to_string(),
+                    },
+                });
             }
-        });
+        };
 
-        let handle_batches = tokio::spawn(async move {
-            while let Some(batch) = self.state.batch_rx.recv().await {
-                log::debug!("{}", batch);
-            }
-        });
-
-        let mut report = self.state.report;
         log::info!(
             "Created {} documents for {} diagnostic: {}",
             report.docs.created,
             report.product,
             report.metadata.id,
         );
+
         if let Ok(kibana_url) = std::env::var("ESDIAG_KIBANA_URL") {
             let kibana_link = format!(
                 "{}/app/dashboards#/view/4e0a26b2-e5f8-4b58-b617-86f5cdd0edad?_g=(filters:!(('$state':(store:globalState),meta:(disabled:!f,index:'4319ebc4-df81-4b18-b8bd-6aaa55a1fd13',key:diagnostic.id,negate:!f,params:(query:'{}'),type:phrase),query:(match_phrase:(diagnostic.id:'{}')))),refreshInterval:(pause:!t,value:60000),time:(from:now-90d,to:now))",
@@ -220,8 +200,13 @@ impl Processor<Processing> {
             log::info!("{}", kibana_link);
             report.add_kibana_link(kibana_link);
         }
-        let runtime = self.start_time.elapsed().as_millis();
-        report.add_processing_duration(runtime);
+        log::warn!("{:?}", self.state.identifiers);
+        report.add_identifiers(self.state.identifiers);
+        report.add_origin(origin);
+        report.add_processing_duration(self.start_time.elapsed().as_millis());
+        if let Err(e) = self.exporter.save_report(&report).await {
+            log::error!("Failed to save report: {}", e);
+        }
 
         Ok(Processor {
             exporter: self.exporter,
@@ -242,13 +227,6 @@ impl std::fmt::Display for Processor<Failed> {
     }
 }
 
-impl Processor<Completed> {
-    pub fn report(&self) -> &DiagnosticReport {
-        &self.state.report
-    }
-}
-
-// -------- Legacy implementation ---------
 pub enum Diagnostic {
     Elasticsearch(Box<ElasticsearchDiagnostic>),
     // ElasticCloudKubernetes(Box<ElasticCloudKubernetesDiagnostic>),
@@ -291,22 +269,23 @@ impl Diagnostic {
         }
     }
 
-    async fn process(
-        self,
-        start_time: &Instant,
-        batch_tx: mpsc::Sender<BatchResponse>,
-        summary_tx: mpsc::Sender<ProcessorSummary>,
-    ) -> Result<()> {
+    async fn process(self, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()> {
         match self {
-            Diagnostic::Elasticsearch(diagnostic) => {
-                diagnostic.process(start_time, batch_tx, summary_tx).await
-            }
+            Diagnostic::Elasticsearch(diagnostic) => diagnostic.process(summary_tx).await,
             //Diagnostic::ElasticCloudKubernetes(diagnostic) => diagnostic.run().await,
             //Diagnostic::KubernetesPlatform(diagnostic) => diagnostic.run().await,
             //Diagnostic::Kibana(diagnostic) => diagnostic.run().await?,
-            Diagnostic::Logstash(diagnostic) => {
-                diagnostic.process(start_time, batch_tx, summary_tx).await
-            }
+            Diagnostic::Logstash(diagnostic) => diagnostic.process(summary_tx).await,
+        }
+    }
+
+    fn origin(&self) -> (String, String, String) {
+        match self {
+            Diagnostic::Elasticsearch(diagnostic) => diagnostic.origin(),
+            //Diagnostic::ElasticCloudKubernetes(diagnostic) => diagnostic.origin(),
+            //Diagnostic::KubernetesPlatform(diagnostic) => diagnostic.origin(),
+            //Diagnostic::Kibana(diagnostic) => diagnostic.origin(),
+            Diagnostic::Logstash(diagnostic) => diagnostic.origin(),
         }
     }
 }
@@ -317,7 +296,6 @@ trait DocumentExporter<T, U> {
         exporter: &Exporter,
         lookups: &T,
         metadata: &U,
-        batch_tx: mpsc::Sender<BatchResponse>,
     ) -> ProcessorSummary;
 }
 
@@ -327,14 +305,10 @@ trait DiagnosticProcessor {
         exporter: Arc<Exporter>,
         manifest: DiagnosticManifest,
     ) -> Result<(Box<Self>, DiagnosticReport)>;
-    async fn process(
-        self,
-        start_time: &Instant,
-        batch_tx: mpsc::Sender<BatchResponse>,
-        summary_tx: mpsc::Sender<ProcessorSummary>,
-    ) -> Result<()>;
+    async fn process(self, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()>;
     #[allow(dead_code)]
     fn id(&self) -> &str;
+    fn origin(&self) -> (String, String, String);
 }
 
 trait Metadata {
