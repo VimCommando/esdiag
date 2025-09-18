@@ -69,7 +69,7 @@ pub async fn handler(
         _ => (false, '_', "Anonymous".to_string()),
     };
 
-    let exporter_target = { state.exporter.read().await.to_string() };
+    let exporter_target = { state.exporter.to_string() };
     let index_html = template::Index {
         auth_header,
         debug: log::max_level() == log::Level::Debug,

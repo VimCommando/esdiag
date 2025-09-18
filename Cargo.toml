@@ -5,7 +5,8 @@ edition = "2024"
 rust-version = "1.89"
 
 [features]
-full = ["setup", "server"]
+default = ["full"]
+full = ["server", "setup"]
 setup = []
 server = []
 

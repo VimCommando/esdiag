@@ -67,7 +67,7 @@ impl Server {
         // Create shared state
         let state = Arc::new(ServerState {
             signals: Arc::new(RwLock::new(Signals::default())),
-            exporter: Arc::new(RwLock::new(exporter)),
+            exporter: Arc::new(exporter),
             kibana_url,
             stats: Arc::new(RwLock::new(Stats::default())),
             uploads: Arc::new(RwLock::new(HashMap::new())),
@@ -145,7 +145,7 @@ impl Drop for Server {
 }
 
 pub struct ServerState {
-    pub exporter: Arc<RwLock<Exporter>>,
+    pub exporter: Arc<Exporter>,
     pub kibana_url: String,
     pub signals: Arc<RwLock<Signals>>,
     pub uploads: Arc<RwLock<HashMap<u64, (String, Bytes)>>>,

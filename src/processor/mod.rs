@@ -65,7 +65,7 @@ pub struct Completed {
 
 /// The `Failed` state represents a failed processing job
 pub struct Failed {
-    error: String,
+    pub error: String,
     pub runtime: u128,
 }
 

@@ -17,6 +17,7 @@ use esdiag::{
 };
 use eyre::{Result, eyre};
 use std::sync::Arc;
+use tokio::signal::unix::{SignalKind, signal};
 use url::Url;
 
 // CLI Styling
