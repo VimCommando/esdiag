@@ -4,8 +4,9 @@
 
 use super::super::super::{Exporter, ProcessorSummary};
 use super::super::{
-    DocumentExporter, ElasticsearchMetadata, Lookup, Lookups,
+    DocumentExporter, ElasticsearchMetadata, IlmStats, Lookup, Lookups,
     alias::Alias,
+    data_stream::DataStream,
     indices_settings::{IndexSettingsDocument, StoreSettings},
     metadata::MetadataDoc,
     nodes::NodeDocument,
@@ -78,7 +79,7 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for IndicesStats {
                         .with_settings(index_settings.clone());
                     let index_document =
                         IndexStatsDocument::new(stats, index_metadata.clone()).calculate();
-                    let write_phase_sec = index_document.index.stats.write_phase_sec;
+                    let write_phase_sec = index_document.index.write_phase_sec;
                     if let Err(_) = index_tx.send(index_document).await {
                         log::warn!("Index channel closed unexpectedly");
                     }
@@ -194,7 +195,6 @@ impl IndexStatsDocument {
     fn calculate(mut self) -> Self {
         let is_write_alias = self
             .index
-            .stats
             .alias
             .as_ref()
             .map(|a| a.is_write_index)
@@ -202,47 +202,45 @@ impl IndexStatsDocument {
 
         let is_write_data_stream = self
             .index
-            .settings
+            .data_stream
             .as_ref()
-            .and_then(|s| s.data_stream.as_ref().map(|ds| ds.is_write_index))
+            .map(|ds| ds.is_write_index)
             .unwrap_or(false);
 
-        self.index.stats.is_write_index = is_write_alias || is_write_data_stream;
+        self.index.is_write_index = is_write_alias || is_write_data_stream;
 
-        let stats = &mut self.index.stats;
         let collection_date = self.metadata.diagnostic.collection_date;
 
-        if let Some(ref settings) = self.index.settings {
-            let since_creation = collection_date - settings.creation_date;
+        let since_creation = collection_date - self.index.creation_date;
 
-            let since_rollover = settings
-                .ilm
+        let since_rollover = self
+            .index
+            .ilm
+            .as_ref()
+            .and_then(|ilm| ilm.lifecycle_date_millis)
+            .map(|lifecycle_date| collection_date - lifecycle_date);
+
+        let is_before_rollover = self.index.ilm.as_ref().is_some_and(|ilm| {
+            ilm.action
                 .as_ref()
-                .and_then(|ilm| ilm.lifecycle_date_millis)
-                .map(|lifecycle_date| collection_date - lifecycle_date);
+                .is_some_and(|action| action == "rollover")
+        });
 
-            let is_before_rollover = settings.ilm.as_ref().is_some_and(|ilm| {
-                ilm.action
-                    .as_ref()
-                    .is_some_and(|action| action == "rollover")
-            });
+        let write_phase_sec = if let Some(rollover) = since_rollover {
+            match since_creation > rollover {
+                true => (since_creation - rollover) / 1000,
+                false if is_before_rollover => since_creation / 1000,
+                _ => 0,
+            }
+        } else {
+            0
+        };
 
-            let write_phase_sec = if let Some(rollover) = since_rollover {
-                match since_creation > rollover {
-                    true => (since_creation - rollover) / 1000,
-                    false if is_before_rollover => since_creation / 1000,
-                    _ => 0,
-                }
-            } else {
-                0
-            };
+        self.index.since_rollover = since_rollover;
+        self.index.write_phase_sec = Some(write_phase_sec);
 
-            stats.since_rollover = since_rollover;
-            stats.write_phase_sec = Some(write_phase_sec);
-        }
-
-        if let Some(ref mut docs) = stats.total.docs {
-            let doc_avg_size = match stats.total.store.size_in_bytes {
+        if let Some(ref mut docs) = self.index.total.docs {
+            let doc_avg_size = match self.index.total.store.size_in_bytes {
                 size if docs.count > 0 => size / docs.count,
                 _ => 0,
             };
@@ -250,7 +248,7 @@ impl IndexStatsDocument {
             docs.avg_size = Some(doc_avg_size);
             docs.deleted_percent =
                 Some(docs.deleted as f64 / (docs.count as f64 + docs.deleted as f64));
-            docs.per_gb = Some(match stats.total.store.size_in_bytes {
+            docs.per_gb = Some(match self.index.total.store.size_in_bytes {
                 0 => 0,
                 1..1_073_741_824 if doc_avg_size > 0 => 1_073_741_824 / doc_avg_size,
                 size => (docs.count as f32 / (size as f32 / 1_073_741_824.0)) as u64,
@@ -259,39 +257,43 @@ impl IndexStatsDocument {
 
         // Estimate bytes per day
 
-        stats.primaries.indexing.est_bytes_per_day = match stats.write_phase_sec {
+        self.index.primaries.indexing.est_bytes_per_day = match self.index.write_phase_sec {
             None => None,
             Some(0) => Some(0),
             Some(seconds) => Some(
-                (stats.primaries.store.size_in_bytes as f64 * (86_400.0 / seconds as f64)) as u64,
+                (self.index.primaries.store.size_in_bytes as f64 * (86_400.0 / seconds as f64))
+                    as u64,
             ),
         };
 
-        stats.total.indexing.est_bytes_per_day = match stats.write_phase_sec {
-            None => None,
-            Some(0) => Some(0),
-            Some(seconds) => {
-                Some((stats.total.store.size_in_bytes as f64 * (86_400.0 / seconds as f64)) as u64)
-            }
-        };
-
-        stats.primaries.bulk.est_bytes_per_day = match stats.write_phase_sec {
+        self.index.total.indexing.est_bytes_per_day = match self.index.write_phase_sec {
             None => None,
             Some(0) => Some(0),
             Some(seconds) => Some(
-                (stats.primaries.bulk.total_size_in_bytes as f64 * (86_400.0 / seconds as f64))
+                (self.index.total.store.size_in_bytes as f64 * (86_400.0 / seconds as f64)) as u64,
+            ),
+        };
+
+        self.index.primaries.bulk.est_bytes_per_day = match self.index.write_phase_sec {
+            None => None,
+            Some(0) => Some(0),
+            Some(seconds) => Some(
+                (self.index.primaries.bulk.total_size_in_bytes as f64 * (86_400.0 / seconds as f64))
                     as u64,
             ),
         };
 
         // Determine average index time per shard
 
-        stats.primaries.indexing.index_time_per_shard_in_millis = Some(
-            stats.primaries.indexing.index_time_in_millis / stats.primaries.shard_stats.total_count,
+        self.index.primaries.indexing.index_time_per_shard_in_millis = Some(
+            self.index.primaries.indexing.index_time_in_millis
+                / self.index.primaries.shard_stats.total_count,
         );
 
-        stats.total.indexing.index_time_per_shard_in_millis =
-            Some(stats.total.indexing.index_time_in_millis / stats.total.shard_stats.total_count);
+        self.index.total.indexing.index_time_per_shard_in_millis = Some(
+            self.index.total.indexing.index_time_in_millis
+                / self.index.total.shard_stats.total_count,
+        );
 
         self
     }
@@ -314,10 +316,27 @@ struct EnrichedIndexStats {
 #[skip_serializing_none]
 #[derive(Serialize)]
 struct EnrichedIndexStatsWithSettings {
-    #[serde(flatten)]
-    settings: Option<IndexSettingsDocument>,
-    #[serde(flatten)]
-    stats: EnrichedIndexStats,
+    pub age: Option<u64>,
+    pub alias: Option<Alias>,
+    pub codec: String,
+    pub creation_date: u64,
+    pub data_stream: Option<DataStream>,
+    pub health: Option<String>,
+    pub ilm: Option<IlmStats>,
+    pub is_write_index: bool,
+    pub lifecycle: Option<serde_json::Value>,
+    pub mode: String,
+    pub name: String,
+    pub number_of_replicas: Option<u64>,
+    pub number_of_shards: Option<u64>,
+    pub primaries: EnrichedStats,
+    pub refresh_interval: String,
+    pub since_rollover: Option<u64>,
+    pub source: Option<String>,
+    pub store: Option<StoreSettings>,
+    pub total: EnrichedStats,
+    pub uuid: String,
+    pub write_phase_sec: Option<u64>,
 }
 
 impl EnrichedIndexStats {
@@ -336,9 +355,53 @@ impl EnrichedIndexStats {
         self,
         settings: Option<IndexSettingsDocument>,
     ) -> EnrichedIndexStatsWithSettings {
-        EnrichedIndexStatsWithSettings {
-            settings,
-            stats: self,
+        match settings {
+            Some(settings) => EnrichedIndexStatsWithSettings {
+                age: settings.age,
+                alias: self.alias,
+                codec: settings.codec,
+                creation_date: settings.creation_date,
+                data_stream: settings.data_stream,
+                health: self.health,
+                ilm: settings.ilm,
+                is_write_index: settings.is_write_index,
+                lifecycle: settings.lifecycle,
+                mode: settings.mode,
+                name: self.name.expect("index name is required"),
+                number_of_replicas: settings.number_of_replicas,
+                number_of_shards: settings.number_of_shards,
+                primaries: self.primaries,
+                refresh_interval: settings.refresh_interval,
+                since_rollover: self.since_rollover,
+                source: settings.source,
+                store: settings.store,
+                total: self.total,
+                uuid: self.uuid.unwrap_or("unkown".to_string()),
+                write_phase_sec: settings.write_phase_sec,
+            },
+            None => EnrichedIndexStatsWithSettings {
+                age: None,
+                alias: self.alias,
+                codec: "unknown".to_string(),
+                creation_date: 0,
+                data_stream: None,
+                health: None,
+                ilm: None,
+                is_write_index: true,
+                lifecycle: None,
+                mode: "unknown".to_string(),
+                name: self.name.expect("index name is required"),
+                number_of_replicas: None,
+                number_of_shards: None,
+                primaries: self.primaries,
+                refresh_interval: "unkown".to_string(),
+                since_rollover: None,
+                source: None,
+                store: None,
+                total: self.total,
+                uuid: self.uuid.unwrap_or("unkown".to_string()),
+                write_phase_sec: None,
+            },
         }
     }
 }
