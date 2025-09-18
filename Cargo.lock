@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "esdiag"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "askama",
  "async-stream",
