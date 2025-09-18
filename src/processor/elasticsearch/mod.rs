@@ -64,7 +64,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use {
     alias::{Alias, AliasList},
     cluster_settings::ClusterSettings,
-    data_stream::{DataStream, DataStreams},
+    data_stream::{DataStreamDocument, DataStreams},
     ilm_explain::{IlmExplain, IlmStats},
     ilm_policies::IlmPolicies,
     indices_settings::{IndexSettings, IndicesSettings},
@@ -236,7 +236,7 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
 #[derive(Serialize)]
 pub struct Lookups {
     pub alias: Lookup<Alias>,
-    pub data_stream: Lookup<DataStream>,
+    pub data_stream: Lookup<DataStreamDocument>,
     pub ilm_explain: Lookup<IlmStats>,
     pub index_settings: Lookup<IndexSettings>,
     pub node: Lookup<NodeDocument>,

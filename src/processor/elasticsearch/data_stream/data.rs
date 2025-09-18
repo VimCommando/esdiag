@@ -35,7 +35,7 @@ pub struct DataStream {
     pub timestamp_field: TimestampField,
     #[serde(skip_deserializing)]
     pub dataset: String,
-    #[serde(skip_deserializing)]
+    #[serde(default)]
     pub is_write_index: bool,
     #[serde(skip_deserializing)]
     pub namespace: String,
@@ -99,6 +99,52 @@ impl DataStream {
         Self {
             is_write_index: value,
             ..self
+        }
+    }
+}
+
+#[skip_serializing_none]
+#[derive(Clone, Deserialize, Serialize)]
+pub struct DataStreamDocument {
+    pub allow_custom_routing: Option<bool>,
+    pub generation: u64,
+    pub hidden: Option<bool>,
+    pub ilm_policy: Option<String>,
+    pub name: String,
+    pub next_generation_managed_by: Option<String>,
+    pub prefer_ilm: Option<bool>,
+    pub replicated: Option<bool>,
+    pub rollover_on_write: Option<bool>,
+    pub status: String,
+    pub system: Option<bool>,
+    pub template: Option<String>,
+    pub timestamp_field: TimestampField,
+    pub dataset: String,
+    pub is_write_index: bool,
+    pub namespace: String,
+    pub r#type: String,
+}
+
+impl From<DataStream> for DataStreamDocument {
+    fn from(data_stream: DataStream) -> Self {
+        Self {
+            allow_custom_routing: data_stream.allow_custom_routing,
+            generation: data_stream.generation,
+            hidden: data_stream.hidden,
+            ilm_policy: data_stream.ilm_policy,
+            name: data_stream.name,
+            next_generation_managed_by: data_stream.next_generation_managed_by,
+            prefer_ilm: data_stream.prefer_ilm,
+            replicated: data_stream.replicated,
+            rollover_on_write: data_stream.rollover_on_write,
+            status: data_stream.status,
+            system: data_stream.system,
+            template: data_stream.template,
+            timestamp_field: data_stream.timestamp_field,
+            dataset: data_stream.dataset,
+            is_write_index: data_stream.is_write_index,
+            namespace: data_stream.namespace,
+            r#type: data_stream.r#type,
         }
     }
 }

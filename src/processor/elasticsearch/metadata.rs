@@ -3,14 +3,17 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::diagnostic::{DataStreamName, DiagnosticManifest, DiagnosticMetadata};
-use super::{Metadata, version::Cluster};
+use super::{
+    Metadata,
+    version::{Cluster, ClusterMetadata},
+};
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Clone, Serialize)]
 pub struct ElasticsearchMetadata {
-    pub cluster: Cluster,
+    pub cluster: ClusterMetadata,
     pub diagnostic: DiagnosticMetadata,
     pub timestamp: u64,
     pub as_doc: MetadataDoc,
@@ -25,11 +28,11 @@ impl ElasticsearchMetadata {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct MetadataDoc {
     #[serde(rename = "@timestamp")]
     pub timestamp: u64,
-    pub cluster: Cluster,
+    pub cluster: ClusterMetadata,
     pub diagnostic: DiagnosticMetadata,
     pub data_stream: DataStreamName,
 }
@@ -45,6 +48,7 @@ impl ElasticsearchMetadata {
         let name = cluster.display_name.replace(" ", "_");
         let diagnostic = DiagnosticMetadata::try_from(manifest.with_name(name))?;
         let timestamp = diagnostic.collection_date;
+        let cluster = ClusterMetadata::from(cluster);
 
         let as_doc = MetadataDoc {
             timestamp,

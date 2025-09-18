@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::super::diagnostic::data_source::PathType;
-use super::super::{DataSource, data_stream::DataStream};
+use super::super::{DataSource, data_stream::DataStreamDocument};
 use crate::data::u64_from_string;
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -53,7 +53,7 @@ pub struct IndexSettings {
     #[serde(skip_deserializing)]
     pub age: Option<u64>,
     #[serde(skip_deserializing)]
-    pub data_stream: Option<DataStream>,
+    pub data_stream: Option<DataStreamDocument>,
     #[serde(skip_deserializing)]
     pub name: Option<String>,
 }
@@ -107,7 +107,7 @@ impl IndexSettings {
     }
 
     /// Sets the data stream for the index
-    pub fn data_stream(self, data_stream: Option<DataStream>) -> Self {
+    pub fn data_stream(self, data_stream: Option<DataStreamDocument>) -> Self {
         let is_data_stream_write_index = data_stream.as_ref().map_or(false, |ds| ds.is_write_index);
         Self {
             data_stream,

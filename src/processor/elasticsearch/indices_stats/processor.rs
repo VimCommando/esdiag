@@ -6,7 +6,7 @@ use super::super::super::{Exporter, ProcessorSummary};
 use super::super::{
     DocumentExporter, ElasticsearchMetadata, IlmStats, Lookup, Lookups,
     alias::Alias,
-    data_stream::DataStream,
+    data_stream::DataStreamDocument,
     indices_settings::{IndexSettingsDocument, StoreSettings},
     metadata::MetadataDoc,
     nodes::NodeDocument,
@@ -177,19 +177,16 @@ fn extract_shard_documents(
 }
 
 #[skip_serializing_none]
-#[derive(Serialize)]
-struct IndexStatsDocument {
+#[derive(Deserialize, Serialize)]
+pub struct IndexStatsDocument {
     index: EnrichedIndexStatsWithSettings,
     #[serde(flatten)]
     metadata: MetadataDoc,
 }
 
 impl IndexStatsDocument {
-    fn new(index_stats: EnrichedIndexStatsWithSettings, metadata: MetadataDoc) -> Self {
-        IndexStatsDocument {
-            index: index_stats,
-            metadata,
-        }
+    fn new(index: EnrichedIndexStatsWithSettings, metadata: MetadataDoc) -> Self {
+        IndexStatsDocument { index, metadata }
     }
 
     fn calculate(mut self) -> Self {
@@ -211,7 +208,7 @@ impl IndexStatsDocument {
 
         let collection_date = self.metadata.diagnostic.collection_date;
 
-        let since_creation = collection_date - self.index.creation_date;
+        let since_creation = collection_date - self.index.creation_date.unwrap_or(collection_date);
 
         let since_rollover = self
             .index
@@ -300,7 +297,7 @@ impl IndexStatsDocument {
 }
 
 #[skip_serializing_none]
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 struct EnrichedIndexStats {
     pub alias: Option<Alias>,
     pub health: Option<String>,
@@ -314,23 +311,23 @@ struct EnrichedIndexStats {
 }
 
 #[skip_serializing_none]
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 struct EnrichedIndexStatsWithSettings {
     pub age: Option<u64>,
     pub alias: Option<Alias>,
-    pub codec: String,
-    pub creation_date: u64,
-    pub data_stream: Option<DataStream>,
+    pub codec: Option<String>,
+    pub creation_date: Option<u64>,
+    pub data_stream: Option<DataStreamDocument>,
     pub health: Option<String>,
     pub ilm: Option<IlmStats>,
     pub is_write_index: bool,
     pub lifecycle: Option<serde_json::Value>,
-    pub mode: String,
-    pub name: String,
+    pub mode: Option<String>,
+    pub name: Option<String>,
     pub number_of_replicas: Option<u64>,
     pub number_of_shards: Option<u64>,
     pub primaries: EnrichedStats,
-    pub refresh_interval: String,
+    pub refresh_interval: Option<String>,
     pub since_rollover: Option<u64>,
     pub source: Option<String>,
     pub store: Option<StoreSettings>,
@@ -359,19 +356,19 @@ impl EnrichedIndexStats {
             Some(settings) => EnrichedIndexStatsWithSettings {
                 age: settings.age,
                 alias: self.alias,
-                codec: settings.codec,
-                creation_date: settings.creation_date,
+                codec: Some(settings.codec),
+                creation_date: Some(settings.creation_date),
                 data_stream: settings.data_stream,
                 health: self.health,
                 ilm: settings.ilm,
-                is_write_index: settings.is_write_index,
+                is_write_index: settings.is_write_index.unwrap_or(false),
                 lifecycle: settings.lifecycle,
-                mode: settings.mode,
-                name: self.name.expect("index name is required"),
+                mode: Some(settings.mode),
+                name: Some(settings.name),
                 number_of_replicas: settings.number_of_replicas,
                 number_of_shards: settings.number_of_shards,
                 primaries: self.primaries,
-                refresh_interval: settings.refresh_interval,
+                refresh_interval: Some(settings.refresh_interval),
                 since_rollover: self.since_rollover,
                 source: settings.source,
                 store: settings.store,
@@ -382,19 +379,19 @@ impl EnrichedIndexStats {
             None => EnrichedIndexStatsWithSettings {
                 age: None,
                 alias: self.alias,
-                codec: "unknown".to_string(),
-                creation_date: 0,
+                codec: None,
+                creation_date: None,
                 data_stream: None,
                 health: None,
                 ilm: None,
                 is_write_index: true,
                 lifecycle: None,
-                mode: "unknown".to_string(),
-                name: self.name.expect("index name is required"),
+                mode: None,
+                name: self.name,
                 number_of_replicas: None,
                 number_of_shards: None,
                 primaries: self.primaries,
-                refresh_interval: "unkown".to_string(),
+                refresh_interval: None,
                 since_rollover: None,
                 source: None,
                 store: None,
@@ -429,7 +426,7 @@ impl TryFrom<IndexStats> for EnrichedIndexStats {
 
 #[skip_serializing_none]
 #[derive(Deserialize, Serialize)]
-struct EnrichedShardStats {
+pub struct EnrichedShardStats {
     pub commit: ShardCommit,
     pub number: u16,
     pub retention_leases: RetentionLeases,
@@ -467,8 +464,8 @@ impl TryFrom<ShardEntry> for EnrichedShardStats {
 }
 
 #[skip_serializing_none]
-#[derive(Serialize)]
-struct ShardStatsDocument {
+#[derive(Deserialize, Serialize)]
+pub struct ShardStatsDocument {
     shard: EnrichedShardStats,
     index: Option<IndexSettingsDocument>,
     node: Option<NodeDocument>,

@@ -3,11 +3,11 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{
-    super::{Lookup, data_stream::DataStream, ilm_explain::IlmStats},
+    super::{Lookup, data_stream::DataStreamDocument, ilm_explain::IlmStats},
     IndexSettings, IndicesSettings, StoreSettings,
 };
 use eyre::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 impl From<IndicesSettings> for Lookup<IndexSettings> {
@@ -35,15 +35,15 @@ impl From<Result<IndicesSettings>> for Lookup<IndexSettings> {
 }
 
 #[skip_serializing_none]
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct IndexSettingsDocument {
     pub age: Option<u64>,
     pub codec: String,
     pub creation_date: u64,
-    pub data_stream: Option<DataStream>,
+    pub data_stream: Option<DataStreamDocument>,
     pub lifecycle: Option<serde_json::Value>,
     pub ilm: Option<IlmStats>,
-    pub is_write_index: bool,
+    pub is_write_index: Option<bool>,
     pub mode: String,
     pub name: String,
     pub store: Option<StoreSettings>,
@@ -70,11 +70,6 @@ impl IndexSettingsDocument {
 
 impl From<IndexSettings> for IndexSettingsDocument {
     fn from(index_settings: IndexSettings) -> Self {
-        log::trace!(
-            "Datastream for {:?}: {:?}",
-            index_settings.name,
-            index_settings.data_stream
-        );
         IndexSettingsDocument {
             age: index_settings.age,
             codec: index_settings.codec,
@@ -82,7 +77,7 @@ impl From<IndexSettings> for IndexSettingsDocument {
             data_stream: index_settings.data_stream,
             lifecycle: index_settings.lifecycle,
             ilm: None,
-            is_write_index: index_settings.is_write_index,
+            is_write_index: Some(index_settings.is_write_index),
             mode: index_settings.mode,
             name: index_settings.name.expect("Name is required"),
             store: index_settings.store,

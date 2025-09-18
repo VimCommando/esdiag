@@ -20,10 +20,11 @@ pub struct Aliases {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AliasSettings {
     pub is_hidden: Option<bool>,
-    pub is_write_index: Option<bool>,
+    #[serde(default)]
+    pub is_write_index: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Alias {
     pub name: String,
     pub is_hidden: bool,
@@ -41,7 +42,7 @@ impl From<AliasSettings> for Alias {
         Self {
             name: "".to_string(),
             is_hidden: data.is_hidden.unwrap_or(false),
-            is_write_index: data.is_write_index.unwrap_or(false),
+            is_write_index: data.is_write_index,
         }
     }
 }

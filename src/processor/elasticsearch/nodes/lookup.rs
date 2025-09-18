@@ -4,12 +4,12 @@
 
 use super::{super::Lookup, Node, Nodes, OsDetails};
 use eyre::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
 
 #[skip_serializing_none]
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct NodeDocument {
     pub attributes: Option<Value>,
     pub host: Option<String>,

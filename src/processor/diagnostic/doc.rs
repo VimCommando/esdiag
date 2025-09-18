@@ -4,10 +4,10 @@
 
 use super::DiagnosticManifest;
 use eyre::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct DiagnosticMetadata {
     pub collection_date: u64,
     pub runner: String,

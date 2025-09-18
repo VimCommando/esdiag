@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 #[skip_serializing_none]
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize)]
 pub struct Cluster {
     #[serde(skip_deserializing)]
     pub display_name: String,
@@ -18,7 +18,7 @@ pub struct Cluster {
     pub diagnostic_node: String,
     #[serde(alias = "cluster_name")]
     pub name: String,
-    #[serde(alias = "cluster_uuid")]
+    #[serde(rename = "cluster_uuid")]
     pub uuid: String,
     pub version: Version,
     #[serde(skip_serializing)]
@@ -44,6 +44,27 @@ impl Cluster {
             ..self
         }
     }
+}
+
+impl From<Cluster> for ClusterMetadata {
+    fn from(cluster: Cluster) -> Self {
+        Self {
+            display_name: cluster.display_name,
+            diagnostic_node: cluster.diagnostic_node,
+            name: cluster.name,
+            uuid: cluster.uuid,
+            version: cluster.version,
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct ClusterMetadata {
+    pub display_name: String,
+    pub diagnostic_node: String,
+    pub name: String,
+    pub uuid: String,
+    pub version: Version,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
