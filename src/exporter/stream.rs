@@ -6,19 +6,27 @@ use super::Export;
 use crate::processor::{BatchResponse, DiagnosticReport};
 use eyre::Result;
 use serde::Serialize;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 /// An exporter that writes documents to stdout.
 #[derive(Clone)]
-pub struct StreamExporter {}
+pub struct StreamExporter {
+    docs_tx: Option<mpsc::Sender<usize>>,
+}
 
 impl StreamExporter {
     pub fn new() -> Self {
-        StreamExporter {}
+        StreamExporter { docs_tx: None }
     }
 }
 
 impl Export for StreamExporter {
+    fn get_docs_rx(&mut self) -> mpsc::Receiver<usize> {
+        let (tx, rx) = mpsc::channel::<usize>(100);
+        self.docs_tx = Some(tx);
+        rx
+    }
+
     /// Returns true for compatibility, can stdout not exist?
     async fn is_connected(&self) -> bool {
         true

@@ -16,7 +16,7 @@ use eyre::{Result, eyre};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::{Semaphore, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use url::Url;
 
 /// An exporter that sends documents to an Elasticsearch cluster.
@@ -24,6 +24,7 @@ use url::Url;
 pub struct ElasticsearchExporter {
     client: Elasticsearch,
     tx_limit: Arc<Semaphore>,
+    docs_tx: Option<mpsc::Sender<usize>>,
     url: Url,
 }
 
@@ -46,6 +47,7 @@ impl ElasticsearchExporter {
             client,
             tx_limit: Arc::new(Semaphore::new(limit)),
             url,
+            docs_tx: None,
         })
     }
 
@@ -97,11 +99,18 @@ impl TryFrom<KnownHost> for ElasticsearchExporter {
             client,
             tx_limit: Arc::new(Semaphore::new(limit)),
             url,
+            docs_tx: None,
         })
     }
 }
 
 impl Export for ElasticsearchExporter {
+    fn get_docs_rx(&mut self) -> mpsc::Receiver<usize> {
+        let (tx, rx) = mpsc::channel::<usize>(100);
+        self.docs_tx = Some(tx);
+        rx
+    }
+
     /// Check if the exporter has a valid connection to Elasticsearch.
     async fn is_connected(&self) -> bool {
         let status_code = match self.client.info().send().await {
@@ -153,6 +162,8 @@ impl Export for ElasticsearchExporter {
         let (tx, rx) = oneshot::channel();
         let client = self.client.clone();
         let semaphore = self.tx_limit.clone();
+        let docs_tx = self.docs_tx.clone();
+        let doc_count = docs.len();
 
         tokio::spawn(async move {
             // Acquire semaphore permit inside task - blocks if at limit (backpressure)
@@ -176,6 +187,10 @@ impl Export for ElasticsearchExporter {
                 Ok(batch_response) => {
                     if tx.send(batch_response).is_err() {
                         log::error!("Failed to send batch response: receiver dropped");
+                    } else {
+                        if let Some(tx) = docs_tx {
+                            let _ = tx.send(doc_count).await;
+                        }
                     }
                 }
                 Err(e) => {

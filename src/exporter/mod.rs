@@ -38,6 +38,7 @@ trait Export {
     where
         T: Serialize + Sized + Send + Sync + 'static;
     async fn save_report(&self, report: &DiagnosticReport) -> Result<()>;
+    fn get_docs_rx(&mut self) -> mpsc::Receiver<usize>;
 }
 
 /// The different types of exporters for data output.
@@ -129,6 +130,14 @@ impl Exporter {
             Exporter::Elasticsearch(exporter) => exporter.batch_send(index, docs).await,
             Exporter::File(exporter) => exporter.batch_send(index, docs).await,
             Exporter::Stream(exporter) => exporter.batch_send(index, docs).await,
+        }
+    }
+
+    pub fn get_docs_rx(&mut self) -> mpsc::Receiver<usize> {
+        match self {
+            Exporter::Elasticsearch(exporter) => exporter.get_docs_rx(),
+            Exporter::File(exporter) => exporter.get_docs_rx(),
+            Exporter::Stream(exporter) => exporter.get_docs_rx(),
         }
     }
 

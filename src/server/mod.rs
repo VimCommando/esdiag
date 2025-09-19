@@ -8,6 +8,7 @@ mod assets;
 mod file_upload;
 mod index;
 mod service_link;
+mod stats;
 mod template;
 
 use super::processor::Identifiers;
@@ -18,7 +19,7 @@ use axum::{
     extract::DefaultBodyLimit,
     http::HeaderMap,
     response::sse::Event,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use bytes::Bytes;
 use datastar::prelude::{ElementPatchMode, PatchElements, PatchSignals};
@@ -55,28 +56,38 @@ impl From<ApiKeyRequest> for Identifiers {
 #[derive(Clone)]
 pub struct Server {
     server_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
+    stats_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
     pub rx: Option<Arc<RwLock<mpsc::Receiver<(Identifiers, Bytes)>>>>,
 }
 
 impl Server {
-    pub fn new(port: u16, exporter: Exporter, kibana_url: String) -> Self {
+    pub fn new(port: u16, mut exporter: Exporter, kibana_url: String) -> Self {
         let (_, rx) = mpsc::channel::<(Identifiers, Bytes)>(1);
         let rx = Arc::new(RwLock::new(rx));
         let rx_clone = rx.clone();
+        let mut docs_rx = exporter.get_docs_rx();
 
         // Create shared state
         let state = Arc::new(ServerState {
-            signals: Arc::new(RwLock::new(Signals::default())),
             exporter: Arc::new(exporter),
+            keys: Arc::new(RwLock::new(HashMap::new())),
             kibana_url,
+            links: Arc::new(RwLock::new(HashMap::new())),
+            signals: Arc::new(RwLock::new(Signals::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
             uploads: Arc::new(RwLock::new(HashMap::new())),
-            links: Arc::new(RwLock::new(HashMap::new())),
-            keys: Arc::new(RwLock::new(HashMap::new())),
+        });
+
+        let stats_clone = state.stats.clone();
+        let stats_handle = tokio::spawn(async move {
+            while let Some(docs) = docs_rx.recv().await {
+                log::debug!("docs_rx: {docs}");
+                stats_clone.write().await.docs.total += docs;
+            }
         });
 
         // Start the Axum server
-        let handle = tokio::spawn(async move {
+        let server_handle = tokio::spawn(async move {
             const FIVE_HUNDRED_TWELVE_MEBIBYTES: usize = 512 * 1024 * 1024;
             let app = Router::new()
                 .route("/", get(index::handler))
@@ -93,6 +104,7 @@ impl Server {
                 .route("/style.css", get(assets::style))
                 .route("/upload/process", post(file_upload::process))
                 .route("/upload/submit", post(file_upload::submit))
+                .route("/stats", patch(stats::handler))
                 .layer(DefaultBodyLimit::max(FIVE_HUNDRED_TWELVE_MEBIBYTES));
 
             let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -109,12 +121,18 @@ impl Server {
         });
 
         Self {
-            server_handle: Some(Arc::new(handle)),
+            server_handle: Some(Arc::new(server_handle)),
+            stats_handle: Some(Arc::new(stats_handle)),
             rx: Some(rx_clone),
         }
     }
 
     pub async fn shutdown(&mut self) {
+        // Shutdown the stats thread
+        if let Some(handle) = self.stats_handle.take() {
+            Arc::try_unwrap(handle).map(|handle| handle.abort()).ok();
+            log::debug!("Stats thread stopped");
+        }
         // Shutdown the main server
         if let Some(handle) = self.server_handle.take() {
             Arc::try_unwrap(handle).map(|handle| handle.abort()).ok();
@@ -155,10 +173,10 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    pub async fn record_success(&self, docs: u32, errors: u32) {
+    pub async fn record_success(&self, _docs: u32, errors: u32) {
         let mut stats = self.stats.write().await;
-        stats.docs.total += docs as u64;
-        stats.docs.errors += errors as u64;
+        //stats.docs.total += docs as usize;
+        stats.docs.errors += errors as usize;
         stats.jobs.total += 1;
         stats.jobs.success += 1;
     }
@@ -258,8 +276,8 @@ impl std::fmt::Display for Stats {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DocStats {
-    pub total: u64,
-    pub errors: u64,
+    pub total: usize,
+    pub errors: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

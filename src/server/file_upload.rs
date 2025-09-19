@@ -116,6 +116,7 @@ pub async fn process(
         let (filename, data): (String, Bytes) = match state.pop_upload(job_id).await{
             Some((filename, data)) => (filename, data),
             None =>{
+                yield patch_signals(r#"{"processing":false}"#);
                 yield patch_template(template::JobFailed {
                     job_id: job_id,
                     error: "Failed to upload file",
@@ -130,6 +131,7 @@ pub async fn process(
             Err(e) => {
                 let error = format!("Failed to create receiver: {}", e);
                 log::error!("{}", error);
+                yield patch_signals(r#"{"processing":false}"#);
                 yield patch_template(template::JobFailed {
                     job_id: job_id,
                     error: "Failed to create file receiver",
@@ -139,7 +141,7 @@ pub async fn process(
             }
         };
 
-        let exporter =  state.exporter.clone();
+        let exporter = state.exporter.clone();
 
         let identifiers = Identifiers {
             user: signals.metadata.user,
@@ -151,8 +153,9 @@ pub async fn process(
             Ok(ready) => ready,
             Err(error) => {
                 state.record_failure().await;
+                yield patch_signals(r#"{"processing":false}"#);
                 yield patch_template(template::JobFailed {
-                    job_id: new_job_id(),
+                    job_id,
                     error: &error.to_string(),
                     source: &filename,
                 });
@@ -189,7 +192,6 @@ pub async fn process(
                             error: &failed.state.error,
                             source: &filename,
                         });
-                        yield patch_signals(r#"{"processing":false}"#);
                     }
                 };
             },

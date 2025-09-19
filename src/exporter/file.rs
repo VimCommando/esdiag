@@ -12,12 +12,13 @@ use std::{
     io::{BufWriter, Write},
     path::PathBuf,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 /// An exporter that writes to a file.
 pub struct FileExporter {
     file: File,
     path: PathBuf,
+    docs_tx: Option<mpsc::Sender<usize>>,
     writer: Arc<RwLock<BufWriter<File>>>,
 }
 
@@ -27,6 +28,7 @@ impl Clone for FileExporter {
             file: self.file.try_clone().expect("Failed to clone file"),
             path: self.path.clone(),
             writer: self.writer.clone(),
+            docs_tx: self.docs_tx.clone(),
         }
     }
 }
@@ -55,11 +57,18 @@ impl TryFrom<PathBuf> for FileExporter {
             file: file.try_clone().expect("Failed to clone file"),
             path,
             writer: Arc::new(RwLock::new(BufWriter::new(file))),
+            docs_tx: None,
         })
     }
 }
 
 impl Export for FileExporter {
+    fn get_docs_rx(&mut self) -> mpsc::Receiver<usize> {
+        let (tx, rx) = mpsc::channel::<usize>(100);
+        self.docs_tx = Some(tx);
+        rx
+    }
+
     /// Validates the file path and returns true if it exists.
     async fn is_connected(&self) -> bool {
         let is_file = self.path.is_file();
@@ -106,6 +115,9 @@ impl Export for FileExporter {
         batch.time = start_time.elapsed().as_millis() as u32;
 
         log::info!("{}, created {} docs", index, doc_count);
+        if let Some(tx) = &self.docs_tx {
+            let _ = tx.send(doc_count).await;
+        }
         Ok(batch)
     }
 
