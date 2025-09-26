@@ -110,9 +110,15 @@ function environment_setup() {
     export kibana_url=${ESDIAG_KIBANA_URL:-"http://localhost:5601"}
     export esdiag_url="http://localhost:2501"
     export assets_path="assets/kibana"
-    export esdiag_registry="${ESDIAG_REGISTRY:-${ELASTIC_CONTAINER_REGISTRY:-"localhost"}}"
-    export esdiag_image="${esdiag_registry}/esdiag/esdiag:${version}"
-    export esdiag_image_latest="${esdiag_registry}/esdiag/esdiag:latest"
+    if [[ -z "${ESDIAG_REGISTRY}" ]]; then
+        export esdiag_image="esdiag:${version}"
+        export esdiag_image_latest="esdiag:latest"
+    else
+        export esdiag_image="${ESDIAG_REGISTRY}/esdiag/esdiag:${version}"
+        export esdiag_image_latest="${ESDIAG_REGISTRY}/esdiag/esdiag:latest"
+    fi
+    # Save image tag to `.env` file
+    sed -i -e "s/^export ESDIAG_IMAGE_TAG=.*/export ESDIAG_IMAGE_TAG='${esdiag_image}'/" "${env_file}"
 
     export security=${security:-${ELASTIC_SECURITY_ENABLED:-"true"}}
     # Use ESDIAG_OUTPUT* environment variables to configure Elastic Stack authentication
@@ -591,7 +597,7 @@ function print_help_build () {
     echo "    -p, --push             - Push the container image to the registry"
     echo
     white "Environment Variables:\n"
-    echo "    ESDIAG_REGISTRY        - Private container registry to publish to (default $(gray "localhost"))"
+    echo "    ESDIAG_REGISTRY        - Private container registry to publish to"
     echo
 }
 
@@ -630,7 +636,7 @@ function print_help_buildx () {
     echo "    -p, --push             - Push the container image to the registry"
     echo
     white "Environment Variables:\n"
-    echo "    ESDIAG_REGISTRY        - Private container registry to publish to (default $(gray "localhost"))"
+    echo "    ESDIAG_REGISTRY        - Private container registry to publish to"
     echo
 }
 
@@ -665,7 +671,7 @@ function print_help_up () {
     echo
     white "Environment Variables:\n"
     echo "    ELASTIC_CONTAINER_REGISTRY - Elastic container registry (default $(gray "docker.elastic.co"))"
-    echo "    ESDIAG_REGISTRY            - Private container registry (default $(gray "localhost"))"
+    echo "    ESDIAG_REGISTRY            - Private container registry"
     echo
 }
 

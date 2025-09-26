@@ -11,7 +11,7 @@ name: esdiag
 services:
   esdiag-webui:
     container_name: esdiag
-    image: ${ESDIAG_REGISTRY}/esdiag/esdiag:${ESDIAG_VERSION}
+    image: ${ESDIAG_IMAGE_TAG:-esdiag:latest}
     depends_on:
       esdiag-elasticsearch:
         condition: service_healthy
