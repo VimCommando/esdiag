@@ -19,6 +19,10 @@ pub async fn handler(State(state): State<Arc<ServerState>>) -> impl IntoResponse
             let stats = state.stats.read().await;
             if stats.docs.total != last_count {
                 last_count = stats.docs.total;
+                match serde_json::to_string(&*stats) {
+                    Ok(json) => yield patch_signals(&format!(r#"{{"stats":{}}}"#, json)),
+                    Err(err) => log::error!("Failed to serialize stats: {}", err),
+                }
                 let stats = format!(r#"{{"stats":{}}}"#, serde_json::to_string(&*stats).unwrap());
                 yield patch_signals(&stats)
             }
