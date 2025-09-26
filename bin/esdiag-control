@@ -462,6 +462,11 @@ function dependencies_validate() {
     log_debug "$(green using) $(white "${container}") container runtime"
     export container
 
+    if [[ $(id -u) -eq 0 || $(id -un) == "root" ]]; then
+        log_error "$(white running as root) user is not supported"
+        failures=$((failures + 1))
+    fi
+
     if ! command -v curl &> /dev/null; then
         log_error "$(white curl) is required to send HTTP requests"
         failures=$((failures + 1))
