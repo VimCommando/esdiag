@@ -683,20 +683,25 @@ function compose_file_select() {
 
 function command_up() {
     # Check if the container runtime has the recommended resources
+    local uname && uname=$(uname)
     local machine
     local cpus
     local memory
-    if [[ $container == "podman" ]]; then
-        machine=$(podman machine inspect --format '{{.Name}}')
+    if [[ "${uname}" == "Linux" ]]; then
+        machine="$(cyan "$uname") system"
+        cpus=$(nproc)
+        memory=$(free --mebi | sed -n '/^Mem:/ s/^Mem: *\([0-9]*\).*/\1/p')
+    elif [[ $container == "podman" ]]; then
+        machine="podman machine $(cyan "$(podman machine inspect --format '{{.Name}}')")"
         cpus=$(podman machine inspect --format '{{.Resources.CPUs}}')
         memory=$(podman machine inspect --format '{{.Resources.Memory}}')
     elif [[ $container == "docker" ]]; then
-        machine=$(docker info --format '{{.Name}}')
+        machine="docker machine $(cyan "$(docker info --format '{{.Name}}')")"
         cpus=$(docker info --format '{{.NCPU}}')
         memory=$(( $(docker info --format '{{.MemTotal}}') / 1024 / 1024 ))
     fi
 
-    log_info "$(green found) machine $(cyan "${machine}") allocated with $(cyan "${cpus} CPUs") and $(cyan "${memory}MB") memory"
+    log_info "$(green found) ${machine} allocated with $(cyan "${cpus} CPUs") and $(cyan "${memory}MB") memory"
     if [[ $memory -lt 8192 ]]; then
         log_error "Required minimum container engine memory is $(magenta 8192MB)"
         exit 1
