@@ -2,37 +2,17 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::client::KnownHost;
-use crate::env;
-use eyre::Result;
-use eyre::{OptionExt, Report};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use crate::data::Product;
+
+use super::{ElasticCloud, KnownHost, KnownHostBuilder};
+use eyre::{OptionExt, Report, Result, eyre};
+use serde::{Deserialize, Deserializer};
 use std::{
-    fs::OpenOptions,
-    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
 };
+
 use url::Url;
-
-/// Save an arbitrary serializable object to a file
-pub fn save_file<T: Serialize>(filename: &str, content: &T) -> Result<()> {
-    let home_file = PathBuf::from(env::get_string("HOME")?)
-        .join(env::get_string("ESDIAG_HOME")?)
-        .join("last_run")
-        .join(filename);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .append(true)
-        .open(home_file)?;
-    let body = serde_json::to_string(&content)?;
-    file.write_all(body.as_bytes())?;
-    file.write_all(b"\n")?;
-    Ok(())
-}
-
 /// The different types of supported URIs
 #[derive(Clone)]
 pub enum Uri {
@@ -56,6 +36,56 @@ pub enum Uri {
     File(PathBuf),
     /// An input/output stream (stdin/stdout)
     Stream,
+}
+
+/// Try reading the authentication environment variables.
+/// Returns a tuple of optional strings for (apikey, username, password)
+fn try_get_auth_env() -> Result<(Option<String>, Option<String>, Option<String>)> {
+    let apikey = std::env::var("ESDIAG_OUTPUT_APIKEY").ok();
+    let username = std::env::var("ESDIAG_OUTPUT_USERNAME").ok();
+    let password = std::env::var("ESDIAG_OUTPUT_PASSWORD").ok();
+    Ok((apikey, username, password))
+}
+
+impl Uri {
+    /// Try creating a new Elasticsearch Uri from the environment variables
+    /// - `ESDIAG_OUTPUT_URL` (required): The URL to use for Elasticsearch output.
+    /// - `ESDIAG_OUTPUT_APIKEY` (optional): API key for authentication.
+    /// - `ESDIAG_OUTPUT_USERNAME` (optional): Username for authentication.
+    /// - `ESDIAG_OUTPUT_PASSWORD` (optional): Password for authentication.
+    pub fn try_from_output_env() -> Result<Self> {
+        log::debug!("Creating URI from ESDIAG_OUTPUT_URL");
+        let url = std::env::var("ESDIAG_OUTPUT_URL")
+            .map_err(|_| eyre!("ESDIAG_OUTPUT_URL is not defined"))?;
+        log::debug!("output: Env {}", url);
+        let (apikey, username, password) = try_get_auth_env()?;
+        let host = KnownHostBuilder::new(Url::parse(&url)?)
+            .apikey(apikey)
+            .username(username)
+            .password(password)
+            .build()?;
+        host.try_into()
+    }
+
+    /// Try creating a new Kibana Uri from the environment variables
+    /// - `ESDIAG_KIBANA_URL` (required): The URL to use for Kibana.
+    /// - `ESDIAG_OUTPUT_APIKEY` (optional): API key for authentication.
+    /// - `ESDIAG_OUTPUT_USERNAME` (optional): Username for authentication.
+    /// - `ESDIAG_OUTPUT_PASSWORD` (optional): Password for authentication.
+    pub fn try_from_kibana_env() -> Result<Self> {
+        log::debug!("Creating URI from ESDIAG_KIBANA_URL");
+        let url = std::env::var("ESDIAG_KIBANA_URL")
+            .map_err(|_| eyre!("ESDIAG_KIBANA_URL is not defined"))?;
+        log::debug!("kibana: Env {}", url);
+        let (apikey, username, password) = try_get_auth_env()?;
+        let host = KnownHostBuilder::new(Url::parse(&url)?)
+            .product(Product::Kibana)
+            .apikey(apikey)
+            .username(username)
+            .password(password)
+            .build()?;
+        host.try_into()
+    }
 }
 
 impl<'de> Deserialize<'de> for Uri {
@@ -95,7 +125,6 @@ impl TryFrom<KnownHost> for Uri {
     type Error = eyre::Report;
 
     fn try_from(host: KnownHost) -> Result<Self> {
-        use crate::client::ElasticCloud;
         let host_uri = match host {
             KnownHost::ApiKey { ref cloud_id, .. } => match cloud_id {
                 Some(ElasticCloud::ElasticCloud) => Uri::ElasticCloud(host),
@@ -184,6 +213,17 @@ impl TryFrom<String> for Uri {
     }
 }
 
+impl TryFrom<Option<String>> for Uri {
+    type Error = Report;
+
+    fn try_from(uri: Option<String>) -> Result<Self> {
+        match uri {
+            Some(uri) => Uri::try_from(uri),
+            None => Uri::try_from_output_env(),
+        }
+    }
+}
+
 impl std::fmt::Display for Uri {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -202,90 +242,5 @@ impl std::fmt::Display for Uri {
             Uri::Stream => write!(f, "-"),
             Uri::Url(url) => write!(f, "{}", url),
         }
-    }
-}
-
-/// The standard deserializer from serde_json does not deserializing u64 from
-/// strings. Unfortunately the _settings API frequently wraps numbers in quotes.
-
-pub fn u64_from_string<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Value = Deserialize::deserialize(deserializer)?;
-
-    match value {
-        Value::Number(num) => Ok(num.as_u64()),
-        Value::String(s) => Ok(s.parse::<u64>().ok()),
-        Value::Null => Ok(None),
-        _ => Err(serde::de::Error::custom(
-            "expected a number or a string representing a number",
-        )),
-    }
-}
-
-/// The standard deserializer from serde_json does not deserializing i64 from
-/// strings. Unfortunately the _settings API frequently wraps numbers in quotes.
-
-pub fn i64_from_string<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Value = Deserialize::deserialize(deserializer)?;
-
-    match value {
-        Value::Number(num) => Ok(num.as_i64()),
-        Value::String(s) => Ok(s.parse::<i64>().ok()),
-        Value::Null => Ok(None),
-        _ => Err(serde::de::Error::custom(
-            "expected a number or a string representing a number",
-        )),
-    }
-}
-
-pub fn map_as_vec_entries<'de, D, T>(deserializer: D) -> Result<Vec<(String, T)>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    let value: Value = Deserialize::deserialize(deserializer)?;
-
-    match value {
-        Value::Object(map) => {
-            let mut result = Vec::new();
-            for (key, value) in map {
-                let deserialized_value = T::deserialize(value).map_err(serde::de::Error::custom)?;
-                result.push((key, deserialized_value));
-            }
-            Ok(result)
-        }
-        _ => Err(serde::de::Error::custom("expected an object")),
-    }
-}
-
-pub fn option_map_as_vec_entries<'de, D, T>(
-    deserializer: D,
-) -> Result<Option<Vec<(String, T)>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    // Deserialize into an Option<Value> so we can distinguish missing / null
-    let opt_value: Option<Value> = Option::deserialize(deserializer)?;
-
-    match opt_value {
-        None => Ok(None),
-        Some(Value::Null) => Ok(None),
-        Some(Value::Object(map)) => {
-            let mut result = Vec::with_capacity(map.len());
-            for (key, value) in map {
-                let deserialized_value = T::deserialize(value).map_err(serde::de::Error::custom)?;
-                result.push((key, deserialized_value));
-            }
-            Ok(Some(result))
-        }
-        Some(_) => Err(serde::de::Error::custom(
-            "expected an object, null, or missing field",
-        )),
     }
 }
