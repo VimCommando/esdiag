@@ -361,6 +361,62 @@
                 }
               }
             },
+            "mappings": {
+              "properties": {
+                "dynamic": {
+                  "type": "keyword"
+                },
+                "date_detection": {
+                  "type": "boolean"
+                },
+                "numeric_detection": {
+                  "type": "boolean"
+                },
+                "dynamic_date_formats": {
+                  "type": "keyword"
+                },
+                "dynamic_templates": {
+                  "type": "long"
+                },
+                "_data_stream_timestamp": {
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "_source": {
+                  "properties": {
+                    "mode": {
+                      "type": "keyword"
+                    }
+                  }
+                },
+                "_meta": {
+                  "type": "object",
+                  "enabled": false
+                },
+                "fields": {
+                  "type": "object",
+                  "dynamic": true,
+                  "properties": {
+                    "total": {
+                      "type": "long"
+                    }
+                  }
+                },
+                "multi-fields": {
+                  "properties": {
+                    "total": {
+                      "type": "long"
+                    },
+                    "names": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
+            },
             "mode": {
               "type": "keyword"
             },
