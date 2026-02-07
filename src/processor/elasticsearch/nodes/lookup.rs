@@ -7,6 +7,7 @@ use eyre::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
+use std::collections::HashSet;
 
 #[skip_serializing_none]
 #[derive(Clone, Deserialize, Serialize)]
@@ -18,23 +19,23 @@ pub struct NodeDocument {
     pub name: String,
     pub os: OsDetails,
     pub role: String,
-    pub roles: Vec<String>,
+    pub roles: HashSet<String>,
     pub tier: String,
     pub tier_order: usize,
     pub version: Option<String>,
 }
 
 impl NodeDocument {
-    pub fn rename(self, name: &String) -> Self {
+    pub fn rename(self, name: &str) -> Self {
         NodeDocument {
-            name: name.clone(),
+            name: name.to_string(),
             ..self
         }
     }
 
-    pub fn with_id(self, id: &String) -> Self {
+    pub fn with_id(self, id: &str) -> Self {
         NodeDocument {
-            id: Some(id.clone()),
+            id: Some(id.to_string()),
             ..self
         }
     }
@@ -79,7 +80,7 @@ impl From<Nodes> for Lookup<NodeDocument> {
 impl From<Result<Nodes>> for Lookup<NodeDocument> {
     fn from(nodes_result: Result<Nodes>) -> Self {
         match nodes_result {
-            Ok(nodes) => Lookup::<NodeDocument>::from(nodes),
+            Ok(nodes) => Lookup::<NodeDocument>::from_parsed(nodes),
             Err(e) => {
                 log::warn!("Failed to parse Nodes: {}", e);
                 Lookup::new()
@@ -95,22 +96,22 @@ impl std::fmt::Display for Node {
 }
 
 /// Determines a node's tier based on a precedence of assigned roles.
-fn get_tier(roles: &Vec<String>) -> String {
+fn get_tier(roles: &HashSet<String>) -> String {
     match () {
-        _ if roles.contains(&"index".to_string()) => "index",
-        _ if roles.contains(&"search".to_string()) => "search",
-        _ if roles.contains(&"data_hot".to_string()) => "hot",
-        _ if roles.contains(&"data_warm".to_string()) => "warm",
-        _ if roles.contains(&"data_cold".to_string()) => "cold",
-        _ if roles.contains(&"data_frozen".to_string()) => "frozen",
-        _ if roles.contains(&"data_content".to_string()) => "content",
-        _ if roles.contains(&"data".to_string()) => "data",
-        _ if roles.contains(&"ingest".to_string()) => "ingest",
-        _ if roles.contains(&"ml".to_string()) => "ml",
-        _ if roles.contains(&"transform".to_string()) => "transform",
-        _ if roles.contains(&"voting_only".to_string()) => "tiebreaker",
-        _ if roles.contains(&"master".to_string()) => "master",
-        _ if roles.contains(&"remote_cluster_client".to_string()) => "remote",
+        _ if roles.contains("index") => "index",
+        _ if roles.contains("search") => "search",
+        _ if roles.contains("data_hot") => "hot",
+        _ if roles.contains("data_warm") => "warm",
+        _ if roles.contains("data_cold") => "cold",
+        _ if roles.contains("data_frozen") => "frozen",
+        _ if roles.contains("data_content") => "content",
+        _ if roles.contains("data") => "data",
+        _ if roles.contains("ingest") => "ingest",
+        _ if roles.contains("ml") => "ml",
+        _ if roles.contains("transform") => "transform",
+        _ if roles.contains("voting_only") => "tiebreaker",
+        _ if roles.contains("master") => "master",
+        _ if roles.contains("remote_cluster_client") => "remote",
         _ if roles.is_empty() => "coord",
         _ => "node",
     }
@@ -152,8 +153,8 @@ fn get_tier_node_name(node_name: String, tier: &str) -> String {
 }
 
 /// Collects single-character abbreviations for roles into a string.
-fn get_roles_abbreviation(role_list: &Vec<String>) -> String {
-    let char_for = |role| {
+fn get_roles_abbreviation(role_list: &HashSet<String>) -> String {
+    let char_for = |role: &str| {
         let c = match role {
             "data" => 'd',
             "data_content" => 's',

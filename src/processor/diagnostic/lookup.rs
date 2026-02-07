@@ -11,6 +11,7 @@ pub struct Lookup<T> {
     by_id: HashMap<String, usize>,
     by_name: HashMap<String, usize>,
     entries: Vec<T>,
+    pub parsed: bool,
 }
 
 impl<T> Lookup<T>
@@ -22,9 +23,36 @@ where
             by_id: HashMap::new(),
             by_name: HashMap::new(),
             entries: Vec::new(),
+            parsed: false,
         }
     }
 
+    pub fn was_parsed(mut self) -> Self {
+        self.parsed = true;
+        self
+    }
+
+    pub fn from_parsed<U>(value: U) -> Self
+    where
+        Self: From<U>,
+    {
+        Self::from(value).was_parsed()
+    }
+}
+
+impl<T> Default for Lookup<T>
+where
+    T: Clone + Serialize,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Lookup<T>
+where
+    T: Clone + Serialize,
+{
     /// Retrieve a lookup entry by name
     pub fn by_name(&self, name: &str) -> Option<&T> {
         match self.by_name.get(name) {
