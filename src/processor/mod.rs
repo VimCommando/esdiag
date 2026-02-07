@@ -46,6 +46,7 @@ use futures::{
     future::BoxFuture,
     stream::{BoxStream, FuturesUnordered},
 };
+use kibana::KibanaDiagnostic;
 use kubernetes_platform::KubernetesPlatformDiagnostic;
 use logstash::LogstashDiagnostic;
 use std::sync::{
@@ -837,7 +838,7 @@ enum Diagnostic {
     Elasticsearch(Box<ElasticsearchDiagnostic>),
     ElasticCloudKubernetes(Box<ElasticCloudKubernetesDiagnostic>),
     KubernetesPlatform(Box<KubernetesPlatformDiagnostic>),
-    //Kibana(KibanaDiagnostic)
+    Kibana(Box<KibanaDiagnostic>),
     Logstash(Box<LogstashDiagnostic>),
 }
 
@@ -848,6 +849,7 @@ impl Diagnostic {
             Diagnostic::Elasticsearch(diagnostic) => Some(diagnostic.uuid().to_string()),
             Diagnostic::ElasticCloudKubernetes(diagnostic) => Some(diagnostic.uuid().to_string()),
             Diagnostic::KubernetesPlatform(diagnostic) => Some(diagnostic.uuid().to_string()),
+            Diagnostic::Kibana(diagnostic) => Some(diagnostic.uuid().to_string()),
             Diagnostic::Logstash(diagnostic) => Some(diagnostic.uuid().to_string()),
         }
     }
@@ -883,7 +885,11 @@ impl Diagnostic {
                     LogstashDiagnostic::try_new(receiver, exporter, manifest, process_selection).await?;
                 Ok((Self::Logstash(diagnostic), report))
             }
-            Some(Application::Kibana) => Err(eyre!(KIBANA_PROCESSING_NOT_IMPLEMENTED)),
+            Some(Application::Kibana) => {
+                let (diagnostic, report) =
+                    KibanaDiagnostic::try_new(receiver, exporter, manifest, process_selection).await?;
+                Ok((Self::Kibana(diagnostic), report))
+            }
             Some(Application::Agent) => Err(eyre!(AGENT_PROCESSING_NOT_IMPLEMENTED)),
             // A platform-only diagnostic: dispatch on the platform axis.
             None => match manifest.platform() {
@@ -908,7 +914,7 @@ impl Diagnostic {
             Diagnostic::Elasticsearch(diagnostic) => diagnostic.process(summary_tx).await,
             Diagnostic::ElasticCloudKubernetes(diagnostic) => diagnostic.process(summary_tx).await,
             Diagnostic::KubernetesPlatform(diagnostic) => diagnostic.process(summary_tx).await,
-            //Diagnostic::Kibana(diagnostic) => diagnostic.run().await?,
+            Diagnostic::Kibana(diagnostic) => diagnostic.process(summary_tx).await,
             Diagnostic::Logstash(diagnostic) => diagnostic.process(summary_tx).await,
         }
     }
@@ -918,7 +924,7 @@ impl Diagnostic {
             Diagnostic::Elasticsearch(diagnostic) => diagnostic.origin(),
             Diagnostic::ElasticCloudKubernetes(diagnostic) => diagnostic.origin(),
             Diagnostic::KubernetesPlatform(diagnostic) => diagnostic.origin(),
-            //Diagnostic::Kibana(diagnostic) => diagnostic.origin(),
+            Diagnostic::Kibana(diagnostic) => diagnostic.origin(),
             Diagnostic::Logstash(diagnostic) => diagnostic.origin(),
         }
     }
@@ -926,6 +932,11 @@ impl Diagnostic {
 
 trait DocumentExporter<T, U> {
     async fn documents_export(self, exporter: &Exporter, lookups: &T, metadata: &U) -> ProcessorSummary;
+
+    #[allow(unused_variables)]
+    async fn export_raw(data: String, exporter: &Exporter, lookups: &T, metadata: &U) -> ProcessorSummary {
+        ProcessorSummary::new("error".to_string())
+    }
 }
 
 trait StreamingDocumentExporter<T, U>: StreamingDataSource {
