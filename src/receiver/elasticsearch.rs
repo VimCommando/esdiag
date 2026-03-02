@@ -35,7 +35,7 @@ impl ElasticsearchReceiver {
         })
     }
 
-    async fn get_version(&self) -> Result<&semver::Version> {
+    pub async fn get_version(&self) -> Result<&semver::Version> {
         self.version
             .get_or_try_init(|| async {
                 log::debug!("Fetching version from {}", self.url);
@@ -61,6 +61,33 @@ impl ElasticsearchReceiver {
                     .map_err(|e| eyre!("Failed to parse version: {}", e))
             })
             .await
+    }
+
+    pub async fn get_raw_by_path(&self, path: &str, extension: &str) -> Result<String> {
+        log::debug!("Getting raw API path: {}", path);
+
+        let mut headers = http::headers::HeaderMap::new();
+        // By default, the Elasticsearch client enforces Accept: application/json
+        // We use the configured file extension to request the appropriate content type
+        if extension == ".txt" {
+            headers.append(http::headers::ACCEPT, "text/plain".parse().unwrap());
+        } else {
+            headers.append(http::headers::ACCEPT, "application/json".parse().unwrap());
+        }
+
+        let response = self
+            .client
+            .send(
+                http::Method::Get,
+                path,
+                headers,
+                Option::<&String>::None,
+                Option::<&String>::None,
+                None,
+            )
+            .await?;
+
+        response.text().await.map_err(Into::into)
     }
 }
 
@@ -192,22 +219,13 @@ impl ReceiveRaw for ElasticsearchReceiver {
         // Get the API URL path for the provided type
         let version = self.get_version().await.ok();
         let path = T::source(PathType::Url, version)?;
-        log::debug!("Getting API: {}", &path);
+        
+        let name = T::name();
+        let aliases = T::aliases();
+        let source_conf = crate::processor::diagnostic::data_source::get_source(T::product(), &name, &aliases)?;
+        let extension = source_conf.1.extension.as_deref().unwrap_or(".json");
 
-        // Send a simple GET request to the API path
-        let response = self
-            .client
-            .send(
-                http::Method::Get,
-                &path,
-                http::headers::HeaderMap::new(),
-                Option::<&String>::None,
-                Option::<&String>::None,
-                None,
-            )
-            .await?;
-
-        response.text().await.map_err(Into::into)
+        self.get_raw_by_path(&path, extension).await
     }
 }
 
