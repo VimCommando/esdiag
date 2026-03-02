@@ -1,0 +1,27 @@
+<docs-content
+    id="main-content"
+    data-init="window.location.hash && @get('/docs/'+window.location.hash.substring(1), { filterSignals: {exclude: /.*/} })"
+    data-on:hashchange__window="@get('/docs/'+(window.location.hash.substring(1) || '{{ current_path }}'), {
+    filterSignals: {exclude: /.*/}
+    })"
+>
+    <docs-nav>
+        <ul>
+            {% for entry in toc %} {% if entry.is_dir %}
+            <li class="dir">{{ entry.title }}</li>
+            {% else %}
+            <li class="{% if entry.level > 0 %}nested{% else %}top{% endif %}">
+                <a href="#{{ entry.path }}" class="{% if current_path == entry.path %}active{% endif %}">
+                    {{ entry.title }}
+                </a>
+            </li>
+            {% endif %} {% endfor %}
+        </ul>
+    </docs-nav>
+
+    <doc-viewer
+        data-init__delay.50ms="Prism.highlightAllUnder(el)"
+        data-on:popstate__window__delay.50ms="Prism.highlightAllUnder(el)"
+        >{{ html_content|safe }}</doc-viewer
+    >
+</docs-content>

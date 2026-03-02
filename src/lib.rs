@@ -6,6 +6,8 @@
 pub mod client;
 /// Data structures and types for serializing and deserializing
 pub mod data;
+/// Embedded assets
+pub mod embeds;
 /// Environment variables
 pub mod env;
 /// Exports data to various destinations
