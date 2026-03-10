@@ -2,6 +2,8 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+/// Collector definition for Logstash diagnostics
+mod collector;
 /// Logstash hot threads
 mod hot_threads;
 /// Logstash diagnostic metadata
@@ -15,6 +17,7 @@ mod plugins;
 /// Logstash version
 mod version;
 
+pub use collector::LogstashCollector;
 pub use metadata::LogstashMetadata;
 
 use super::{

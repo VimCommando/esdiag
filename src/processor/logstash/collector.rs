@@ -2,32 +2,34 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::super::{
-    collector::{CollectOptions, CollectionResult},
-    SourceContext,
-};
 use super::{
-    AliasList, Cluster, ClusterSettings, DataSource, DataStreams, DiagnosticManifest, HealthReport,
-    IlmExplain, IlmPolicies, IndicesSettings, IndicesStats, Licenses, MappingStats, Nodes,
-    NodesStats, PendingTasks, Repositories, SearchableSnapshotsCacheStats,
-    SearchableSnapshotsStats, SlmPolicies, Snapshots, Tasks,
+    node::Node,
+    node_stats::NodeStats,
+    version::Version,
 };
-use crate::{data::Product, exporter::ArchiveExporter, receiver::Receiver};
+use crate::{
+    data::Product,
+    exporter::ArchiveExporter,
+    processor::{
+        api::{ApiResolver, ApiWeight, DiagnosticType, LogstashApi},
+        collector::{CollectOptions, CollectionResult},
+        DataSource, DiagnosticManifest, SourceContext,
+    },
+    receiver::Receiver,
+};
 use eyre::{Result, WrapErr};
-use std::path::PathBuf;
-
-use crate::processor::api::{ApiResolver, ApiWeight, DiagnosticType, ElasticsearchApi};
 use futures::stream::{self, StreamExt};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-pub struct ElasticsearchCollector {
+pub struct LogstashCollector {
     receiver: Receiver,
     exporter: ArchiveExporter,
     options: CollectOptions,
 }
 
-impl ElasticsearchCollector {
+impl LogstashCollector {
     pub async fn new(
         receiver: Receiver,
         exporter: ArchiveExporter,
@@ -52,19 +54,19 @@ impl ElasticsearchCollector {
     pub async fn collect(&self) -> Result<CollectionResult> {
         let collect_result: Result<CollectionResult> = async {
             let diag_type = DiagnosticType::from_str(&self.options.r#type)?;
-            let apis = ApiResolver::resolve_es(
+            let apis = ApiResolver::resolve_ls(
                 &diag_type,
                 self.options.include.as_ref(),
                 self.options.exclude.as_ref(),
             )?;
 
             let api_names: Vec<&str> = apis.iter().map(|a| a.as_str()).collect();
-            log::debug!("Resolved APIs for collection: {:?}", api_names);
+            log::debug!("Resolved Logstash APIs for collection: {:?}", api_names);
 
             let mut result = CollectionResult {
                 path: self.exporter.to_string(),
                 success: 0,
-                total: apis.len() + 1, // +1 for manifest
+                total: apis.len() + 1,
             };
 
             let mut heavy_apis = Vec::new();
@@ -80,7 +82,6 @@ impl ElasticsearchCollector {
                 }
             }
 
-            // Concurrent fetch for Light APIs
             let mut light_stream = stream::iter(light_apis)
                 .map(|api| async move { self.save_api_with_retry(&api).await })
                 .buffer_unordered(5);
@@ -89,7 +90,6 @@ impl ElasticsearchCollector {
                 result.success += res;
             }
 
-            // Sequential fetch for Heavy APIs
             for api in heavy_apis {
                 result.success += self.save_api_with_retry(&api).await;
             }
@@ -110,8 +110,8 @@ impl ElasticsearchCollector {
         }
     }
 
-    async fn save_api_with_retry(&self, api: &ElasticsearchApi) -> usize {
-        let max_duration = Duration::from_secs(300); // 5 minutes
+    async fn save_api_with_retry(&self, api: &LogstashApi) -> usize {
+        let max_duration = Duration::from_secs(300);
         let start_time = std::time::Instant::now();
         let mut attempt = 1;
         let mut delay = Duration::from_secs(2);
@@ -144,59 +144,35 @@ impl ElasticsearchCollector {
         }
     }
 
-    async fn save_api(&self, api: &ElasticsearchApi) -> Result<usize> {
+    async fn save_api(&self, api: &LogstashApi) -> Result<usize> {
         match api {
-            ElasticsearchApi::AliasList => self.save::<AliasList>().await,
-            ElasticsearchApi::Cluster => self.save::<Cluster>().await,
-            ElasticsearchApi::ClusterSettings => self.save::<ClusterSettings>().await,
-            ElasticsearchApi::DataStreams => self.save::<DataStreams>().await,
-            ElasticsearchApi::HealthReport => self.save::<HealthReport>().await,
-            ElasticsearchApi::IlmExplain => self.save::<IlmExplain>().await,
-            ElasticsearchApi::IlmPolicies => self.save::<IlmPolicies>().await,
-            ElasticsearchApi::IndicesSettings => self.save::<IndicesSettings>().await,
-            ElasticsearchApi::IndicesStats => self.save::<IndicesStats>().await,
-            ElasticsearchApi::Licenses => self.save::<Licenses>().await,
-            ElasticsearchApi::MappingStats => self.save::<MappingStats>().await,
-            ElasticsearchApi::Nodes => self.save::<Nodes>().await,
-            ElasticsearchApi::NodesStats => self.save::<NodesStats>().await,
-            ElasticsearchApi::PendingTasks => self.save::<PendingTasks>().await,
-            ElasticsearchApi::Repositories => self.save::<Repositories>().await,
-            ElasticsearchApi::SearchableSnapshotsCacheStats => {
-                self.save::<SearchableSnapshotsCacheStats>().await
-            }
-            ElasticsearchApi::SearchableSnapshotsStats => {
-                self.save::<SearchableSnapshotsStats>().await
-            }
-            ElasticsearchApi::Snapshots => self.save::<Snapshots>().await,
-            ElasticsearchApi::SlmPolicies => self.save::<SlmPolicies>().await,
-            ElasticsearchApi::Tasks => self.save::<Tasks>().await,
-            ElasticsearchApi::Raw(name, _) => self.save_raw(name).await,
+            LogstashApi::Node => self.save::<Node>().await,
+            LogstashApi::NodeStats => self.save::<NodeStats>().await,
+            LogstashApi::Raw(name, _) => self.save_raw(name).await,
         }
     }
 
     async fn save_raw(&self, name: &str) -> Result<usize> {
-        let source_conf =
-            match crate::processor::diagnostic::data_source::get_source("elasticsearch", name, &[])
-            {
-                Ok((_, conf)) => conf,
-                Err(e) => {
-                    log::debug!("Skipping {} collection: {}", name, e);
-                    return Ok(0);
-                }
-            };
+        let source_conf = match crate::processor::diagnostic::data_source::get_source(
+            "logstash",
+            name,
+            &[],
+        ) {
+            Ok((_, conf)) => conf,
+            Err(e) => {
+                log::debug!("Skipping {} collection: {}", name, e);
+                return Ok(0);
+            }
+        };
 
         let version = match &self.receiver {
-            Receiver::Elasticsearch(r) => match r.get_version().await {
+            Receiver::Logstash(r) => match r.get_version().await {
                 Ok(v) => v,
                 Err(e) => {
                     log::debug!("Cannot collect raw API without version: {}", e);
                     return Ok(0);
                 }
             },
-            Receiver::ElasticCloudAdmin(_) => {
-                log::debug!("ElasticCloudAdmin receiver not fully supported for raw by path yet");
-                return Ok(0);
-            }
             _ => return Ok(0),
         };
 
@@ -213,7 +189,7 @@ impl ElasticsearchCollector {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("Failed to get raw API {}: {}", name, e);
-                return Err(eyre::eyre!(e));
+                return Err(e);
             }
         };
 
@@ -248,7 +224,8 @@ impl ElasticsearchCollector {
                 return Err(e);
             }
         };
-        let ctx = SourceContext::new("elasticsearch", None);
+
+        let ctx = SourceContext::new("logstash", None);
         let path = PathBuf::from(T::resolve_source_file_path(&ctx)?);
         let filename = format!("{}", path.display());
         match self.exporter.save(path, content).await {
@@ -263,10 +240,32 @@ impl ElasticsearchCollector {
         }
     }
 
-    async fn save_diagnostic_manifest(&self, apis: &[ElasticsearchApi]) -> Result<usize> {
-        let cluster = self.receiver.get::<Cluster>().await?;
-        let collected_api_names: Vec<String> =
-            apis.iter().map(|a| a.as_str().to_string()).collect();
+    async fn save_diagnostic_manifest(&self, apis: &[LogstashApi]) -> Result<usize> {
+        let version = self.receiver.get::<Version>().await?;
+        let parsed_version = semver::Version::parse(&version.version)?;
+        let collected_api_names: Vec<String> = apis
+            .iter()
+            .filter_map(|api| match api {
+                LogstashApi::Node => Some(api.as_str().to_string()),
+                LogstashApi::NodeStats => Some(api.as_str().to_string()),
+                LogstashApi::Raw(name, _) => {
+                    match crate::processor::diagnostic::data_source::get_source(
+                        "logstash",
+                        name,
+                        &[],
+                    ) {
+                        Ok((_, source_conf)) => {
+                            if source_conf.get_url(&parsed_version).is_ok() {
+                                Some(api.as_str().to_string())
+                            } else {
+                                None
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                }
+            })
+            .collect();
 
         let manifest = DiagnosticManifest::new(
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -274,10 +273,10 @@ impl ElasticsearchCollector {
             None,
             None,
             Some(self.options.r#type.clone()),
-            Product::Elasticsearch,
-            Some("elasticsearch_diagnostic".to_string()),
+            Product::Logstash,
+            Some("logstash_diagnostic".to_string()),
             Some("esdiag".to_string()),
-            Some(cluster.version.number.to_string()),
+            Some(version.version),
         )
         .with_identifiers(self.options.identifiers.clone())
         .with_collected_apis(collected_api_names);

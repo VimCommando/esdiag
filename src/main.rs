@@ -41,7 +41,8 @@ struct Cli {
     /// Enable debug logging
     #[arg(global = true, long)]
     debug: bool,
-    /// Override the path to sources.yml
+    /// Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow.
+    /// The file must match the active product or the command fails before collection/processing.
     #[arg(global = true, long)]
     sources: Option<String>,
     /// Commands
@@ -289,10 +290,6 @@ async fn main() -> Result<()> {
 
     clear_last_run_files()?;
 
-    if let Some(sources) = cli.sources.clone() {
-        esdiag::processor::init_sources(Some(sources))?;
-    }
-
     match run(cli).await {
         Ok(cmd) => {
             log::debug!("{cmd} complete");
@@ -306,6 +303,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run(cli: Cli) -> Result<&'static str> {
+    let sources_override = cli.sources.clone();
     // If there are CLI arguments but no subcommand, avoid starting the desktop/Tauri
     // entrypoint. The desktop UI should only start when launched absolutely without arguments.
     if should_error_for_missing_subcommand(std::env::args_os().len(), cli.command.is_none()) {
@@ -381,6 +379,13 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     | Uri::ElasticCloudAdmin(host)
                     | Uri::ElasticGovCloudAdmin(host) => {
                         ensure_host_role(&host, HostRole::Collect, "collect")?;
+                        let product = host.app().clone();
+                        if let Some(sources) = sources_override.clone() {
+                            esdiag::processor::init_sources(
+                                sources_product_key(&product)?,
+                                sources,
+                            )?;
+                        }
                         let known_host = Uri::try_from(host)?;
                         log::info!("Collecting diagnostic from {known_host}");
                         log::info!("Saving diagnostic to {output}");
@@ -401,6 +406,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                         let collector = Collector::try_new(
                             receiver,
                             exporter,
+                            product,
                             r#type,
                             include,
                             exclude,
@@ -524,7 +530,12 @@ async fn run(cli: Cli) -> Result<&'static str> {
 
                 log::info!("input: {}", input_uri);
 
-                let receiver = Arc::new(Receiver::try_from(input_uri)?);
+                let receiver = Receiver::try_from(input_uri.clone())?;
+                if let Some(sources) = sources_override.clone() {
+                    let product = detect_sources_product_for_process(&input_uri, &receiver).await?;
+                    esdiag::processor::init_sources(sources_product_key(&product)?, sources)?;
+                }
+                let receiver = Arc::new(receiver);
                 let exporter = Arc::new(Exporter::try_from(output_uri)?);
 
                 let identifiers =
@@ -679,6 +690,20 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 "No command provided. If you want to use the Desktop UI, compile with the 'desktop' feature."
             ))
         }
+    }
+}
+
+fn sources_product_key(product: &Product) -> Result<&'static str> {
+    esdiag::processor::diagnostic::data_source::source_product_key(product)
+        .map_err(|_| eyre!("--sources is only supported for Elasticsearch and Logstash inputs, got {}", product))
+}
+
+async fn detect_sources_product_for_process(input_uri: &Uri, receiver: &Receiver) -> Result<Product> {
+    match input_uri {
+        Uri::KnownHost(host) | Uri::ElasticCloudAdmin(host) | Uri::ElasticGovCloudAdmin(host) => {
+            Ok(host.app().clone())
+        }
+        _ => Ok(receiver.try_get_manifest_from_files().await?.product),
     }
 }
 

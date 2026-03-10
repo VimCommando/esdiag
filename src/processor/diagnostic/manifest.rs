@@ -3,9 +3,9 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::elasticsearch;
-use super::{DataSource, DiagPath, data_source::PathType};
+use super::DiagPath;
 use crate::data::Product;
-use eyre::{Result, eyre};
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -143,15 +143,6 @@ impl TryFrom<elasticsearch::Cluster> for Manifest {
     }
 }
 
-impl DataSource for Manifest {
-    fn source(path: PathType, _version: Option<&semver::Version>) -> Result<String> {
-        match path {
-            PathType::File => Ok("manifest.json".to_string()),
-            _ => Err(eyre!("Unsupported source for manifest")),
-        }
-    }
-
-    fn name() -> String {
-        "manifest".to_string()
-    }
+impl Manifest {
+    pub const FILENAME: &'static str = "manifest.json";
 }
