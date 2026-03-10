@@ -16,9 +16,10 @@ This project supports desktop packaging for:
 
 ## Configuration
 
-- `tauri.conf.json` controls desktop bundles, including macOS `.dmg`.
+- `tauri.conf.json` controls desktop bundles, including macOS `.dmg`, and intentionally excludes Windows installer targets.
 - `packaging/desktop-targets.json` is the source of truth for:
   - Windows minimum version (`10`)
+  - Windows artifact format (`exe`)
   - Flatpak base app version (`0.15.0`)
   - Flatpak local-only mode
 - `packaging/flatpak/com.elastic.esdiag.json` defines the Flatpak manifest.
@@ -42,38 +43,17 @@ Validate packaging configuration:
 bash bin/verify-desktop-config.sh
 ```
 
-Normalize the package version to an MSI-safe form:
-
-```sh
-bash bin/normalize-cargo-version-for-msi.sh Cargo.toml
-```
-
-Run the local regression test for MSI version normalization:
-
-```sh
-bash bin/test-normalize-cargo-version-for-msi.sh
-```
-
-Build desktop macOS/Windows bundles with Tauri:
+Build the desktop macOS bundle with Tauri:
 
 ```sh
 cargo tauri build --features desktop
 ```
 
-Build a local Windows raw app artifact with Docker Buildx:
+Build the Windows desktop executable:
 
 ```sh
-bash bin/buildx-windows.sh
+cargo build --release --features desktop
 ```
-
-At the moment, the local Buildx path is experimental.
-
-- Windows Buildx output is only the raw desktop app layout:
-  - `esdiag.exe`
-  - `WebView2Loader.dll`
-- Windows Buildx does not produce an `.msi`.
-- The official Windows `.msi` bundle is produced by the native `windows-latest` GitHub Actions job.
-- That MSI CI path sets `ESDIAG_GENERATE_NOTICE=0`, so it does not require `cargo-about`.
 
 Build local Flatpak artifact:
 

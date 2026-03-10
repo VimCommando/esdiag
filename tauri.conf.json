@@ -16,13 +16,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "msi"],
-    "windows": {
-      "wix": {
-        "bannerPath": "packaging/windows/msi-banner.bmp",
-        "dialogImagePath": "packaging/windows/msi-dialog.bmp"
-      }
-    },
+    "targets": ["app", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
