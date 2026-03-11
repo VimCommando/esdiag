@@ -92,88 +92,6 @@ pub struct SecretDeleteForm {
     pub secret_id: String,
 }
 
-#[derive(Default, Deserialize)]
-pub(crate) struct HostsUiSignals {
-    #[serde(default)]
-    hosts: TableUiSignals,
-}
-
-#[derive(Default, Deserialize)]
-pub(crate) struct SecretsUiSignals {
-    #[serde(default)]
-    secrets: TableUiSignals,
-}
-
-#[derive(Default, Deserialize)]
-pub(crate) struct ClustersUiSignals {
-    #[serde(default)]
-    clusters: TableUiSignals,
-}
-
-#[derive(Default, Deserialize)]
-struct TableUiSignals {
-    #[serde(default)]
-    rows: HashMap<String, TableRowSignals>,
-}
-
-#[derive(Default, Deserialize)]
-struct TableRowSignals {
-    #[serde(default)]
-    draft: Option<Map<String, Value>>,
-}
-
-#[derive(Deserialize, Serialize)]
-struct HostDraftSignal {
-    #[serde(default)]
-    original_name: Option<String>,
-    name: String,
-    auth: String,
-    app: String,
-    url: String,
-    roles: String,
-    #[serde(default)]
-    viewer: Option<String>,
-    #[serde(default)]
-    secret: Option<String>,
-    #[serde(default)]
-    apikey: Option<String>,
-    #[serde(default)]
-    username: Option<String>,
-    #[serde(default)]
-    password: Option<String>,
-    #[serde(default)]
-    accept_invalid_certs: bool,
-}
-
-#[derive(Deserialize, Serialize)]
-struct SecretDraftSignal {
-    #[serde(default)]
-    original_secret_id: Option<String>,
-    secret_id: String,
-    #[serde(rename = "authtype")]
-    auth_type: String,
-    #[serde(default)]
-    apikey: Option<String>,
-    #[serde(default)]
-    username: Option<String>,
-    #[serde(default)]
-    password: Option<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-struct ClusterDraftSignal {
-    #[serde(default)]
-    original_name: Option<String>,
-    name: String,
-    auth: String,
-    #[serde(default)]
-    secret: Option<String>,
-    #[serde(default)]
-    accept_invalid_certs: bool,
-    elasticsearch_url: String,
-    kibana_url: String,
-}
-
 pub async fn page(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> impl IntoResponse {
     let (auth_header, user_email) = match state.resolve_user_email(&headers) {
         Ok(result) => result,
@@ -194,7 +112,7 @@ pub async fn page(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> 
         .next()
         .unwrap_or('_')
         .to_ascii_uppercase();
-    let (keystore_locked, keystore_lock_time) = state.keystore_status_for(&user_email).await;
+    let (keystore_locked, keystore_lock_time) = state.keystore_status().await;
     let can_use_keystore =
         cfg!(feature = "keystore") && state.runtime_mode_policy.allows_local_artifacts();
     let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
@@ -786,8 +704,7 @@ pub async fn delete_secret(
     headers: HeaderMap,
     Form(form): Form<SecretDeleteForm>,
 ) -> Response {
-    let user = resolve_request_user(&state, &headers);
-    if !state.is_keystore_unlocked_for(&user).await {
+    if !state.is_keystore_unlocked().await {
         return (
             StatusCode::PRECONDITION_FAILED,
             "Unlock keystore before deleting secrets.",
@@ -1319,8 +1236,6 @@ async fn apply_upsert_host(
 
     let mut hosts: BTreeMap<String, KnownHost> =
         KnownHost::parse_hosts_yml().map_err(to_message)?;
-    let mut settings = Settings::load().map_err(to_message)?;
-    let mut settings_changed = false;
     if let Some(original_name) = form.original_name {
         let original_name = original_name.trim();
         if !original_name.is_empty() && original_name != name {

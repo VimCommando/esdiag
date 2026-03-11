@@ -1,7 +1,5 @@
-#[cfg(feature = "keystore")]
-use super::keystore;
-use super::{ServerState, append_body_event, execute_script_event, html_event, signal_event};
-use crate::data::{HostRole, KnownHost, Settings, Uri, with_scoped_keystore_password};
+use super::{ServerState, append_body_event, html_event, prepend_selector_event};
+use crate::data::{KnownHost, KnownHostBuilder, Settings, Uri};
 use crate::exporter::Exporter;
 use crate::server::template::{self, SettingsModal};
 use askama::Template;
