@@ -125,9 +125,7 @@ pub async fn service_link(
     metadata.user = Some(request_user);
 
     // Stash the user-scoped metadata and (filename, URI) into the server state for later use
-    state
-        .push_link(job_id, metadata, filename, uri)
-        .await;
+    state.push_link(job_id, metadata, filename, uri).await;
 
     // Respond with a JSON success
     (StatusCode::CREATED, Json(json!({"link_id": job_id})))

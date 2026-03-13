@@ -576,10 +576,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     upload_id
                 );
                 let response = uploader::upload_file(&file_path, &upload_id, &api_url).await?;
-                log::info!(
-                    "Upload complete for slug {}",
-                    response.slug
-                );
+                log::info!("Upload complete for slug {}", response.slug);
                 Ok("upload")
             }
             #[cfg(feature = "setup")]

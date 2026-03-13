@@ -10,8 +10,7 @@ mod file_upload;
 #[cfg(feature = "keystore")]
 mod hosts;
 mod index;
-#[cfg(feature = "keystore")]
-mod keystore;
+mod known_host;
 mod service_link;
 mod settings;
 mod stats;
@@ -35,8 +34,6 @@ use axum::{
         header::{HeaderName, VARY},
     },
     middleware,
-    middleware::Next,
-    response::IntoResponse,
     response::sse::Event,
     response::{Response, Sse},
     routing::{get, patch, post},
@@ -203,6 +200,7 @@ impl Server {
                 .route("/api/api_key", post(api::api_key))
                 .route("/api_key", post(api_key::form))
                 .route("/api_key/{id}", post(api_key::id))
+                .route("/known_host", post(known_host::form))
                 .route("/datastar.js", get(assets::datastar))
                 .route("/datastar.js.map", get(assets::datastar_map))
                 .route("/esdiag.svg", get(assets::logo))
@@ -1115,7 +1113,11 @@ impl CollectedArtifact {
                 std::fs::remove_file(path)
             };
             if let Err(err) = result {
-                log::debug!("Failed to clean workflow artifact {}: {}", path.display(), err);
+                log::debug!(
+                    "Failed to clean workflow artifact {}: {}",
+                    path.display(),
+                    err
+                );
             }
         }
     }

@@ -3,13 +3,17 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{
-    CollectedArtifact, CollectSource, ProcessMode, SendMode, ServerEvent, ServerState, Signals,
+    CollectSource, CollectedArtifact, ProcessMode, SendMode, ServerEvent, ServerState, Signals,
     WorkflowJob, job_feed_event, signal_event, template, template_event,
 };
 use crate::{
     data::{HostRole, Uri},
     exporter::Exporter,
-    processor::{Collector, Identifiers, Processor, api::{ApiResolver, ProcessSelection}, new_job_id},
+    processor::{
+        Collector, Identifiers, Processor,
+        api::{ApiResolver, ProcessSelection},
+        new_job_id,
+    },
     receiver::Receiver,
     uploader,
 };
@@ -51,14 +55,37 @@ pub async fn run_job(
         return;
     }
 
-    let identifiers = merged_identifiers(job.identifiers.clone(), signals.metadata.clone(), request_user, &job.artifact);
+    let identifiers = merged_identifiers(
+        job.identifiers.clone(),
+        signals.metadata.clone(),
+        request_user,
+        &job.artifact,
+    );
 
     let result = match &job.artifact {
         CollectedArtifact::LocalArchive { path, .. } => {
-            execute_local_archive_job(state.clone(), &signals, job_id, path.clone(), &source, identifiers, &tx).await
+            execute_local_archive_job(
+                state.clone(),
+                &signals,
+                job_id,
+                path.clone(),
+                &source,
+                identifiers,
+                &tx,
+            )
+            .await
         }
         CollectedArtifact::ServiceLink { uri, .. } => {
-            execute_service_link_job(state.clone(), &signals, job_id, uri.clone(), &source, identifiers, &tx).await
+            execute_service_link_job(
+                state.clone(),
+                &signals,
+                job_id,
+                uri.clone(),
+                &source,
+                identifiers,
+                &tx,
+            )
+            .await
         }
         CollectedArtifact::RemoteCollection {
             host,
@@ -137,10 +164,7 @@ async fn execute_service_link_job(
         state.record_job_started().await;
         send_event(
             tx,
-            job_feed_event(template::JobCollectionProcessing {
-                job_id,
-                source,
-            }),
+            job_feed_event(template::JobCollectionProcessing { job_id, source }),
         )
         .await;
         send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
@@ -172,7 +196,9 @@ async fn execute_service_link_job(
             .await;
         }
 
-        return Err(eyre!("Service link collection did not produce a local archive"));
+        return Err(eyre!(
+            "Service link collection did not produce a local archive"
+        ));
     }
 
     match signals.workflow.process.mode {
@@ -241,7 +267,8 @@ async fn execute_remote_collection_job(
         send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
     }
 
-    let collected = collect_remote_archive(job_id, host, &diagnostic_type, signals, identifiers).await?;
+    let collected =
+        collect_remote_archive(job_id, host, &diagnostic_type, signals, identifiers).await?;
     let _cleanup = match &collected.artifact {
         CollectedArtifact::LocalArchive {
             cleanup_path: Some(path),
@@ -284,7 +311,7 @@ async fn execute_remote_collection_job(
                 collected.identifiers,
                 tx,
             )
-                .await
+            .await
         }
     } else {
         Err(eyre!("Remote collection did not produce a local archive"))
@@ -301,8 +328,12 @@ async fn run_processor_job(
     job: JobDescriptor<'_>,
 ) -> Result<()> {
     let processor =
-        Processor::try_new_with_selection(receiver, exporter, identifiers, process_selection).await?;
-    let processor = processor.start().await.map_err(|failed| eyre!(failed.state.error))?;
+        Processor::try_new_with_selection(receiver, exporter, identifiers, process_selection)
+            .await?;
+    let processor = processor
+        .start()
+        .await
+        .map_err(|failed| eyre!(failed.state.error))?;
     state.record_job_started().await;
 
     send_event(
@@ -327,7 +358,10 @@ async fn run_processor_job(
                     job_id: job.id,
                     diagnostic_id: &report.diagnostic.metadata.id,
                     docs_created: &report.diagnostic.docs.created,
-                    duration: &format!("{:.3}", report.diagnostic.processing_duration as f64 / 1000.0),
+                    duration: &format!(
+                        "{:.3}",
+                        report.diagnostic.processing_duration as f64 / 1000.0
+                    ),
                     source: job.source,
                     kibana_link: report
                         .diagnostic
@@ -382,15 +416,38 @@ async fn run_forward_job(
     source: &str,
     path: &Path,
 ) -> Result<()> {
-    if signals.workflow.send.mode != SendMode::Remote {
-        return Err(eyre!(
-            "Forwarded archives currently support only remote send. Local archive delivery is handled by Collect save."
-        ));
+    if signals.workflow.send.mode == SendMode::Local {
+        send_event(
+            tx,
+            job_feed_event(template::JobForwardProcessing { job_id, source }),
+        )
+        .await;
+        state.record_job_started().await;
+        send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
+
+        let destination = if !signals.workflow.collect.save_dir.trim().is_empty() {
+            signals.workflow.collect.save_dir.trim().to_string()
+        } else {
+            path.display().to_string()
+        };
+        state.record_success(0, 0).await;
+        send_event(
+            tx,
+            template_event(template::JobForwardCompleted {
+                job_id,
+                source,
+                destination: &destination,
+            }),
+        )
+        .await;
+        return Ok(());
     }
 
     let target = signals.workflow.send.remote_target.trim();
     if target.is_empty() {
-        return Err(eyre!("Remote forward requires an Elastic Upload Service upload id or URL"));
+        return Err(eyre!(
+            "Remote forward requires an Elastic Upload Service upload id or URL"
+        ));
     }
 
     send_event(
@@ -440,7 +497,9 @@ async fn select_processed_exporter(state: Arc<ServerState>, signals: &Signals) -
                 }
                 Exporter::try_from(Uri::try_from(directory.to_string())?)
             } else if target.is_empty() {
-                Err(eyre!("Local send requires a localhost host or local directory"))
+                Err(eyre!(
+                    "Local send requires a localhost host or local directory"
+                ))
             } else {
                 let uri = Uri::try_from(target.to_string())?;
                 validate_local_send_uri(&uri)?;
@@ -456,7 +515,9 @@ async fn validate_workflow_request(
     job: &WorkflowJob,
 ) -> Result<()> {
     if signals.workflow.collect.save && !state.runtime_mode_policy.allows_local_artifacts() {
-        return Err(eyre!("Service mode does not allow local bundle save artifacts"));
+        return Err(eyre!(
+            "Service mode does not allow local bundle save artifacts"
+        ));
     }
 
     if signals.workflow.collect.source == CollectSource::KnownHost
@@ -469,13 +530,35 @@ async fn validate_workflow_request(
 
     if signals.workflow.send.mode == SendMode::Local {
         if signals.workflow.process.mode == ProcessMode::Forward {
-            return Err(eyre!(
-                "Forward + Local is handled by Collect save and cannot execute as a local send job"
-            ));
+            if matches!(
+                job.artifact,
+                CollectedArtifact::RemoteCollection { .. } | CollectedArtifact::ServiceLink { .. }
+            ) && !signals.workflow.collect.save
+            {
+                return Err(eyre!(
+                    "Forward + Local requires Save Archive in Collect so the bundle has a local destination"
+                ));
+            }
+
+            if matches!(
+                job.artifact,
+                CollectedArtifact::LocalArchive {
+                    cleanup_path: Some(_),
+                    ..
+                }
+            ) && !signals.workflow.collect.save
+            {
+                return Err(eyre!(
+                    "Forward + Local for uploaded archives requires a save-capable collect source"
+                ));
+            }
         }
 
         let target = signals.workflow.send.local_target.trim();
-        if target == "directory" && !state.runtime_mode_policy.allows_local_artifacts() {
+        if signals.workflow.process.mode == ProcessMode::Process
+            && target == "directory"
+            && !state.runtime_mode_policy.allows_local_artifacts()
+        {
             return Err(eyre!("Service mode does not allow local directory output"));
         }
     }
@@ -496,7 +579,9 @@ fn validate_local_send_uri(uri: &Uri) -> Result<()> {
     match uri {
         Uri::KnownHost(host) => {
             if !host.has_role(HostRole::Send) {
-                return Err(eyre!("Local known-host send targets must have the `send` role"));
+                return Err(eyre!(
+                    "Local known-host send targets must have the `send` role"
+                ));
             }
             let url = host.get_url();
             let host_name = url
@@ -526,7 +611,10 @@ async fn collect_remote_archive(
         if signals.workflow.collect.save_dir.trim().is_empty() {
             return Err(eyre!("Save Bundle requires a save directory"));
         }
-        (PathBuf::from(signals.workflow.collect.save_dir.trim()), None)
+        (
+            PathBuf::from(signals.workflow.collect.save_dir.trim()),
+            None,
+        )
     } else {
         let temp_dir = std::env::temp_dir().join(format!("esdiag-workflow-{job_id}"));
         std::fs::create_dir_all(&temp_dir)?;
@@ -606,7 +694,9 @@ async fn download_service_link_to_temp(uri: &Uri, job_id: u64, source: &str) -> 
 
 async fn download_service_link_to_path(uri: &Uri, path: &Path) -> Result<()> {
     let Uri::ServiceLink(url) = uri else {
-        return Err(eyre!("Expected an authenticated Elastic Upload Service URL"));
+        return Err(eyre!(
+            "Expected an authenticated Elastic Upload Service URL"
+        ));
     };
 
     let mut download_url = url.clone();
@@ -791,7 +881,11 @@ mod tests {
             },
         };
 
-        assert!(validate_workflow_request(&state, &signals, &job).await.is_err());
+        assert!(
+            validate_workflow_request(&state, &signals, &job)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -804,15 +898,21 @@ mod tests {
             identifiers: Default::default(),
             artifact: CollectedArtifact::ServiceLink {
                 source: "downloaded.zip".to_string(),
-                uri: Uri::ServiceLink(Url::parse("https://token:secret@example.com/archive.zip").unwrap()),
+                uri: Uri::ServiceLink(
+                    Url::parse("https://token:secret@example.com/archive.zip").unwrap(),
+                ),
             },
         };
 
-        assert!(validate_workflow_request(&state, &signals, &job).await.is_err());
+        assert!(
+            validate_workflow_request(&state, &signals, &job)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
-    async fn forward_local_is_rejected_server_side() {
+    async fn forward_local_temp_upload_requires_save_server_side() {
         let state = test_state(RuntimeMode::User);
         let mut signals = Signals::default();
         signals.workflow.process.mode = ProcessMode::Forward;
@@ -824,10 +924,14 @@ mod tests {
                 source: "upload.zip".to_string(),
                 filename: "upload.zip".to_string(),
                 path: "/tmp/upload.zip".into(),
-                cleanup_path: None,
+                cleanup_path: Some("/tmp/upload.zip".into()),
             },
         };
 
-        assert!(validate_workflow_request(&state, &signals, &job).await.is_err());
+        assert!(
+            validate_workflow_request(&state, &signals, &job)
+                .await
+                .is_err()
+        );
     }
 }

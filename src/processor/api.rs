@@ -391,7 +391,11 @@ impl ApiResolver {
 
     fn es_processing_defs() -> &'static [ProcessingOptionDef] {
         &[
-            ProcessingOptionDef { key: "version", required: true, dependencies: &[] },
+            ProcessingOptionDef {
+                key: "version",
+                required: true,
+                dependencies: &[],
+            },
             ProcessingOptionDef {
                 key: "cluster_settings_defaults",
                 required: true,
@@ -402,8 +406,16 @@ impl ApiResolver {
                 required: false,
                 dependencies: &["version", "cluster_settings_defaults"],
             },
-            ProcessingOptionDef { key: "health_report", required: false, dependencies: &["version"] },
-            ProcessingOptionDef { key: "ilm_policies", required: false, dependencies: &["version"] },
+            ProcessingOptionDef {
+                key: "health_report",
+                required: false,
+                dependencies: &["version"],
+            },
+            ProcessingOptionDef {
+                key: "ilm_policies",
+                required: false,
+                dependencies: &["version"],
+            },
             ProcessingOptionDef {
                 key: "indices_settings",
                 required: false,
@@ -414,30 +426,66 @@ impl ApiResolver {
                 required: false,
                 dependencies: &["version", "cluster_settings_defaults"],
             },
-            ProcessingOptionDef { key: "nodes", required: false, dependencies: &["version"] },
+            ProcessingOptionDef {
+                key: "nodes",
+                required: false,
+                dependencies: &["version"],
+            },
             ProcessingOptionDef {
                 key: "nodes_stats",
                 required: false,
                 dependencies: &["nodes", "cluster_settings_defaults", "version"],
             },
-            ProcessingOptionDef { key: "pending_tasks", required: false, dependencies: &["version"] },
-            ProcessingOptionDef { key: "repositories", required: false, dependencies: &["version"] },
+            ProcessingOptionDef {
+                key: "pending_tasks",
+                required: false,
+                dependencies: &["version"],
+            },
+            ProcessingOptionDef {
+                key: "repositories",
+                required: false,
+                dependencies: &["version"],
+            },
             ProcessingOptionDef {
                 key: "slm_policies",
                 required: false,
                 dependencies: &["repositories", "version"],
             },
-            ProcessingOptionDef { key: "snapshot", required: false, dependencies: &["repositories", "version"] },
-            ProcessingOptionDef { key: "tasks", required: false, dependencies: &["nodes", "version"] },
+            ProcessingOptionDef {
+                key: "snapshot",
+                required: false,
+                dependencies: &["repositories", "version"],
+            },
+            ProcessingOptionDef {
+                key: "tasks",
+                required: false,
+                dependencies: &["nodes", "version"],
+            },
         ]
     }
 
     fn ls_processing_defs() -> &'static [ProcessingOptionDef] {
         &[
-            ProcessingOptionDef { key: "version", required: true, dependencies: &[] },
-            ProcessingOptionDef { key: "plugins", required: true, dependencies: &["version"] },
-            ProcessingOptionDef { key: "node", required: true, dependencies: &["version"] },
-            ProcessingOptionDef { key: "node_stats", required: false, dependencies: &["node", "version"] },
+            ProcessingOptionDef {
+                key: "version",
+                required: true,
+                dependencies: &[],
+            },
+            ProcessingOptionDef {
+                key: "plugins",
+                required: true,
+                dependencies: &["version"],
+            },
+            ProcessingOptionDef {
+                key: "node",
+                required: true,
+                dependencies: &["version"],
+            },
+            ProcessingOptionDef {
+                key: "node_stats",
+                required: false,
+                dependencies: &["node", "version"],
+            },
         ]
     }
 
@@ -521,7 +569,10 @@ impl ApiResolver {
         }
     }
 
-    fn default_processing_selection(product: &str, diag_type: &DiagnosticType) -> Result<Vec<String>> {
+    fn default_processing_selection(
+        product: &str,
+        diag_type: &DiagnosticType,
+    ) -> Result<Vec<String>> {
         match product {
             "elasticsearch" => {
                 let selected = Self::resolve_es(diag_type, None, None)?
@@ -843,11 +894,16 @@ mod tests {
 
     #[test]
     fn test_processing_options_marks_required_entries() {
-        let options =
-            ApiResolver::resolve_processing_options("logstash", "standard", "").unwrap();
+        let options = ApiResolver::resolve_processing_options("logstash", "standard", "").unwrap();
 
-        let version = options.iter().find(|option| option.key == "version").unwrap();
-        let plugins = options.iter().find(|option| option.key == "plugins").unwrap();
+        let version = options
+            .iter()
+            .find(|option| option.key == "version")
+            .unwrap();
+        let plugins = options
+            .iter()
+            .find(|option| option.key == "plugins")
+            .unwrap();
         let node_stats = options
             .iter()
             .find(|option| option.key == "node_stats")

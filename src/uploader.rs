@@ -199,7 +199,10 @@ mod tests {
 
     #[test]
     fn default_upload_path_preserves_cli_filename() {
-        assert_eq!(default_upload_path("diag.zip").to_string_lossy(), "diag.zip");
+        assert_eq!(
+            default_upload_path("diag.zip").to_string_lossy(),
+            "diag.zip"
+        );
         assert_eq!(DEFAULT_UPLOAD_API_URL, "https://upload.elastic.co");
     }
 
@@ -261,7 +264,10 @@ mod tests {
     async fn upload_file_uses_expected_service_protocol() {
         let state = TestState::default();
         let app = Router::new()
-            .route("/api/uploads/{upload_id}", head(head_upload).put(put_upload))
+            .route(
+                "/api/uploads/{upload_id}",
+                head(head_upload).put(put_upload),
+            )
             .route(
                 "/api/uploads/{upload_id}/{file_digest}/_finalize",
                 post(finalize_upload_handler),
@@ -273,7 +279,9 @@ mod tests {
             .expect("bind test listener");
         let addr = listener.local_addr().expect("listener addr");
         let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve uploader stub");
+            axum::serve(listener, app)
+                .await
+                .expect("serve uploader stub");
         });
 
         let mut file = tempfile::Builder::new()

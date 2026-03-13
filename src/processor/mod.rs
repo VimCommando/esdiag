@@ -425,31 +425,33 @@ impl Diagnostic {
         }
         match manifest.product {
             Product::Elasticsearch => {
-                let (diagnostic, report) =
-                    ElasticsearchDiagnostic::try_new(receiver, exporter, manifest, process_selection)
-                        .await?;
+                let (diagnostic, report) = ElasticsearchDiagnostic::try_new(
+                    receiver,
+                    exporter,
+                    manifest,
+                    process_selection,
+                )
+                .await?;
                 Ok((Self::Elasticsearch(diagnostic), report))
             }
             Product::ECK => {
-                let (diagnostic, report) =
-                    ElasticCloudKubernetesDiagnostic::try_new(
-                        receiver,
-                        exporter,
-                        manifest,
-                        process_selection,
-                    )
-                    .await?;
+                let (diagnostic, report) = ElasticCloudKubernetesDiagnostic::try_new(
+                    receiver,
+                    exporter,
+                    manifest,
+                    process_selection,
+                )
+                .await?;
                 Ok((Self::ElasticCloudKubernetes(diagnostic), report))
             }
             Product::KubernetesPlatform => {
-                let (diagnostic, report) =
-                    KubernetesPlatformDiagnostic::try_new(
-                        receiver,
-                        exporter,
-                        manifest,
-                        process_selection,
-                    )
-                    .await?;
+                let (diagnostic, report) = KubernetesPlatformDiagnostic::try_new(
+                    receiver,
+                    exporter,
+                    manifest,
+                    process_selection,
+                )
+                .await?;
                 Ok((Self::KubernetesPlatform(diagnostic), report))
             }
             Product::Logstash => {

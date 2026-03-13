@@ -211,11 +211,11 @@ async fn user_mode_index_shows_known_host_collect_and_local_save_defaults() {
     let body = response.text().await.expect("user mode body");
 
     assert!(body.contains("id=\"collect-known-host\""));
+    assert!(body.contains("id=\"known-host-button\""));
     assert!(body.contains("data-signals:workflow.collect.mode=\"'upload'\""));
     assert!(body.contains("data-signals:workflow.collect.source=\"'upload-file'\""));
     assert!(body.contains("id=\"collect-save-toggle\""));
-    assert!(body.contains("Save Archive"));
-    assert!(body.contains("id=\"collect-save-dir\""));
+    assert!(body.contains("Download Archive"));
     assert!(body.contains("id=\"upload-form\""));
     assert!(body.contains(
         "data-attr:disabled=\"($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')"
@@ -231,7 +231,10 @@ async fn service_mode_index_hides_known_host_selection_and_disables_save() {
 
     let response = client
         .get(format!("{base}/"))
-        .header("X-Goog-Authenticated-User-Email", "accounts.google.com:ops@example.com")
+        .header(
+            "X-Goog-Authenticated-User-Email",
+            "accounts.google.com:ops@example.com",
+        )
         .send()
         .await
         .expect("service mode authorized request");
@@ -287,14 +290,18 @@ async fn index_embeds_send_target_disable_and_auto_save_rules() {
     let body = response.text().await.expect("workflow page body");
 
     assert!(body.contains("data-bind:workflow.process.enabled"));
-    assert!(body.contains("$workflow.process.mode = $workflow.process.enabled ? 'process' : 'forward'"));
-    assert!(body.contains("data-attr:disabled=\"!$workflow.process.enabled\""));
-    assert!(body.contains("Local bundle retention is handled in `Collect` via Save Archive."));
-    assert!(body.contains("Forward + Local` is disabled. Save the bundle in `Collect` to keep a local archive."));
+    assert!(
+        body.contains("$workflow.process.mode = $workflow.process.enabled ? 'process' : 'forward'")
+    );
+    assert!(body.contains("$workflow.send.mode = 'local'"));
+    assert!(body.contains("Download the archive from&nbsp;<strong>Collect</strong>."));
+    assert!(body.contains("$workflow.collect.source === 'known-host'"));
+    assert!(body.contains("$workflow.collect.mode === 'collect' && $workflow.collect.source === 'known-host' && $workflow.collect.known_host !== ''"));
     assert!(body.contains("id=\"send-local-directory\""));
     assert!(body.contains("Local directory"));
     assert!(body.contains("id=\"workflow-go-button\""));
-    assert!(body.contains("collect + process + send"));
+    assert!(body.contains("id=\"known-host-button\""));
+    assert!(body.contains("<path d=\"M6 3L11 8L6 13\"></path>"));
 
     server.shutdown().await;
 }
@@ -313,8 +320,6 @@ async fn user_mode_index_exposes_os_aware_save_dir_and_override_binding() {
 
     assert!(body.contains("data-signals:workflow.collect.save_dir=\"'"));
     assert!(body.contains("/Downloads"));
-    assert!(body.contains("id=\"collect-save-dir\""));
-    assert!(body.contains("data-bind:workflow.collect.save_dir"));
 
     server.shutdown().await;
 }

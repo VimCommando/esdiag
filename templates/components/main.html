@@ -3,6 +3,7 @@
     class="workflow-content"
     data-signals:loading="false"
     data-signals:processing="false"
+    data-signals:_file_selected="false"
     data-signals:workflow.collect.mode="'upload'"
     data-signals:workflow.collect.source="'upload-file'"
     data-signals:workflow.collect.known_host="''"
@@ -100,6 +101,15 @@
                         </select>
                     </input-group>
                     <info-text>Saved-host collection wiring is handled in the workflow implementation layer.</info-text>
+                    <input
+                        id="known-host-button"
+                        class="button"
+                        type="button"
+                        value="Collect"
+                        data-on:click="$loading = true; $message = 'Collecting from known host...'; @post('/known_host')"
+                        data-attr:disabled="$loading || !$workflow.collect.known_host"
+                        style="display: none"
+                    />
                 </form>
 
                 <form
@@ -187,7 +197,16 @@
                     style="display: none"
                 >
                     <info-text class="margin-after">Upload an existing diagnostic archive from your local machine.</info-text>
-                    <input type="file" id="file-input" name="file" accept=".zip" required value="" style="opacity: 0" />
+                    <input
+                        type="file"
+                        id="file-input"
+                        name="file"
+                        accept=".zip"
+                        required
+                        value=""
+                        style="opacity: 0"
+                        data-on:change="$_file_selected = evt.target.files && evt.target.files.length > 0"
+                    />
                     <div
                         id="dropzone"
                         data-on:dragenter="$_drag-on=true"
@@ -348,6 +367,7 @@
                     function handleFiles(files) {
                         if (files.length > 0) {
                             fileInput.files = files;
+                            fileInput.dispatchEvent(new Event("change", { bubbles: true }));
                             updateFileInfo(files[0]);
                         }
                     }
@@ -371,6 +391,7 @@
                         `;
                         } else {
                             fileInput.value = "";
+                            fileInput.dispatchEvent(new Event("change", { bubbles: true }));
                             fileInfo.classList.add("hidden");
                             uploadButton.disabled = true;
                             uploadInstructions.classList.remove("hidden");
@@ -545,20 +566,12 @@
                             </svg>
                         </switch-glyphs>
                     </switch-clip>
-                    <label for="collect-save-toggle">Save Archive</label>
+                    <label for="collect-save-toggle">Download Archive</label>
                 </choice-row>
-                <input
-                    type="text"
-                    id="collect-save-dir"
-                    class="form-input footer-input"
-                    data-bind:workflow.collect.save_dir
-                    placeholder="{{ default_save_dir }}"
-                    data-attr:disabled="!$workflow.collect.save || ($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file'){% if runtime_mode != "user" %} || true{% endif %}"
-                />
             </footer>
         </card>
 
-        <card class="workflow-card">
+        <card class="workflow-card" data-class:disabled="!$workflow.process.enabled">
             <card-badge>Process</card-badge>
             <card-body>
             <div data-show="$workflow.process.enabled">
@@ -611,7 +624,9 @@
                         data-bind:workflow.process.enabled
                         data-on:change="{
                             $workflow.process.mode = $workflow.process.enabled ? 'process' : 'forward',
-                            !$workflow.process.enabled ? $workflow.send.mode = 'remote' : null
+                            !$workflow.process.enabled && $workflow.send.mode === 'local' && $workflow.collect.source !== 'upload-file'
+                                ? $workflow.collect.save = true
+                                : null
                         }"
                     />
                     <switch-clip>
@@ -641,9 +656,13 @@
                 </button>
                 <button
                     class="tab"
-                    data-on:click="$workflow.send.mode = 'local'"
+                    data-on:click="{
+                        $workflow.send.mode = 'local',
+                        !$workflow.process.enabled && $workflow.collect.source !== 'upload-file'
+                            ? $workflow.collect.save = true
+                            : null
+                    }"
                     data-class:active="$workflow.send.mode === 'local'"
-                    data-attr:disabled="!$workflow.process.enabled"
                 >
                     Local
                 </button>
@@ -666,21 +685,22 @@
                     </select>
                 </input-group>
                 <input-group data-show="!$workflow.process.enabled" style="display: none">
-                    <label for="send-forward-upload" class="form-label">Upload ID or URL</label>
+                    <label for="send-forward-upload" class="form-label">Upload ID</label>
                     <input
                         id="send-forward-upload"
                         type="text"
                         class="form-input"
                         data-bind:workflow.send.remote_target
-                        placeholder="https://upload.elastic.co/g/<upload_id> or <upload_id>"
+                        placeholder="00000000-0000-0000-0000-000000000000"
                     />
                 </input-group>
                 <info-text data-show="$workflow.process.enabled">
                     Remote send uses the configured output target for processed diagnostics.
                 </info-text>
                 <info-text data-show="!$workflow.process.enabled" style="display: none">
-                    Remote send for forwarded archives uses the Elastic uploader capability.
+                    Upload the archive to the Elastic Upload Service:
                 </info-text>
+                <a href="https://upload.elastic.co" target="_blank">https://upload.elastic.co</a>
             </div>
 
             <div data-show="$workflow.send.mode === 'local'" style="display: none">
@@ -715,11 +735,14 @@
                     />
                 </input-group>
                 <info-text data-show="!$workflow.process.enabled" style="display: none">
-                    Local bundle retention is handled in `Collect` via Save Archive.
+                    Download the archive from&nbsp;<strong>Collect</strong>.
                 </info-text>
             </div>
-            <info-text data-show="!$workflow.process.enabled" style="display: none">
-                `Forward + Local` is disabled. Save the bundle in `Collect` to keep a local archive.
+            <info-text
+                data-show="!$workflow.process.enabled && $workflow.send.mode === 'local' && $workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file'"
+                style="display: none"
+            >
+                Existing local files stay in place. Choose `Remote` or use a save-capable collect source to create a new saved archive.
             </info-text>
             </card-body>
             <footer class="workflow-card-footer send-card-footer">
@@ -735,18 +758,90 @@
                             : null,
                         $workflow.collect.mode === 'collect' && $workflow.collect.source === 'api-key'
                             ? document.getElementById('es-api-key-button').click()
+                            : null,
+                        $workflow.collect.mode === 'collect' && $workflow.collect.source === 'known-host'
+                            ? document.getElementById('known-host-button').click()
                             : null
                     }"
-                    data-attr:disabled="$loading || $processing || ($workflow.collect.mode === 'collect' && $workflow.collect.source === 'known-host')"
+                    data-attr:disabled="$loading || $processing || !((
+                        (
+                            ($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file' && $_file_selected) ||
+                            ($workflow.collect.mode === 'upload' && $workflow.collect.source === 'service-link' && $service_link.url !== '' && $service_link.token !== '' && $service_link.filename !== '') ||
+                            ($workflow.collect.mode === 'collect' && $workflow.collect.source === 'api-key' && $es_api.url !== '' && $es_api.key !== '') ||
+                            ($workflow.collect.mode === 'collect' && $workflow.collect.source === 'known-host' && $workflow.collect.known_host !== '')
+                        )
+                    ) && (
+                        (
+                            $workflow.process.enabled &&
+                            (
+                                ($workflow.send.mode === 'remote' && $workflow.send.remote_target !== '') ||
+                                ($workflow.send.mode === 'local' && $workflow.send.local_target !== '' && ($workflow.send.local_target !== 'directory' || $workflow.send.local_directory !== ''))
+                            )
+                        ) ||
+                        (
+                            !$workflow.process.enabled &&
+                            (
+                                ($workflow.send.mode === 'local' && $workflow.collect.save && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')) ||
+                                ($workflow.send.mode === 'remote' && $workflow.send.remote_target !== '')
+                            )
+                        )
+                    ))"
                 >
                     Go
                 </button>
                 <span
                     id="workflow-step-label"
                     class="footer-status"
-                    data-text="$workflow.process.enabled ? 'collect + process + send' : 'collect + send'"
                 >
-                    collect + process + send
+                    <span class="workflow-step-segment">collect</span>
+                    <svg
+                        data-show="$workflow.collect.save && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                        focusable="false"
+                        style="display: none"
+                    >
+                        <path d="M6 3L11 8L6 13"></path>
+                    </svg>
+                    <span
+                        class="workflow-step-segment"
+                        data-show="$workflow.collect.save && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')"
+                        style="display: none"
+                    >
+                        download
+                    </span>
+                    <svg
+                        data-show="$workflow.process.enabled"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                        focusable="false"
+                        style="display: none"
+                    >
+                        <path d="M6 3L11 8L6 13"></path>
+                    </svg>
+                    <span
+                        class="workflow-step-segment"
+                        data-show="$workflow.process.enabled"
+                        style="display: none"
+                    >
+                        process
+                    </span>
+                    <svg
+                        data-show="$workflow.process.enabled || $workflow.send.mode === 'remote'"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                        focusable="false"
+                        style="display: none"
+                    >
+                        <path d="M6 3L11 8L6 13"></path>
+                    </svg>
+                    <span
+                        class="workflow-step-segment"
+                        data-show="$workflow.process.enabled || $workflow.send.mode === 'remote'"
+                        style="display: none"
+                    >
+                        send
+                    </span>
                 </span>
             </footer>
         </card>
