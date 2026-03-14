@@ -12,13 +12,13 @@
 
     <body data-signals="{theme: {dark: {% if theme_dark %}true{% else %}false{% endif %}}}">
         <input id="dark-mode" type="checkbox" data-bind:theme.dark {% if theme_dark %}checked{% endif %} />
-        
+
         <!-- Fix Tauri external links -->
         <script>
             document.addEventListener('click', function(e) {
                 var target = e.target instanceof Element ? e.target : e.target.parentElement;
                 if (!target) return;
-                
+
                 var a = target.closest('a');
                 if (a && a.target === '_blank') {
                     if (window.__TAURI_INTERNALS__) {
@@ -28,10 +28,21 @@
                 }
             });
         </script>
-        
-        {% include "components/header.html" %} {% block content %}{% endblock %} {% include "components/footer.html" %}
+
+        {% include "components/header.html" %}
+        {% block content %}{% endblock %}
+        {% include "components/footer.html" %}
         {% if debug %}
-        <pre class="debug-signals" data-json-signals="{exclude: /files/}"></pre>
+        <signals-panel data-signals:signalsPanel="false">
+          <signals-toggle>
+            <button type="button" title="Toggle signals panel" aria-label="Toggle signals panel" data-on:click="$signalsPanel = !$signalsPanel">
+              <icon-zap></icon-zap>
+            </button>
+          </signals-toggle>
+          <signals-view data-show="$signalsPanel">
+            <pre data-text="JSON.stringify({ tab: $tab, loading: $loading, processing: $processing, message: $message, auth: { header: $auth.header }, metadata: { user: $metadata.user, account: $metadata.account, case_number: $metadata.case_number, opportunity: $metadata.opportunity }, settings: { target: $settings.target }, keystore: { locked: $keystore.locked, invalid: $keystore.invalid, lock_time: $keystore.lock_time }, stats: $stats }, null, 2)"></pre>
+          </signals-view>
+        </signals-panel>
         {% endif %}
     </body>
 </html>
