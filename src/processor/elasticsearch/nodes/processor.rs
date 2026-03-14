@@ -3,12 +3,13 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::{DocumentExporter, ElasticsearchMetadata, Lookups, ProcessorSummary};
+use super::super::metadata::MetadataRawValue;
 use super::{Node, Nodes};
 use crate::exporter::Exporter;
 use json_patch::merge;
 use rayon::prelude::*;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 impl DocumentExporter<Lookups, ElasticsearchMetadata> for Nodes {
     async fn documents_export(
@@ -21,7 +22,7 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for Nodes {
         log::debug!("nodes: {}", nodes.len());
         let data_stream = "settings-node-esdiag".to_string();
         let lookup_node = &lookups.node;
-        let metadata = metadata.for_data_stream(&data_stream).as_meta_doc();
+        let metadata = metadata.for_data_stream(&data_stream);
 
         let node_doc = NodeDoc {
             metadata,
@@ -30,26 +31,25 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for Nodes {
 
         let node_docs: Vec<Value> = nodes
             .par_drain()
-            .map(|(node_id, node)| {
-                let patch = json!({
-                    "node" : {
-                        "settings": {
-                            "http": {
-                                "type.default": null,
-                            },
-                            "transport": {
-                                "type.default": null,
-                            },
-                        }
+            .filter_map(|(node_id, node)| {
+                let mut node_doc = match serde_json::to_value(node_doc.clone().with_node(node)) {
+                    Ok(doc) => doc,
+                    Err(err) => {
+                        log::error!("Failed to serialize node document for {}: {}", node_id, err);
+                        return None;
                     }
-                });
+                };
+                if let Some(node_val) = node_doc.get_mut("node") {
+                    remove_nested_key(node_val, &["settings", "http", "type.default"]);
+                    remove_nested_key(node_val, &["settings", "transport", "type.default"]);
 
-                let node_summary = json!({"node": lookup_node.by_id(&node_id)});
-                let mut node_doc = json!(node_doc.clone().with_node(node));
-
-                merge(&mut node_doc, &patch);
-                merge(&mut node_doc, &node_summary);
-                node_doc
+                    if let Some(summary) = lookup_node.by_id(&node_id)
+                        && let Ok(summary_val) = serde_json::to_value(summary)
+                    {
+                        merge(node_val, &summary_val);
+                    }
+                }
+                Some(node_doc)
             })
             .collect();
 
@@ -66,7 +66,7 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for Nodes {
 #[derive(Clone, Serialize)]
 struct NodeDoc {
     #[serde(flatten)]
-    metadata: Value,
+    metadata: MetadataRawValue,
     node: Option<Node>,
 }
 
@@ -75,6 +75,29 @@ impl NodeDoc {
         Self {
             node: Some(node),
             ..self
+        }
+    }
+}
+
+fn remove_nested_key(root: &mut Value, path: &[&str]) {
+    if path.is_empty() {
+        return;
+    }
+
+    let Value::Object(object) = root else {
+        return;
+    };
+
+    if path.len() == 1 {
+        object.remove(path[0]);
+        return;
+    }
+
+    if let Some(child) = object.get_mut(path[0]) {
+        remove_nested_key(child, &path[1..]);
+        let prune_child = child.as_object().is_some_and(|map| map.is_empty());
+        if prune_child {
+            object.remove(path[0]);
         }
     }
 }

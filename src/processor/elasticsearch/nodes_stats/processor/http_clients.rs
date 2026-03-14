@@ -2,33 +2,55 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::super::super::nodes::NodeDocument;
+use super::super::super::{metadata::MetadataRawValue, nodes::NodeDocument};
 use eyre::{OptionExt, Result};
-use json_patch::merge;
 use rayon::prelude::*;
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::{Value, value::RawValue};
 use tokio::sync::mpsc::Sender;
 
 /// Extract http.clients
 pub async fn extract(
-    sender: &Sender<Value>,
+    sender: &Sender<HttpClientDoc>,
     mut clients: Value,
-    metadata: &Value,
+    metadata: &MetadataRawValue,
     node_metadata: Option<&NodeDocument>,
 ) -> Result<()> {
     let clients = clients
         .as_array_mut()
         .ok_or_eyre("Error extracting node.http.clients data")?;
 
-    let mut docs = Vec::<Value>::with_capacity(200);
-    docs.par_extend(clients.par_drain(..).map(|client| {
-        let mut doc = json!({ "node": node_metadata, "http": { "client": client }});
-        merge(&mut doc, metadata);
-        doc
+    let mut docs = Vec::<HttpClientDoc>::with_capacity(200);
+    docs.par_extend(clients.par_drain(..).filter_map(|client| {
+        let client_raw = match serde_json::value::to_raw_value(&client) {
+            Ok(raw) => raw,
+            Err(err) => {
+                log::warn!("Skipping malformed http client stats record: {}", err);
+                return None;
+            }
+        };
+        Some(HttpClientDoc {
+            node: node_metadata.cloned(),
+            http: HttpClientContainer { client: client_raw },
+            metadata: metadata.clone(),
+        })
     }));
 
     for doc in docs {
         sender.send(doc).await?;
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+pub struct HttpClientDoc {
+    node: Option<NodeDocument>,
+    http: HttpClientContainer,
+    #[serde(flatten)]
+    metadata: MetadataRawValue,
+}
+
+#[derive(Serialize)]
+struct HttpClientContainer {
+    client: Box<RawValue>,
 }
