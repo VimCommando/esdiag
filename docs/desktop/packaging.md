@@ -8,7 +8,7 @@ This project supports desktop packaging for:
 
 ## Scope
 
-- Windows installer format is `.msi` only.
+- Windows installer format is `.msi`.
 - Flatpak base app version is pinned to `0.15.0`.
 - Flatpak runtime/sdk target is `org.gnome.*//49` (moved from GNOME 47 because GNOME 47 reached end-of-life on October 15, 2025).
 - Flatpak work in this change is local artifact generation and validation only.
@@ -26,9 +26,9 @@ This project supports desktop packaging for:
 
 ## Linux Flatpak Notes
 
-- Build runs inside Flatpak SDK and needs Rust plus cargo subcommands used by `build.rs`:
-  - `cargo-about`
-  - `cargo-sbom`
+- Flatpak builds run inside the Flatpak SDK and disable NOTICE generation in the manifest, so they do not require `cargo-about`.
+- Notice generation is enabled by default elsewhere and can be disabled with `ESDIAG_GENERATE_NOTICE=0` for read-only build contexts such as the Docker image build.
+- SBOM generation is opt-in via `ESDIAG_GENERATE_SBOM=1` and additionally requires `cargo-sbom`.
 - Local workflow requires runtime availability from Flathub:
   - `org.gnome.Platform//49`
   - `org.gnome.Sdk//49`
@@ -43,16 +43,55 @@ Validate packaging configuration:
 bash bin/verify-desktop-config.sh
 ```
 
+Normalize the package version to an MSI-safe form:
+
+```sh
+bash bin/normalize-cargo-version-for-msi.sh Cargo.toml
+```
+
+Run the local regression test for MSI version normalization:
+
+```sh
+bash bin/test-normalize-cargo-version-for-msi.sh
+```
+
 Build desktop macOS/Windows bundles with Tauri:
 
 ```sh
 cargo tauri build --features desktop
 ```
 
+Build a local Windows raw app artifact with Docker Buildx:
+
+```sh
+bash bin/buildx-windows.sh
+```
+
+At the moment, the local Buildx path is experimental.
+
+- Windows Buildx output is only the raw desktop app layout:
+  - `esdiag.exe`
+  - `WebView2Loader.dll`
+- Windows Buildx does not produce an `.msi`.
+- The official Windows `.msi` bundle is produced by the native `windows-latest` GitHub Actions job.
+- That MSI CI path sets `ESDIAG_GENERATE_NOTICE=0`, so it does not require `cargo-about`.
+
 Build local Flatpak artifact:
 
 ```sh
 bash bin/build-flatpak-local.sh
+```
+
+Generate an SBOM during a build:
+
+```sh
+ESDIAG_GENERATE_SBOM=1 cargo build
+```
+
+Skip NOTICE generation in read-only build contexts:
+
+```sh
+ESDIAG_GENERATE_NOTICE=0 cargo build
 ```
 
 ## Artifact Validation
@@ -63,8 +102,8 @@ Validate required artifacts in a staging directory:
 bash bin/validate-desktop-artifacts.sh target/artifacts
 ```
 
-Expected artifacts:
+Expected CI artifacts:
 
-- `target/artifacts/macos/ESDiag*.dmg`
-- `target/artifacts/windows/ESDiag*.msi`
+- `target/artifacts/macos/*.dmg`
+- `target/artifacts/windows/*.msi`
 - `target/artifacts/flatpak/com.elastic.esdiag-0.15.0.flatpak`

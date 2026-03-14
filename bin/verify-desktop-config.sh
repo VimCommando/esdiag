@@ -58,6 +58,7 @@ fi
 jq -e '.bundle.targets | type == "array"' "${TAURI_CONF}" >/dev/null
 jq -e '.bundle.targets | index("msi") != null' "${TAURI_CONF}" >/dev/null
 jq -e '.bundle.targets | index("nsis") == null' "${TAURI_CONF}" >/dev/null
+jq -e '.bundle.targets | index("dmg") != null' "${TAURI_CONF}" >/dev/null
 
 jq -e --arg v "${FLATPAK_BASE_VERSION}" '."x-esdiag-base-app-version" == $v' "${FLATPAK_MANIFEST}" >/dev/null
 
