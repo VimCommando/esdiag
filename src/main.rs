@@ -41,10 +41,6 @@ struct Cli {
     /// Enable debug logging
     #[arg(global = true, long)]
     debug: bool,
-    /// Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow.
-    /// The file must match the active product or the command fails before collection/processing.
-    #[arg(global = true, long)]
-    sources: Option<String>,
     /// Commands
     #[command(subcommand)]
     command: Option<Commands>,
@@ -81,6 +77,10 @@ enum Commands {
             value_delimiter = ','
         )]
         exclude: Option<Vec<String>>,
+        /// Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow.
+        /// The file must match the active product or the command fails before collection.
+        #[arg(long)]
+        sources: Option<String>,
         /// Diagnostic report account name
         #[arg(help = "Diagnostic report account name", long, short)]
         account: Option<String>,
@@ -198,6 +198,10 @@ enum Commands {
         /// Diagnostic report user
         #[arg(help = "Diagnostic report user", long, short)]
         user: Option<String>,
+        /// Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow.
+        /// The file must match the active product or the command fails before processing.
+        #[arg(long)]
+        sources: Option<String>,
     },
     /// Upload a raw diagnostic archive to Elastic Upload Service
     Upload {
@@ -317,7 +321,6 @@ async fn main() -> Result<()> {
 
 #[tracing::instrument(skip_all)]
 async fn run(cli: Cli) -> Result<&'static str> {
-    let sources_override = cli.sources.clone();
     // If there are CLI arguments but no subcommand, avoid starting the desktop/Tauri
     // entrypoint. The desktop UI should only start when launched absolutely without arguments.
     if should_error_for_missing_subcommand(std::env::args_os().len(), cli.command.is_none()) {
@@ -366,6 +369,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 r#type,
                 include,
                 exclude,
+                sources,
                 account,
                 case,
                 opportunity,
@@ -379,7 +383,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     | Uri::ElasticGovCloudAdmin(host) => {
                         ensure_host_role(&host, HostRole::Collect, "collect")?;
                         let product = host.app().clone();
-                        if let Some(sources) = sources_override.clone() {
+                        if let Some(sources) = sources {
                             esdiag::processor::init_sources(
                                 sources_product_key(&product)?,
                                 sources,
@@ -518,6 +522,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 case,
                 opportunity,
                 user,
+                sources,
             } => {
                 let has_explicit_output = output.is_some();
                 let input_uri = Uri::try_from(input)?;
@@ -530,7 +535,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 tracing::info!("input: {}", input_uri);
 
                 let receiver = Receiver::try_from(input_uri.clone())?;
-                if let Some(sources) = sources_override.clone() {
+                if let Some(sources) = sources {
                     let product = detect_sources_product_for_process(&input_uri, &receiver).await?;
                     esdiag::processor::init_sources(sources_product_key(&product)?, sources)?;
                 }
