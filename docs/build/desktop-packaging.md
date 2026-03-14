@@ -91,6 +91,6 @@ bash bin/validate-desktop-artifacts.sh target/artifacts
 
 Expected CI artifacts:
 
-- `target/artifacts/macos/ESDiag*.dmg`
-- `target/artifacts/windows/ESDiag*.msi`
+- `target/artifacts/macos/*.dmg`
+- `target/artifacts/windows/*.msi`
 - `target/artifacts/flatpak/com.elastic.esdiag-0.15.0.flatpak`
