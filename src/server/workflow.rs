@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{
-    CollectSource, CollectedArtifact, ProcessMode, SendMode, ServerEvent, ServerState, Signals,
+    CollectSource, ProcessMode, SendMode, ServerEvent, ServerState, Signals, WorkflowInput,
     WorkflowJob, job_feed_event, signal_event, template, template_event,
 };
 use crate::{
@@ -21,8 +21,11 @@ use eyre::{Result, eyre};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 use tokio::sync::mpsc;
+
+const RETAINED_BUNDLE_TTL: Duration = Duration::from_secs(3600);
 
 struct JobDescriptor<'a> {
     id: u64,
@@ -38,8 +41,20 @@ pub async fn run_job(
 ) {
     let cleanup = WorkflowCleanup::new(job.clone());
     let source = job.source().to_string();
+    let download_token = signals.archive.download_token.trim().to_string();
+    let should_track_download = signals.workflow.collect.save && !download_token.is_empty();
     let validation = validate_workflow_request(&state, &signals, &job).await;
     if let Err(error) = validation {
+        if should_track_download {
+            state
+                .reject_retained_bundle(
+                    &download_token,
+                    &request_user,
+                    error.to_string(),
+                    RETAINED_BUNDLE_TTL,
+                )
+                .await;
+        }
         state.record_failure().await;
         send_event(
             &tx,
@@ -55,15 +70,22 @@ pub async fn run_job(
         return;
     }
 
+    if should_track_download {
+        state
+            .accept_retained_bundle(&download_token, &request_user, RETAINED_BUNDLE_TTL)
+            .await;
+        state.schedule_retained_bundle_cleanup(download_token.clone(), RETAINED_BUNDLE_TTL);
+    }
+
     let identifiers = merged_identifiers(
         job.identifiers.clone(),
         signals.metadata.clone(),
-        request_user,
-        &job.artifact,
+        request_user.clone(),
+        &job.input,
     );
 
-    let result = match &job.artifact {
-        CollectedArtifact::LocalArchive { path, .. } => {
+    let result = match &job.input {
+        WorkflowInput::LocalArchive { path, .. } => {
             execute_local_archive_job(
                 state.clone(),
                 &signals,
@@ -75,7 +97,7 @@ pub async fn run_job(
             )
             .await
         }
-        CollectedArtifact::ServiceLink { uri, .. } => {
+        WorkflowInput::FromServiceLink { uri, .. } => {
             execute_service_link_job(
                 state.clone(),
                 &signals,
@@ -83,11 +105,12 @@ pub async fn run_job(
                 uri.clone(),
                 &source,
                 identifiers,
+                &request_user,
                 &tx,
             )
             .await
         }
-        CollectedArtifact::RemoteCollection {
+        WorkflowInput::FromRemoteHost {
             host,
             diagnostic_type,
             ..
@@ -99,6 +122,7 @@ pub async fn run_job(
                 host.clone(),
                 diagnostic_type.clone(),
                 identifiers,
+                &request_user,
                 &tx,
             )
             .await
@@ -106,6 +130,23 @@ pub async fn run_job(
     };
 
     if let Err(error) = result {
+        if should_track_download {
+            let token_has_bundle = state
+                .retained_bundle(&download_token)
+                .await
+                .and_then(|bundle| bundle.path)
+                .is_some();
+            if !token_has_bundle {
+                state
+                    .reject_retained_bundle(
+                        &download_token,
+                        &request_user,
+                        error.to_string(),
+                        RETAINED_BUNDLE_TTL,
+                    )
+                    .await;
+            }
+        }
         state.record_failure().await;
         send_event(
             &tx,
@@ -158,6 +199,7 @@ async fn execute_service_link_job(
     uri: Uri,
     source: &str,
     identifiers: Identifiers,
+    request_user: &str,
     tx: &mpsc::Sender<ServerEvent>,
 ) -> Result<()> {
     if signals.workflow.collect.save {
@@ -171,15 +213,28 @@ async fn execute_service_link_job(
 
         let collected =
             collect_service_link_archive(job_id, uri, source, signals, identifiers).await?;
-        if let CollectedArtifact::LocalArchive { path, .. } = collected.artifact {
+        if let WorkflowInput::LocalArchive { path, .. } = collected.input {
+            let archive_filename = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("diagnostic.zip")
+                .to_string();
+            publish_retained_download(
+                &state,
+                tx,
+                request_user,
+                &signals.archive.download_token,
+                archive_filename.clone(),
+                path.clone(),
+            )
+            .await?;
             state.record_success(0, 0).await;
-            let archive_path = path.display().to_string();
             send_event(
                 tx,
                 template_event(template::JobCollectionCompleted {
                     job_id,
                     source,
-                    archive_path: &archive_path,
+                    archive_path: &archive_filename,
                 }),
             )
             .await;
@@ -232,6 +287,7 @@ async fn execute_remote_collection_job(
     host: crate::data::KnownHost,
     diagnostic_type: String,
     identifiers: Identifiers,
+    request_user: &str,
     tx: &mpsc::Sender<ServerEvent>,
 ) -> Result<()> {
     let source = host.get_url().to_string();
@@ -269,24 +325,37 @@ async fn execute_remote_collection_job(
 
     let collected =
         collect_remote_archive(job_id, host, &diagnostic_type, signals, identifiers).await?;
-    let _cleanup = match &collected.artifact {
-        CollectedArtifact::LocalArchive {
+    let _cleanup = match &collected.input {
+        WorkflowInput::LocalArchive {
             cleanup_path: Some(path),
             ..
         } => Some(LocalPathCleanup::new(path.clone())),
         _ => None,
     };
 
-    if let CollectedArtifact::LocalArchive { path, .. } = collected.artifact {
+    if let WorkflowInput::LocalArchive { path, .. } = collected.input {
         if signals.workflow.collect.save {
+            let archive_filename = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("diagnostic.zip")
+                .to_string();
+            publish_retained_download(
+                &state,
+                tx,
+                request_user,
+                &signals.archive.download_token,
+                archive_filename.clone(),
+                path.clone(),
+            )
+            .await?;
             state.record_success(0, 0).await;
-            let archive_path = path.display().to_string();
             send_event(
                 tx,
                 template_event(template::JobCollectionCompleted {
                     job_id,
                     source: &source,
-                    archive_path: &archive_path,
+                    archive_path: &archive_filename,
                 }),
             )
             .await;
@@ -425,11 +494,11 @@ async fn run_forward_job(
         state.record_job_started().await;
         send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
 
-        let destination = if !signals.workflow.collect.save_dir.trim().is_empty() {
-            signals.workflow.collect.save_dir.trim().to_string()
-        } else {
-            path.display().to_string()
-        };
+        let destination = Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| format!("Browser download started for {name}"))
+            .unwrap_or_else(|| "Browser download started".to_string());
         state.record_success(0, 0).await;
         send_event(
             tx,
@@ -488,7 +557,7 @@ async fn select_processed_exporter(state: Arc<ServerState>, signals: &Signals) -
         SendMode::Local => {
             let target = signals.workflow.send.local_target.trim();
             if target == "directory" {
-                if !state.runtime_mode_policy.allows_local_artifacts() {
+                if !state.runtime_mode_policy.allows_local_runtime_features() {
                     return Err(eyre!("Service mode does not allow local directory output"));
                 }
                 let directory = signals.workflow.send.local_directory.trim();
@@ -514,12 +583,6 @@ async fn validate_workflow_request(
     signals: &Signals,
     job: &WorkflowJob,
 ) -> Result<()> {
-    if signals.workflow.collect.save && !state.runtime_mode_policy.allows_local_artifacts() {
-        return Err(eyre!(
-            "Service mode does not allow local bundle save artifacts"
-        ));
-    }
-
     if signals.workflow.collect.source == CollectSource::KnownHost
         && !state.runtime_mode_policy.allows_host_management()
     {
@@ -531,18 +594,18 @@ async fn validate_workflow_request(
     if signals.workflow.send.mode == SendMode::Local {
         if signals.workflow.process.mode == ProcessMode::Forward {
             if matches!(
-                job.artifact,
-                CollectedArtifact::RemoteCollection { .. } | CollectedArtifact::ServiceLink { .. }
+                job.input,
+                WorkflowInput::FromRemoteHost { .. } | WorkflowInput::FromServiceLink { .. }
             ) && !signals.workflow.collect.save
             {
                 return Err(eyre!(
-                    "Forward + Local requires Save Archive in Collect so the bundle has a local destination"
+                    "Forward + Local requires Download Archive in Collect so the bundle can be retained for browser download"
                 ));
             }
 
             if matches!(
-                job.artifact,
-                CollectedArtifact::LocalArchive {
+                job.input,
+                WorkflowInput::LocalArchive {
                     cleanup_path: Some(_),
                     ..
                 }
@@ -557,19 +620,10 @@ async fn validate_workflow_request(
         let target = signals.workflow.send.local_target.trim();
         if signals.workflow.process.mode == ProcessMode::Process
             && target == "directory"
-            && !state.runtime_mode_policy.allows_local_artifacts()
+            && !state.runtime_mode_policy.allows_local_runtime_features()
         {
             return Err(eyre!("Service mode does not allow local directory output"));
         }
-    }
-
-    if matches!(
-        job.artifact,
-        CollectedArtifact::RemoteCollection { .. } | CollectedArtifact::ServiceLink { .. }
-    ) && signals.workflow.collect.save
-        && signals.workflow.collect.save_dir.trim().is_empty()
-    {
-        return Err(eyre!("Save Bundle requires a target directory"));
     }
 
     Ok(())
@@ -607,17 +661,11 @@ async fn collect_remote_archive(
     signals: &Signals,
     identifiers: Identifiers,
 ) -> Result<WorkflowJob> {
+    let temp_dir = std::env::temp_dir().join(format!("esdiag-workflow-{job_id}"));
+    std::fs::create_dir_all(&temp_dir)?;
     let (output_dir, cleanup_path) = if signals.workflow.collect.save {
-        if signals.workflow.collect.save_dir.trim().is_empty() {
-            return Err(eyre!("Save Bundle requires a save directory"));
-        }
-        (
-            PathBuf::from(signals.workflow.collect.save_dir.trim()),
-            None,
-        )
+        (temp_dir.clone(), None)
     } else {
-        let temp_dir = std::env::temp_dir().join(format!("esdiag-workflow-{job_id}"));
-        std::fs::create_dir_all(&temp_dir)?;
         (temp_dir.clone(), Some(temp_dir))
     };
 
@@ -644,7 +692,7 @@ async fn collect_remote_archive(
 
     Ok(WorkflowJob {
         identifiers: identifiers.with_filename(Some(filename.clone())),
-        artifact: CollectedArtifact::LocalArchive {
+        input: WorkflowInput::LocalArchive {
             source,
             filename,
             path,
@@ -661,23 +709,18 @@ async fn collect_service_link_archive(
     identifiers: Identifiers,
 ) -> Result<WorkflowJob> {
     let filename = local_archive_filename(source, job_id)?;
-    let (path, cleanup_path) = if signals.workflow.collect.save {
-        if signals.workflow.collect.save_dir.trim().is_empty() {
-            return Err(eyre!("Save Bundle requires a save directory"));
-        }
-        let directory = PathBuf::from(signals.workflow.collect.save_dir.trim());
-        std::fs::create_dir_all(&directory)?;
-        (directory.join(&filename), None)
+    let path = std::env::temp_dir().join(format!("esdiag-service-link-{job_id}-{filename}"));
+    let cleanup_path = if signals.workflow.collect.save {
+        None
     } else {
-        let path = std::env::temp_dir().join(format!("esdiag-service-link-{job_id}-{filename}"));
-        (path.clone(), Some(path))
+        Some(path.clone())
     };
 
     download_service_link_to_path(&uri, &path).await?;
 
     Ok(WorkflowJob {
         identifiers: identifiers.with_filename(Some(filename.clone())),
-        artifact: CollectedArtifact::LocalArchive {
+        input: WorkflowInput::LocalArchive {
             source: source.to_string(),
             filename,
             path,
@@ -738,11 +781,33 @@ fn local_archive_filename(source: &str, job_id: u64) -> Result<String> {
     Ok(filename)
 }
 
+async fn publish_retained_download(
+    state: &Arc<ServerState>,
+    tx: &mpsc::Sender<ServerEvent>,
+    request_user: &str,
+    download_token: &str,
+    filename: String,
+    path: PathBuf,
+) -> Result<()> {
+    let token = state
+        .insert_retained_bundle_with_token(
+            Some(download_token),
+            request_user.to_string(),
+            filename.clone(),
+            path,
+            RETAINED_BUNDLE_TTL,
+        )
+        .await;
+    state.schedule_retained_bundle_cleanup(token.clone(), RETAINED_BUNDLE_TTL);
+    let _ = (tx, filename, token);
+    Ok(())
+}
+
 fn merged_identifiers(
     mut base: Identifiers,
     overrides: Identifiers,
     request_user: String,
-    artifact: &CollectedArtifact,
+    input: &WorkflowInput,
 ) -> Identifiers {
     if overrides.account.is_some() {
         base.account = overrides.account;
@@ -761,8 +826,8 @@ fn merged_identifiers(
     }
 
     base.user = Some(request_user);
-    base.filename = overrides.filename.or_else(|| match artifact {
-        CollectedArtifact::LocalArchive { filename, .. } => Some(filename.clone()),
+    base.filename = overrides.filename.or_else(|| match input {
+        WorkflowInput::LocalArchive { filename, .. } => Some(filename.clone()),
         _ => base.filename.clone(),
     });
     base
@@ -776,7 +841,7 @@ async fn send_terminal_signal(tx: &mpsc::Sender<ServerEvent>, state: &ServerStat
     send_event(
         tx,
         signal_event(format!(
-            r#"{{"loading":false,"processing":false,"stats":{}}}"#,
+            r#"{{"loading":false,"processing":false,"archive":{{"download_token":""}},"stats":{}}}"#,
             state.get_stats().await
         )),
     )
@@ -820,8 +885,9 @@ mod tests {
         data::{HostRole, KnownHostBuilder, Uri},
         exporter::Exporter,
         server::{
-            CollectedArtifact, ProcessMode, RuntimeMode, RuntimeModePolicy, SendMode, ServerEvent,
-            ServerState, Signals, Stats, WorkflowJob,
+            CollectSource, KeystoreSessionState, ProcessMode, RetainedBundle, RuntimeMode,
+            RuntimeModePolicy, SendMode, ServerEvent, ServerState, Signals, Stats, WorkflowInput,
+            WorkflowJob,
         },
     };
     use std::{collections::HashMap, sync::Arc};
@@ -835,9 +901,10 @@ mod tests {
             kibana_url: Arc::new(RwLock::new(String::new())),
             signals: Arc::new(RwLock::new(Signals::default())),
             workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
+            retained_bundles: Arc::new(RwLock::new(HashMap::<String, RetainedBundle>::new())),
             runtime_mode: mode,
             runtime_mode_policy: RuntimeModePolicy::new(mode),
-            keystore_state: Arc::new(RwLock::new(HashMap::new())),
+            keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
             shutdown: watch::channel(false).1,
             event_tx: broadcast::channel::<ServerEvent>(8).0,
@@ -867,15 +934,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_mode_rejects_bundle_save() {
+    async fn service_mode_allows_bundle_save_downloads() {
         let state = test_state(RuntimeMode::Service);
         let mut signals = Signals::default();
+        signals.workflow.collect.source = CollectSource::ApiKey;
         signals.workflow.collect.save = true;
-        signals.workflow.collect.save_dir = "/tmp".to_string();
 
         let job = WorkflowJob {
             identifiers: Default::default(),
-            artifact: CollectedArtifact::LocalArchive {
+            input: WorkflowInput::LocalArchive {
                 source: "upload.zip".to_string(),
                 filename: "upload.zip".to_string(),
                 path: "/tmp/upload.zip".into(),
@@ -884,21 +951,19 @@ mod tests {
         };
 
         assert!(
-            validate_workflow_request(&state, &signals, &job)
-                .await
-                .is_err()
+            validate_workflow_request(&state, &signals, &job).await.is_ok()
         );
     }
 
     #[tokio::test]
-    async fn service_link_save_requires_directory() {
+    async fn service_link_save_does_not_require_directory() {
         let state = test_state(RuntimeMode::User);
         let mut signals = Signals::default();
         signals.workflow.collect.save = true;
 
         let job = WorkflowJob {
             identifiers: Default::default(),
-            artifact: CollectedArtifact::ServiceLink {
+            input: WorkflowInput::FromServiceLink {
                 source: "downloaded.zip".to_string(),
                 uri: Uri::ServiceLink(
                     Url::parse("https://token:secret@example.com/archive.zip").unwrap(),
@@ -907,9 +972,7 @@ mod tests {
         };
 
         assert!(
-            validate_workflow_request(&state, &signals, &job)
-                .await
-                .is_err()
+            validate_workflow_request(&state, &signals, &job).await.is_ok()
         );
     }
 
@@ -922,7 +985,7 @@ mod tests {
 
         let job = WorkflowJob {
             identifiers: Default::default(),
-            artifact: CollectedArtifact::LocalArchive {
+            input: WorkflowInput::LocalArchive {
                 source: "upload.zip".to_string(),
                 filename: "upload.zip".to_string(),
                 path: "/tmp/upload.zip".into(),

@@ -353,6 +353,19 @@ impl KnownHost {
         }
     }
 
+    pub fn requires_keystore_secret(&self) -> bool {
+        matches!(
+            self,
+            Self::ApiKey {
+                secret: Some(_),
+                ..
+            } | Self::Basic {
+                secret: Some(_),
+                ..
+            }
+        )
+    }
+
     pub fn get_auth(&self) -> Result<Auth> {
         match self {
             Self::ApiKey { apikey, secret, .. } => {

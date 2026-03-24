@@ -24,7 +24,7 @@ pub async fn submit(
 ) -> impl IntoResponse {
     let job_id = new_job_id();
     let can_use_keystore =
-        cfg!(feature = "keystore") && state.runtime_mode_policy.allows_local_artifacts();
+        cfg!(feature = "keystore") && state.runtime_mode_policy.allows_local_runtime_features();
 
     // Process the multipart form
     if let Ok(Some(field)) = multipart.next_field().await {
@@ -57,7 +57,7 @@ pub async fn submit(
             let upload_file_element = format!(
                 r#"<div id="job-{job_id}"
                     class="status-box history-item processing"
-                    data-init="$loading=false; $file_upload.job_id={job_id}; if ({can_use_keystore} && $keystore.locked && $output.secure) {{ @get('/keystore/modal/process'); }} else {{ @post('upload/process', {{openWhenHidden: true}}); }}"
+                    data-init="$loading=false; $file_upload.job_id={job_id}; if ({can_use_keystore} && $keystore.locked && $output.secure) {{ $_pending_workflow_action = 'upload-process'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process'); }} else {{ @post('/upload/process', {{openWhenHidden: true}}); }}"
                 >
                     <div class="spinner"></div> Processing diagnostic
                         <p><b>Filename:</b> {filename}</p>
@@ -87,7 +87,7 @@ pub async fn submit(
                         tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
                         if state_clone.workflow_jobs.read().await.contains_key(&job_id) {
                             state_clone.discard_workflow_job(job_id).await;
-                            log::warn!(
+                            tracing::warn!(
                                 "Upload job {} was never processed and was removed from state to free memory",
                                 job_id
                             );
@@ -183,7 +183,7 @@ async fn send_terminal_signal(tx: &mpsc::Sender<ServerEvent>, state: &ServerStat
     .await;
 }
 
-async fn run_upload_job(
+pub(super) async fn run_upload_job(
     state: Arc<ServerState>,
     signals: Signals,
     job_id: u64,

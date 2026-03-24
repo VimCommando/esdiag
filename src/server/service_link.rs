@@ -6,15 +6,20 @@ use super::{
     Identifiers, ServerEvent, ServerState, Signals, job_feed_event, receiver_stream, signal_event,
     template, template_event, workflow,
 };
-use crate::{data::Uri, processor::new_job_id};
+use crate::{
+    data::{Uri, with_scoped_keystore_password},
+    processor::new_job_id,
+};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
     response::{IntoResponse, Sse},
 };
 use datastar::axum::ReadSignals;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
+
+const DOWNLOAD_REJECTION_TTL: Duration = Duration::from_secs(300);
 
 pub async fn form(
     State(state): State<Arc<ServerState>>,
@@ -87,13 +92,22 @@ async fn send_event(tx: &mpsc::Sender<ServerEvent>, event: ServerEvent) {
     let _ = tx.send(event).await;
 }
 
-async fn run_service_link_form(
+pub(super) async fn run_service_link_form(
     state: Arc<ServerState>,
     signals: Signals,
     request_user: String,
     tx: mpsc::Sender<ServerEvent>,
 ) {
+    let download_token = signals.archive.download_token.clone();
     if let Err(err) = super::ensure_active_output_ready(&state, &request_user).await {
+        state
+            .reject_retained_bundle(
+                &download_token,
+                &request_user,
+                err.clone(),
+                DOWNLOAD_REJECTION_TTL,
+            )
+            .await;
         send_event(
             &tx,
             template_event(template::JobFailed {
@@ -111,6 +125,14 @@ async fn run_service_link_form(
 
     let tokenized_uri = if let Uri::ServiceLinkNoAuth(mut url) = service_link.url.clone() {
         if url.set_username("token").is_err() {
+            state
+                .reject_retained_bundle(
+                    &download_token,
+                    &request_user,
+                    "Failed to set username in URL",
+                    DOWNLOAD_REJECTION_TTL,
+                )
+                .await;
             send_event(
                 &tx,
                 template_event(template::Error {
@@ -122,6 +144,14 @@ async fn run_service_link_form(
             .await;
         }
         if url.set_password(Some(&service_link.token)).is_err() {
+            state
+                .reject_retained_bundle(
+                    &download_token,
+                    &request_user,
+                    "Failed to set token in URL",
+                    DOWNLOAD_REJECTION_TTL,
+                )
+                .await;
             send_event(
                 &tx,
                 template_event(template::Error {
@@ -135,6 +165,14 @@ async fn run_service_link_form(
         Uri::ServiceLink(url)
     } else {
         let error_msg = format!("Unsupported URL: {}", service_link.url);
+        state
+            .reject_retained_bundle(
+                &download_token,
+                &request_user,
+                error_msg.clone(),
+                DOWNLOAD_REJECTION_TTL,
+            )
+            .await;
         tracing::error!("Invalid URL provided: {}", service_link.url);
         send_event(
             &tx,
@@ -149,16 +187,24 @@ async fn run_service_link_form(
         return;
     };
 
-    log::debug!("Tokenized URI: {}", tokenized_uri);
+    tracing::debug!("Tokenized URI: {}", tokenized_uri);
     let job_id = new_job_id();
     let job = super::WorkflowJob {
         identifiers: Identifiers::default(),
-        artifact: super::CollectedArtifact::ServiceLink {
+        input: super::WorkflowInput::FromServiceLink {
             source: signals.service_link.filename.clone(),
             uri: tokenized_uri,
         },
     };
-    workflow::run_job(state, signals, job_id, request_user, tx, job).await;
+    let keystore_password = state.keystore_password_for(&request_user).await;
+    if let Some(password) = keystore_password {
+        with_scoped_keystore_password(password, async move {
+            workflow::run_job(state, signals, job_id, request_user, tx, job).await;
+        })
+        .await;
+    } else {
+        workflow::run_job(state, signals, job_id, request_user, tx, job).await;
+    }
 }
 
 async fn run_service_link_id(

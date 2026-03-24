@@ -6,15 +6,20 @@ use super::{
     Identifiers, ServerEvent, ServerState, Signals, job_feed_event, receiver_stream, signal_event,
     template, template_event, workflow,
 };
-use crate::{data::KnownHostBuilder, processor::new_job_id};
+use crate::{
+    data::{KnownHostBuilder, with_scoped_keystore_password},
+    processor::new_job_id,
+};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
     response::{IntoResponse, Sse},
 };
 use datastar::axum::ReadSignals;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
+
+const DOWNLOAD_REJECTION_TTL: Duration = Duration::from_secs(300);
 
 pub async fn form(
     State(state): State<Arc<ServerState>>,
@@ -84,19 +89,28 @@ async fn send_event(tx: &mpsc::Sender<ServerEvent>, event: ServerEvent) {
     let _ = tx.send(event).await;
 }
 
-async fn run_api_key_form(
+pub(super) async fn run_api_key_form(
     state: Arc<ServerState>,
     signals: Signals,
     uri: String,
     request_user: String,
     tx: mpsc::Sender<ServerEvent>,
 ) {
+    let download_token = signals.archive.download_token.clone();
     let host = match KnownHostBuilder::new(signals.es_api.url.clone().into())
         .apikey(Some(signals.es_api.key.clone()))
         .build()
     {
         Ok(host) => host,
         Err(e) => {
+            state
+                .reject_retained_bundle(
+                    &download_token,
+                    &request_user,
+                    format!("Failed to build host: {}", e),
+                    DOWNLOAD_REJECTION_TTL,
+                )
+                .await;
             state.record_failure().await;
             let error_msg = format!("Failed to build host: {}", e);
             tracing::error!("Failed to build host: {}", e);
@@ -114,13 +128,22 @@ async fn run_api_key_form(
     };
     let job = super::WorkflowJob {
         identifiers: Identifiers::default(),
-        artifact: super::CollectedArtifact::RemoteCollection {
+        input: super::WorkflowInput::FromRemoteHost {
             source: host.get_url().to_string(),
             host,
             diagnostic_type: signals.workflow.collect.diagnostic_type.clone(),
         },
     };
-    workflow::run_job(state, signals, new_job_id(), request_user, tx, job).await;
+    let job_id = new_job_id();
+    let keystore_password = state.keystore_password_for(&request_user).await;
+    if let Some(password) = keystore_password {
+        with_scoped_keystore_password(password, async move {
+            workflow::run_job(state, signals, job_id, request_user, tx, job).await;
+        })
+        .await;
+    } else {
+        workflow::run_job(state, signals, job_id, request_user, tx, job).await;
+    }
 }
 
 async fn run_api_key_id(

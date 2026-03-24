@@ -17,7 +17,12 @@
                     required
                 />
             </input-group>
-            <input class="button" type="submit" value="Unlock" />
+            <form-actions>
+                <input class="button" type="submit" value="Unlock" />
+                <button type="button" class="button is-neutral" data-on:click="document.getElementById('keystore-unlock-modal')?.remove()">
+                    Cancel
+                </button>
+            </form-actions>
         </form>
     </div>
 </div>

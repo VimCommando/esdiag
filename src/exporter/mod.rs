@@ -23,9 +23,10 @@ use elasticsearch::ElasticsearchExporter;
 use eyre::{Result, eyre};
 use file::FileExporter;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use stream::StreamExporter;
 use tokio::sync::{mpsc, oneshot};
+use url::Url;
 
 trait Export {
     async fn is_connected(&self) -> bool;
@@ -54,7 +55,7 @@ trait Export {
 /// - `Stream`: Exports data to standard output (stdout).
 #[derive(Clone)]
 pub enum Exporter {
-    /// Export collection artifacts to a directory or zip archive
+    /// Export collected bundles to a directory or zip archive
     Archive(ArchiveExporter),
     /// Export to an Elasticsearch cluster with the `_bulk` API
     Elasticsearch(ElasticsearchExporter),
@@ -228,13 +229,17 @@ impl Exporter {
         self.clone()
     }
 
-    pub fn target_value(&self) -> String {
+    pub fn target_uri(&self) -> String {
         match self {
-            Exporter::Archive(exporter) => exporter.to_string(),
-            Exporter::Directory(exporter) => exporter.to_string(),
+            Exporter::Archive(exporter) => {
+                path_to_file_uri(Path::new(&exporter.to_string()), false)
+            }
+            Exporter::Directory(exporter) => {
+                path_to_file_uri(Path::new(&exporter.to_string()), true)
+            }
             Exporter::Elasticsearch(exporter) => exporter.to_string(),
-            Exporter::File(exporter) => exporter.to_string(),
-            Exporter::Stream(_) => "-".to_string(),
+            Exporter::File(exporter) => path_to_file_uri(Path::new(&exporter.to_string()), false),
+            Exporter::Stream(_) => "stdio://stdout".to_string(),
         }
     }
 
@@ -322,6 +327,23 @@ fn format_directory_label(value: &str) -> String {
     }
 }
 
+fn path_to_file_uri(path: &Path, is_dir: bool) -> String {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    let url = if is_dir {
+        Url::from_directory_path(&absolute)
+    } else {
+        Url::from_file_path(&absolute)
+    };
+    url.map(|url| url.to_string())
+        .unwrap_or_else(|_| absolute.display().to_string())
+}
+
 impl TryFrom<KnownHost> for Exporter {
     type Error = eyre::Report;
     fn try_from(host: KnownHost) -> std::result::Result<Self, Self::Error> {
@@ -336,7 +358,9 @@ impl TryFrom<KnownHost> for Exporter {
 
 #[cfg(test)]
 mod tests {
-    use super::format_directory_label;
+    use super::{Exporter, format_directory_label};
+    use crate::data::Uri;
+    use std::path::PathBuf;
 
     #[test]
     fn format_directory_label_preserves_existing_trailing_separator() {
@@ -350,5 +374,22 @@ mod tests {
             format_directory_label("/tmp/out"),
             format!("/tmp/out{}", std::path::MAIN_SEPARATOR)
         );
+    }
+
+    #[test]
+    fn target_uri_uses_canonical_machine_values() {
+        let directory = Exporter::try_from(Uri::Directory(PathBuf::from("/tmp/out")))
+            .expect("directory exporter");
+        assert_eq!(directory.target_uri(), "file:///tmp/out/");
+        assert_eq!(directory.target_label(), "dir: /tmp/out/");
+
+        let file = Exporter::try_from(Uri::File(PathBuf::from("/tmp/out/report.ndjson")))
+            .expect("file exporter");
+        assert_eq!(file.target_uri(), "file:///tmp/out/report.ndjson");
+        assert_eq!(file.target_label(), "file: /tmp/out/report.ndjson");
+
+        let stream = Exporter::default();
+        assert_eq!(stream.target_uri(), "stdio://stdout");
+        assert_eq!(stream.target_label(), "stdout: -");
     }
 }

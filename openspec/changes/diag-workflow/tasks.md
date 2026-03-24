@@ -2,15 +2,17 @@
 
 - [x] 1.1 Replace the single home page workflow panel with separate `Collect`, `Process`, and `Send` panels in the main template.
 - [x] 1.2 Expand the web signal/state model to track the selected mode for each stage (`Collect`/`Upload`, `Process`/`Forward`, `Remote`/`Local`) plus each mode's configuration independently.
-- [x] 1.3 Add mode-aware `Collect -> Collect` inputs for known-host selection, direct URL/API-key entry, Elastic Upload Service input, diagnostic type selection, and `Save` controls with a configurable directory target where allowed.
+- [x] 1.3 Add mode-aware `Collect -> Collect` inputs for known-host selection, direct URL/API-key entry, Elastic Upload Service input, diagnostic type selection, and `Save` controls that advertise browser-managed retained downloads instead of a user-entered directory target.
 - [x] 1.4 Add `Collect -> Upload` inputs for drag-and-drop and file-picker local archive intake.
 
 ## 2. Collection and Orchestration
 
-- [x] 2.1 Refactor workflow orchestration so `Collect -> Collect`, Elastic Upload Service intake, and `Collect -> Upload` all normalize into a shared collected-artifact contract for downstream stages.
-- [x] 2.2 Reuse the CLI `collect --save` archive persistence behavior for `Collect` save in the workflow, including a user-configurable local directory defaulting to the operating-system-aware `Downloads` directory.
-- [x] 2.3 Preserve the current one-job on-demand path for unsaved `collect + process + send` and add the saved two-job handoff path where collection persists an archive before later processing/send.
+- [x] 2.1 Refactor workflow orchestration so `Collect -> Collect`, Elastic Upload Service intake, and `Collect -> Upload` all normalize into a shared workflow input contract for downstream stages.
+- [x] 2.2 Replace browser workflow `Collect` save path handling with server-managed retained archive bundles that can be reused by downstream processing/forwarding without requiring direct writes to a user-selected filesystem path.
+- [x] 2.3 Preserve the current one-job on-demand path for unsaved `collect + process + send` and keep the saved two-job handoff path, but have the saved path retain an archive bundle for download and later processing/send.
 - [x] 2.4 Add `Process -> Forward` execution branching so the raw collected archive is preserved unchanged.
+- [x] 2.5 Add a dedicated download endpoint or equivalent bundle-delivery route so saved workflow bundles are fetched outside the SSE status stream.
+- [x] 2.6 Add server-managed bundle retention and cleanup semantics for saved workflow bundles, including lifecycle handling after download or expiry.
 
 ## 3. Processing Controls
 
@@ -25,8 +27,9 @@
 - [x] 4.2 Add `Send -> Remote` behavior for processed-output delivery to diagnostic cluster targets and forwarded archive delivery through the new Elastic Upload Service uploader capability.
 - [x] 4.3 Add `Send -> Local` behavior for processed-output delivery to localhost diagnostic clusters or local directories.
 - [x] 4.4 Filter known-host send targets to Elasticsearch hosts with the `send` role, further restrict local known-host targets to `localhost`/`127.0.0.1`, and disable incompatible target types as `Collect` and `Process` selections change.
-- [x] 4.5 Implement `Forward + Local` behavior so local send is disabled, the UI explains that the local bundle is saved in `Collect`, and `Collect` save is automatically enabled if it was off.
-- [x] 4.6 Enforce user/service mode validation rules for remote collection credentials, known-host usage, and local bundle persistence in the new workflow.
+- [x] 4.5 Implement `Forward + Local` behavior so local send is disabled, the UI explains that the local bundle download is handled in `Collect`, and `Collect` save is automatically enabled if it was off.
+- [x] 4.6 Enforce user/service mode validation rules for remote collection credentials, known-host usage, and retained browser-download bundle behavior in the new workflow.
+- [x] 4.7 Auto-initiate the retained bundle download from the same `Go` action through a separate browser request/action while allowing processing and send status to continue over SSE.
 
 ## 5. Elastic Uploader
 
@@ -39,8 +42,9 @@
 - [x] 6.1 Add or update UI/integration tests covering `Collect -> Collect` in user mode with known-host selection, service mode with explicit endpoint/API-key entry, and `Collect -> Upload`.
 - [x] 6.2 Add or update tests for `Process -> Process` and `Process -> Forward`, including advanced processor filtering and required dependency locking.
 - [x] 6.3 Add or update tests that invalid `Send` targets become disabled when `Collect` or `Process` options make them incompatible.
-- [x] 6.4 Add or update tests for `Send -> Local` processed delivery to localhost clusters/directories and `Forward + Local` auto-enabling `Collect` save.
-- [x] 6.5 Add or update tests for OS-aware default `Save` directory behavior and user override of the suggested path.
+- [x] 6.4 Add or update tests for `Send -> Local` processed delivery to localhost clusters/directories and `Forward + Local` auto-enabling `Collect` save/download behavior.
+- [x] 6.5 Add or update tests for browser-managed saved bundle download behavior in both `user` and `service` modes, including auto-trigger from the same workflow execution.
+- [x] 6.6 Add or update tests for retained bundle download endpoints and cleanup semantics.
 - [x] 6.6 Add or update tests for the `upload` CLI command and forwarded remote uploader behavior.
 - [x] 6.7 Run `cargo clippy` and resolve any new warnings in changed code.
 - [x] 6.8 Run `cargo test` and confirm relevant suites pass.

@@ -717,6 +717,7 @@ icon-moon {
 icon-paintbrush,
 icon-sun,
 icon-moon,
+icon-book,
 icon-chevron-left,
 icon-chevron-up,
 icon-chevron-down,
@@ -759,6 +760,7 @@ icon-trash {
 icon-paintbrush,
 icon-sun,
 icon-moon,
+icon-book,
 icon-chevron-left,
 icon-chevron-up,
 icon-chevron-down,
@@ -1220,6 +1222,7 @@ tab-content {
 panel {
     display: flex;
     flex-direction: column;
+    overflow: auto;
     margin: var(--size-xl) 0;
     padding: var(--size-l);
     border: 1px solid var(--border-color);
@@ -2532,6 +2535,11 @@ icon-trash {
     color: currentColor;
 }
 
+icon-book {
+    -webkit-mask-image: var(--icon-book);
+    mask-image: var(--icon-book);
+}
+
 icon-pencil {
     -webkit-mask-image: var(--icon-pencil);
     mask-image: var(--icon-pencil);
@@ -3342,4 +3350,8 @@ footer-right {
     display: flex;
     gap: var(--size-s);
     margin-top: var(--size-l);
+}
+
+.row {
+    flex-direction: row;
 }

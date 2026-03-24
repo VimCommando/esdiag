@@ -2,7 +2,7 @@
 
 The current home page is organized around a single "Process Diagnostics" panel with tabbed intake sources. That shape assumes every workflow immediately processes a diagnostic after intake, even though the product now needs to support three different execution paths: collect and process, collect and send without processing, and process an already-available archive before sending it onward.
 
-This change cuts across the web template layer, Datastar signal model, server request handlers, and workflow orchestration. It also has mode-aware behavior: `user` mode can use locally persisted known hosts, while `service` mode must avoid local host persistence and require explicit remote credentials. The design must preserve existing collection sources while making the execution path explicit and safe, with each stage choosing between two concrete modes instead of a single generic form.
+This change cuts across the web template layer, Datastar signal model, server request handlers, and workflow orchestration. It also has mode-aware behavior: `user` mode can use locally persisted known hosts, while `service` mode must avoid local host persistence and require explicit remote credentials. The design must preserve existing collection sources while making the execution path explicit and safe, with each stage choosing between two concrete modes instead of a single generic form. Saved bundles must work in both modes, which means the browser workflow cannot depend on direct writes to a user-selected local path.
 
 ## Goals / Non-Goals
 
@@ -14,11 +14,11 @@ This change cuts across the web template layer, Datastar signal model, server re
   - `Process`: `Process` or `Forward`
   - `Send`: `Remote` or `Local`
 - Preserve existing intake sources while fitting them into the new stage model: remote inputs under `Collect`, local archive upload under `Upload`.
-- Allow remote collection to optionally save a bundle locally before later processing, forwarding, or local delivery by reusing the existing `collect --save` behavior.
+- Allow remote collection to optionally retain a bundle for browser download before later processing, forwarding, or local delivery.
 - Support processing subsets via diagnostic product/type selection and advanced API option overrides limited to fully implemented options.
 - Support send targets appropriate to the workflow outcome:
   - `Remote`: processed output to diagnostic cluster targets, forwarded archives to Elastic Upload Service endpoints
-  - `Local`: processed output to localhost diagnostic clusters or local directories, forwarded archives handled through the `Collect` save path
+  - `Local`: processed output to localhost diagnostic clusters or local directories, forwarded archives handled through the `Collect` save/download behavior
 - Reuse existing exporter concepts behind the UI so `Remote` and `Local` are presentation choices over already-supported output types wherever possible.
 
 **Non-Goals:**
@@ -36,22 +36,22 @@ This change cuts across the web template layer, Datastar signal model, server re
      - Keep the current tabs and add more conditional sections: rejected because validation and send/skip-processing flows become harder to reason about.
      - Split each path into a separate route/page: rejected because the requested experience is a single staged home page workflow.
 
-2. **Normalize both remote collection and local upload into one collected-artifact contract**
-   - Decision: `Collect -> Collect` and `Collect -> Upload` SHALL both resolve into a shared workflow artifact contract describing the archive kind, provenance, whether the bundle is already local, and whether a persisted saved copy exists. When `Collect` save is enabled, this SHALL reuse the same archive persistence behavior as the CLI `collect --save` path.
-   - Rationale: Downstream `Process` and `Send` stages should consume one normalized contract instead of branching on raw form origin, and archive persistence should not invent a second save mechanism separate from the existing CLI behavior.
+2. **Normalize both remote collection and local upload into one workflow input contract**
+   - Decision: `Collect -> Collect` and `Collect -> Upload` SHALL both resolve into a shared workflow input contract describing the archive kind, provenance, whether the bundle is already local, and whether a retained downloadable copy exists. When `Collect` save is enabled, the workflow SHALL retain a server-managed archive bundle that can be reused by downstream processing/forwarding and exposed to the browser through a separate download action.
+   - Rationale: Downstream `Process` and `Send` stages should consume one normalized contract instead of branching on raw form origin, and bundle retention must work in both `user` and `service` web runtimes without requiring direct filesystem writes to a user-selected path.
    - Alternatives considered:
      - Let process/send handlers inspect original form payloads directly: rejected because it couples downstream stages to UI source details.
 
 3. **Model processing as `Process` or `Forward`**
-   - Decision: The `Process` panel SHALL explicitly choose between `Process` and `Forward`. `Process` builds processed diagnostic output using product/type and advanced processor selection. `Forward` preserves the raw archive unchanged from the collected/uploaded artifact.
+   - Decision: The `Process` panel SHALL explicitly choose between `Process` and `Forward`. `Process` builds processed diagnostic output using product/type and advanced processor selection. `Forward` preserves the raw archive unchanged from the collected/uploaded bundle input.
    - Rationale: Forwarding raw data is a first-class workflow, not just "processing disabled."
    - Alternatives considered:
      - Always process and add a "minimal output" option: rejected because the user explicitly needs to forward unprocessed archives in some flows.
      - Model forwarding as a hidden side effect of disabling processing: rejected because the user asked for an explicit stage option.
 
 4. **Use one job or two jobs depending on save behavior**
-   - Decision: `Collect -> Collect -> Process -> Send` without `Save` SHALL continue using the current on-demand API retrieval flow as a single job. When `Save` is enabled, collection SHALL become its own job that persists an archive, and `Process + Send` SHALL run as a second job consuming the saved artifact.
-   - Rationale: This preserves today's efficient in-memory/on-demand path while allowing saved archives to become explicit handoff points for later workflow stages.
+   - Decision: `Collect -> Collect -> Process -> Send` without `Save` SHALL continue using the current on-demand API retrieval flow as a single job. When `Save` is enabled, collection SHALL become its own job that retains an archive bundle, auto-initiates browser download through a separate request/action, and `Process + Send` SHALL run as a second job consuming that retained bundle.
+   - Rationale: This preserves today's efficient in-memory/on-demand path while allowing saved archives to become explicit handoff points for later workflow stages without overloading the SSE status response with file transfer.
    - Alternatives considered:
      - Always split into two jobs: rejected because it would add unnecessary persistence and orchestration overhead to the current on-demand flow.
      - Never split into two jobs: rejected because saved archives need a durable boundary between collection and later processing/sending.
@@ -73,21 +73,21 @@ This change cuts across the web template layer, Datastar signal model, server re
      - Hide required processors entirely: rejected because users still need visibility into why certain processors are always included.
 
 7. **Keep runtime-mode boundaries at the input/validation layer**
-   - Decision: `user` mode SHALL allow known-host selection in `Collect -> Collect` and local bundle save targets, while `service` mode SHALL use explicit endpoint/API key inputs and SHALL not depend on persisted local host artifacts.
+   - Decision: `user` mode SHALL allow known-host selection in `Collect -> Collect`, while `service` mode SHALL use explicit endpoint/API key inputs and SHALL not depend on persisted local host settings. Saved-bundle behavior SHALL use the same browser download contract in both modes rather than mode-specific local-path handling.
    - Rationale: This preserves the existing runtime-mode contract while still allowing the same high-level workflow in both modes.
    - Alternatives considered:
      - Allow service mode to read local known hosts for convenience: rejected because it violates the existing shared-instance contract.
 
-8. **Default bundle persistence to an OS-aware Downloads directory**
-   - Decision: When `Save Bundle` is enabled, the workflow SHALL use a configurable local directory target with an operating-system-aware default of the current user's `Downloads` directory.
-   - Rationale: Users need a predictable default save location that matches normal desktop expectations while still being able to redirect bundle storage when needed.
+8. **Make bundle save browser-managed instead of path-managed**
+   - Decision: When `Save Bundle` is enabled, the workflow SHALL retain a server-managed archive bundle and auto-initiate browser download through a separate request/action from the same `Go` click. The web UI SHALL NOT require a user-entered local save path.
+   - Rationale: Browser-managed download works in both `service` mode and Tauri-wrapped `user` mode, while direct writes to a user-selected local path do not.
    - Alternatives considered:
-     - Restrict saves to a fixed workspace/application directory: rejected because it is less discoverable and less user-friendly for downloaded archives.
-     - Require manual directory entry every time: rejected because it adds friction to a common workflow.
+     - Keep a configurable local directory target in the browser workflow: rejected because it does not work reliably in service deployments or browser-wrapped desktop shells.
+     - Transfer the file over the workflow SSE response: rejected because the SSE stream must remain dedicated to workflow status updates and job progress.
 
 9. **Model send as `Remote` or `Local` with output-aware subtargets**
-   - Decision: The `Send` panel SHALL explicitly choose between `Remote` and `Local`. For `Process -> Process`, `Remote` targets a diagnostic cluster and `Local` targets either a localhost diagnostic cluster or a local directory. For `Process -> Forward`, `Remote` targets a new Elastic Upload Service exporter endpoint and `Local` is disabled because the raw archive's local persistence is handled by `Collect` save behavior. The current footer output selector SHALL move into this panel as part of the send-target UI.
-   - Rationale: The user-visible distinction is not only artifact kind; it is also whether delivery leaves the machine or remains local, and the output target belongs to the send stage rather than as a page-global footer control.
+   - Decision: The `Send` panel SHALL explicitly choose between `Remote` and `Local`. For `Process -> Process`, `Remote` targets a diagnostic cluster and `Local` targets either a localhost diagnostic cluster or a local directory. For `Process -> Forward`, `Remote` targets a new Elastic Upload Service exporter endpoint and `Local` is disabled because the raw archive's browser download is handled by `Collect` save behavior. The current footer output selector SHALL move into this panel as part of the send-target UI.
+   - Rationale: The user-visible distinction is not only bundle kind; it is also whether delivery leaves the machine or remains local, and the output target belongs to the send stage rather than as a page-global footer control.
    - Alternatives considered:
      - Funnel both through one generic "target" input: rejected because it obscures incompatible validation and transport rules.
      - Allow `Local` forwarding as a second save destination separate from `Collect`: rejected because it duplicates the bundle-save concept and creates conflicting local archive ownership.
@@ -99,9 +99,9 @@ This change cuts across the web template layer, Datastar signal model, server re
      - Allow any target selection and fail only on submit: rejected because it creates avoidable user confusion.
      - Hide incompatible targets entirely: rejected because disabled targets better communicate why a delivery path is unavailable.
 
-11. **Auto-enable local save when forward + local is selected**
-   - Decision: If the user selects `Send -> Local` while `Process -> Forward` is active, the UI SHALL disable local send execution, explain that the local bundle is managed in `Collect`, and automatically enable `Collect` save if it is currently off.
-   - Rationale: Forwarded archives do not need a second local delivery mechanism; they just need the collected archive persisted locally.
+11. **Auto-enable bundle download when forward + local is selected**
+   - Decision: If the user selects `Send -> Local` while `Process -> Forward` is active, the UI SHALL disable local send execution, explain that the local bundle download is managed in `Collect`, and automatically enable `Collect` save if it is currently off.
+   - Rationale: Forwarded archives do not need a second local delivery mechanism; they just need the collected archive retained for browser download.
    - Alternatives considered:
      - Keep `Send -> Local` disabled without changing `Collect` save: rejected because the user asked for local forwarded bundle handling and auto-enabling save reduces friction.
      - Create a second independent local-save destination in `Send`: rejected because it duplicates archive persistence behavior.
@@ -118,21 +118,21 @@ This change cuts across the web template layer, Datastar signal model, server re
 - **[Risk] The three-panel workflow increases UI state complexity** -> **Mitigation:** define a single normalized workflow signal model and keep cross-panel derived state server-validated.
 - **[Risk] Folder-based implementation detection can be awkward to represent at runtime** -> **Mitigation:** use the product processor module layout as the conceptual source of truth, but introduce a per-product enum/registry when direct inference is not clean in compiled code.
 - **[Risk] Required processor rules can drift from actual processor dependencies** -> **Mitigation:** derive locked selections from the same per-product authoritative enum/registry or equivalent planning registry used to define implemented processors, including product-specific rules like Elasticsearch `version` and `cluster_settings_defaults`.
-- **[Risk] Save-enabled workflows can diverge from CLI collect behavior** -> **Mitigation:** reuse the same `collect --save` archive persistence logic instead of building a separate web-only save path.
-- **[Risk] Optional local bundle saving can conflict with service mode artifact restrictions** -> **Mitigation:** gate local save path inputs behind runtime-mode policy and fail validation early when local artifact writes are disallowed.
-- **[Risk] OS-specific Downloads resolution can vary by environment** -> **Mitigation:** centralize path resolution behind one cross-platform helper and allow the user to override the default directory before execution.
-- **[Risk] Send behavior can become ambiguous when the user changes collect/process options after configuring targets** -> **Mitigation:** recompute send-target affordances from current workflow state, disable incompatible targets immediately, and normalize forward-plus-local behavior back into the `Collect` save path.
+- **[Risk] Save-enabled workflows can diverge from CLI collect behavior** -> **Mitigation:** share archive-generation and retained-bundle semantics where practical, but keep the web delivery contract explicitly browser-managed.
+- **[Risk] Retained download bundles can leak storage or linger too long** -> **Mitigation:** store them under server-managed temp retention with TTL or post-download cleanup semantics.
+- **[Risk] Browser download triggering can race with workflow status updates** -> **Mitigation:** emit a dedicated one-shot download signal and keep the file transfer on a separate HTTP request from the SSE stream.
+- **[Risk] Send behavior can become ambiguous when the user changes collect/process options after configuring targets** -> **Mitigation:** recompute send-target affordances from current workflow state, disable incompatible targets immediately, and normalize forward-plus-local behavior back into the `Collect` save/download behavior.
 - **[Risk] Elastic Upload Service export is a new integration surface** -> **Mitigation:** define it as a separate capability with a CLI contract, reference implementation, and dedicated tests rather than coupling it loosely into existing receiver code.
 
 ## Migration Plan
 
 1. Introduce workflow state and template structure for the three-panel home page while preserving existing backend handlers behind adapted orchestration.
-2. Add collect/upload normalization so remote collection, uploader-service intake, and local upload all produce a shared workflow result, reusing `collect --save` persistence when requested.
-3. Preserve the current one-job on-demand path for unsaved collect-plus-process-plus-send and add the saved two-job handoff path.
+2. Add collect/upload normalization so remote collection, uploader-service intake, and local upload all produce a shared workflow result, with retained downloadable archive bundles when save is requested.
+3. Preserve the current one-job on-demand path for unsaved collect-plus-process-plus-send and add the saved two-job handoff path, including browser-triggered download from the retained bundle.
 4. Add explicit process/forward controls, implemented-option filtering sourced from product processor implementations or an equivalent enum/registry with dependency metadata, and required-processor locking.
-5. Add remote/local send controls by moving output-target selection from the footer into the send panel, including localhost/local-directory processed delivery and forward-plus-local normalization into `Collect` save behavior.
+5. Add remote/local send controls by moving output-target selection from the footer into the send panel, including localhost/local-directory processed delivery and forward-plus-local normalization into `Collect` save/download behavior.
 6. Implement the new Elastic Upload Service exporter/CLI capability for forwarded raw bundles.
-7. Update user/service mode validation to match the new panel inputs, local bundle save rules, and OS-aware default save directory behavior.
+7. Update user/service mode validation to match the new panel inputs and browser-managed saved-bundle behavior.
 8. Add UI and integration coverage for collect/upload, process/forward, remote/local send flows, and uploader behavior.
 
 Rollback strategy:

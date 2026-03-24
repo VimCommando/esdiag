@@ -130,12 +130,12 @@ async fn index_embeds_processing_option_catalog() {
     let (mut server, client, base) = start_server().await;
 
     let response = client
-        .get(format!("{base}/"))
+        .get(format!("{base}/workflow"))
         .send()
         .await
-        .expect("index response");
+        .expect("workflow response");
     assert!(response.status().is_success());
-    let body = response.text().await.expect("index body");
+    let body = response.text().await.expect("workflow body");
 
     assert!(body.contains("const PROCESS_OPTIONS ="));
     assert!(body.contains("\"elasticsearch\""));

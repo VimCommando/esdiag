@@ -83,12 +83,80 @@ pub async fn handler(
         .next()
         .unwrap_or('_')
         .to_ascii_uppercase();
+    let allows_local_runtime_features =
+        state.runtime_mode_policy.allows_local_runtime_features();
+    let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
+    let theme_dark = get_theme_dark(&headers);
+    let kibana_url = { state.kibana_url.read().await.clone() };
+    let (keystore_locked, keystore_lock_time) = if can_use_keystore {
+        state.keystore_status_for(&user_email).await
+    } else {
+        (true, 0)
+    };
+    let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
+    let page = template::Index {
+        auth_header,
+        debug: tracing::enabled!(tracing::Level::DEBUG),
+        desktop: cfg!(feature = "desktop"),
+        kibana_url,
+        key_id: params.key_id,
+        link_id: params.link_id,
+        upload_id: params.upload_id,
+        stats: state.get_stats_as_signals().await,
+        user: user_email,
+        user_initial,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        theme_dark,
+        runtime_mode: state.runtime_mode.to_string(),
+        can_use_keystore,
+        keystore_locked,
+        keystore_lock_time,
+        show_keystore_bootstrap,
+    };
 
-    let allows_local_artifacts = state.runtime_mode_policy.allows_local_artifacts();
-    let can_use_keystore = cfg!(feature = "keystore") && allows_local_artifacts;
+    let html = match page.render() {
+        Ok(html) => html,
+        Err(err) => format!(
+            "<html><body><h1>Internal Server Error</h1><p>{}</p></body></html>",
+            err
+        ),
+    };
+
+    Html(html).into_response()
+}
+
+pub async fn workflow_page(
+    State(state): State<Arc<ServerState>>,
+    Query(params): Query<Params>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let (auth_header, user_email) = match state.resolve_user_email(&headers) {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::warn!("Authentication header validation failed: {err}");
+            return (
+                StatusCode::UNAUTHORIZED,
+                Html(format!(
+                    "<html><body><h1>Unauthorized</h1><p>{}</p></body></html>",
+                    err
+                )),
+            )
+                .into_response();
+        }
+    };
+    let user_initial = user_email
+        .chars()
+        .next()
+        .unwrap_or('_')
+        .to_ascii_uppercase();
+
+    let allows_local_runtime_features =
+        state.runtime_mode_policy.allows_local_runtime_features();
+    let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
     let exporter = { state.exporter.read().await.clone() };
     let send_defaults = classify_configured_exporter(&exporter);
-    let (collect_hosts, send_remote_hosts, send_local_hosts) = workflow_host_options(&state);
+    let (collect_hosts, collect_secure_hosts, send_remote_hosts, send_local_hosts, send_secure_hosts) =
+        workflow_host_options(&state);
     let default_save_dir = default_downloads_dir().display().to_string();
     let process_options_json =
         serde_json::to_string(&ApiResolver::processing_catalog().unwrap_or_default())
@@ -101,11 +169,13 @@ pub async fn handler(
         (true, 0)
     };
     let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
-    let index_html = template::Index {
+    let page = template::Workflow {
         auth_header,
         debug: tracing::enabled!(tracing::Level::DEBUG),
         desktop: cfg!(feature = "desktop"),
         collect_hosts,
+        collect_secure_hosts_json: serde_json::to_string(&collect_secure_hosts)
+            .unwrap_or_else(|_| "[]".to_string()),
         configured_local_path: send_defaults.local_path,
         configured_remote_target: send_defaults.remote_target,
         default_save_dir,
@@ -116,6 +186,8 @@ pub async fn handler(
         key_id: params.key_id,
         link_id: params.link_id,
         process_options_json,
+        send_secure_hosts_json: serde_json::to_string(&send_secure_hosts)
+            .unwrap_or_else(|_| "[]".to_string()),
         send_local_hosts,
         send_remote_hosts,
         upload_id: params.upload_id,
@@ -131,7 +203,7 @@ pub async fn handler(
         show_keystore_bootstrap,
     };
 
-    let index_html = match index_html.render() {
+    let html = match page.render() {
         Ok(html) => html,
         Err(err) => format!(
             "<html><body><h1>Internal Server Error</h1><p>{}</p></body></html>",
@@ -139,7 +211,7 @@ pub async fn handler(
         ),
     };
 
-    Html(index_html).into_response()
+    Html(html).into_response()
 }
 
 struct SendDefaults {
@@ -151,18 +223,18 @@ struct SendDefaults {
 }
 
 fn classify_configured_exporter(exporter: &Exporter) -> SendDefaults {
-    let display = exporter.to_string();
+    let target_uri = exporter.target_uri();
     match exporter {
         Exporter::Elasticsearch(_) => SendDefaults {
             mode: "remote".to_string(),
             local_path: String::new(),
             local_target: String::new(),
-            remote_target: display.clone(),
-            remote_target_default: display,
+            remote_target: target_uri.clone(),
+            remote_target_default: target_uri,
         },
         Exporter::Directory(_) | Exporter::File(_) => SendDefaults {
             mode: "local".to_string(),
-            local_path: display,
+            local_path: target_uri,
             local_target: "directory".to_string(),
             remote_target: String::new(),
             remote_target_default: String::new(),
@@ -171,21 +243,25 @@ fn classify_configured_exporter(exporter: &Exporter) -> SendDefaults {
             mode: "remote".to_string(),
             local_path: String::new(),
             local_target: String::new(),
-            remote_target: display.clone(),
-            remote_target_default: display,
+            remote_target: target_uri.clone(),
+            remote_target_default: target_uri,
         },
     }
 }
 
-fn workflow_host_options(state: &Arc<ServerState>) -> (Vec<String>, Vec<String>, Vec<String>) {
+fn workflow_host_options(
+    state: &Arc<ServerState>,
+) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
     if !state.runtime_mode_policy.allows_host_management() {
-        return (Vec::new(), Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     }
 
     let names = KnownHost::list_all().unwrap_or_default();
     let mut collect_hosts = Vec::new();
+    let mut collect_secure_hosts = Vec::new();
     let mut send_remote_hosts = Vec::new();
     let mut send_local_hosts = Vec::new();
+    let mut send_secure_hosts = Vec::new();
 
     for name in names {
         let Some(host) = KnownHost::get_known(&name) else {
@@ -194,17 +270,29 @@ fn workflow_host_options(state: &Arc<ServerState>) -> (Vec<String>, Vec<String>,
 
         if host.has_role(HostRole::Collect) {
             collect_hosts.push(name.clone());
+            if host.requires_keystore_secret() {
+                collect_secure_hosts.push(name.clone());
+            }
         }
 
         if host.has_role(HostRole::Send) {
             send_remote_hosts.push(name.clone());
+            if host.requires_keystore_secret() {
+                send_secure_hosts.push(name.clone());
+            }
             if host.get_url().host_str().is_some_and(is_local_host) {
                 send_local_hosts.push(name.clone());
             }
         }
     }
 
-    (collect_hosts, send_remote_hosts, send_local_hosts)
+    (
+        collect_hosts,
+        collect_secure_hosts,
+        send_remote_hosts,
+        send_local_hosts,
+        send_secure_hosts,
+    )
 }
 
 fn is_local_host(host: &str) -> bool {

@@ -28,22 +28,22 @@ The `Collect` panel SHALL support `Collect` and `Upload` options. `Collect` SHAL
 - **AND** remote intake inputs are hidden or inactive
 
 ### Requirement: Collect Save Behavior
-When `Collect -> Collect` is active and local persistence is allowed, the panel SHALL provide an optional `Save` control with a configurable local directory target for persisting the collected archive before downstream stages consume it.
+When `Collect -> Collect` is active, the panel SHALL provide an optional `Save` control that retains the collected archive as a downloadable workflow bundle before downstream stages consume it. The browser workflow SHALL NOT require the user to configure a local filesystem path in order to save the bundle.
 
-#### Scenario: User configures remote collection with bundle persistence
-- **GIVEN** the workflow is running in a mode that allows local artifacts
-- **WHEN** the user selects `Collect -> Collect`, chooses a diagnostic type, enables `Save`, and provides a target directory
+#### Scenario: User configures remote collection with retained bundle download
+- **WHEN** the user selects `Collect -> Collect`, chooses a diagnostic type, and enables `Save`
 - **THEN** the workflow records the selected remote diagnostic type
-- **AND** the collected remote archive is persisted to the provided local directory before downstream workflow stages consume it
+- **AND** the collected remote archive is retained as a downloadable workflow bundle before downstream workflow stages consume it
 
-#### Scenario: Save Bundle defaults to Downloads
-- **GIVEN** the workflow is running in a mode that allows local artifacts
-- **WHEN** the user enables `Save` without overriding the suggested directory
-- **THEN** the UI defaults the target directory to the current user's operating-system-aware `Downloads` directory
-- **AND** the user may replace that directory with another writable location before execution
+#### Scenario: Save auto-initiates browser download from the same Go action
+- **GIVEN** the user enables `Save`
+- **WHEN** remote collection completes successfully
+- **THEN** the workflow initiates bundle download through a separate browser request or action
+- **AND** the download is triggered automatically from the same workflow execution without requiring a second manual click
+- **AND** the SSE workflow response remains dedicated to workflow status updates rather than file transfer
 
 ### Requirement: Process Stage Options
-The `Process` panel SHALL support `Process` and `Forward` options. `Process` SHALL expose diagnostic type selection and advanced processor configuration. `Forward` SHALL preserve the raw diagnostic archive unchanged from the collected or uploaded artifact.
+The `Process` panel SHALL support `Process` and `Forward` options. `Process` SHALL expose diagnostic type selection and advanced processor configuration. `Forward` SHALL preserve the raw diagnostic archive unchanged from the collected or uploaded workflow input.
 
 #### Scenario: User chooses processing
 - **WHEN** the user selects `Process -> Process`
@@ -104,7 +104,7 @@ When `Send -> Remote` is selected, the workflow SHALL send processed diagnostics
 - **AND** the raw archive is forwarded unchanged
 
 ### Requirement: Local Send Behavior
-When `Send -> Local` is selected, processed diagnostics SHALL support local delivery to either a localhost diagnostic cluster target or a local directory. Forwarded raw archives SHALL NOT support a second local send target; instead, the workflow SHALL direct the user to the `Collect` save path and automatically enable `Save` if it is currently disabled.
+When `Send -> Local` is selected, processed diagnostics SHALL support local delivery to either a localhost diagnostic cluster target or a local directory. Forwarded raw archives SHALL NOT support a second local send target; instead, the workflow SHALL direct the user to the `Collect` save/download behavior and automatically enable `Save` if it is currently disabled.
 
 #### Scenario: Processed local send targets localhost cluster
 - **GIVEN** the workflow is configured for `Process -> Process`
@@ -120,5 +120,5 @@ When `Send -> Local` is selected, processed diagnostics SHALL support local deli
 - **GIVEN** the workflow is configured for `Process -> Forward`
 - **WHEN** the user selects `Send -> Local`
 - **THEN** the local send target is disabled
-- **AND** the UI states that the local bundle is saved in `Collect`
+- **AND** the UI states that the local bundle download is handled in `Collect`
 - **AND** the workflow automatically enables `Collect` save if it is currently disabled

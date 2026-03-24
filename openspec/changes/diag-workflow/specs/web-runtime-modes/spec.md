@@ -12,18 +12,18 @@ The `Collect` panel SHALL adapt its `Collect -> Collect` inputs to the active we
 - **GIVEN** the web interface is running in `service` mode
 - **WHEN** the user selects `Collect -> Collect` in the `Collect` panel
 - **THEN** the UI requires explicit endpoint and API key inputs
-- **AND** the workflow does not depend on local known-host artifacts for the remote source
+- **AND** the workflow does not depend on local known-host settings for the remote source
 
 ### Requirement: Mode-Aware Bundle Persistence
-The workflow SHALL allow local bundle persistence only when the active runtime mode permits local artifacts.
+The workflow SHALL support browser-managed bundle downloads in both `user` mode and `service` mode. The browser workflow SHALL NOT require a user-configured local filesystem save path in either mode.
 
-#### Scenario: Service mode rejects local bundle save behavior
+#### Scenario: Service mode exposes browser download save behavior
 - **GIVEN** the web interface is running in `service` mode
-- **WHEN** the user configures `Collect -> Collect`
-- **THEN** the workflow does not expose or honor local bundle save behavior that depends on local persisted artifacts
+- **WHEN** the user configures `Collect -> Collect` and enables `Save Bundle`
+- **THEN** the workflow exposes retained bundle download behavior that does not depend on local persisted host settings or a user-entered save path
 
-#### Scenario: User mode defaults bundle save path locally
+#### Scenario: User mode uses the same browser download contract
 - **GIVEN** the web interface is running in `user` mode
 - **WHEN** the user enables `Save Bundle`
-- **THEN** the workflow may suggest the current user's operating-system-aware `Downloads` directory as the default local save path
-- **AND** the user may change that path before execution
+- **THEN** the workflow uses the same browser-managed download behavior as service mode
+- **AND** the workflow does not require manual local path entry before execution

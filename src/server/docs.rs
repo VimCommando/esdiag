@@ -161,7 +161,7 @@ pub async fn handler(
                 let (keystore_locked, keystore_lock_time) =
                     state.keystore_status_for(&user_email).await;
                 let can_use_keystore = cfg!(feature = "keystore")
-                    && state.runtime_mode_policy.allows_local_artifacts();
+                    && state.runtime_mode_policy.allows_local_runtime_features();
 
                 let template = DocsTemplate {
                     nav_root_items,
@@ -442,7 +442,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_mode_docs_does_not_touch_local_artifacts() {
+    async fn service_mode_docs_does_not_touch_local_runtime_features() {
         let _guard = env_lock().lock().expect("env lock");
         let (_tmp, hosts_path, settings_path) = setup_env();
 

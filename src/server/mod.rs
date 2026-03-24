@@ -4,6 +4,7 @@
 
 mod api;
 mod api_key;
+mod bundle_download;
 mod assets;
 mod docs;
 mod file_upload;
@@ -52,6 +53,7 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, convert::Infallible, net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
+use uuid::Uuid;
 
 type UploadReceiver = Arc<RwLock<mpsc::Receiver<(Identifiers, Bytes)>>>;
 const IAP_USER_EMAIL_HEADER: &str = "X-Goog-Authenticated-User-Email";
@@ -103,7 +105,7 @@ impl RuntimeModePolicy {
         self.mode == RuntimeMode::Service
     }
 
-    pub fn allows_local_artifacts(&self) -> bool {
+    pub fn allows_local_runtime_features(&self) -> bool {
         self.mode == RuntimeMode::User
     }
 
@@ -174,6 +176,7 @@ impl Server {
             signals: Arc::new(RwLock::new(Signals::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
             workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
+            retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             shutdown: shutdown_rx,
             event_tx,
             stats_updates_tx,
@@ -201,6 +204,7 @@ impl Server {
             const FIVE_HUNDRED_TWELVE_MEBIBYTES: usize = 512 * 1024 * 1024;
             let app = Router::new()
                 .route("/", get(index::handler))
+                .route("/workflow", get(index::workflow_page))
                 .route("/api/service_link", post(api::service_link))
                 .route("/api/api_key", post(api::api_key))
                 .route("/api_key", post(api_key::form))
@@ -225,6 +229,10 @@ impl Server {
                 )
                 .route("/theme-borealis.css", get(assets::theme_borealis))
                 .route("/theme", post(theme::set_theme))
+                .route(
+                    "/workflow/download/{token}",
+                    get(bundle_download::download_retained_bundle),
+                )
                 .route("/docs/{*path}", get(docs::handler))
                 .route("/docs", get(docs::handler_index))
                 .route("/upload/process", post(file_upload::process))
@@ -236,7 +244,7 @@ impl Server {
                 .route("/api/settings/update", post(settings::update_settings));
 
             #[cfg(feature = "keystore")]
-            let app = if runtime_mode_policy.allows_local_artifacts() {
+            let app = if runtime_mode_policy.allows_local_runtime_features() {
                 app.route("/settings", get(hosts::page))
                     .route("/settings/create", post(hosts::create_host))
                     .route("/settings/update", put(hosts::update_host))
@@ -261,7 +269,6 @@ impl Server {
                         get(keystore::get_process_unlock_modal),
                     )
                     .route("/keystore/unlock", post(keystore::unlock))
-                    .route("/keystore/unlock-and-run", post(keystore::unlock_and_run))
                     .route("/keystore/lock", post(keystore::lock))
             } else {
                 app
@@ -305,9 +312,9 @@ impl Server {
             bound_addr.port()
         );
         tracing::debug!(
-            "Runtime mode policy => requires_iap_headers={}, allows_local_artifacts={}, allows_exporter_updates={}, allows_host_management={}",
+            "Runtime mode policy => requires_iap_headers={}, allows_local_runtime_features={}, allows_exporter_updates={}, allows_host_management={}",
             runtime_mode_policy.requires_iap_headers(),
-            runtime_mode_policy.allows_local_artifacts(),
+            runtime_mode_policy.allows_local_runtime_features(),
             runtime_mode_policy.allows_exporter_updates(),
             runtime_mode_policy.allows_host_management()
         );
@@ -353,6 +360,7 @@ pub struct ServerState {
     pub kibana_url: Arc<RwLock<String>>,
     pub signals: Arc<RwLock<Signals>>,
     pub workflow_jobs: Arc<RwLock<HashMap<u64, WorkflowJob>>>,
+    pub retained_bundles: Arc<RwLock<HashMap<String, RetainedBundle>>>,
     pub runtime_mode: RuntimeMode,
     pub runtime_mode_policy: RuntimeModePolicy,
     // Keystore session state is intentionally single-user only. User mode keeps one
@@ -363,6 +371,16 @@ pub struct ServerState {
     event_tx: broadcast::Sender<ServerEvent>,
     stats_updates_tx: watch::Sender<u64>,
     stats_updates_rx: watch::Receiver<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RetainedBundle {
+    pub owner: String,
+    pub accepted: bool,
+    pub error: Option<String>,
+    pub filename: Option<String>,
+    pub path: Option<PathBuf>,
+    pub expires_at_epoch: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -438,7 +456,7 @@ impl ServerState {
         // Keystore support is only available for the local single-user web flow.
         // Service mode is explicitly excluded, even if a request is authenticated.
         cfg!(feature = "keystore")
-            && self.runtime_mode_policy.allows_local_artifacts()
+            && self.runtime_mode_policy.allows_local_runtime_features()
             && !self.runtime_mode_policy.requires_iap_headers()
     }
 
@@ -713,8 +731,158 @@ impl ServerState {
         self.workflow_jobs.write().await.insert(id, job)
     }
 
+    pub async fn insert_retained_bundle(
+        &self,
+        owner: String,
+        filename: String,
+        path: PathBuf,
+        ttl: Duration,
+    ) -> String {
+        self.insert_retained_bundle_with_token(None, owner, filename, path, ttl)
+            .await
+    }
+
+    pub async fn insert_retained_bundle_with_token(
+        &self,
+        token: Option<&str>,
+        owner: String,
+        filename: String,
+        path: PathBuf,
+        ttl: Duration,
+    ) -> String {
+        let token = token
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
+        self.retained_bundles.write().await.insert(
+            token.clone(),
+            RetainedBundle {
+                owner,
+                accepted: true,
+                error: None,
+                filename: Some(filename),
+                path: Some(path),
+                expires_at_epoch,
+            },
+        );
+        token
+    }
+
+    pub async fn ensure_retained_bundle_token(
+        &self,
+        token: &str,
+        owner: String,
+        ttl: Duration,
+    ) {
+        if token.trim().is_empty() {
+            return;
+        }
+        let expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
+        let mut bundles = self.retained_bundles.write().await;
+        bundles.entry(token.to_string()).or_insert(RetainedBundle {
+            owner,
+            accepted: false,
+            error: None,
+            filename: None,
+            path: None,
+            expires_at_epoch,
+        });
+    }
+
+    pub async fn accept_retained_bundle(&self, token: &str, owner: &str, ttl: Duration) {
+        if token.trim().is_empty() {
+            return;
+        }
+        let expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
+        let mut bundles = self.retained_bundles.write().await;
+        let bundle = bundles
+            .entry(token.to_string())
+            .or_insert(RetainedBundle {
+                owner: owner.to_string(),
+                accepted: false,
+                error: None,
+                filename: None,
+                path: None,
+                expires_at_epoch,
+            });
+        bundle.owner = owner.to_string();
+        bundle.accepted = true;
+        bundle.error = None;
+        bundle.expires_at_epoch = expires_at_epoch;
+    }
+
+    pub async fn reject_retained_bundle(
+        &self,
+        token: &str,
+        owner: &str,
+        error: impl Into<String>,
+        ttl: Duration,
+    ) {
+        if token.trim().is_empty() {
+            return;
+        }
+        let expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
+        let mut bundles = self.retained_bundles.write().await;
+        let bundle = bundles
+            .entry(token.to_string())
+            .or_insert(RetainedBundle {
+                owner: owner.to_string(),
+                accepted: false,
+                error: None,
+                filename: None,
+                path: None,
+                expires_at_epoch,
+            });
+        bundle.owner = owner.to_string();
+        bundle.accepted = false;
+        bundle.error = Some(error.into());
+        bundle.expires_at_epoch = expires_at_epoch;
+    }
+
+    pub async fn retained_bundle(&self, token: &str) -> Option<RetainedBundle> {
+        self.retained_bundles.read().await.get(token).cloned()
+    }
+
+    pub async fn touch_retained_bundle(&self, token: &str, ttl: Duration) -> bool {
+        let mut bundles = self.retained_bundles.write().await;
+        let Some(bundle) = bundles.get_mut(token) else {
+            return false;
+        };
+        bundle.expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
+        true
+    }
+
+    pub async fn discard_retained_bundle(&self, token: &str) {
+        if let Some(bundle) = self.retained_bundles.write().await.remove(token)
+            && let Some(path) = bundle.path
+            && let Err(err) = std::fs::remove_file(&path)
+        {
+            tracing::debug!(
+                "Failed to remove retained bundle {}: {}",
+                path.display(),
+                err
+            );
+        }
+    }
+
+    pub fn schedule_retained_bundle_cleanup(self: &Arc<Self>, token: String, delay: Duration) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let should_cleanup = state
+                .retained_bundle(&token)
+                .await
+                .map(|bundle| bundle.expires_at_epoch <= now_epoch_seconds())
+                .unwrap_or(false);
+            if should_cleanup {
+                state.discard_retained_bundle(&token).await;
+            }
+        });
+    }
+
     pub async fn pop_workflow_job(&self, id: u64) -> Option<WorkflowJob> {
-        log::debug!("Popping workflow job id: {id}");
+        tracing::debug!("Popping workflow job id: {id}");
         self.workflow_jobs.write().await.remove(&id)
     }
 
@@ -735,7 +903,7 @@ impl ServerState {
             id,
             WorkflowJob {
                 identifiers,
-                artifact: CollectedArtifact::RemoteCollection {
+                input: WorkflowInput::FromRemoteHost {
                     source: host.get_url().to_string(),
                     host,
                     diagnostic_type,
@@ -752,12 +920,12 @@ impl ServerState {
         filename: String,
         uri: Uri,
     ) -> Option<WorkflowJob> {
-        log::debug!("Pushing service link id: {id}");
+        tracing::debug!("Pushing service link id: {id}");
         self.push_workflow_job(
             id,
             WorkflowJob {
                 identifiers,
-                artifact: CollectedArtifact::ServiceLink {
+                input: WorkflowInput::FromServiceLink {
                     source: filename,
                     uri,
                 },
@@ -772,12 +940,12 @@ impl ServerState {
         filename: String,
         path: PathBuf,
     ) -> Option<WorkflowJob> {
-        log::debug!("Pushing file upload id: {id}");
+        tracing::debug!("Pushing file upload id: {id}");
         self.push_workflow_job(
             id,
             WorkflowJob {
                 identifiers: Identifiers::default(),
-                artifact: CollectedArtifact::LocalArchive {
+                input: WorkflowInput::LocalArchive {
                     source: filename.clone(),
                     filename,
                     path: path.clone(),
@@ -869,6 +1037,7 @@ pub(crate) fn test_server_state() -> Arc<ServerState> {
         signals: Arc::new(RwLock::new(Signals::default())),
         stats: Arc::new(RwLock::new(Stats::default())),
         workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
+        retained_bundles: Arc::new(RwLock::new(HashMap::new())),
         runtime_mode,
         runtime_mode_policy: RuntimeModePolicy::new(runtime_mode),
         keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
@@ -935,6 +1104,7 @@ pub struct Signals {
     pub message: String,
     pub metadata: Identifiers,
     #[serde(default)]
+    pub archive: ArchiveSignals,
     pub workflow: Workflow,
     pub file_upload: FileUpload,
     pub service_link: ServiceLink,
@@ -944,6 +1114,7 @@ pub struct Signals {
     #[serde(default)]
     pub keystore: KeystoreSignals,
     pub stats: Stats,
+    #[serde(default)]
     pub tab: Tab,
 }
 
@@ -955,6 +1126,7 @@ impl Default for Signals {
             loading: false,
             message: String::new(),
             metadata: Identifiers::default(),
+            archive: ArchiveSignals::default(),
             workflow: Workflow::default(),
             file_upload: FileUpload { job_id: 0 },
             service_link: ServiceLink {
@@ -972,6 +1144,12 @@ impl Default for Signals {
             tab: Tab::FileUpload,
         }
     }
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub struct ArchiveSignals {
+    #[serde(default)]
+    pub download_token: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -1083,44 +1261,44 @@ fn default_true() -> bool {
 #[derive(Clone)]
 pub struct WorkflowJob {
     pub identifiers: Identifiers,
-    pub artifact: CollectedArtifact,
+    pub input: WorkflowInput,
 }
 
 impl WorkflowJob {
     pub fn source(&self) -> &str {
-        self.artifact.source()
+        self.input.source()
     }
 
     pub fn cleanup(&self) {
-        self.artifact.cleanup();
+        self.input.cleanup();
     }
 }
 
 #[derive(Clone)]
-pub enum CollectedArtifact {
+pub enum WorkflowInput {
     LocalArchive {
         source: String,
         filename: String,
         path: PathBuf,
         cleanup_path: Option<PathBuf>,
     },
-    ServiceLink {
+    FromServiceLink {
         source: String,
         uri: Uri,
     },
-    RemoteCollection {
+    FromRemoteHost {
         source: String,
         host: KnownHost,
         diagnostic_type: String,
     },
 }
 
-impl CollectedArtifact {
+impl WorkflowInput {
     pub fn source(&self) -> &str {
         match self {
             Self::LocalArchive { source, .. } => source,
-            Self::ServiceLink { source, .. } => source,
-            Self::RemoteCollection { source, .. } => source,
+            Self::FromServiceLink { source, .. } => source,
+            Self::FromRemoteHost { source, .. } => source,
         }
     }
 
@@ -1136,8 +1314,8 @@ impl CollectedArtifact {
                 std::fs::remove_file(path)
             };
             if let Err(err) = result {
-                log::debug!(
-                    "Failed to clean workflow artifact {}: {}",
+                tracing::debug!(
+                    "Failed to clean workflow input {}: {}",
                     path.display(),
                     err
                 );
@@ -1176,9 +1354,10 @@ pub enum SendMode {
     Local,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Tab {
+    #[default]
     FileUpload,
     ServiceLink,
     ApiKey,
@@ -1427,6 +1606,7 @@ mod tests {
             kibana_url: Arc::new(RwLock::new(String::new())),
             signals: Arc::new(RwLock::new(Signals::default())),
             workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
+            retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             runtime_mode: mode,
             runtime_mode_policy: RuntimeModePolicy::new(mode),
             keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
@@ -1466,6 +1646,16 @@ mod tests {
             parsed.is_ok(),
             "desktop signals payload without settings should deserialize"
         );
+    }
+
+    #[test]
+    fn workflow_signals_deserialize_without_tab_field() {
+        let payload = r#"{"loading":true,"processing":false,"message":"Collecting from known host...","stats":{"jobs":{"total":0,"success":0,"failed":0,"active":0},"docs":{"total":0,"errors":0}},"service_link":{"token":"","url":"","filename":""},"file_upload":{"job_id":0},"es_api":{"url":"","key":""},"workflow":{"send":{"mode":"remote","remote_target":"b8b9a090-21fa-419f-a731-ae8676fdd835","local_target":"directory","local_directory":"Directory /tmp/output"},"process":{"mode":"forward","enabled":false,"product":"elasticsearch","diagnostic_type":"standard","selected":""},"collect":{"mode":"collect","source":"known-host","known_host":"esdiag-prod","diagnostic_type":"standard","save":true,"save_dir":"/Users/reno/Downloads"}},"keystore":{"locked":false,"lock_time":1773881448},"metadata":{"user":"Anonymous","account":"","case_number":"","opportunity":""},"auth":{"header":false},"theme":{"dark":true}}"#;
+
+        let parsed = serde_json::from_str::<Signals>(payload)
+            .expect("workflow signals payload without tab should deserialize");
+        assert!(matches!(parsed.tab, super::Tab::FileUpload));
+        assert_eq!(parsed.workflow.collect.known_host, "esdiag-prod");
     }
 
     #[tokio::test]

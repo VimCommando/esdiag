@@ -3,12 +3,11 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use crate::{
-    data::{HostRole, KnownHost, Uri},
+    data::{KnownHost, Uri},
     exporter::Exporter,
 };
 use askama::Template;
 use serde::Serialize;
-use std::collections::BTreeMap;
 
 #[derive(Template)]
 #[template(path = "error.html")]
@@ -24,7 +23,30 @@ pub struct Index {
     pub auth_header: bool,
     pub debug: bool,
     pub desktop: bool,
+    pub kibana_url: String,
+    pub key_id: Option<u64>,
+    pub link_id: Option<u64>,
+    pub upload_id: Option<u64>,
+    pub stats: String,
+    pub user: String,
+    pub user_initial: char,
+    pub version: String,
+    pub theme_dark: bool,
+    pub runtime_mode: String,
+    pub can_use_keystore: bool,
+    pub keystore_locked: bool,
+    pub keystore_lock_time: i64,
+    pub show_keystore_bootstrap: bool,
+}
+
+#[derive(Template)]
+#[template(path = "workflow.html")]
+pub struct Workflow {
+    pub auth_header: bool,
+    pub debug: bool,
+    pub desktop: bool,
     pub collect_hosts: Vec<String>,
+    pub collect_secure_hosts_json: String,
     pub configured_local_path: String,
     pub configured_remote_target: String,
     pub default_save_dir: String,
@@ -35,6 +57,7 @@ pub struct Index {
     pub key_id: Option<u64>,
     pub link_id: Option<u64>,
     pub process_options_json: String,
+    pub send_secure_hosts_json: String,
     pub send_local_hosts: Vec<String>,
     pub send_remote_hosts: Vec<String>,
     pub upload_id: Option<u64>,
@@ -257,7 +280,7 @@ pub fn build_footer_output_context(
     exporter: &Exporter,
     preferred_target: Option<&str>,
 ) -> (Vec<FooterOutputOption>, String, String) {
-    let exporter_value = exporter.target_value();
+    let exporter_value = exporter.target_uri();
     let selected_output = preferred_target
         .filter(|target| send_hosts.iter().any(|host| host == *target))
         .and_then(|target| preferred_target_matches_exporter(target, exporter).then_some(target))
@@ -303,7 +326,7 @@ fn preferred_target_matches_exporter(target: &str, exporter: &Exporter) -> bool 
     let Some(host) = KnownHost::get_known(&target.to_string()) else {
         return false;
     };
-    host.get_url().to_string() == exporter.target_value()
+    host.get_url().to_string() == exporter.target_uri()
 }
 
 pub fn active_output_requires_keystore(
@@ -312,18 +335,18 @@ pub fn active_output_requires_keystore(
     exporter: &Exporter,
 ) -> bool {
     if let Some(host) = KnownHost::get_known(&selected_output.to_string()) {
-        return !matches!(host, KnownHost::NoAuth { .. });
+        return host.requires_keystore_secret();
     }
 
     send_hosts.iter().any(|host_name| {
         let Some(host) = KnownHost::get_known(host_name) else {
             return false;
         };
-        let secure = !matches!(host, KnownHost::NoAuth { .. });
+        let secure = host.requires_keystore_secret();
         if !secure {
             return false;
         }
-        host.get_url().to_string() == exporter.target_value()
+        host.get_url().to_string() == exporter.target_uri()
     })
 }
 
@@ -414,7 +437,7 @@ mod tests {
         let (options, selected_output, label) =
             build_footer_output_context(&send_hosts, &exporter, Some("localhost"));
 
-        assert_eq!(selected_output, "/tmp/output");
+        assert_eq!(selected_output, "file:///tmp/output/");
         assert_eq!(label, "dir: /tmp/output/");
         assert_eq!(
             options.first().map(|option| option.label.as_str()),
@@ -442,7 +465,7 @@ mod tests {
         ));
         assert!(active_output_requires_keystore(
             &send_hosts,
-            &secure_exporter.target_value(),
+            &secure_exporter.target_uri(),
             &secure_exporter
         ));
 
@@ -450,7 +473,7 @@ mod tests {
             .expect("directory exporter");
         assert!(!active_output_requires_keystore(
             &send_hosts,
-            &dir_exporter.target_value(),
+            &dir_exporter.target_uri(),
             &dir_exporter
         ));
     }

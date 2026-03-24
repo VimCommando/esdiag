@@ -284,8 +284,17 @@ enum KeystoreCommands {
     Migrate,
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<()> {
+const TOKIO_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(TOKIO_THREAD_STACK_SIZE)
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     // Parse CLI early to check for debug flag
     let cli = Cli::parse();
 
@@ -295,8 +304,6 @@ async fn main() -> Result<()> {
     } else {
         EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new(LOG_LEVEL))
     };
-    // Bridge log crate events from third-party dependencies into the tracing pipeline
-    tracing_log::LogTracer::init().ok();
     fmt().with_env_filter(filter).init();
 
     std::panic::set_hook(Box::new(|panic| {
@@ -575,13 +582,13 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 api_url,
             } => {
                 let file_path = uploader::default_upload_path(&file_name);
-                log::info!(
+                tracing::info!(
                     "Uploading raw diagnostic archive {} to {}",
                     file_path.display(),
                     upload_id
                 );
                 let response = uploader::upload_file(&file_path, &upload_id, &api_url).await?;
-                log::info!("Upload complete for slug {}", response.slug);
+                tracing::info!("Upload complete for slug {}", response.slug);
                 Ok("upload")
             }
             #[cfg(feature = "setup")]
