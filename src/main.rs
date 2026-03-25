@@ -302,6 +302,7 @@ async fn async_main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize tracing subscriber with debug override if flag is set
+    tracing_log::LogTracer::init()?;
     let filter = if cli.debug {
         EnvFilter::new("debug")
     } else {

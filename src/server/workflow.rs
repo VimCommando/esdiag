@@ -568,9 +568,9 @@ async fn select_processed_exporter(state: Arc<ServerState>, signals: &Signals) -
     match signals.workflow.send.mode {
         SendMode::Remote => {
             let configured = state.exporter.read().await.clone();
-            let configured_display = configured.to_string();
+            let configured_target = configured.target_uri();
             let target = signals.workflow.send.remote_target.trim();
-            if target.is_empty() || target == configured_display {
+            if target.is_empty() || target == configured_target {
                 Ok(configured)
             } else {
                 Exporter::try_from(Uri::try_from(target.to_string())?)
@@ -911,7 +911,7 @@ impl Drop for LocalPathCleanup {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_local_send_uri, validate_workflow_request};
+    use super::{select_processed_exporter, validate_local_send_uri, validate_workflow_request};
     use crate::{
         data::{HostRole, KnownHostBuilder, Uri},
         exporter::Exporter,
@@ -1033,5 +1033,27 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn remote_send_reuses_configured_exporter_for_canonical_target_uri() {
+        let state = test_state(RuntimeMode::User);
+        let host = KnownHostBuilder::new(Url::parse("https://example.com:9200").unwrap())
+            .roles(vec![HostRole::Send])
+            .build()
+            .unwrap();
+        let configured =
+            Exporter::try_from(Uri::try_from(host).unwrap()).expect("configured exporter");
+        *state.exporter.write().await = configured.clone();
+
+        let mut signals = Signals::default();
+        signals.workflow.send.mode = SendMode::Remote;
+        signals.workflow.send.remote_target = configured.target_uri();
+
+        let selected = select_processed_exporter(Arc::new(state), &signals)
+            .await
+            .expect("select exporter");
+        assert_eq!(selected.target_uri(), configured.target_uri());
+        assert_eq!(selected.to_string(), configured.to_string());
     }
 }
