@@ -110,6 +110,9 @@ enum Commands {
             long_help = "Target to send the processed diagnostic documents to (known host, file, stdout, or env). Strings will be checked against the known hosts stored in `~/.esdiag/hosts.yml` and will fallback to a filename if not found. Use `-` for stdout. If nothing is provided, the output will try using the environment variables: ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, and ESDIAG_OUTPUT_PASSWORD."
         )]
         output: Option<String>,
+        /// Web runtime mode for the server
+        #[arg(long, value_enum, help = "Web runtime mode: user or service")]
+        mode: Option<RuntimeMode>,
         /// Kibana URL to display in the web interface
         #[arg(
             long,
@@ -345,6 +348,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
             Commands::Serve {
                 port,
                 output,
+                mode,
                 kibana,
             } => {
                 tracing::info!("Starting ESDiag server");
@@ -361,8 +365,9 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     }
                 });
 
+                let runtime_mode = resolve_serve_runtime_mode(mode)?;
                 let (mut server, _bound_addr) =
-                    Server::start([0, 0, 0, 0], port, exporter, kibana_url, RuntimeMode::User)
+                    Server::start([0, 0, 0, 0], port, exporter, kibana_url, runtime_mode)
                         .await?;
 
                 wait_for_shutdown_signal().await?;
@@ -871,16 +876,32 @@ fn clear_last_run_files() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "server")]
+fn resolve_serve_runtime_mode(mode: Option<RuntimeMode>) -> Result<RuntimeMode> {
+    if let Some(mode) = mode {
+        return Ok(mode);
+    }
+    match std::env::var("ESDIAG_MODE") {
+        Ok(value) => RuntimeMode::from_env(&value),
+        Err(std::env::VarError::NotPresent) => Ok(RuntimeMode::User),
+        Err(err) => Err(eyre!("Failed to read ESDIAG_MODE: {err}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         Cli, Commands, host_connection_uses_receiver, resolve_host_secret_auth,
         should_error_for_missing_subcommand,
     };
+    #[cfg(feature = "server")]
+    use super::resolve_serve_runtime_mode;
     use clap::Parser;
     use esdiag::data::{
         ElasticCloud, HostRole, KnownHost, Product, SecretAuth, Uri, upsert_secret_auth,
     };
+    #[cfg(feature = "server")]
+    use esdiag::server::RuntimeMode;
     use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
     use url::Url;
@@ -1018,6 +1039,53 @@ mod tests {
 
         let resolved = resolve_host_secret_auth(Some("basic-secret")).expect("resolve auth");
         assert!(matches!(resolved, Some(SecretAuth::Basic { .. })));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_runtime_mode_prefers_explicit_flag_over_env() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_MODE", "service");
+        }
+
+        let resolved = resolve_serve_runtime_mode(Some(RuntimeMode::User)).expect("resolve mode");
+
+        assert_eq!(resolved, RuntimeMode::User);
+
+        unsafe {
+            std::env::remove_var("ESDIAG_MODE");
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_runtime_mode_uses_env_when_flag_missing() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_MODE", "service");
+        }
+
+        let resolved = resolve_serve_runtime_mode(None).expect("resolve mode");
+
+        assert_eq!(resolved, RuntimeMode::Service);
+
+        unsafe {
+            std::env::remove_var("ESDIAG_MODE");
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_runtime_mode_defaults_to_user_without_flag_or_env() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::remove_var("ESDIAG_MODE");
+        }
+
+        let resolved = resolve_serve_runtime_mode(None).expect("resolve mode");
+
+        assert_eq!(resolved, RuntimeMode::User);
     }
 }
 

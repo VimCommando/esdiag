@@ -214,6 +214,95 @@ pub async fn workflow_page(
     Html(html).into_response()
 }
 
+pub async fn jobs_page(
+    State(state): State<Arc<ServerState>>,
+    Query(params): Query<Params>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let (auth_header, user_email) = match state.resolve_user_email(&headers) {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::warn!("Authentication header validation failed: {err}");
+            return (
+                StatusCode::UNAUTHORIZED,
+                Html(format!(
+                    "<html><body><h1>Unauthorized</h1><p>{}</p></body></html>",
+                    err
+                )),
+            )
+                .into_response();
+        }
+    };
+    let user_initial = user_email
+        .chars()
+        .next()
+        .unwrap_or('_')
+        .to_ascii_uppercase();
+
+    let allows_local_runtime_features =
+        state.runtime_mode_policy.allows_local_runtime_features();
+    let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
+    let exporter = { state.exporter.read().await.clone() };
+    let send_defaults = classify_configured_exporter(&exporter);
+    let (collect_hosts, collect_secure_hosts, send_remote_hosts, send_local_hosts, send_secure_hosts) =
+        workflow_host_options(&state);
+    let default_save_dir = default_downloads_dir().display().to_string();
+    let process_options_json =
+        serde_json::to_string(&ApiResolver::processing_catalog().unwrap_or_default())
+            .unwrap_or_else(|_| "{}".to_string());
+    let theme_dark = get_theme_dark(&headers);
+    let kibana_url = { state.kibana_url.read().await.clone() };
+    let (keystore_locked, keystore_lock_time) = if can_use_keystore {
+        state.keystore_status_for(&user_email).await
+    } else {
+        (true, 0)
+    };
+    let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
+    let page = template::Jobs {
+        auth_header,
+        debug: tracing::enabled!(tracing::Level::DEBUG),
+        desktop: cfg!(feature = "desktop"),
+        collect_hosts,
+        collect_secure_hosts_json: serde_json::to_string(&collect_secure_hosts)
+            .unwrap_or_else(|_| "[]".to_string()),
+        configured_local_path: send_defaults.local_path,
+        configured_remote_target: send_defaults.remote_target,
+        default_save_dir,
+        initial_send_mode: send_defaults.mode,
+        initial_local_target: send_defaults.local_target,
+        initial_remote_target: send_defaults.remote_target_default,
+        kibana_url,
+        key_id: params.key_id,
+        link_id: params.link_id,
+        process_options_json,
+        send_secure_hosts_json: serde_json::to_string(&send_secure_hosts)
+            .unwrap_or_else(|_| "[]".to_string()),
+        send_local_hosts,
+        send_remote_hosts,
+        upload_id: params.upload_id,
+        stats: state.get_stats_as_signals().await,
+        user: user_email,
+        user_initial,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        theme_dark,
+        runtime_mode: state.runtime_mode.to_string(),
+        can_use_keystore,
+        keystore_locked,
+        keystore_lock_time,
+        show_keystore_bootstrap,
+    };
+
+    let html = match page.render() {
+        Ok(html) => html,
+        Err(err) => format!(
+            "<html><body><h1>Internal Server Error</h1><p>{}</p></body></html>",
+            err
+        ),
+    };
+
+    Html(html).into_response()
+}
+
 struct SendDefaults {
     mode: String,
     local_path: String,

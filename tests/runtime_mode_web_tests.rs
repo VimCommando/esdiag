@@ -55,10 +55,10 @@ async fn service_mode_requires_iap_header_for_web_access() {
 }
 
 #[tokio::test]
-async fn service_mode_workflow_does_not_render_process_unlock_routes() {
+async fn service_mode_does_not_mount_workflow_or_jobs_routes() {
     let (mut server, client, base) = start_server(RuntimeMode::Service).await;
 
-    let response = client
+    let workflow_response = client
         .get(format!("{base}/workflow"))
         .header(
             "X-Goog-Authenticated-User-Email",
@@ -66,13 +66,19 @@ async fn service_mode_workflow_does_not_render_process_unlock_routes() {
         )
         .send()
         .await
-        .expect("service mode request");
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-    let body = response.text().await.expect("service mode body");
-    assert!(
-        !body.contains("/keystore/modal/process"),
-        "service mode should not render process unlock modal routes"
-    );
+        .expect("service mode workflow request");
+    assert_eq!(workflow_response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let jobs_response = client
+        .get(format!("{base}/jobs"))
+        .header(
+            "X-Goog-Authenticated-User-Email",
+            "accounts.google.com:ops@example.com",
+        )
+        .send()
+        .await
+        .expect("service mode jobs request");
+    assert_eq!(jobs_response.status(), reqwest::StatusCode::NOT_FOUND);
 
     server.shutdown().await;
 }
@@ -116,7 +122,7 @@ async fn service_mode_does_not_mount_keystore_routes() {
         .send()
         .await
         .expect("service mode keystore request without header");
-    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 
     let response = client
         .post(format!("{base}/keystore/unlock"))
@@ -223,38 +229,6 @@ async fn user_mode_workflow_shows_known_host_collect_and_local_save_defaults() {
         "data-attr:disabled=\"$workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file'\""
     ));
     assert!(body.contains("placeholder=\"/"));
-
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn service_mode_workflow_hides_known_host_selection_and_keeps_browser_download_save() {
-    let (mut server, client, base) = start_server(RuntimeMode::Service).await;
-
-    let response = client
-        .get(format!("{base}/workflow"))
-        .header(
-            "X-Goog-Authenticated-User-Email",
-            "accounts.google.com:ops@example.com",
-        )
-        .send()
-        .await
-        .expect("service mode authorized request");
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-    let body = response.text().await.expect("service mode body");
-
-    assert!(body.contains("data-signals:workflow.collect.mode=\"'upload'\""));
-    assert!(body.contains("data-signals:workflow.collect.source=\"'upload-file'\""));
-    assert!(body.contains("id=\"collect-save-toggle\""));
-    assert!(body.contains("id=\"upload-form\""));
-    assert!(!body.contains(">Known Host<"));
-    assert!(!body.contains("data-on:click=\"$workflow.collect.source = 'known-host'\""));
-    assert!(body.contains(
-        "data-attr:disabled=\"$workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file'\""
-    ));
-    assert!(body.contains(
-        "Saved bundles are retained server-side and downloaded automatically through the browser."
-    ));
 
     server.shutdown().await;
 }

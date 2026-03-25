@@ -57,24 +57,28 @@
             </tab-links>
 
             <div data-show="$workflow.collect.mode === 'collect'">
-                <tab-links class="stage-options nested">
+                <button-group
+                    class="stage-options nested"
+                    role="group"
+                    aria-label="Choose a collection method"
+                >
                     {% if runtime_mode == "user" %}
                     <button
-                        class="tab active"
+                        type="button"
                         data-on:click="$workflow.collect.source = 'known-host'"
-                        data-class:active="$workflow.collect.source === 'known-host'"
+                        data-attr:aria-pressed="$workflow.collect.source === 'known-host' ? 'true' : 'false'"
                     >
                         Known Host
                     </button>
                     {% endif %}
                     <button
-                        class="tab {% if runtime_mode != "user" %}active{% endif %}"
+                        type="button"
                         data-on:click="$workflow.collect.source = 'api-key'"
-                        data-class:active="$workflow.collect.source === 'api-key'"
+                        data-attr:aria-pressed="$workflow.collect.source === 'api-key' ? 'true' : 'false'"
                     >
                         API Key
                     </button>
-                </tab-links>
+                </button-group>
 
                 {% if runtime_mode == "user" %}
                 <form
@@ -182,22 +186,26 @@
             </div>
 
             <div data-show="$workflow.collect.mode === 'upload'" style="display: none">
-                <tab-links class="stage-options nested">
+                <button-group
+                    class="stage-options nested"
+                    role="group"
+                    aria-label="Choose an existing diagnostic source"
+                >
                     <button
-                        class="tab active"
+                        type="button"
                         data-on:click="{ $workflow.collect.source = 'upload-file', $workflow.collect.save = false, $archive.download_token = '' }"
-                        data-class:active="$workflow.collect.source === 'upload-file'"
+                        data-attr:aria-pressed="$workflow.collect.source === 'upload-file' ? 'true' : 'false'"
                     >
                         Local File
                     </button>
                     <button
-                        class="tab"
+                        type="button"
                         data-on:click="$workflow.collect.source = 'service-link'"
-                        data-class:active="$workflow.collect.source === 'service-link'"
+                        data-attr:aria-pressed="$workflow.collect.source === 'service-link' ? 'true' : 'false'"
                     >
                         Service Link
                     </button>
-                </tab-links>
+                </button-group>
 
                 <form
                     id="upload-form"
@@ -227,20 +235,7 @@
                         class="dropzone"
                     >
                         <div class="file-icon">
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            >
-                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                                <polyline points="14 2 14 8 20 8"></polyline>
-                                <line x1="12" y1="18" x2="12" y2="12"></line>
-                                <line x1="9" y1="15" x2="15" y2="15"></line>
-                            </svg>
+                            <icon-upload></icon-upload>
                         </div>
                         <div id="upload-instructions">
                             <p>Select or drag and drop a <code>.zip</code> file</p>
@@ -400,11 +395,7 @@
                             uploadInstructions.classList.add("hidden");
                             dropzone.classList.add("active");
                             fileIcon.style.color = "var(--primary)";
-                            document.querySelector(".file-icon svg").innerHTML = `
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                            <polyline points="14 2 14 8 20 8"></polyline>
-                            <path d="M9 15L11 17L15 13"></path>
-                        `;
+                            fileIcon.innerHTML = "<icon-check></icon-check>";
                         } else {
                             fileInput.value = "";
                             fileInput.dispatchEvent(new Event("change", { bubbles: true }));
@@ -413,12 +404,7 @@
                             uploadInstructions.classList.remove("hidden");
                             dropzone.classList.remove("active");
                             fileIcon.style.color = "var(--text-subdued-color)";
-                            document.querySelector(".file-icon svg").innerHTML = `
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                            <polyline points="14 2 14 8 20 8"></polyline>
-                            <line x1="12" y1="18" x2="12" y2="12"></line>
-                            <line x1="9" y1="15" x2="15" y2="15"></line>
-                        `;
+                            fileIcon.innerHTML = "<icon-upload></icon-upload>";
                         }
                     }
 
@@ -585,9 +571,6 @@
                     </switch-clip>
                     <label for="collect-save-toggle">Download Archive</label>
                 </choice-row>
-                <info-text data-show="$workflow.collect.save" style="display: none">
-                    Saved bundles are retained server-side and downloaded automatically through the browser.
-                </info-text>
             </footer>
         </card>
 

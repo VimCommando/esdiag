@@ -74,6 +74,40 @@ pub struct Workflow {
 }
 
 #[derive(Template)]
+#[template(path = "jobs.html")]
+pub struct Jobs {
+    pub auth_header: bool,
+    pub debug: bool,
+    pub desktop: bool,
+    pub collect_hosts: Vec<String>,
+    pub collect_secure_hosts_json: String,
+    pub configured_local_path: String,
+    pub configured_remote_target: String,
+    pub default_save_dir: String,
+    pub initial_send_mode: String,
+    pub initial_local_target: String,
+    pub initial_remote_target: String,
+    pub kibana_url: String,
+    pub key_id: Option<u64>,
+    pub link_id: Option<u64>,
+    pub process_options_json: String,
+    pub send_secure_hosts_json: String,
+    pub send_local_hosts: Vec<String>,
+    pub send_remote_hosts: Vec<String>,
+    pub upload_id: Option<u64>,
+    pub stats: String,
+    pub user: String,
+    pub user_initial: char,
+    pub version: String,
+    pub theme_dark: bool,
+    pub runtime_mode: String,
+    pub can_use_keystore: bool,
+    pub keystore_locked: bool,
+    pub keystore_lock_time: i64,
+    pub show_keystore_bootstrap: bool,
+}
+
+#[derive(Template)]
 #[template(path = "settings.html")]
 pub struct SettingsModal {
     pub output_options: Vec<FooterOutputOption>,

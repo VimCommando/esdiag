@@ -204,7 +204,6 @@ impl Server {
             const FIVE_HUNDRED_TWELVE_MEBIBYTES: usize = 512 * 1024 * 1024;
             let app = Router::new()
                 .route("/", get(index::handler))
-                .route("/workflow", get(index::workflow_page))
                 .route("/api/service_link", post(api::service_link))
                 .route("/api/api_key", post(api::api_key))
                 .route("/api_key", post(api_key::form))
@@ -238,6 +237,13 @@ impl Server {
                 .route("/upload/process", post(file_upload::process))
                 .route("/upload/submit", post(file_upload::submit))
                 .route("/events", patch(events));
+
+            let app = if runtime_mode_policy.allows_local_runtime_features() {
+                app.route("/workflow", get(index::workflow_page))
+                    .route("/jobs", get(index::jobs_page))
+            } else {
+                app
+            };
 
             let app = app
                 .route("/settings/modal", get(settings::get_modal))
@@ -1013,14 +1019,32 @@ async fn require_authenticated_user(
     request: Request,
     next: Next,
 ) -> Response {
-    let path = request.uri().path();
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
     let path_is_routable_without_iap =
-        request.method() == axum::http::Method::OPTIONS || path.starts_with("/keystore/");
+        method == axum::http::Method::OPTIONS
+            || path.starts_with("/.well-known/")
+            || matches!(
+                path.as_str(),
+                "/datastar.js"
+                    | "/datastar.js.map"
+                    | "/documentation-outline.js"
+                    | "/esdiag.svg"
+                    | "/favicon.ico"
+                    | "/prism.js"
+                    | "/prism-bash.js"
+                    | "/prism-json.js"
+                    | "/prism-json5.js"
+                    | "/prism-rust.js"
+                    | "/prism.css"
+                    | "/style.css"
+                    | "/theme-borealis.css"
+            );
     if state.runtime_mode_policy.requires_iap_headers()
         && !path_is_routable_without_iap
         && let Err(err) = state.resolve_user_email(request.headers())
     {
-        tracing::warn!("Rejected unauthenticated request: {}", err);
+        tracing::warn!("Rejected unauthenticated request for {} {}: {}", method, path, err);
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
     }
 
