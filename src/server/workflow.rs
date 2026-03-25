@@ -50,7 +50,6 @@ pub async fn run_job(
     tx: mpsc::Sender<ServerEvent>,
     job: WorkflowJob,
 ) {
-    let cleanup = WorkflowCleanup::new(job.clone());
     let source = job.source().to_string();
     let download_token = signals.archive.download_token.trim().to_string();
     let should_track_download = signals.workflow.collect.save && !download_token.is_empty();
@@ -77,7 +76,7 @@ pub async fn run_job(
         )
         .await;
         send_terminal_signal(&tx, &state).await;
-        drop(cleanup);
+        job.cleanup().await;
         return;
     }
 
@@ -176,7 +175,7 @@ pub async fn run_job(
     }
 
     send_terminal_signal(&tx, &state).await;
-    drop(cleanup);
+    job.cleanup().await;
 }
 
 async fn execute_local_archive_job(
@@ -291,8 +290,9 @@ async fn execute_service_link_job(ctx: WorkflowExecutionContext<'_>, uri: Uri) -
         }
         ProcessMode::Forward => {
             let path = download_service_link_to_temp(&uri, job_id, source).await?;
-            let _cleanup = LocalPathCleanup::new(path.clone());
-            run_forward_job(state, tx, signals, job_id, source, &path).await
+            let result = run_forward_job(state, tx, signals, job_id, source, &path).await;
+            cleanup_local_path(&path).await;
+            result
         }
     }
 }
@@ -347,15 +347,15 @@ async fn execute_remote_collection_job(
 
     let collected =
         collect_remote_archive(job_id, host, &diagnostic_type, signals, identifiers).await?;
-    let _cleanup = match &collected.input {
+    let cleanup_path = match &collected.input {
         WorkflowInput::LocalArchive {
             cleanup_path: Some(path),
             ..
-        } => Some(LocalPathCleanup::new(path.clone())),
+        } => Some(path.clone()),
         _ => None,
     };
 
-    if let WorkflowInput::LocalArchive {
+    let result = if let WorkflowInput::LocalArchive {
         path, cleanup_path, ..
     } = collected.input
     {
@@ -409,7 +409,13 @@ async fn execute_remote_collection_job(
         }
     } else {
         Err(eyre!("Remote collection did not produce a local archive"))
+    };
+
+    if let Some(path) = cleanup_path {
+        cleanup_local_path(&path).await;
     }
+
+    result
 }
 
 async fn run_processor_job(
@@ -889,33 +895,11 @@ async fn send_terminal_signal(tx: &mpsc::Sender<ServerEvent>, state: &ServerStat
     .await;
 }
 
-struct WorkflowCleanup(Option<WorkflowJob>);
-
-impl WorkflowCleanup {
-    fn new(job: WorkflowJob) -> Self {
-        Self(Some(job))
-    }
-}
-
-impl Drop for WorkflowCleanup {
-    fn drop(&mut self) {
-        if let Some(job) = self.0.take() {
-            job.cleanup();
-        }
-    }
-}
-
-struct LocalPathCleanup(PathBuf);
-
-impl LocalPathCleanup {
-    fn new(path: PathBuf) -> Self {
-        Self(path)
-    }
-}
-
-impl Drop for LocalPathCleanup {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+async fn cleanup_local_path(path: &Path) {
+    if let Err(err) = fs::remove_file(path).await
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::debug!("Failed to clean local workflow path {}: {}", path.display(), err);
     }
 }
 

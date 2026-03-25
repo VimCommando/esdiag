@@ -920,7 +920,7 @@ impl ServerState {
 
     pub async fn discard_workflow_job(&self, id: u64) {
         if let Some(job) = self.workflow_jobs.write().await.remove(&id) {
-            job.cleanup();
+            job.cleanup().await;
         }
     }
 
@@ -1332,8 +1332,8 @@ impl WorkflowJob {
         self.input.source()
     }
 
-    pub fn cleanup(&self) {
-        self.input.cleanup();
+    pub async fn cleanup(&self) {
+        self.input.cleanup().await;
     }
 }
 
@@ -1365,16 +1365,18 @@ impl WorkflowInput {
         }
     }
 
-    pub fn cleanup(&self) {
+    pub async fn cleanup(&self) {
         if let Self::LocalArchive {
             cleanup_path: Some(path),
             ..
         } = self
         {
-            let result = if path.is_dir() {
-                std::fs::remove_dir_all(path)
-            } else {
-                std::fs::remove_file(path)
+            let metadata = tokio::fs::metadata(path).await;
+            let result = match metadata {
+                Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir_all(path).await,
+                Ok(_) => tokio::fs::remove_file(path).await,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(err),
             };
             if let Err(err) = result {
                 tracing::debug!("Failed to clean workflow input {}: {}", path.display(), err);

@@ -2,14 +2,18 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use bytes::BytesMut;
 use eyre::{Result, eyre};
-use reqwest::StatusCode;
+use reqwest::{Client, ClientBuilder, StatusCode};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::{fs::File, io::AsyncReadExt};
 
 const CHUNK_SIZE: usize = 50 * 1024 * 1024;
+const UPLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 pub const DEFAULT_UPLOAD_API_URL: &str = "https://upload.elastic.co";
 
 #[derive(Debug, Deserialize)]
@@ -23,6 +27,7 @@ pub async fn upload_file(
     upload_id: &str,
     api_url: &str,
 ) -> Result<FinalizeResponse> {
+    let client = build_http_client()?;
     let upload_id = normalize_upload_id(upload_id);
     let filename = file_path
         .file_name()
@@ -30,11 +35,11 @@ pub async fn upload_file(
         .ok_or_else(|| eyre!("Invalid upload file name"))?
         .to_string();
 
-    ensure_upload_exists(&upload_id, api_url).await?;
+    ensure_upload_exists(&client, &upload_id, api_url).await?;
 
     let file_digest = digest_file(file_path).await?;
-    upload_parts(file_path, &filename, &upload_id, &file_digest, api_url).await?;
-    finalize_upload(&upload_id, &file_digest, api_url).await
+    upload_parts(&client, file_path, &filename, &upload_id, &file_digest, api_url).await?;
+    finalize_upload(&client, &upload_id, &file_digest, api_url).await
 }
 
 pub fn normalize_upload_id(upload_id: &str) -> String {
@@ -46,8 +51,14 @@ pub fn normalize_upload_id(upload_id: &str) -> String {
         .to_string()
 }
 
-async fn ensure_upload_exists(upload_id: &str, api_url: &str) -> Result<()> {
-    let client = reqwest::Client::new();
+fn build_http_client() -> Result<Client> {
+    Ok(ClientBuilder::new()
+        .connect_timeout(UPLOAD_CONNECT_TIMEOUT)
+        .timeout(UPLOAD_REQUEST_TIMEOUT)
+        .build()?)
+}
+
+async fn ensure_upload_exists(client: &Client, upload_id: &str, api_url: &str) -> Result<()> {
     let response = client
         .head(format!("{api_url}/api/uploads/{upload_id}"))
         .send()
@@ -81,26 +92,29 @@ async fn digest_file(path: &Path) -> Result<String> {
 }
 
 async fn upload_parts(
+    client: &Client,
     file_path: &Path,
     filename: &str,
     upload_id: &str,
     file_digest: &str,
     api_url: &str,
 ) -> Result<()> {
-    let client = reqwest::Client::new();
     let mut file = File::open(file_path).await?;
     let mut part_number: i64 = 1;
-    let mut chunk = vec![0_u8; CHUNK_SIZE];
+    let mut chunk = BytesMut::with_capacity(CHUNK_SIZE);
 
     loop {
-        let bytes_read = file.read(&mut chunk).await?;
+        chunk.resize(CHUNK_SIZE, 0);
+        let bytes_read = file.read(&mut chunk[..]).await?;
         if bytes_read == 0 {
             break;
         }
+        chunk.truncate(bytes_read);
 
         let mut part_hasher = Sha256::new();
-        part_hasher.update(&chunk[..bytes_read]);
+        part_hasher.update(&chunk);
         let part_digest = hex_digest(part_hasher.finalize());
+        let body = chunk.split().freeze();
 
         let response = client
             .put(format!("{api_url}/api/uploads/{upload_id}"))
@@ -110,7 +124,7 @@ async fn upload_parts(
                 ("part_number", &part_number.to_string()),
                 ("part_digest", &part_digest),
             ])
-            .body(chunk[..bytes_read].to_vec())
+            .body(body)
             .send()
             .await?;
 
@@ -129,11 +143,11 @@ async fn upload_parts(
 }
 
 async fn finalize_upload(
+    client: &Client,
     upload_id: &str,
     file_digest: &str,
     api_url: &str,
 ) -> Result<FinalizeResponse> {
-    let client = reqwest::Client::new();
     let response = client
         .post(format!(
             "{api_url}/api/uploads/{upload_id}/{file_digest}/_finalize"
