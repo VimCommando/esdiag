@@ -16,20 +16,10 @@
                 if ($workflow.collect.save && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')) {
                     const token = $archive.download_token || crypto.randomUUID();
                     $archive.download_token = token;
-                    if (window.esdiagStartRetainedDownload) {
-                        window.esdiagStartRetainedDownload({
-                            token,
-                            anchorId: document.getElementById('jobs-download-anchor') ? 'jobs-download-anchor' : 'workflow-download-anchor',
-                            saveDir: $workflow.collect.save_dir,
-                            preferDirectoryPicker: !!document.getElementById('jobs-download-anchor'),
-                        });
-                    } else {
-                        const anchor = document.getElementById('workflow-download-anchor');
-                        if (anchor) {
-                            anchor.href = `/workflow/download/${token}`;
-                            anchor.click();
-                        }
-                    }
+                    $archive.pending_token = token;
+                    $archive.ready_token = '';
+                    $archive.status = 'waiting';
+                    $archive.error = '';
                 }
                 @post('/keystore/unlock', {contentType: 'form'});
             }"

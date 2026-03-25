@@ -31,6 +31,17 @@ struct JobDescriptor<'a> {
     id: u64,
     source: &'a str,
 }
+
+struct WorkflowExecutionContext<'a> {
+    state: Arc<ServerState>,
+    signals: &'a Signals,
+    job_id: u64,
+    source: &'a str,
+    identifiers: Identifiers,
+    request_user: &'a str,
+    tx: &'a mpsc::Sender<ServerEvent>,
+}
+
 pub async fn run_job(
     state: Arc<ServerState>,
     signals: Signals,
@@ -99,14 +110,16 @@ pub async fn run_job(
         }
         WorkflowInput::FromServiceLink { uri, .. } => {
             execute_service_link_job(
-                state.clone(),
-                &signals,
-                job_id,
+                WorkflowExecutionContext {
+                    state: state.clone(),
+                    signals: &signals,
+                    job_id,
+                    source: &source,
+                    identifiers,
+                    request_user: &request_user,
+                    tx: &tx,
+                },
                 uri.clone(),
-                &source,
-                identifiers,
-                &request_user,
-                &tx,
             )
             .await
         }
@@ -116,14 +129,17 @@ pub async fn run_job(
             ..
         } => {
             execute_remote_collection_job(
-                state.clone(),
-                &signals,
-                job_id,
+                WorkflowExecutionContext {
+                    state: state.clone(),
+                    signals: &signals,
+                    job_id,
+                    source: &source,
+                    identifiers,
+                    request_user: &request_user,
+                    tx: &tx,
+                },
                 host.clone(),
                 diagnostic_type.clone(),
-                identifiers,
-                &request_user,
-                &tx,
             )
             .await
         }
@@ -192,16 +208,17 @@ async fn execute_local_archive_job(
     }
 }
 
-async fn execute_service_link_job(
-    state: Arc<ServerState>,
-    signals: &Signals,
-    job_id: u64,
-    uri: Uri,
-    source: &str,
-    identifiers: Identifiers,
-    request_user: &str,
-    tx: &mpsc::Sender<ServerEvent>,
-) -> Result<()> {
+async fn execute_service_link_job(ctx: WorkflowExecutionContext<'_>, uri: Uri) -> Result<()> {
+    let WorkflowExecutionContext {
+        state,
+        signals,
+        job_id,
+        source,
+        identifiers,
+        request_user,
+        tx,
+    } = ctx;
+
     if signals.workflow.collect.save {
         state.record_job_started().await;
         send_event(
@@ -281,15 +298,20 @@ async fn execute_service_link_job(
 }
 
 async fn execute_remote_collection_job(
-    state: Arc<ServerState>,
-    signals: &Signals,
-    job_id: u64,
+    ctx: WorkflowExecutionContext<'_>,
     host: crate::data::KnownHost,
     diagnostic_type: String,
-    identifiers: Identifiers,
-    request_user: &str,
-    tx: &mpsc::Sender<ServerEvent>,
 ) -> Result<()> {
+    let WorkflowExecutionContext {
+        state,
+        signals,
+        job_id,
+        identifiers,
+        request_user,
+        tx,
+        ..
+    } = ctx;
+
     let source = host.get_url().to_string();
     if signals.workflow.process.mode == ProcessMode::Process && !signals.workflow.collect.save {
         let receiver = Arc::new(Receiver::try_from(host)?);

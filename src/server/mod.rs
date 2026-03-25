@@ -452,6 +452,13 @@ fn now_epoch_seconds() -> i64 {
 }
 
 impl ServerState {
+    fn retained_bundle_signal(token: &str, status: &str, error: Option<&str>) -> ServerEvent {
+        let error = serde_json::to_string(error.unwrap_or("")).unwrap_or_else(|_| "\"\"".to_string());
+        signal_event(format!(
+            r#"{{"archive":{{"ready_token":"{token}","status":"{status}","error":{error}}}}}"#
+        ))
+    }
+
     fn apply_keystore_timeout_locked(state: &mut KeystoreSessionState) -> bool {
         let was_locked = state.locked;
         state.apply_timeout();
@@ -772,6 +779,7 @@ impl ServerState {
                 expires_at_epoch,
             },
         );
+        self.publish_event(Self::retained_bundle_signal(&token, "ready", None));
         token
     }
 
@@ -828,6 +836,7 @@ impl ServerState {
         if token.trim().is_empty() {
             return;
         }
+        let error = error.into();
         let expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
         let mut bundles = self.retained_bundles.write().await;
         let bundle = bundles
@@ -842,8 +851,10 @@ impl ServerState {
             });
         bundle.owner = owner.to_string();
         bundle.accepted = false;
-        bundle.error = Some(error.into());
+        bundle.error = Some(error.clone());
         bundle.expires_at_epoch = expires_at_epoch;
+        drop(bundles);
+        self.publish_event(Self::retained_bundle_signal(token, "error", Some(&error)));
     }
 
     pub async fn retained_bundle(&self, token: &str) -> Option<RetainedBundle> {
@@ -1174,6 +1185,14 @@ impl Default for Signals {
 pub struct ArchiveSignals {
     #[serde(default)]
     pub download_token: String,
+    #[serde(default)]
+    pub pending_token: String,
+    #[serde(default)]
+    pub ready_token: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub error: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]

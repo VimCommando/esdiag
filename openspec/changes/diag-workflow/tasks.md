@@ -1,6 +1,6 @@
 ## 1. Workflow UI Structure
 
-- [x] 1.1 Replace the single home page workflow panel with separate `Collect`, `Process`, and `Send` panels in the main template.
+- [x] 1.1 Add dedicated advanced workflow pages with separate `Collect`, `Process`, and `Send` panels while leaving the main home page unchanged for now.
 - [x] 1.2 Expand the web signal/state model to track the selected mode for each stage (`Collect`/`Upload`, `Process`/`Forward`, `Remote`/`Local`) plus each mode's configuration independently.
 - [x] 1.3 Add mode-aware `Collect -> Collect` inputs for known-host selection, direct URL/API-key entry, Elastic Upload Service input, diagnostic type selection, and `Save` controls that advertise browser-managed retained downloads instead of a user-entered directory target.
 - [x] 1.4 Add `Collect -> Upload` inputs for drag-and-drop and file-picker local archive intake.
@@ -28,7 +28,7 @@
 - [x] 4.3 Add `Send -> Local` behavior for processed-output delivery to localhost diagnostic clusters or local directories.
 - [x] 4.4 Filter known-host send targets to Elasticsearch hosts with the `send` role, further restrict local known-host targets to `localhost`/`127.0.0.1`, and disable incompatible target types as `Collect` and `Process` selections change.
 - [x] 4.5 Implement `Forward + Local` behavior so local send is disabled, the UI explains that the local bundle download is handled in `Collect`, and `Collect` save is automatically enabled if it was off.
-- [x] 4.6 Enforce user/service mode validation rules for remote collection credentials, known-host usage, and retained browser-download bundle behavior in the new workflow.
+- [x] 4.6 Enforce runtime-mode validation rules for known-host usage and retained browser-download bundle behavior in the new workflow, while keeping advanced workflow routes user-mode-only for now.
 - [x] 4.7 Auto-initiate the retained bundle download from the same `Go` action through a separate browser request/action while allowing processing and send status to continue over SSE.
 
 ## 5. Elastic Uploader
@@ -39,11 +39,11 @@
 
 ## 6. Verification
 
-- [x] 6.1 Add or update UI/integration tests covering `Collect -> Collect` in user mode with known-host selection, service mode with explicit endpoint/API-key entry, and `Collect -> Upload`.
+- [x] 6.1 Add or update UI/integration tests covering `Collect -> Collect` in user mode with known-host selection, `Collect -> Upload`, and service-mode route gating for advanced workflow pages.
 - [x] 6.2 Add or update tests for `Process -> Process` and `Process -> Forward`, including advanced processor filtering and required dependency locking.
 - [x] 6.3 Add or update tests that invalid `Send` targets become disabled when `Collect` or `Process` options make them incompatible.
 - [x] 6.4 Add or update tests for `Send -> Local` processed delivery to localhost clusters/directories and `Forward + Local` auto-enabling `Collect` save/download behavior.
-- [x] 6.5 Add or update tests for browser-managed saved bundle download behavior in both `user` and `service` modes, including auto-trigger from the same workflow execution.
+- [x] 6.5 Add or update tests for browser-managed saved bundle download behavior in the user-mode advanced workflow, including auto-trigger from the same workflow execution.
 - [x] 6.6 Add or update tests for retained bundle download endpoints and cleanup semantics.
 - [x] 6.6 Add or update tests for the `upload` CLI command and forwarded remote uploader behavior.
 - [x] 6.7 Run `cargo clippy` and resolve any new warnings in changed code.

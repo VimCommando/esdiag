@@ -155,8 +155,7 @@ pub async fn workflow_page(
     let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
     let exporter = { state.exporter.read().await.clone() };
     let send_defaults = classify_configured_exporter(&exporter);
-    let (collect_hosts, collect_secure_hosts, send_remote_hosts, send_local_hosts, send_secure_hosts) =
-        workflow_host_options(&state);
+    let workflow_hosts = workflow_host_options(&state);
     let default_save_dir = default_downloads_dir().display().to_string();
     let process_options_json =
         serde_json::to_string(&ApiResolver::processing_catalog().unwrap_or_default())
@@ -173,8 +172,8 @@ pub async fn workflow_page(
         auth_header,
         debug: tracing::enabled!(tracing::Level::DEBUG),
         desktop: cfg!(feature = "desktop"),
-        collect_hosts,
-        collect_secure_hosts_json: serde_json::to_string(&collect_secure_hosts)
+        collect_hosts: workflow_hosts.collect_hosts,
+        collect_secure_hosts_json: serde_json::to_string(&workflow_hosts.collect_secure_hosts)
             .unwrap_or_else(|_| "[]".to_string()),
         configured_local_path: send_defaults.local_path,
         configured_remote_target: send_defaults.remote_target,
@@ -186,10 +185,10 @@ pub async fn workflow_page(
         key_id: params.key_id,
         link_id: params.link_id,
         process_options_json,
-        send_secure_hosts_json: serde_json::to_string(&send_secure_hosts)
+        send_secure_hosts_json: serde_json::to_string(&workflow_hosts.send_secure_hosts)
             .unwrap_or_else(|_| "[]".to_string()),
-        send_local_hosts,
-        send_remote_hosts,
+        send_local_hosts: workflow_hosts.send_local_hosts,
+        send_remote_hosts: workflow_hosts.send_remote_hosts,
         upload_id: params.upload_id,
         stats: state.get_stats_as_signals().await,
         user: user_email,
@@ -244,8 +243,7 @@ pub async fn jobs_page(
     let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
     let exporter = { state.exporter.read().await.clone() };
     let send_defaults = classify_configured_exporter(&exporter);
-    let (collect_hosts, collect_secure_hosts, send_remote_hosts, send_local_hosts, send_secure_hosts) =
-        workflow_host_options(&state);
+    let workflow_hosts = workflow_host_options(&state);
     let default_save_dir = default_downloads_dir().display().to_string();
     let process_options_json =
         serde_json::to_string(&ApiResolver::processing_catalog().unwrap_or_default())
@@ -262,8 +260,8 @@ pub async fn jobs_page(
         auth_header,
         debug: tracing::enabled!(tracing::Level::DEBUG),
         desktop: cfg!(feature = "desktop"),
-        collect_hosts,
-        collect_secure_hosts_json: serde_json::to_string(&collect_secure_hosts)
+        collect_hosts: workflow_hosts.collect_hosts,
+        collect_secure_hosts_json: serde_json::to_string(&workflow_hosts.collect_secure_hosts)
             .unwrap_or_else(|_| "[]".to_string()),
         configured_local_path: send_defaults.local_path,
         configured_remote_target: send_defaults.remote_target,
@@ -275,10 +273,10 @@ pub async fn jobs_page(
         key_id: params.key_id,
         link_id: params.link_id,
         process_options_json,
-        send_secure_hosts_json: serde_json::to_string(&send_secure_hosts)
+        send_secure_hosts_json: serde_json::to_string(&workflow_hosts.send_secure_hosts)
             .unwrap_or_else(|_| "[]".to_string()),
-        send_local_hosts,
-        send_remote_hosts,
+        send_local_hosts: workflow_hosts.send_local_hosts,
+        send_remote_hosts: workflow_hosts.send_remote_hosts,
         upload_id: params.upload_id,
         stats: state.get_stats_as_signals().await,
         user: user_email,
@@ -311,6 +309,14 @@ struct SendDefaults {
     remote_target_default: String,
 }
 
+struct WorkflowHostOptions {
+    collect_hosts: Vec<String>,
+    collect_secure_hosts: Vec<String>,
+    send_remote_hosts: Vec<String>,
+    send_local_hosts: Vec<String>,
+    send_secure_hosts: Vec<String>,
+}
+
 fn classify_configured_exporter(exporter: &Exporter) -> SendDefaults {
     let target_uri = exporter.target_uri();
     match exporter {
@@ -338,11 +344,15 @@ fn classify_configured_exporter(exporter: &Exporter) -> SendDefaults {
     }
 }
 
-fn workflow_host_options(
-    state: &Arc<ServerState>,
-) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+fn workflow_host_options(state: &Arc<ServerState>) -> WorkflowHostOptions {
     if !state.runtime_mode_policy.allows_host_management() {
-        return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        return WorkflowHostOptions {
+            collect_hosts: Vec::new(),
+            collect_secure_hosts: Vec::new(),
+            send_remote_hosts: Vec::new(),
+            send_local_hosts: Vec::new(),
+            send_secure_hosts: Vec::new(),
+        };
     }
 
     let names = KnownHost::list_all().unwrap_or_default();
@@ -375,13 +385,13 @@ fn workflow_host_options(
         }
     }
 
-    (
+    WorkflowHostOptions {
         collect_hosts,
         collect_secure_hosts,
         send_remote_hosts,
         send_local_hosts,
         send_secure_hosts,
-    )
+    }
 }
 
 fn is_local_host(host: &str) -> bool {

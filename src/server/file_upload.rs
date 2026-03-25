@@ -16,6 +16,7 @@ use datastar::axum::ReadSignals;
 use reqwest::StatusCode;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::{fs::File, io::AsyncWriteExt};
 use uuid::Uuid;
 
 pub async fn submit(
@@ -59,43 +60,33 @@ pub async fn submit(
                     class="status-box history-item processing"
                     data-init="$loading=false; $file_upload.job_id={job_id}; if ({can_use_keystore} && $keystore.locked && $output.secure) {{ $_pending_workflow_action = 'upload-process'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process'); }} else {{ @post('/upload/process', {{openWhenHidden: true}}); }}"
                 >
-                    <div class="spinner"></div> Processing diagnostic
-                        <p><b>Filename:</b> {filename}</p>
-                    </div>
+                    <div class="spinner"></div>
+                    <span>Processing diagnostic</span>
+                    <p><b>Filename:</b> {filename}</p>
                 </div>"#
             );
 
-            match field.bytes().await {
-                Ok(data) => {
-                    let temp_upload_path = std::env::temp_dir()
-                        .join(format!("esdiag-upload-{job_id}-{}.zip", Uuid::new_v4()));
-                    if let Err(err) = std::fs::write(&temp_upload_path, &data) {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            Html(format!(
-                                r#"<div id="job-{job_id}" class="status-box history-item error">
-                            🛑 Error staging upload: {err}
-                        </div>"#
-                            )),
-                        );
-                    }
+            let temp_upload_path =
+                std::env::temp_dir().join(format!("esdiag-upload-{job_id}-{}.zip", Uuid::new_v4()));
+            match stage_upload_field(field, &temp_upload_path).await {
+                Ok(()) => {
                     state.push_upload(job_id, filename, temp_upload_path).await;
 
-                    // Add a cleanup task to prevent memory leaks if /upload/process is never called
+                    // Add a cleanup task to remove abandoned staged uploads.
                     let state_clone = state.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
                         if state_clone.workflow_jobs.read().await.contains_key(&job_id) {
                             state_clone.discard_workflow_job(job_id).await;
                             tracing::warn!(
-                                "Upload job {} was never processed and was removed from state to free memory",
+                                "Upload job {} was never processed and was removed from state to clean up the staged upload",
                                 job_id
                             );
                         }
                     });
                 }
                 Err(e) => {
-                    let error_msg = format!("Failed to read upload data: {}", e);
+                    let error_msg = format!("Failed to stage upload data: {}", e);
                     tracing::error!("{}", error_msg);
                     state.record_failure().await;
                     return (
@@ -130,6 +121,17 @@ pub async fn submit(
             )),
         )
     }
+}
+
+async fn stage_upload_field(
+    mut field: axum::extract::multipart::Field<'_>,
+    path: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    let mut file = File::create(path).await?;
+    while let Some(chunk) = field.chunk().await.map_err(std::io::Error::other)? {
+        file.write_all(&chunk).await?;
+    }
+    file.flush().await
 }
 
 pub async fn process(

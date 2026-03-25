@@ -1,13 +1,13 @@
 ## Context
 
-The current home page is organized around a single "Process Diagnostics" panel with tabbed intake sources. That shape assumes every workflow immediately processes a diagnostic after intake, even though the product now needs to support three different execution paths: collect and process, collect and send without processing, and process an already-available archive before sending it onward.
+The current home page is organized around a single "Process Diagnostics" panel with tabbed intake sources. That shape assumes every workflow immediately processes a diagnostic after intake, even though the product now needs to support three different execution paths: collect and process, collect and send without processing, and process an already-available archive before sending it onward. For now, the main page will remain unchanged while a more explicit staged workflow lives on dedicated advanced pages.
 
-This change cuts across the web template layer, Datastar signal model, server request handlers, and workflow orchestration. It also has mode-aware behavior: `user` mode can use locally persisted known hosts, while `service` mode must avoid local host persistence and require explicit remote credentials. The design must preserve existing collection sources while making the execution path explicit and safe, with each stage choosing between two concrete modes instead of a single generic form. Saved bundles must work in both modes, which means the browser workflow cannot depend on direct writes to a user-selected local path.
+This change cuts across the web template layer, Datastar signal model, server request handlers, and workflow orchestration. It also has mode-aware behavior: `user` mode can use locally persisted known hosts, while `service` mode must avoid local host persistence and keep the advanced workflow routes disabled until further design is complete. The design must preserve existing collection sources while making the execution path explicit and safe, with each stage choosing between two concrete modes instead of a single generic form. Saved bundles must work through browser-managed downloads rather than direct writes to a user-selected local path.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Introduce a clear three-stage workflow model with `Collect`, `Process`, and `Send` panels on the home page.
+- Introduce a clear three-stage workflow model with `Collect`, `Process`, and `Send` panels on dedicated advanced workflow pages while leaving the home page unchanged for now.
 - Separate source selection from processing options and delivery options so each stage can be chosen, validated, and executed independently.
 - Model each stage with two explicit modes:
   - `Collect`: `Collect` or `Upload`
@@ -34,11 +34,11 @@ This change cuts across the web template layer, Datastar signal model, server re
    - Rationale: The requested workflow is not just a visual split; it is a decision tree where each stage chooses one of two behaviors that materially changes validation and execution.
    - Alternatives considered:
      - Keep the current tabs and add more conditional sections: rejected because validation and send/skip-processing flows become harder to reason about.
-     - Split each path into a separate route/page: rejected because the requested experience is a single staged home page workflow.
+     - Replace the main page immediately: rejected for now because the staged workflow needs more iteration before becoming the default landing experience.
 
 2. **Normalize both remote collection and local upload into one workflow input contract**
    - Decision: `Collect -> Collect` and `Collect -> Upload` SHALL both resolve into a shared workflow input contract describing the archive kind, provenance, whether the bundle is already local, and whether a retained downloadable copy exists. When `Collect` save is enabled, the workflow SHALL retain a server-managed archive bundle that can be reused by downstream processing/forwarding and exposed to the browser through a separate download action.
-   - Rationale: Downstream `Process` and `Send` stages should consume one normalized contract instead of branching on raw form origin, and bundle retention must work in both `user` and `service` web runtimes without requiring direct filesystem writes to a user-selected path.
+   - Rationale: Downstream `Process` and `Send` stages should consume one normalized contract instead of branching on raw form origin, and bundle retention must work in the user-mode advanced workflow without requiring direct filesystem writes to a user-selected path.
    - Alternatives considered:
      - Let process/send handlers inspect original form payloads directly: rejected because it couples downstream stages to UI source details.
 
@@ -72,15 +72,15 @@ This change cuts across the web template layer, Datastar signal model, server re
      - Allow any checkbox to be deselected and fail only during execution: rejected because it creates confusing late validation and weakens trust in the processing controls.
      - Hide required processors entirely: rejected because users still need visibility into why certain processors are always included.
 
-7. **Keep runtime-mode boundaries at the input/validation layer**
-   - Decision: `user` mode SHALL allow known-host selection in `Collect -> Collect`, while `service` mode SHALL use explicit endpoint/API key inputs and SHALL not depend on persisted local host settings. Saved-bundle behavior SHALL use the same browser download contract in both modes rather than mode-specific local-path handling.
-   - Rationale: This preserves the existing runtime-mode contract while still allowing the same high-level workflow in both modes.
+7. **Keep advanced workflow routes user-mode-only for now**
+   - Decision: The staged workflow routes SHALL remain available only in `user` mode until service-mode workflow UX and security design are complete. Service mode SHALL continue to avoid local host persistence and SHALL not mount `/workflow` or `/jobs`.
+   - Rationale: This preserves the current service-mode boundary while leaving room for a later design pass before exposing advanced workflow configuration on shared instances.
    - Alternatives considered:
-     - Allow service mode to read local known hosts for convenience: rejected because it violates the existing shared-instance contract.
+     - Expose the advanced workflow in service mode immediately with explicit credentials: deferred because the interaction and trust boundaries still need design work.
 
 8. **Make bundle save browser-managed instead of path-managed**
    - Decision: When `Save Bundle` is enabled, the workflow SHALL retain a server-managed archive bundle and auto-initiate browser download through a separate request/action from the same `Go` click. The web UI SHALL NOT require a user-entered local save path.
-   - Rationale: Browser-managed download works in both `service` mode and Tauri-wrapped `user` mode, while direct writes to a user-selected local path do not.
+   - Rationale: Browser-managed download works in the user-mode browser and Tauri-wrapped desktop flows, while direct writes to a user-selected local path do not.
    - Alternatives considered:
      - Keep a configurable local directory target in the browser workflow: rejected because it does not work reliably in service deployments or browser-wrapped desktop shells.
      - Transfer the file over the workflow SSE response: rejected because the SSE stream must remain dedicated to workflow status updates and job progress.
@@ -126,13 +126,13 @@ This change cuts across the web template layer, Datastar signal model, server re
 
 ## Migration Plan
 
-1. Introduce workflow state and template structure for the three-panel home page while preserving existing backend handlers behind adapted orchestration.
+1. Introduce workflow state and template structure for dedicated advanced workflow pages while preserving the existing home page and backend handlers behind adapted orchestration.
 2. Add collect/upload normalization so remote collection, uploader-service intake, and local upload all produce a shared workflow result, with retained downloadable archive bundles when save is requested.
 3. Preserve the current one-job on-demand path for unsaved collect-plus-process-plus-send and add the saved two-job handoff path, including browser-triggered download from the retained bundle.
 4. Add explicit process/forward controls, implemented-option filtering sourced from product processor implementations or an equivalent enum/registry with dependency metadata, and required-processor locking.
 5. Add remote/local send controls by moving output-target selection from the footer into the send panel, including localhost/local-directory processed delivery and forward-plus-local normalization into `Collect` save/download behavior.
 6. Implement the new Elastic Upload Service exporter/CLI capability for forwarded raw bundles.
-7. Update user/service mode validation to match the new panel inputs and browser-managed saved-bundle behavior.
+7. Keep advanced workflow routes user-mode-only for now while updating runtime validation and browser-managed saved-bundle behavior for the staged workflow implementation.
 8. Add UI and integration coverage for collect/upload, process/forward, remote/local send flows, and uploader behavior.
 
 Rollback strategy:

@@ -466,7 +466,8 @@ mod tests {
     use super::*;
     use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
     use serde_json::json;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
     use tokio::net::TcpListener;
 
     /// Spin up a minimal Axum server that returns `status_sequence` in order,
@@ -480,7 +481,7 @@ mod tests {
 
         async fn bulk_handler(State(state): State<MockState>) -> impl IntoResponse {
             let idx = {
-                let mut c = state.call_count.lock().unwrap();
+                let mut c = state.call_count.lock().await;
                 let v = *c;
                 *c += 1;
                 v
@@ -531,7 +532,7 @@ mod tests {
         (url, call_count)
     }
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
     struct RetryEnvGuard {
         prev_max: Option<String>,
@@ -574,7 +575,7 @@ mod tests {
 
     #[tokio::test]
     async fn retries_on_429_then_succeeds() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().await;
         let _env = RetryEnvGuard::set("5");
         let (url, call_count) = mock_bulk_server(vec![429, 429, 200]).await;
         let exporter = ElasticsearchExporter::try_new(url, Auth::None).unwrap();
@@ -587,12 +588,12 @@ mod tests {
         let br = result.unwrap();
         assert_eq!(br.retries, 2, "expected 2 retries");
         assert_eq!(br.errors, 0);
-        assert_eq!(*call_count.lock().unwrap(), 3, "expected 3 total attempts");
+        assert_eq!(*call_count.lock().await, 3, "expected 3 total attempts");
     }
 
     #[tokio::test]
     async fn exhausted_retries_returns_ok_with_errors() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().await;
         // max_retries=2 → 1 initial + 2 retries = 3 total, all 429
         let _env = RetryEnvGuard::set("2");
         let (url, call_count) = mock_bulk_server(vec![429, 429, 429]).await;
@@ -608,12 +609,12 @@ mod tests {
         assert_eq!(br.errors, 2, "all docs should be counted as errors");
         assert_eq!(br.retries, 2);
         assert_eq!(br.status_code, 429);
-        assert_eq!(*call_count.lock().unwrap(), 3, "expected 3 total attempts");
+        assert_eq!(*call_count.lock().await, 3, "expected 3 total attempts");
     }
 
     #[tokio::test]
     async fn fatal_status_not_retried() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().await;
         let _env = RetryEnvGuard::set("5");
         let (url, call_count) = mock_bulk_server(vec![400]).await;
         let exporter = ElasticsearchExporter::try_new(url, Auth::None).unwrap();
@@ -623,6 +624,6 @@ mod tests {
             .await;
 
         assert!(result.is_err(), "expected Err for 400");
-        assert_eq!(*call_count.lock().unwrap(), 1, "400 must not be retried");
+        assert_eq!(*call_count.lock().await, 1, "400 must not be retried");
     }
 }

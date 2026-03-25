@@ -1,15 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Three-Panel Diagnostic Workflow
-The web home page SHALL present the diagnostic workflow as three distinct panels named `Collect`, `Process`, and `Send`. Each panel SHALL provide exactly two workflow options:
+The web advanced workflow pages SHALL present the diagnostic workflow as distinct panels named `Collect`, `Process`, and `Send`. Each panel SHALL provide exactly two workflow options:
 - `Collect`: `Collect` or `Upload`
 - `Process`: `Process` or `Forward`
 - `Send`: `Remote` or `Local`
 
-The workflow SHALL preserve panel state across user interaction so source selection, processing choices, and delivery choices can be configured together before execution.
+The workflow SHALL preserve panel state across user interaction so source selection, processing choices, and delivery choices can be configured together before execution. The main home page MAY remain on the existing single-panel experience while this staged workflow remains on dedicated advanced pages.
 
-#### Scenario: User loads the home page
-- **WHEN** the web home page is rendered
+#### Scenario: User loads an advanced workflow page
+- **WHEN** an advanced workflow page is rendered
 - **THEN** the interface shows separate `Collect`, `Process`, and `Send` panels in the primary workflow area
 - **AND** each panel exposes its two stage options
 - **AND** each panel exposes only the controls relevant to the currently selected option

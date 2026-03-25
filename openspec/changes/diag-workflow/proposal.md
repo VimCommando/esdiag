@@ -1,10 +1,10 @@
 ## Why
 
-The current web home page combines collection, processing, and delivery into a single "Process Diagnostics" panel, which makes it hard to support distinct workflows like collect-only, collect-and-send, or process-and-send. We need a clearer staged workflow now so users can choose how a diagnostic is sourced, whether it is processed, and where the resulting bundle is delivered without mode-specific behavior being hidden behind one form.
+The current web home page combines collection, processing, and delivery into a single "Process Diagnostics" panel, which makes it hard to support distinct workflows like collect-only, collect-and-send, or process-and-send. We need a clearer staged workflow on a dedicated advanced page now so users can choose how a diagnostic is sourced, whether it is processed, and where the resulting bundle is delivered without mode-specific behavior being hidden behind one form.
 
 ## What Changes
 
-- Replace the single home page workflow panel with three explicit panels: `Collect`, `Process`, and `Send`.
+- Add a dedicated advanced workflow page with three explicit panels: `Collect`, `Process`, and `Send`, while leaving the main home page unchanged for now.
 - Give each stage two explicit operating modes:
   - `Collect`: `Collect` or `Upload`
   - `Process`: `Process` or `Forward`
@@ -24,21 +24,21 @@ The current web home page combines collection, processing, and delivery into a s
 ## Capabilities
 
 ### New Capabilities
-- `diagnostic-workflow`: Define the three-panel home page workflow, staged state transitions, and collect/process/send execution rules for the web UI.
+- `diagnostic-workflow`: Define the three-panel advanced workflow page, staged state transitions, and collect/process/send execution rules for the web UI.
 - `elastic-uploader`: Upload unprocessed diagnostic bundles to Elastic Upload Service from the CLI and workflow send stage.
 
 ### Modified Capabilities
 - `api-selection`: Processing controls expose diagnostic product/type selection, only list fully implemented API options for advanced overrides, and preserve required processor dependencies.
 - `collection-execution`: Workflow execution supports collect/upload intake, process/forward behavior, retained downloadable archive bundles, single-job versus two-job orchestration, and local/remote delivery flows.
 - `host-role-targeting`: Send target selection in the workflow is constrained to known hosts that are valid for the `send` phase, including localhost-only host targeting for local processed delivery.
-- `web-runtime-modes`: Remote collection inputs and send target behavior remain mode-aware between `user` and `service` execution.
+- `web-runtime-modes`: Workflow routes remain user-mode-only for now while runtime-mode validation still governs the underlying workflow behavior.
 
 ## Impact
 
-- Web templates, Datastar signals, and server-side workflow handlers for the home page.
+- Web templates, Datastar signals, and server-side workflow handlers for the advanced workflow pages.
 - Runtime workflow state that currently assumes a single form/tabbed intake surface instead of explicit two-option stages.
 - Remote collection and processing orchestration, including optional retained archive downloads before processing or forwarding.
 - Footer output-target behavior, which moves into the `Send` panel as a workflow choice instead of a global page control.
 - Host filtering and send target resolution for Elasticsearch known hosts with the `send` role, plus localhost-only processed local delivery.
 - New Elastic Upload Service exporter behavior and CLI upload entrypoint for unprocessed bundles.
-- User/service mode UX and validation for remote collection credentials and browser-managed archive downloads.
+- User-mode advanced workflow routing plus runtime-aware validation for remote collection credentials and browser-managed archive downloads.

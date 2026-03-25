@@ -6,12 +6,17 @@
     data-signals:_file_selected="false"
     data-signals:_pending_workflow_action="''"
     data-signals:archive.download_token="''"
+    data-signals:archive.pending_token="''"
+    data-signals:archive.ready_token="''"
+    data-signals:archive.status="'idle'"
+    data-signals:archive.error="''"
     data-signals:_collect_secure_hosts="{{ collect_secure_hosts_json }}"
     data-signals:_send_secure_hosts="{{ send_secure_hosts_json }}"
     data-on:datastar-fetch-error="$loading = false; $processing = false; $message = evt.detail.error || 'Request failed'"
     data-on:datastar-fetch-retries-failed="$loading = false; $processing = false"
     data-effect="if (!$keystore.locked && $_pending_workflow_action === 'known-host') { $_pending_workflow_action = ''; document.getElementById('known-host-button')?.click(); } else if (!$keystore.locked && $_pending_workflow_action === 'api-key') { $_pending_workflow_action = ''; document.getElementById('es-api-key-button')?.click(); } else if (!$keystore.locked && $_pending_workflow_action === 'service-link') { $_pending_workflow_action = ''; document.getElementById('service-link-button')?.click(); } else if (!$keystore.locked && $_pending_workflow_action === 'upload-process') { $_pending_workflow_action = ''; document.getElementById('workflow-upload-process-button')?.click(); }"
     data-effect="if ($workflow.collect.save && !$archive.download_token && !$loading && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')) { $archive.download_token = crypto.randomUUID(); }"
+    data-effect="if ($archive.ready_token && $archive.pending_token && $archive.ready_token === $archive.pending_token && $archive.status === 'ready') { window.esdiagStartRetainedDownload?.({ token: $archive.ready_token, anchorId: 'jobs-download-anchor', preferDirectoryPicker: true }); $archive.pending_token = ''; $archive.ready_token = ''; $archive.status = 'idle'; $archive.error = ''; } else if ($archive.ready_token && $archive.pending_token && $archive.ready_token === $archive.pending_token && $archive.status === 'error') { $message = $archive.error || 'Download failed'; $archive.pending_token = ''; $archive.ready_token = ''; $archive.status = 'idle'; }"
     data-signals:workflow.collect.mode="'upload'"
     data-signals:workflow.collect.source="'upload-file'"
     data-signals:workflow.collect.known_host="''"
@@ -687,18 +692,16 @@
                     @get('/keystore/modal/process');
                 } else {
                 {% endif %}
-                    const startDownload = () => {
+                    const requestDownload = () => {
                         if (!shouldDownload) return;
                         const token = $archive.download_token || crypto.randomUUID();
                         $archive.download_token = token;
-                        window.esdiagStartRetainedDownload?.({
-                            token,
-                            anchorId: 'jobs-download-anchor',
-                            saveDir: $workflow.collect.save_dir,
-                            preferDirectoryPicker: true,
-                        });
+                        $archive.pending_token = token;
+                        $archive.ready_token = '';
+                        $archive.status = 'waiting';
+                        $archive.error = '';
                     };
-                    startDownload();
+                    requestDownload();
                     $workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file'
                         ? document.getElementById('upload-form').requestSubmit()
                         : null;
@@ -863,8 +866,12 @@
                 const filename = parseDownloadFilename(response.headers.get("Content-Disposition"));
                 const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
                 const writable = await fileHandle.createWritable();
-                await writable.write(await response.blob());
-                await writable.close();
+                if (response.body) {
+                    await response.body.pipeTo(writable);
+                } else {
+                    await writable.write(await response.blob());
+                    await writable.close();
+                }
             };
             void start();
         };

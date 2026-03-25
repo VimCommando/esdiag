@@ -3,20 +3,24 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::ServerState;
+use async_stream::try_stream;
 use axum::{
+    body::Body,
     extract::{Path, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
+        header::{CONTENT_DISPOSITION, CONTENT_TYPE},
     },
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
+use bytes::Bytes;
+use futures::{StreamExt, stream::BoxStream};
 use std::{sync::Arc, time::Duration};
-use tokio::time::{Instant, sleep};
+use tokio::{fs::File, io::AsyncReadExt};
 
 const RETAINED_BUNDLE_POST_DOWNLOAD_TTL: Duration = Duration::from_secs(300);
-const RETAINED_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(1800);
-const RETAINED_BUNDLE_WAIT_POLL: Duration = Duration::from_millis(200);
+const RETAINED_BUNDLE_TOKEN_TTL: Duration = Duration::from_secs(1800);
+const DOWNLOAD_STREAM_CHUNK_SIZE: usize = 64 * 1024;
 
 pub async fn download_retained_bundle(
     State(state): State<Arc<ServerState>>,
@@ -32,12 +36,12 @@ pub async fn download_retained_bundle(
         .ensure_retained_bundle_token(
             &token,
             request_user.clone(),
-            RETAINED_BUNDLE_WAIT_TIMEOUT,
+            RETAINED_BUNDLE_TOKEN_TTL,
         )
         .await;
 
-    let Some(bundle) = wait_for_retained_bundle_resolution(&state, &token).await else {
-        return (StatusCode::NOT_FOUND, "Download not ready").into_response();
+    let Some(bundle) = state.retained_bundle(&token).await else {
+        return (StatusCode::NOT_FOUND, "Download not found").into_response();
     };
 
     if bundle.owner != request_user {
@@ -55,11 +59,10 @@ pub async fn download_retained_bundle(
     }
 
     let Some(path) = bundle.path else {
-        state.discard_retained_bundle(&token).await;
-        return (StatusCode::NOT_FOUND, "Download bundle missing").into_response();
+        return (StatusCode::ACCEPTED, "Download not ready").into_response();
     };
-    let bytes = match tokio::fs::read(&path).await {
-        Ok(bytes) => bytes,
+    let file = match File::open(&path).await {
+        Ok(file) => file,
         Err(err) => {
             state.discard_retained_bundle(&token).await;
             return (
@@ -81,8 +84,20 @@ pub async fn download_retained_bundle(
         .replace('"', "_");
     let disposition = format!("attachment; filename=\"{safe_filename}\"");
 
-    let content_length = bytes.len();
-    let mut response = bytes.into_response();
+    let stream: BoxStream<'static, Result<Bytes, std::io::Error>> = try_stream! {
+        let mut file = file;
+        let mut buffer = vec![0_u8; DOWNLOAD_STREAM_CHUNK_SIZE];
+        loop {
+            let bytes_read = file.read(&mut buffer).await?;
+            if bytes_read == 0 {
+                break;
+            }
+            yield Bytes::copy_from_slice(&buffer[..bytes_read]);
+        }
+    }
+    .boxed();
+
+    let mut response = Response::new(Body::from_stream(stream));
     response.headers_mut().insert(
         CONTENT_TYPE,
         HeaderValue::from_static("application/zip"),
@@ -92,30 +107,7 @@ pub async fn download_retained_bundle(
         HeaderValue::from_str(&disposition)
             .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
-    response.headers_mut().insert(
-        CONTENT_LENGTH,
-        HeaderValue::from_str(&content_length.to_string())
-            .unwrap_or_else(|_| HeaderValue::from_static("0")),
-    );
     response
-}
-
-async fn wait_for_retained_bundle_resolution(
-    state: &Arc<ServerState>,
-    token: &str,
-) -> Option<super::RetainedBundle> {
-    let deadline = Instant::now() + RETAINED_BUNDLE_WAIT_TIMEOUT;
-    loop {
-        if let Some(bundle) = state.retained_bundle(token).await
-            && (bundle.error.is_some() || bundle.path.is_some())
-        {
-            return Some(bundle);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        sleep(RETAINED_BUNDLE_WAIT_POLL).await;
-    }
 }
 
 #[cfg(test)]

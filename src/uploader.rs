@@ -6,11 +6,8 @@ use eyre::{Result, eyre};
 use reqwest::StatusCode;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{
-    fs::File,
-    io::{BufReader, Read},
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
+use tokio::{fs::File, io::AsyncReadExt};
 
 const CHUNK_SIZE: usize = 50 * 1024 * 1024;
 pub const DEFAULT_UPLOAD_API_URL: &str = "https://upload.elastic.co";
@@ -35,7 +32,7 @@ pub async fn upload_file(
 
     ensure_upload_exists(&upload_id, api_url).await?;
 
-    let file_digest = digest_file(file_path)?;
+    let file_digest = digest_file(file_path).await?;
     upload_parts(file_path, &filename, &upload_id, &file_digest, api_url).await?;
     finalize_upload(&upload_id, &file_digest, api_url).await
 }
@@ -67,14 +64,13 @@ async fn ensure_upload_exists(upload_id: &str, api_url: &str) -> Result<()> {
     }
 }
 
-fn digest_file(path: &Path) -> Result<String> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
+async fn digest_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path).await?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
 
     loop {
-        let read = reader.read(&mut buffer)?;
+        let read = file.read(&mut buffer).await?;
         if read == 0 {
             break;
         }
@@ -92,19 +88,18 @@ async fn upload_parts(
     api_url: &str,
 ) -> Result<()> {
     let client = reqwest::Client::new();
-    let mut file = File::open(file_path)?;
+    let mut file = File::open(file_path).await?;
     let mut part_number: i64 = 1;
+    let mut chunk = vec![0_u8; CHUNK_SIZE];
 
     loop {
-        let mut chunk = vec![0_u8; CHUNK_SIZE];
-        let bytes_read = file.read(&mut chunk)?;
+        let bytes_read = file.read(&mut chunk).await?;
         if bytes_read == 0 {
             break;
         }
-        chunk.truncate(bytes_read);
 
         let mut part_hasher = Sha256::new();
-        part_hasher.update(&chunk);
+        part_hasher.update(&chunk[..bytes_read]);
         let part_digest = hex_digest(part_hasher.finalize());
 
         let response = client
@@ -115,7 +110,7 @@ async fn upload_parts(
                 ("part_number", &part_number.to_string()),
                 ("part_digest", &part_digest),
             ])
-            .body(chunk)
+            .body(chunk[..bytes_read].to_vec())
             .send()
             .await?;
 
