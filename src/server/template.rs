@@ -35,6 +35,7 @@ pub struct Index {
     pub theme_dark: bool,
     pub runtime_mode: String,
     pub can_use_keystore: bool,
+    pub output_secure: bool,
     pub keystore_locked: bool,
     pub keystore_lock_time: i64,
     pub show_keystore_bootstrap: bool,

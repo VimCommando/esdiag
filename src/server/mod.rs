@@ -1130,6 +1130,7 @@ pub struct Signals {
     pub metadata: Identifiers,
     #[serde(default)]
     pub archive: ArchiveSignals,
+    #[serde(default)]
     pub workflow: Workflow,
     pub file_upload: FileUpload,
     pub service_link: ServiceLink,
@@ -1685,6 +1686,20 @@ mod tests {
             .expect("workflow signals payload without tab should deserialize");
         assert!(matches!(parsed.tab, super::Tab::FileUpload));
         assert_eq!(parsed.workflow.collect.known_host, "esdiag-prod");
+    }
+
+    #[test]
+    fn legacy_signals_deserialize_without_workflow_field() {
+        let payload = r#"{"loading":false,"processing":false,"tab":"file-upload","message":"","stats":{"jobs":{"total":0,"success":0,"failed":0},"docs":{"total":0,"errors":0}},"es_api":{"url":"","key":""},"service_link":{"token":"","url":"","filename":""},"file_upload":{"job_id":22775},"metadata":{"user":"Anonymous","account":"","case_number":"","opportunity":""},"auth":{"header":false}}"#;
+
+        let parsed = serde_json::from_str::<Signals>(payload)
+            .expect("legacy signals payload without workflow should deserialize");
+        assert!(matches!(parsed.workflow.collect.mode, super::CollectMode::Collect));
+        assert!(matches!(
+            parsed.workflow.collect.source,
+            super::CollectSource::KnownHost
+        ));
+        assert!(parsed.archive.download_token.is_empty());
     }
 
     #[tokio::test]

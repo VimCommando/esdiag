@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{ServerState, get_theme_dark, template};
-use crate::data::{HostRole, KnownHost, keystore_exists};
+use crate::data::{HostRole, KnownHost, Settings, keystore_exists};
 use crate::exporter::Exporter;
 use crate::processor::api::ApiResolver;
 use askama::Template;
@@ -87,6 +87,32 @@ pub async fn handler(
     let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
     let theme_dark = get_theme_dark(&headers);
     let kibana_url = { state.kibana_url.read().await.clone() };
+    let output_secure = if allows_local_runtime_features {
+        let hosts_by_name = KnownHost::parse_hosts_yml().unwrap_or_default();
+        let send_hosts: Vec<String> = hosts_by_name
+            .iter()
+            .filter(|(_, h)| h.has_role(HostRole::Send))
+            .map(|(name, _)| name.clone())
+            .collect();
+        let exporter = state.exporter.read().await.clone();
+        let preferred_target = Settings::load()
+            .ok()
+            .and_then(|settings| settings.active_target);
+        let (_output_options, selected_output, _label) = template::build_footer_output_context(
+            &hosts_by_name,
+            &send_hosts,
+            &exporter,
+            preferred_target.as_deref(),
+        );
+        template::active_output_requires_keystore(
+            &hosts_by_name,
+            &send_hosts,
+            &selected_output,
+            &exporter,
+        )
+    } else {
+        false
+    };
     let (keystore_locked, keystore_lock_time) = if can_use_keystore {
         state.keystore_status_for(&user_email).await
     } else {
@@ -108,6 +134,7 @@ pub async fn handler(
         theme_dark,
         runtime_mode: state.runtime_mode.to_string(),
         can_use_keystore,
+        output_secure,
         keystore_locked,
         keystore_lock_time,
         show_keystore_bootstrap,

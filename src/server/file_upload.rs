@@ -76,8 +76,8 @@ pub async fn submit(
                     let state_clone = state.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
-                        if state_clone.workflow_jobs.read().await.contains_key(&job_id) {
-                            state_clone.discard_workflow_job(job_id).await;
+                        if let Some(job) = state_clone.pop_workflow_job(job_id).await {
+                            job.cleanup();
                             tracing::warn!(
                                 "Upload job {} was never processed and was removed from state to clean up the staged upload",
                                 job_id

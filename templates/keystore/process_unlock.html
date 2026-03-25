@@ -13,8 +13,10 @@
         <form
             id="keystore-process-unlock-form"
             data-on:submit__prevent="{
-                if ($workflow.collect.save && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')) {
-                    const token = $archive.download_token || crypto.randomUUID();
+                const workflow = typeof $workflow === 'undefined' ? null : $workflow;
+                const archive = typeof $archive === 'undefined' ? null : $archive;
+                if (workflow && archive && workflow.collect.save && !(workflow.collect.mode === 'upload' && workflow.collect.source === 'upload-file')) {
+                    const token = archive.download_token || crypto.randomUUID();
                     $archive.download_token = token;
                     $archive.pending_token = token;
                     $archive.ready_token = '';
