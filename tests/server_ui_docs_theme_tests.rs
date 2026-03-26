@@ -125,24 +125,23 @@ async fn test_docs_routes_render_and_404() {
     server.shutdown().await;
 }
 
-#[cfg(feature = "keystore")]
 #[tokio::test]
-async fn test_user_menu_renders_keystore_controls_and_lock_confirmation() {
+async fn index_embeds_processing_option_catalog() {
     let (mut server, client, base) = start_server().await;
 
     let response = client
-        .get(format!("{base}/"))
+        .get(format!("{base}/workflow"))
         .send()
         .await
-        .expect("index response");
+        .expect("workflow response");
     assert!(response.status().is_success());
-    let body = response.text().await.expect("response body");
+    let body = response.text().await.expect("workflow body");
 
-    assert!(body.contains("Settings"));
-    assert!(body.contains("<span>Keystore</span>"));
-    assert!(body.contains("/keystore/modal"));
-    assert!(body.contains("confirm('Lock keystore and disable secret usage?')"));
-    assert!(body.contains("data-signals:keystore.locked="));
+    assert!(body.contains("const PROCESS_OPTIONS ="));
+    assert!(body.contains("\"elasticsearch\""));
+    assert!(body.contains("\"cluster_settings_defaults\""));
+    assert!(body.contains("\"logstash\""));
+    assert!(body.contains("\"plugins\""));
 
     server.shutdown().await;
 }

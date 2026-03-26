@@ -3,7 +3,6 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use crate::embeds::DocsAssets;
-use crate::server::template::FooterOutputOption;
 use askama::Template;
 use axum::{
     extract::Path,
@@ -25,15 +24,10 @@ pub struct DocsTemplate {
     pub auth_header: bool,
     pub debug: bool,
     pub desktop: bool,
-    pub can_configure_output: bool,
-    pub output_options: Vec<FooterOutputOption>,
-    pub active_output_secure: bool,
     pub user: String,
     pub user_initial: char,
     pub version: String,
     pub kibana_url: String,
-    pub selected_output: String,
-    pub exporter_label: String,
     pub stats: String,
     pub theme_dark: bool,
     pub runtime_mode: String,
@@ -164,37 +158,10 @@ pub async fn handler(
                     .next()
                     .unwrap_or('_')
                     .to_ascii_uppercase();
-                let allows_local_artifacts = state.runtime_mode_policy.allows_local_artifacts();
-                let can_use_keystore = cfg!(feature = "keystore") && allows_local_artifacts;
-                let (keystore_locked, keystore_lock_time) = if can_use_keystore {
-                    state.keystore_status_for(&user_email).await
-                } else {
-                    (true, 0)
-                };
-                let hosts_by_name = if allows_local_artifacts {
-                    crate::data::KnownHost::parse_hosts_yml().unwrap_or_default()
-                } else {
-                    std::collections::BTreeMap::new()
-                };
-                let exporter = state.exporter.read().await.clone();
-                let preferred_target = if allows_local_artifacts {
-                    crate::data::Settings::load()
-                        .ok()
-                        .and_then(|settings| settings.active_target)
-                } else {
-                    None
-                };
-                let (output_options, selected_output, exporter_label) =
-                    crate::server::template::build_footer_output_context(
-                        &hosts_by_name,
-                        &exporter,
-                        preferred_target.as_deref(),
-                    );
-                let active_output_secure = crate::server::template::active_output_requires_keystore(
-                    &hosts_by_name,
-                    &selected_output,
-                    &exporter,
-                );
+                let (keystore_locked, keystore_lock_time) =
+                    state.keystore_status_for(&user_email).await;
+                let can_use_keystore = cfg!(feature = "keystore")
+                    && state.runtime_mode_policy.allows_local_runtime_features();
 
                 let template = DocsTemplate {
                     nav_root_items,
@@ -204,11 +171,6 @@ pub async fn handler(
                     auth_header,
                     debug: tracing::enabled!(tracing::Level::DEBUG),
                     desktop: cfg!(feature = "desktop"),
-                    can_configure_output: state.runtime_mode_policy.allows_exporter_updates(),
-                    output_options,
-                    active_output_secure,
-                    selected_output,
-                    exporter_label,
                     kibana_url: state.kibana_url.read().await.clone(),
                     stats: state.get_stats_as_signals().await,
                     user: user_email,
@@ -480,7 +442,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_mode_docs_does_not_touch_local_artifacts() {
+    async fn service_mode_docs_does_not_touch_local_runtime_features() {
         let _guard = env_lock().lock().expect("env lock");
         let (_tmp, hosts_path, settings_path) = setup_env();
 

@@ -138,7 +138,7 @@ impl TryFrom<&str> for Uri {
     type Error = Report;
 
     fn try_from(uri: &str) -> Result<Self> {
-        if uri == "-" {
+        if uri == "-" || uri == "stdio://stdout" {
             tracing::debug!("Creating Uri::Stream");
             return Ok(Uri::Stream);
         }
@@ -149,6 +149,22 @@ impl TryFrom<&str> for Uri {
         tracing::debug!("No known host for {uri}");
 
         if let Ok(url) = Url::parse(uri) {
+            if url.scheme() == "file" {
+                let path = url
+                    .to_file_path()
+                    .map_err(|_| eyre!("Invalid file URI: {uri}"))?;
+                if uri.ends_with('/') {
+                    return Ok(Uri::Directory(path));
+                }
+                if path.exists() {
+                    return if path.is_dir() {
+                        Ok(Uri::Directory(path))
+                    } else {
+                        Ok(Uri::File(path))
+                    };
+                }
+                return Ok(Uri::File(path));
+            }
             let domain = url.domain().ok_or_eyre("URL is missing a domain")?;
             match (domain, url.username(), url.password()) {
                 ("upload.elastic.co", "token", Some(_)) => {
@@ -237,5 +253,33 @@ impl std::fmt::Display for Uri {
             Uri::Stream => write!(f, "-"),
             Uri::Url(url) => write!(f, "{}", url),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Uri;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_stdio_stdout_uri_as_stream() {
+        assert!(matches!(Uri::try_from("stdio://stdout"), Ok(Uri::Stream)));
+        assert!(matches!(Uri::try_from("-"), Ok(Uri::Stream)));
+    }
+
+    #[test]
+    fn parses_file_uri_directory_and_file_targets() {
+        assert!(matches!(
+            Uri::try_from("file:///tmp/output/"),
+            Ok(Uri::Directory(path)) if path == PathBuf::from("/tmp/output")
+        ));
+        assert!(matches!(
+            Uri::try_from("file:///tmp/output/report.ndjson"),
+            Ok(Uri::File(path)) if path == PathBuf::from("/tmp/output/report.ndjson")
+        ));
+        assert!(matches!(
+            Uri::try_from("file:///tmp/REPORT"),
+            Ok(Uri::File(path)) if path == PathBuf::from("/tmp/REPORT")
+        ));
     }
 }

@@ -25,6 +25,7 @@
     --size-xxl: 2.5rem;
     --size-neg-xs: -0.25rem;
     --size-neg-l: -1.5rem;
+    --size-header: 52px;
 
     --size-footer: 0px;
     --size-header: 52px;
@@ -716,6 +717,7 @@ icon-moon {
 icon-paintbrush,
 icon-sun,
 icon-moon,
+icon-book,
 icon-chevron-left,
 icon-chevron-up,
 icon-chevron-down,
@@ -758,6 +760,7 @@ icon-trash {
 icon-paintbrush,
 icon-sun,
 icon-moon,
+icon-book,
 icon-chevron-left,
 icon-chevron-up,
 icon-chevron-down,
@@ -1180,10 +1183,203 @@ tab-bar > button:hover {
     color: var(--color-primary-shade);
 }
 
-tab-bar > button:focus-visible,
-form-input > input:focus-visible {
+content.workflow-content {
+    max-width: min(1500px, calc(100vw - var(--size-xl)));
+}
+
+content.jobs-content {
+    max-width: min(1100px, calc(100vw - var(--size-xl)));
+}
+
+steps {
+    display: block;
+}
+
+steps > ol {
+    counter-reset: steps;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+steps li {
+    position: relative;
+    margin: 0;
+    padding: var(--size-xs) 0 var(--size-xl) calc(var(--size-xl) + var(--size-m));
+}
+
+steps li::before {
+    content: counter(steps);
+    counter-increment: steps;
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: grid;
+    place-items: center;
+    inline-size: var(--size-xl);
+    block-size: var(--size-xl);
+    border-radius: 50%;
+    background: var(--color-primary);
+    color: var(--button-text-color);
+    font-size: var(--font-size-s);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1;
+}
+
+steps li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    top: var(--size-xl);
+    left: calc(var(--size-xl) / 2);
+    bottom: -0.25em;
+    width: 2px;
+    transform: translateX(-50%);
+    background: var(--border-color);
+}
+
+steps li > :first-child {
+    margin-top: 0;
+}
+
+steps li > :last-child {
+    margin-bottom: 0;
+}
+
+content.jobs-content > steps {
+    margin: var(--size-xl) 0;
+}
+
+content.jobs-content steps h2 {
+    margin: 0 0 var(--size-xs);
+}
+
+content.jobs-content steps h3 {
+    margin: var(--size-l) 0 var(--size-xs);
+}
+
+content.jobs-content steps button-group,
+content.jobs-content steps choice-row {
+    margin-top: var(--size-xs);
+}
+
+content.jobs-content steps .form-input,
+content.jobs-content steps .curl-textarea {
+    width: 100%;
+    max-width: 44rem;
+}
+
+content.jobs-content steps .dropzone {
+    max-width: 44rem;
+}
+
+jobs-actions {
+    display: flex;
+    gap: var(--size-s);
+    margin: 0 0 var(--size-xl) calc(var(--size-xl) + var(--size-m));
+}
+
+jobs-actions > button {
+    border: 1px solid var(--border-color-light);
+    border-radius: var(--border-radius-small);
+    background: var(--background-color);
+    color: var(--text-color);
+    font: inherit;
+    font-size: var(--font-size-s);
+    line-height: var(--font-size-l);
+    padding: var(--size-xs) var(--size);
+    cursor: pointer;
+    transition:
+        background-color 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease;
+}
+
+jobs-actions > button.primary {
+    border-color: var(--button-primary-background);
+    background: var(--button-primary-background);
+    color: var(--button-text-color);
+}
+
+jobs-actions > button:hover {
+    background: var(--color-overlay);
+}
+
+jobs-actions > button.primary:hover {
+    border-color: var(--button-primary-background-hover);
+    background: var(--button-primary-background-hover);
+}
+
+jobs-actions > button:disabled {
+    border-color: var(--border-color);
+    background: var(--form-control-disabled-color);
+    color: var(--text-subdued-color);
+    cursor: not-allowed;
+}
+
+jobs-actions > button:disabled:hover {
+    background: var(--form-control-disabled-color);
+}
+
+jobs-actions > button:focus-visible {
     outline: var(--focus-ring-outline);
-    outline-offset: 3px;
+    outline-offset: 2px;
+}
+
+directory-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--size-s);
+    align-items: center;
+    max-width: 44rem;
+}
+
+directory-picker > input.form-input {
+    flex: 1 1 20rem;
+    min-width: 0;
+}
+
+directory-picker > button {
+    border: 1px solid var(--border-color-light);
+    border-radius: var(--border-radius-small);
+    background: var(--background-color);
+    color: var(--text-color);
+    font: inherit;
+    font-size: var(--font-size-s);
+    line-height: var(--font-size-l);
+    padding: var(--size-xs) var(--size);
+    cursor: pointer;
+    transition:
+        background-color 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease;
+}
+
+directory-picker > button:hover {
+    background: var(--color-overlay);
+}
+
+directory-picker > button:disabled {
+    border-color: var(--border-color);
+    background: var(--form-control-disabled-color);
+    color: var(--text-subdued-color);
+    cursor: not-allowed;
+}
+
+directory-picker > button:disabled:hover {
+    background: var(--form-control-disabled-color);
+}
+
+directory-picker > button:focus-visible {
+    outline: var(--focus-ring-outline);
+    outline-offset: 2px;
+}
+
+metadata-form {
+    display: block;
+    width: 40%;
+    background-color: var(--background-color);
+    padding: var(--size-m);
+    border-left: 1px solid var(--border-color);
 }
 
 tab-bar > button.active,
@@ -1213,6 +1409,7 @@ tab-content {
 panel {
     display: flex;
     flex-direction: column;
+    overflow: auto;
     margin: var(--size-xl) 0;
     padding: var(--size-l);
     border: 1px solid var(--border-color);
@@ -1221,6 +1418,473 @@ panel {
 
 panel > :is(h1, h2, h3, h4, h5, h6):first-child {
     margin-top: 0;
+}
+
+.workflow-panel {
+    padding: var(--size-l);
+}
+
+workflow-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--size-l);
+    align-items: stretch;
+    margin: var(--size-xl) 0;
+}
+
+card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background-color: var(--background-color);
+    box-shadow: var(--shadow-small);
+    overflow: visible;
+}
+
+card.workflow-card {
+    min-height: calc(100svh - var(--size-header) - 8rem);
+    max-height: calc(100svh - var(--size-header) - 8rem);
+}
+
+card.disabled {
+    background: var(--background-color-dimmed);
+    box-shadow: none;
+}
+
+card.disabled:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+card.disabled > card-body,
+card.disabled > card-body * {
+    color: color-mix(
+        in srgb,
+        var(--text-subdued-color) 92%,
+        var(--background-color)
+    );
+}
+
+card.disabled > card-badge {
+    background: color-mix(
+        in srgb,
+        var(--background-color-dimmed) 85%,
+        var(--background-color)
+    );
+    color: var(--text-subdued-color);
+    box-shadow: none;
+    border-color: var(--border-color);
+}
+
+card > card-badge {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 6rem;
+    min-height: var(--size-l);
+    padding: 0 calc(var(--size-s) + var(--size-xs));
+    border: 1px solid var(--border-color-strong);
+    border-radius: 999px;
+    background: var(--background-color);
+    color: var(--text-color);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    transform: translate(-50%, -50%);
+}
+
+card > card-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--size);
+    min-height: 0;
+    overflow: auto;
+    padding: var(--size-xl) var(--size-l) var(--size-l);
+}
+
+card > footer {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: var(--size-s);
+    margin-top: auto;
+    padding: var(--size-s);
+    background: var(--background-color-dimmed);
+    border-top: 1px solid var(--border-color);
+    border-bottom-left-radius: var(--border-radius);
+    border-bottom-right-radius: var(--border-radius);
+}
+
+card > footer > button {
+    border: none;
+    border-radius: var(--border-radius-small);
+    background: var(--color-primary);
+    color: var(--background-color);
+    font: inherit;
+    font-size: var(--font-size-s);
+    line-height: var(--font-size-l);
+    padding: var(--size-xs) var(--size);
+    cursor: pointer;
+    transition:
+        background-color 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease;
+}
+
+card > footer > button:hover {
+    background: var(--color-overlay);
+}
+
+card > footer > button:disabled {
+    background: color-mix(in srgb, var(--border-color) 45%, transparent);
+    color: var(--text-subdued-color);
+    cursor: not-allowed;
+}
+
+card > footer > button:focus-visible {
+    outline: 3px solid
+        color-mix(
+            in srgb,
+            var(--focus-ring-color) 40%,
+            var(--color-transparent)
+        );
+    outline-offset: 2px;
+}
+
+.workflow-card-footer {
+    gap: var(--size);
+}
+
+.footer-choice {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-s);
+    white-space: nowrap;
+    margin: 0;
+}
+
+.footer-choice > label {
+    font-size: var(--font-size-s);
+    font-weight: 600;
+}
+
+.footer-input {
+    flex: 1 1 14rem;
+    min-width: 12rem;
+    margin: 0;
+}
+
+.footer-status {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--size-xs);
+    color: var(--text-subdued-color);
+    font-size: var(--font-size-s);
+    font-weight: 600;
+}
+
+.footer-status svg {
+    width: 0.875rem;
+    height: 0.875rem;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    fill: none;
+    flex: 0 0 auto;
+}
+
+.workflow-step-segment {
+    text-transform: lowercase;
+}
+
+.footer-choice > input.switch {
+    width: 40px;
+    min-width: 40px;
+    height: 20px;
+    margin: 0;
+    appearance: none;
+    border: 0;
+    border-radius: 20px;
+    background: var(--text-subdued-color);
+    cursor: pointer;
+    transition: background-color 300ms ease;
+}
+
+.footer-choice > input.switch:checked {
+    background: var(--color-primary);
+}
+
+.footer-choice > input.switch:focus-visible {
+    outline: 3px solid
+        color-mix(
+            in srgb,
+            var(--focus-ring-color) 40%,
+            var(--color-transparent)
+        );
+    outline-offset: 2px;
+}
+
+.footer-choice > input.switch:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+.footer-choice > input.switch:disabled ~ label {
+    color: var(--text-subdued-color);
+}
+
+switch-clip {
+    width: 40px;
+    height: 20px;
+    margin-left: calc(-40px - var(--size-s));
+    pointer-events: none;
+    overflow: hidden;
+    border-radius: 20px;
+}
+
+switch-glyphs {
+    color: var(--background-color);
+    pointer-events: none;
+    position: relative;
+    display: flex;
+    width: 50px;
+    height: 20px;
+    left: -16px;
+    transition: left 200ms ease;
+}
+
+switch-glyphs:disabled {
+    color: var(--color-background-dimmed);
+}
+
+switch-glyphs > svg {
+    width: 50px;
+    height: 20px;
+}
+
+switch-glyphs .glyph {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+switch-glyphs .filled {
+    fill: currentColor;
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: transform 120ms ease;
+}
+
+.footer-choice > input.switch:active + switch-clip switch-glyphs .filled {
+    transform: scale(0.9);
+}
+
+switch-glyphs.switch-off {
+    left: -16px;
+}
+
+switch-glyphs.switch-on {
+    left: 4px;
+}
+
+switch-glyphs:disabled {
+    color: var(--color-background-dimmed);
+}
+
+stage-panel {
+    display: block;
+    width: 100%;
+}
+
+stage-header {
+    display: block;
+    margin-bottom: var(--size);
+}
+
+stage-divider {
+    display: block;
+    margin: var(--size-l) 0 var(--size);
+    border-top: 1px solid var(--border-color);
+}
+
+.stage-options {
+    margin-bottom: var(--size);
+}
+
+.stage-options.nested {
+    margin-top: var(--size);
+}
+
+button-group {
+    display: inline-flex;
+    align-items: stretch;
+    --button-group-border-color: var(--border-color-light);
+    --button-group-background: var(--background-color);
+    --button-group-color: var(--text-color);
+    --button-group-hover-background: var(--background-color-primary);
+    --button-group-active-background: var(--background-color-primary);
+    --button-group-selected-border-color: var(--text-subdued-color);
+    --button-group-selected-background: var(--text-subdued-color);
+    --button-group-selected-color: var(--button-text-color);
+    --button-group-selected-hover-color: color-mix(
+        in srgb,
+        var(--button-group-selected-background) 80%,
+        var(--background-color-primary)
+    );
+}
+
+button-group.primary {
+    --button-group-color: var(--button-primary-background);
+    --button-group-selected-border-color: var(--button-primary-background);
+    --button-group-selected-background: var(--button-primary-background);
+}
+
+button-group > button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--size-xs);
+    height: var(--size-xl);
+    padding: var(--size-xs) var(--size);
+    border: 1px solid var(--button-group-border-color);
+    border-radius: 0;
+    background: var(--button-group-background);
+    color: var(--button-group-color);
+    font: inherit;
+    font-size: var(--font-size-s);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+    transition:
+        background-color 120ms ease-in,
+        border-color 120ms ease-in,
+        color 120ms ease-in;
+}
+
+button-group > button + button {
+    margin-left: -1px;
+}
+
+button-group > button:first-child {
+    border-top-left-radius: var(--border-radius-small);
+    border-bottom-left-radius: var(--border-radius-small);
+}
+
+button-group > button:last-child {
+    border-top-right-radius: var(--border-radius-small);
+    border-bottom-right-radius: var(--border-radius-small);
+}
+
+button-group > button:hover {
+    z-index: 1;
+    background: var(--button-group-hover-background);
+}
+
+button-group > button:active {
+    z-index: 1;
+    background: var(--button-group-active-background);
+}
+
+button-group > button:focus-visible {
+    z-index: 2;
+    outline: var(--focus-ring-outline);
+    outline-offset: -1px;
+}
+
+button-group
+    > button:is(
+        .active,
+        .selected,
+        [aria-pressed="true"],
+        [aria-selected="true"],
+        [aria-current="true"],
+        [aria-current="page"]
+    ) {
+    z-index: 1;
+    border-color: var(--button-group-selected-border-color);
+    background: var(--button-group-selected-background);
+    color: var(--button-group-selected-color);
+}
+
+button-group
+    > button:is(
+        .active,
+        .selected,
+        [aria-pressed="true"],
+        [aria-selected="true"],
+        [aria-current="true"],
+        [aria-current="page"]
+    ):hover {
+    border-color: var(--button-group-selected-hover-color);
+    background: var(--button-group-selected-hover-color);
+}
+
+button-group > button:has(> icon) {
+    width: 32px;
+    min-height: 32px;
+    padding: 0;
+}
+
+advanced-panel {
+    display: block;
+    margin-top: var(--size);
+    padding: var(--size);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-small);
+    background-color: var(--background-color-dimmed);
+}
+
+.processor-accordion {
+    width: 100%;
+    margin-top: var(--size);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-small);
+    background-color: var(--background-color-dimmed);
+}
+
+.processor-accordion > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: var(--size) var(--size-m);
+    font-size: var(--font-size-s);
+    font-weight: 600;
+}
+
+.processor-accordion > summary::-webkit-details-marker {
+    display: none;
+}
+
+.processor-accordion > advanced-panel {
+    margin-top: 0;
+    border: 0;
+    border-top: 1px solid var(--border-color);
+    border-radius: 0 0 var(--border-radius-small) var(--border-radius-small);
+}
+
+processor-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--size-xs);
+    margin-top: var(--size);
+}
+
+.save-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--size);
 }
 
 panel > footer {
@@ -1859,7 +2523,7 @@ switch-glyphs {
     color: var(--background-color);
     pointer-events: none;
     position: relative;
-    display: block;
+    display: flex;
     width: 50px;
     height: 20px;
     left: -16px;
@@ -2168,6 +2832,11 @@ icon-trash {
     color: currentColor;
 }
 
+icon-book {
+    -webkit-mask-image: var(--icon-book);
+    mask-image: var(--icon-book);
+}
+
 icon-pencil {
     -webkit-mask-image: var(--icon-pencil);
     mask-image: var(--icon-pencil);
@@ -2308,6 +2977,32 @@ panel.no-padding {
 
 #job-feed {
     margin-top: var(--size);
+}
+
+workflow-results {
+    display: block;
+    width: 100%;
+    margin-top: var(--size-xl);
+}
+
+content:is(.workflow-content, .jobs-content) .status-box {
+    max-width: none;
+    margin: var(--size-s) 0;
+}
+
+@media (max-width: 1200px) {
+    workflow-grid {
+        grid-template-columns: 1fr;
+    }
+
+    card.workflow-card {
+        min-height: 0;
+        max-height: none;
+    }
+
+    card > card-body {
+        overflow: visible;
+    }
 }
 
 .status-box {
@@ -2702,6 +3397,52 @@ user-icon {
     cursor: pointer;
 }
 
+#user-circle {
+    position: relative;
+}
+
+#user-circle:hover popup-menu {
+    display: block;
+}
+
+.debug-signals {
+    color: var(--text-subdued-color);
+    position: absolute;
+    right: var(--size-s);
+    top: 48px;
+    width: 20%;
+    overflow: scroll;
+}
+
+body > footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: var(--background-color-dimmed);
+    backdrop-filter: blur(4px);
+    font-family: var(--font-family-code);
+    font-size: var(--font-size-s);
+    color: var(--text-subdued-color);
+    border-top: 1px solid var(--border-color);
+    padding: var(--size-xs) var(--size);
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 100;
+}
+
+html:has(#dark-mode:checked) header,
+html:has(#dark-mode:checked) body > footer {
+    background-color: var(--background-color-dimmed);
+}
+
+html:has(#dark-mode:checked) .form-input,
+html:has(#dark-mode:checked) .curl-textarea {
+    background-color: var(--background-color-dimmed);
+}
+
 .counter {
     display: inline-block;
     width: 8em;
@@ -2779,6 +3520,11 @@ footer-right {
     position: fixed;
     inset: 0;
     z-index: 100;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.4);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2786,6 +3532,12 @@ footer-right {
 }
 
 .modal-content {
+    background-color: var(--background-color);
+    padding: 24px;
+    border-radius: 8px;
+    width: 80%;
+    max-width: 500px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
     position: relative;
     width: min(80%, 500px);
     padding: 24px;
@@ -2895,4 +3647,8 @@ footer-right {
     display: flex;
     gap: var(--size-s);
     margin-top: var(--size-l);
+}
+
+.row {
+    flex-direction: row;
 }

@@ -3,7 +3,9 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{ServerState, get_theme_dark, template};
-use crate::data::{KnownHost, keystore_exists};
+use crate::data::{HostRole, KnownHost, Product, Settings, keystore_exists};
+use crate::exporter::Exporter;
+use crate::processor::api::ApiResolver;
 use askama::Template;
 use axum::{
     extract::{Query, State},
@@ -11,7 +13,7 @@ use axum::{
     response::{Html, IntoResponse},
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
-use std::{str::FromStr, sync::Arc};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 #[allow(dead_code)] // Needed when deserializing signals to modify selected tab in Web UI
 #[derive(Deserialize, Serialize)]
@@ -81,29 +83,108 @@ pub async fn handler(
         .next()
         .unwrap_or('_')
         .to_ascii_uppercase();
-
-    let allows_local_artifacts = state.runtime_mode_policy.allows_local_artifacts();
-    let can_use_keystore = cfg!(feature = "keystore") && allows_local_artifacts;
-    let exporter = { state.exporter.read().await.clone() };
-    let hosts_by_name = if allows_local_artifacts {
-        KnownHost::parse_hosts_yml().unwrap_or_default()
-    } else {
-        std::collections::BTreeMap::new()
-    };
-    let preferred_target = if allows_local_artifacts {
-        crate::data::Settings::load()
+    let allows_local_runtime_features = state.runtime_mode_policy.allows_local_runtime_features();
+    let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
+    let theme_dark = get_theme_dark(&headers);
+    let kibana_url = { state.kibana_url.read().await.clone() };
+    let output_secure = if allows_local_runtime_features {
+        let hosts_by_name = KnownHost::parse_hosts_yml().unwrap_or_default();
+        let send_hosts: Vec<String> = hosts_by_name
+            .iter()
+            .filter(|(_, h)| h.has_role(HostRole::Send))
+            .map(|(name, _)| name.clone())
+            .collect();
+        let exporter = state.exporter.read().await.clone();
+        let preferred_target = Settings::load()
             .ok()
-            .and_then(|settings| settings.active_target)
+            .and_then(|settings| settings.active_target);
+        let (_output_options, selected_output, _label) = template::build_footer_output_context(
+            &hosts_by_name,
+            &send_hosts,
+            &exporter,
+            preferred_target.as_deref(),
+        );
+        template::active_output_requires_keystore(
+            &hosts_by_name,
+            &send_hosts,
+            &selected_output,
+            &exporter,
+        )
     } else {
-        None
+        false
     };
-    let (output_options, selected_output, exporter_label) = template::build_footer_output_context(
-        &hosts_by_name,
-        &exporter,
-        preferred_target.as_deref(),
-    );
-    let active_output_secure =
-        template::active_output_requires_keystore(&hosts_by_name, &selected_output, &exporter);
+    let (keystore_locked, keystore_lock_time) = if can_use_keystore {
+        state.keystore_status_for(&user_email).await
+    } else {
+        (true, 0)
+    };
+    let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
+    let page = template::Index {
+        auth_header,
+        debug: tracing::enabled!(tracing::Level::DEBUG),
+        desktop: cfg!(feature = "desktop"),
+        kibana_url,
+        key_id: params.key_id,
+        link_id: params.link_id,
+        upload_id: params.upload_id,
+        stats: state.get_stats_as_signals().await,
+        user: user_email,
+        user_initial,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        theme_dark,
+        runtime_mode: state.runtime_mode.to_string(),
+        can_use_keystore,
+        output_secure,
+        keystore_locked,
+        keystore_lock_time,
+        show_keystore_bootstrap,
+    };
+
+    let html = match page.render() {
+        Ok(html) => html,
+        Err(err) => format!(
+            "<html><body><h1>Internal Server Error</h1><p>{}</p></body></html>",
+            err
+        ),
+    };
+
+    Html(html).into_response()
+}
+
+pub async fn workflow_page(
+    State(state): State<Arc<ServerState>>,
+    Query(params): Query<Params>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let (auth_header, user_email) = match state.resolve_user_email(&headers) {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::warn!("Authentication header validation failed: {err}");
+            return (
+                StatusCode::UNAUTHORIZED,
+                Html(format!(
+                    "<html><body><h1>Unauthorized</h1><p>{}</p></body></html>",
+                    err
+                )),
+            )
+                .into_response();
+        }
+    };
+    let user_initial = user_email
+        .chars()
+        .next()
+        .unwrap_or('_')
+        .to_ascii_uppercase();
+
+    let allows_local_runtime_features = state.runtime_mode_policy.allows_local_runtime_features();
+    let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
+    let exporter = { state.exporter.read().await.clone() };
+    let send_defaults = classify_configured_exporter(&exporter);
+    let workflow_hosts = workflow_host_options(&state);
+    let default_save_dir = default_downloads_dir().display().to_string();
+    let process_options_json =
+        serde_json::to_string(&ApiResolver::processing_catalog().unwrap_or_default())
+            .unwrap_or_else(|_| "{}".to_string());
     let theme_dark = get_theme_dark(&headers);
     let kibana_url = { state.kibana_url.read().await.clone() };
     let (keystore_locked, keystore_lock_time) = if can_use_keystore {
@@ -112,18 +193,27 @@ pub async fn handler(
         (true, 0)
     };
     let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
-    let index_html = template::Index {
+    let page = template::Workflow {
         auth_header,
         debug: tracing::enabled!(tracing::Level::DEBUG),
         desktop: cfg!(feature = "desktop"),
-        can_configure_output: state.runtime_mode_policy.allows_exporter_updates(),
-        output_options,
-        selected_output,
-        exporter_label,
-        active_output_secure,
+        collect_hosts: workflow_hosts.collect_hosts,
+        collect_secure_hosts_json: serde_json::to_string(&workflow_hosts.collect_secure_hosts)
+            .unwrap_or_else(|_| "[]".to_string()),
+        configured_local_path: send_defaults.local_path,
+        configured_remote_target: send_defaults.remote_target,
+        default_save_dir,
+        initial_send_mode: send_defaults.mode,
+        initial_local_target: send_defaults.local_target,
+        initial_remote_target: send_defaults.remote_target_default,
         kibana_url,
         key_id: params.key_id,
         link_id: params.link_id,
+        process_options_json,
+        send_secure_hosts_json: serde_json::to_string(&workflow_hosts.send_secure_hosts)
+            .unwrap_or_else(|_| "[]".to_string()),
+        send_local_hosts: workflow_hosts.send_local_hosts,
+        send_remote_hosts: workflow_hosts.send_remote_hosts,
         upload_id: params.upload_id,
         stats: state.get_stats_as_signals().await,
         user: user_email,
@@ -137,7 +227,7 @@ pub async fn handler(
         show_keystore_bootstrap,
     };
 
-    let index_html = match index_html.render() {
+    let html = match page.render() {
         Ok(html) => html,
         Err(err) => format!(
             "<html><body><h1>Internal Server Error</h1><p>{}</p></body></html>",
@@ -145,80 +235,274 @@ pub async fn handler(
         ),
     };
 
-    Html(index_html).into_response()
+    Html(html).into_response()
+}
+
+pub async fn jobs_page(
+    State(state): State<Arc<ServerState>>,
+    Query(params): Query<Params>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let (auth_header, user_email) = match state.resolve_user_email(&headers) {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::warn!("Authentication header validation failed: {err}");
+            return (
+                StatusCode::UNAUTHORIZED,
+                Html(format!(
+                    "<html><body><h1>Unauthorized</h1><p>{}</p></body></html>",
+                    err
+                )),
+            )
+                .into_response();
+        }
+    };
+    let user_initial = user_email
+        .chars()
+        .next()
+        .unwrap_or('_')
+        .to_ascii_uppercase();
+
+    let allows_local_runtime_features = state.runtime_mode_policy.allows_local_runtime_features();
+    let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
+    let exporter = { state.exporter.read().await.clone() };
+    let send_defaults = classify_configured_exporter(&exporter);
+    let workflow_hosts = workflow_host_options(&state);
+    let default_save_dir = default_downloads_dir().display().to_string();
+    let process_options_json =
+        serde_json::to_string(&ApiResolver::processing_catalog().unwrap_or_default())
+            .unwrap_or_else(|_| "{}".to_string());
+    let theme_dark = get_theme_dark(&headers);
+    let kibana_url = { state.kibana_url.read().await.clone() };
+    let (keystore_locked, keystore_lock_time) = if can_use_keystore {
+        state.keystore_status_for(&user_email).await
+    } else {
+        (true, 0)
+    };
+    let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
+    let page = template::Jobs {
+        auth_header,
+        debug: tracing::enabled!(tracing::Level::DEBUG),
+        desktop: cfg!(feature = "desktop"),
+        collect_hosts: workflow_hosts.collect_hosts,
+        collect_secure_hosts_json: serde_json::to_string(&workflow_hosts.collect_secure_hosts)
+            .unwrap_or_else(|_| "[]".to_string()),
+        configured_local_path: send_defaults.local_path,
+        configured_remote_target: send_defaults.remote_target,
+        default_save_dir,
+        initial_send_mode: send_defaults.mode,
+        initial_local_target: send_defaults.local_target,
+        initial_remote_target: send_defaults.remote_target_default,
+        kibana_url,
+        key_id: params.key_id,
+        link_id: params.link_id,
+        process_options_json,
+        send_secure_hosts_json: serde_json::to_string(&workflow_hosts.send_secure_hosts)
+            .unwrap_or_else(|_| "[]".to_string()),
+        send_local_hosts: workflow_hosts.send_local_hosts,
+        send_remote_hosts: workflow_hosts.send_remote_hosts,
+        upload_id: params.upload_id,
+        stats: state.get_stats_as_signals().await,
+        user: user_email,
+        user_initial,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        theme_dark,
+        runtime_mode: state.runtime_mode.to_string(),
+        can_use_keystore,
+        keystore_locked,
+        keystore_lock_time,
+        show_keystore_bootstrap,
+    };
+
+    let html = match page.render() {
+        Ok(html) => html,
+        Err(err) => format!(
+            "<html><body><h1>Internal Server Error</h1><p>{}</p></body></html>",
+            err
+        ),
+    };
+
+    Html(html).into_response()
+}
+
+struct SendDefaults {
+    mode: String,
+    local_path: String,
+    local_target: String,
+    remote_target: String,
+    remote_target_default: String,
+}
+
+struct WorkflowHostOptions {
+    collect_hosts: Vec<String>,
+    collect_secure_hosts: Vec<String>,
+    send_remote_hosts: Vec<String>,
+    send_local_hosts: Vec<String>,
+    send_secure_hosts: Vec<String>,
+}
+
+fn classify_configured_exporter(exporter: &Exporter) -> SendDefaults {
+    let target_uri = exporter.target_uri();
+    match exporter {
+        Exporter::Elasticsearch(_) => SendDefaults {
+            mode: "remote".to_string(),
+            local_path: String::new(),
+            local_target: String::new(),
+            remote_target: target_uri.clone(),
+            remote_target_default: target_uri,
+        },
+        Exporter::Directory(_) | Exporter::File(_) => SendDefaults {
+            mode: "local".to_string(),
+            local_path: target_uri,
+            local_target: "directory".to_string(),
+            remote_target: String::new(),
+            remote_target_default: String::new(),
+        },
+        Exporter::Archive(_) | Exporter::Stream(_) => SendDefaults {
+            mode: "remote".to_string(),
+            local_path: String::new(),
+            local_target: String::new(),
+            remote_target: target_uri.clone(),
+            remote_target_default: target_uri,
+        },
+    }
+}
+
+fn workflow_host_options(state: &Arc<ServerState>) -> WorkflowHostOptions {
+    if !state.runtime_mode_policy.allows_host_management() {
+        return WorkflowHostOptions {
+            collect_hosts: Vec::new(),
+            collect_secure_hosts: Vec::new(),
+            send_remote_hosts: Vec::new(),
+            send_local_hosts: Vec::new(),
+            send_secure_hosts: Vec::new(),
+        };
+    }
+
+    let hosts_by_name = KnownHost::parse_hosts_yml().unwrap_or_default();
+    let mut collect_hosts = Vec::new();
+    let mut collect_secure_hosts = Vec::new();
+    let mut send_remote_hosts = Vec::new();
+    let mut send_local_hosts = Vec::new();
+    let mut send_secure_hosts = Vec::new();
+
+    for (name, host) in hosts_by_name {
+        if host.has_role(HostRole::Collect) {
+            collect_hosts.push(name.clone());
+            if host.requires_keystore_secret() {
+                collect_secure_hosts.push(name.clone());
+            }
+        }
+
+        if host.has_role(HostRole::Send) && host.app() == &Product::Elasticsearch {
+            send_remote_hosts.push(name.clone());
+            if host.requires_keystore_secret() {
+                send_secure_hosts.push(name.clone());
+            }
+            if host.get_url().host_str().is_some_and(is_local_host) {
+                send_local_hosts.push(name.clone());
+            }
+        }
+    }
+
+    WorkflowHostOptions {
+        collect_hosts,
+        collect_secure_hosts,
+        send_remote_hosts,
+        send_local_hosts,
+        send_secure_hosts,
+    }
+}
+
+fn is_local_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1")
+}
+
+fn default_downloads_dir() -> PathBuf {
+    let home_dir = match std::env::consts::OS {
+        "windows" => std::env::var("USERPROFILE").unwrap_or_default(),
+        "linux" | "macos" => std::env::var("HOME").unwrap_or_default(),
+        _ => String::new(),
+    };
+
+    let home_path = PathBuf::from(home_dir);
+    if home_path.as_os_str().is_empty() {
+        PathBuf::from("Downloads")
+    } else {
+        home_path.join("Downloads")
+    }
 }
 
 #[cfg(test)]
-#[allow(clippy::await_holding_lock)]
 mod tests {
-    use super::{Params, handler};
+    use super::workflow_host_options;
     use crate::{
-        exporter::Exporter,
-        server::{RuntimeMode, RuntimeModePolicy, test_server_state},
+        data::{HostRole, KnownHost, KnownHostBuilder, Product},
+        server::test_server_state,
     };
-    use axum::{
-        extract::{Query, State},
-        http::{HeaderMap, HeaderValue, StatusCode},
-        response::IntoResponse,
-    };
-    use std::{sync::Arc, sync::Mutex};
+    use std::collections::BTreeMap;
     use tempfile::TempDir;
+    use url::Url;
 
-    fn env_lock() -> &'static Mutex<()> {
+    fn env_lock() -> &'static std::sync::Mutex<()> {
         crate::test_env_lock()
     }
 
-    fn setup_env() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    fn setup_hosts() -> TempDir {
         let tmp = TempDir::new().expect("temp dir");
         let config_dir = tmp.path().join(".esdiag");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
         let hosts_path = config_dir.join("hosts.yml");
-        let settings_path = config_dir.join("settings.yml");
         unsafe {
             std::env::set_var("HOME", tmp.path());
             std::env::set_var("USERPROFILE", tmp.path());
             std::env::set_var("ESDIAG_HOSTS", &hosts_path);
-            std::env::set_var("ESDIAG_SETTINGS", &settings_path);
         }
-        (tmp, hosts_path, settings_path)
+
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "es-remote".to_string(),
+            KnownHostBuilder::new(Url::parse("https://es.example.com:9200").expect("es url"))
+                .product(Product::Elasticsearch)
+                .roles(vec![HostRole::Send])
+                .build()
+                .expect("es host"),
+        );
+        hosts.insert(
+            "es-local".to_string(),
+            KnownHostBuilder::new(Url::parse("http://localhost:9200").expect("local es url"))
+                .product(Product::Elasticsearch)
+                .roles(vec![HostRole::Send])
+                .build()
+                .expect("local es host"),
+        );
+        hosts.insert(
+            "kb-collect".to_string(),
+            KnownHostBuilder::new(Url::parse("https://kb.example.com:5601").expect("kb url"))
+                .product(Product::Kibana)
+                .roles(vec![HostRole::Collect])
+                .build()
+                .expect("kb host"),
+        );
+        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
+        tmp
     }
 
-    #[tokio::test]
-    async fn service_mode_index_does_not_touch_local_artifacts() {
+    #[test]
+    fn workflow_host_options_only_offer_elasticsearch_send_hosts() {
         let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, hosts_path, settings_path) = setup_env();
+        let _tmp = setup_hosts();
+        let state = test_server_state();
 
-        let mut state = test_server_state();
-        let state_mut = Arc::get_mut(&mut state).expect("unique state");
-        state_mut.runtime_mode = RuntimeMode::Service;
-        state_mut.runtime_mode_policy = RuntimeModePolicy::new(RuntimeMode::Service);
-        *state.exporter.write().await = Exporter::default();
+        let options = workflow_host_options(&state);
 
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "X-Goog-Authenticated-User-Email",
-            HeaderValue::from_static("accounts.google.com:test@example.com"),
-        );
-
-        let response = handler(
-            State(state),
-            Query(Params {
-                key_id: None,
-                link_id: None,
-                upload_id: None,
-            }),
-            headers,
-        )
-        .await
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert!(
-            !hosts_path.exists(),
-            "service mode index should not create hosts.yml"
-        );
-        assert!(
-            !settings_path.exists(),
-            "service mode index should not create settings.yml"
-        );
+        assert_eq!(options.send_remote_hosts.len(), 2);
+        assert!(options.send_remote_hosts.contains(&"es-remote".to_string()));
+        assert!(options.send_remote_hosts.contains(&"es-local".to_string()));
+        assert_eq!(options.send_local_hosts, vec!["es-local".to_string()]);
+        assert!(options.collect_hosts.contains(&"kb-collect".to_string()));
+        assert!(!options.send_remote_hosts.contains(&"kb-collect".to_string()));
+        assert!(!options.send_local_hosts.contains(&"kb-collect".to_string()));
+        assert!(!options.send_secure_hosts.contains(&"kb-collect".to_string()));
     }
 }

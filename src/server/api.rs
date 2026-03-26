@@ -116,6 +116,11 @@ pub async fn service_link(
         }
     };
 
+    let filename = payload
+        .metadata
+        .filename
+        .clone()
+        .unwrap_or_else(|| "Elastic Upload Service".to_string());
     let mut metadata = payload.metadata;
     metadata.user = Some(request_user);
 
@@ -220,7 +225,7 @@ pub async fn service_link(
     } else {
         // Stash the user-scoped metadata and (filename, URI) into the server state for later use
         tracing::debug!("[fsm][api.service_link] queued(in state): job_id={job_id}");
-        state.push_link(job_id, metadata, uri).await;
+        state.push_link(job_id, metadata, filename, uri).await;
 
         // Respond with a JSON success
         (StatusCode::CREATED, Json(json!({"link_id": job_id})))
@@ -441,7 +446,9 @@ pub async fn api_key(
         tracing::debug!("[fsm][api.api_key] queued(in state): job_id={job_id}");
         let mut metadata = payload.metadata;
         metadata.user = Some(request_user);
-        state.push_key(job_id, metadata, host).await;
+        state
+            .push_key(job_id, metadata, host, "standard".to_string())
+            .await;
 
         // Respond with a JSON success
         (StatusCode::CREATED, Json(json!({"key_id": job_id})))

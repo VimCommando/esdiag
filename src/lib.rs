@@ -22,6 +22,8 @@ pub mod server;
 /// Send pre-built assets (index templates, etc) to Elasticsearch
 #[cfg(feature = "setup")]
 pub mod setup;
+/// Upload raw diagnostic archives to Elastic Upload Service
+pub mod uploader;
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {

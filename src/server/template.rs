@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use crate::{
-    data::{HostRole, KnownHost, Uri},
+    data::{KnownHost, Uri},
     exporter::Exporter,
 };
 use askama::Template;
@@ -24,14 +24,78 @@ pub struct Index {
     pub auth_header: bool,
     pub debug: bool,
     pub desktop: bool,
-    pub can_configure_output: bool,
-    pub output_options: Vec<FooterOutputOption>,
-    pub selected_output: String,
-    pub exporter_label: String,
-    pub active_output_secure: bool,
     pub kibana_url: String,
     pub key_id: Option<u64>,
     pub link_id: Option<u64>,
+    pub upload_id: Option<u64>,
+    pub stats: String,
+    pub user: String,
+    pub user_initial: char,
+    pub version: String,
+    pub theme_dark: bool,
+    pub runtime_mode: String,
+    pub can_use_keystore: bool,
+    pub output_secure: bool,
+    pub keystore_locked: bool,
+    pub keystore_lock_time: i64,
+    pub show_keystore_bootstrap: bool,
+}
+
+#[derive(Template)]
+#[template(path = "workflow.html")]
+pub struct Workflow {
+    pub auth_header: bool,
+    pub debug: bool,
+    pub desktop: bool,
+    pub collect_hosts: Vec<String>,
+    pub collect_secure_hosts_json: String,
+    pub configured_local_path: String,
+    pub configured_remote_target: String,
+    pub default_save_dir: String,
+    pub initial_send_mode: String,
+    pub initial_local_target: String,
+    pub initial_remote_target: String,
+    pub kibana_url: String,
+    pub key_id: Option<u64>,
+    pub link_id: Option<u64>,
+    pub process_options_json: String,
+    pub send_secure_hosts_json: String,
+    pub send_local_hosts: Vec<String>,
+    pub send_remote_hosts: Vec<String>,
+    pub upload_id: Option<u64>,
+    pub stats: String,
+    pub user: String,
+    pub user_initial: char,
+    pub version: String,
+    pub theme_dark: bool,
+    pub runtime_mode: String,
+    pub can_use_keystore: bool,
+    pub keystore_locked: bool,
+    pub keystore_lock_time: i64,
+    pub show_keystore_bootstrap: bool,
+}
+
+#[derive(Template)]
+#[template(path = "jobs.html")]
+pub struct Jobs {
+    pub auth_header: bool,
+    pub debug: bool,
+    pub desktop: bool,
+    pub collect_hosts: Vec<String>,
+    pub collect_secure_hosts_json: String,
+    pub configured_local_path: String,
+    pub configured_remote_target: String,
+    pub default_save_dir: String,
+    pub initial_send_mode: String,
+    pub initial_local_target: String,
+    pub initial_remote_target: String,
+    pub kibana_url: String,
+    pub key_id: Option<u64>,
+    pub link_id: Option<u64>,
+    pub process_options_json: String,
+    pub send_secure_hosts_json: String,
+    pub send_local_hosts: Vec<String>,
+    pub send_remote_hosts: Vec<String>,
     pub upload_id: Option<u64>,
     pub stats: String,
     pub user: String,
@@ -169,11 +233,6 @@ pub struct HostsPage {
     pub auth_header: bool,
     pub debug: bool,
     pub desktop: bool,
-    pub can_configure_output: bool,
-    pub output_options: Vec<FooterOutputOption>,
-    pub selected_output: String,
-    pub exporter_label: String,
-    pub active_output_secure: bool,
     pub kibana_url: String,
     pub stats: String,
     pub user: String,
@@ -202,6 +261,29 @@ pub struct JobCompleted<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "job/collection_processing.html")]
+pub struct JobCollectionProcessing<'a> {
+    pub job_id: u64,
+    pub source: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "job/collection_completed.html")]
+pub struct JobCollectionCompleted<'a> {
+    pub job_id: u64,
+    pub source: &'a str,
+    pub archive_path: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "job/forward_completed.html")]
+pub struct JobForwardCompleted<'a> {
+    pub job_id: u64,
+    pub source: &'a str,
+    pub destination: &'a str,
+}
+
+#[derive(Template)]
 #[template(path = "job/failed.html")]
 pub struct JobFailed<'a> {
     pub job_id: u64,
@@ -216,6 +298,13 @@ pub struct JobProcessing<'a> {
     pub source: &'a str,
 }
 
+#[derive(Template)]
+#[template(path = "job/forward_processing.html")]
+pub struct JobForwardProcessing<'a> {
+    pub job_id: u64,
+    pub source: &'a str,
+}
+
 #[derive(Clone, Serialize)]
 pub struct FooterOutputOption {
     pub value: String,
@@ -224,15 +313,15 @@ pub struct FooterOutputOption {
 
 pub fn build_footer_output_context(
     hosts_by_name: &BTreeMap<String, KnownHost>,
+    send_hosts: &[String],
     exporter: &Exporter,
     preferred_target: Option<&str>,
 ) -> (Vec<FooterOutputOption>, String, String) {
-    let send_hosts = send_host_names(hosts_by_name);
-    let exporter_value = exporter.target_value();
+    let exporter_value = exporter.target_uri();
     let selected_output = preferred_target
         .filter(|target| send_hosts.iter().any(|host| host == *target))
         .and_then(|target| {
-            preferred_target_matches_exporter(target, exporter, hosts_by_name).then_some(target)
+            preferred_target_matches_exporter(hosts_by_name, target, exporter).then_some(target)
         })
         .map(str::to_string)
         .unwrap_or_else(|| exporter_value.clone());
@@ -272,46 +361,36 @@ pub fn build_footer_output_context(
     (output_options, selected_output, exporter_label)
 }
 
-fn send_host_names(hosts_by_name: &BTreeMap<String, KnownHost>) -> Vec<String> {
-    hosts_by_name
-        .iter()
-        .filter_map(|(name, host)| host.has_role(HostRole::Send).then_some(name.clone()))
-        .collect()
-}
-
 fn preferred_target_matches_exporter(
+    hosts_by_name: &BTreeMap<String, KnownHost>,
     target: &str,
     exporter: &Exporter,
-    hosts_by_name: &BTreeMap<String, KnownHost>,
 ) -> bool {
     let Some(host) = hosts_by_name.get(target) else {
         return false;
     };
-    host.get_url().to_string() == exporter.target_value()
+    host.get_url().to_string() == exporter.target_uri()
 }
 
 pub fn active_output_requires_keystore(
     hosts_by_name: &BTreeMap<String, KnownHost>,
+    send_hosts: &[String],
     selected_output: &str,
     exporter: &Exporter,
 ) -> bool {
     if let Some(host) = hosts_by_name.get(selected_output) {
-        return !matches!(host, KnownHost::NoAuth { .. });
+        return host.requires_keystore_secret();
     }
 
-    if selected_output == exporter.target_value() {
-        return exporter.requires_secret();
-    }
-
-    hosts_by_name.values().any(|host| {
-        if !host.has_role(HostRole::Send) {
+    send_hosts.iter().any(|host_name| {
+        let Some(host) = hosts_by_name.get(host_name) else {
             return false;
-        }
-        let secure = !matches!(host, KnownHost::NoAuth { .. });
+        };
+        let secure = host.requires_keystore_secret();
         if !secure {
             return false;
         }
-        host.get_url().to_string() == exporter.target_value()
+        host.get_url().to_string() == exporter.target_uri()
     })
 }
 
@@ -395,14 +474,18 @@ mod tests {
     fn footer_context_prefers_live_cli_output_over_saved_host_override() {
         let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_hosts();
-        let hosts = KnownHost::parse_hosts_yml().expect("parse hosts");
+        let send_hosts = vec!["localhost".to_string(), "secure-prod".to_string()];
         let exporter = Exporter::try_from(Uri::Directory(PathBuf::from("/tmp/output")))
             .expect("directory exporter");
 
-        let (options, selected_output, label) =
-            build_footer_output_context(&hosts, &exporter, Some("localhost"));
+        let (options, selected_output, label) = build_footer_output_context(
+            &KnownHost::parse_hosts_yml().unwrap_or_default(),
+            &send_hosts,
+            &exporter,
+            Some("localhost"),
+        );
 
-        assert_eq!(selected_output, "/tmp/output");
+        assert_eq!(selected_output, "file:///tmp/output/");
         assert_eq!(label, "dir: /tmp/output/");
         assert_eq!(
             options.first().map(|option| option.label.as_str()),
@@ -414,7 +497,7 @@ mod tests {
     fn active_output_security_tracks_selected_host_or_matching_exporter() {
         let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_hosts();
-        let hosts = KnownHost::parse_hosts_yml().expect("parse hosts");
+        let send_hosts = vec!["localhost".to_string(), "secure-prod".to_string()];
 
         let secure_exporter = Exporter::try_from(KnownHost::NoAuth {
             app: Product::Elasticsearch,
@@ -423,36 +506,27 @@ mod tests {
             url: Url::parse("https://secure.example.com:9200").expect("secure url"),
         })
         .expect("secure exporter");
+        let hosts_by_name = KnownHost::parse_hosts_yml().unwrap_or_default();
         assert!(active_output_requires_keystore(
-            &hosts,
+            &hosts_by_name,
+            &send_hosts,
             "secure-prod",
             &secure_exporter
         ));
-        assert!(!active_output_requires_keystore(
-            &hosts,
-            &secure_exporter.target_value(),
+        assert!(active_output_requires_keystore(
+            &hosts_by_name,
+            &send_hosts,
+            &secure_exporter.target_uri(),
             &secure_exporter
         ));
 
         let dir_exporter = Exporter::try_from(Uri::Directory(PathBuf::from("/tmp/output")))
             .expect("directory exporter");
         assert!(!active_output_requires_keystore(
-            &hosts,
-            &dir_exporter.target_value(),
+            &hosts_by_name,
+            &send_hosts,
+            &dir_exporter.target_uri(),
             &dir_exporter
-        ));
-
-        let live_url_exporter = Exporter::try_from(KnownHost::NoAuth {
-            app: Product::Elasticsearch,
-            roles: vec![HostRole::Send],
-            viewer: None,
-            url: Url::parse("https://secure.example.com:9200").expect("live url"),
-        })
-        .expect("live url exporter");
-        assert!(!active_output_requires_keystore(
-            &hosts,
-            &live_url_exporter.target_value(),
-            &live_url_exporter
         ));
     }
 }

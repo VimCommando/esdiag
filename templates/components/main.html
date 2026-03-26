@@ -1,6 +1,22 @@
 <content id="main-content">
     <section-title>Process Diagnostics</section-title>
-    <panel class="no-padding" id="input-form" data-signals:loading="false" data-signals:processing="false">
+    <panel
+        class="row no-padding"
+        id="input-form"
+        data-signals:loading="false"
+        data-signals:processing="false"
+        data-signals:output.secure="{{ output_secure }}"
+        data-signals:archive.download_token="''"
+        data-signals:archive.pending_token="''"
+        data-signals:archive.ready_token="''"
+        data-signals:archive.status="'idle'"
+        data-signals:archive.error="''"
+        data-signals:workflow.collect.mode="'upload'"
+        data-signals:workflow.collect.source="'upload-file'"
+        data-signals:workflow.collect.save="false"
+        data-signals:_pending_workflow_action="''"
+        data-effect="if (!$keystore.locked && $_pending_workflow_action === 'api-key') { $_pending_workflow_action = ''; document.getElementById('es-api-key-button')?.click(); } else if (!$keystore.locked && $_pending_workflow_action === 'service-link') { $_pending_workflow_action = ''; document.getElementById('service-link-button')?.click(); } else if (!$keystore.locked && $_pending_workflow_action === 'upload-process') { $_pending_workflow_action = ''; document.getElementById('main-upload-process-button')?.click(); }"
+    >
         <diagnostic-form id="diagnostic-form">
             <tab-links data-signals:tab="'file-upload'">
                 <button
@@ -62,6 +78,12 @@
                         <div class="upload-progress-text" id="upload-progress-text">0%</div>
                     </div>
                     <input id="upload-button" class="button" type="submit" value="Process" disabled />
+                    <button
+                        id="main-upload-process-button"
+                        type="button"
+                        style="display: none"
+                        data-on:click="$loading = true; $message = 'Processing diagnostic...'; @post('/upload/process', {openWhenHidden: true})"
+                    ></button>
                     <script>
                         // File upload handling
                         const dropzone = document.getElementById("dropzone");
@@ -283,7 +305,7 @@
                         class="button"
                         type="button"
                         value="Process"
-                        data-on:click="{% if can_use_keystore %}if ($keystore.locked && $output.secure) { @get('/keystore/modal/process'); } else { $loading = true; $message = 'Connecting to Elastic Upload service...'; @post('/service_link'); }{% else %}$loading = true; $message = 'Connecting to Elastic Upload service...'; @post('/service_link');{% endif %}"
+                        data-on:click="{% if can_use_keystore %}if ($keystore.locked && $output.secure) { $_pending_workflow_action = 'service-link'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process'); } else { $loading = true; $message = 'Connecting to Elastic Upload service...'; @post('/service_link'); }{% else %}$loading = true; $message = 'Connecting to Elastic Upload service...'; @post('/service_link');{% endif %}"
                         data-attr:disabled="$loading || !$service_link.url || !$service_link.token"
                     />
                     <script>
@@ -347,7 +369,7 @@
                         class="button"
                         type="button"
                         value="Process"
-                        data-on:click="{% if can_use_keystore %}if ($keystore.locked && $output.secure) { @get('/keystore/modal/process'); } else { $loading = true; $message = 'Connecting with API key...'; @post('/api_key'); }{% else %}$loading = true; $message = 'Connecting with API key...'; @post('/api_key');{% endif %}"
+                        data-on:click="{% if can_use_keystore %}if ($keystore.locked && $output.secure) { $_pending_workflow_action = 'api-key'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process'); } else { $loading = true; $message = 'Connecting with API key...'; @post('/api_key'); }{% else %}$loading = true; $message = 'Connecting with API key...'; @post('/api_key');{% endif %}"
                         data-attr:disabled="$loading || !$es_api.url || !$es_api.key"
                     />
                 </form>

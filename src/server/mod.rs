@@ -5,6 +5,7 @@
 mod api;
 mod api_key;
 mod assets;
+mod bundle_download;
 mod docs;
 mod file_upload;
 #[cfg(feature = "keystore")]
@@ -12,11 +13,13 @@ mod hosts;
 mod index;
 #[cfg(feature = "keystore")]
 mod keystore;
+mod known_host;
 mod service_link;
 mod settings;
 mod stats;
 mod template;
 mod theme;
+mod workflow;
 
 use super::processor::Identifiers;
 use crate::{
@@ -48,8 +51,9 @@ use eyre::eyre;
 use futures::stream;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
+use uuid::Uuid;
 
 type UploadReceiver = Arc<RwLock<mpsc::Receiver<(Identifiers, Bytes)>>>;
 const IAP_USER_EMAIL_HEADER: &str = "X-Goog-Authenticated-User-Email";
@@ -101,7 +105,7 @@ impl RuntimeModePolicy {
         self.mode == RuntimeMode::Service
     }
 
-    pub fn allows_local_artifacts(&self) -> bool {
+    pub fn allows_local_runtime_features(&self) -> bool {
         self.mode == RuntimeMode::User
     }
 
@@ -168,12 +172,11 @@ impl Server {
         // Create shared state
         let state = Arc::new(ServerState {
             exporter: Arc::new(RwLock::new(exporter)),
-            keys: Arc::new(RwLock::new(HashMap::new())),
             kibana_url: Arc::new(RwLock::new(kibana_url)),
-            links: Arc::new(RwLock::new(HashMap::new())),
             signals: Arc::new(RwLock::new(Signals::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
-            uploads: Arc::new(RwLock::new(HashMap::new())),
+            workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
+            retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             shutdown: shutdown_rx,
             event_tx,
             stats_updates_tx,
@@ -205,6 +208,7 @@ impl Server {
                 .route("/api/api_key", post(api::api_key))
                 .route("/api_key", post(api_key::form))
                 .route("/api_key/{id}", post(api_key::id))
+                .route("/known_host", post(known_host::form))
                 .route("/datastar.js", get(assets::datastar))
                 .route("/datastar.js.map", get(assets::datastar_map))
                 .route("/esdiag.svg", get(assets::logo))
@@ -224,18 +228,29 @@ impl Server {
                 )
                 .route("/theme-borealis.css", get(assets::theme_borealis))
                 .route("/theme", post(theme::set_theme))
+                .route(
+                    "/workflow/download/{token}",
+                    get(bundle_download::download_retained_bundle),
+                )
                 .route("/docs/{*path}", get(docs::handler))
                 .route("/docs", get(docs::handler_index))
                 .route("/upload/process", post(file_upload::process))
                 .route("/upload/submit", post(file_upload::submit))
                 .route("/events", patch(events));
 
+            let app = if runtime_mode_policy.allows_local_runtime_features() {
+                app.route("/workflow", get(index::workflow_page))
+                    .route("/jobs", get(index::jobs_page))
+            } else {
+                app
+            };
+
             let app = app
                 .route("/settings/modal", get(settings::get_modal))
                 .route("/api/settings/update", post(settings::update_settings));
 
             #[cfg(feature = "keystore")]
-            let app = if runtime_mode_policy.allows_local_artifacts() {
+            let app = if runtime_mode_policy.allows_local_runtime_features() {
                 app.route("/settings", get(hosts::page))
                     .route("/settings/create", post(hosts::create_host))
                     .route("/settings/update", put(hosts::update_host))
@@ -260,7 +275,6 @@ impl Server {
                         get(keystore::get_process_unlock_modal),
                     )
                     .route("/keystore/unlock", post(keystore::unlock))
-                    .route("/keystore/unlock-and-run", post(keystore::unlock_and_run))
                     .route("/keystore/lock", post(keystore::lock))
             } else {
                 app
@@ -304,9 +318,9 @@ impl Server {
             bound_addr.port()
         );
         tracing::debug!(
-            "Runtime mode policy => requires_iap_headers={}, allows_local_artifacts={}, allows_exporter_updates={}, allows_host_management={}",
+            "Runtime mode policy => requires_iap_headers={}, allows_local_runtime_features={}, allows_exporter_updates={}, allows_host_management={}",
             runtime_mode_policy.requires_iap_headers(),
-            runtime_mode_policy.allows_local_artifacts(),
+            runtime_mode_policy.allows_local_runtime_features(),
             runtime_mode_policy.allows_exporter_updates(),
             runtime_mode_policy.allows_host_management()
         );
@@ -351,9 +365,8 @@ pub struct ServerState {
     pub exporter: Arc<RwLock<Exporter>>,
     pub kibana_url: Arc<RwLock<String>>,
     pub signals: Arc<RwLock<Signals>>,
-    pub uploads: Arc<RwLock<HashMap<u64, (String, Bytes)>>>,
-    pub links: Arc<RwLock<HashMap<u64, (Identifiers, Uri)>>>,
-    pub keys: Arc<RwLock<HashMap<u64, (Identifiers, KnownHost)>>>,
+    pub workflow_jobs: Arc<RwLock<HashMap<u64, WorkflowJob>>>,
+    pub retained_bundles: Arc<RwLock<HashMap<String, RetainedBundle>>>,
     pub runtime_mode: RuntimeMode,
     pub runtime_mode_policy: RuntimeModePolicy,
     // Keystore session state is intentionally single-user only. User mode keeps one
@@ -364,6 +377,17 @@ pub struct ServerState {
     event_tx: broadcast::Sender<ServerEvent>,
     stats_updates_tx: watch::Sender<u64>,
     stats_updates_rx: watch::Receiver<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RetainedBundle {
+    pub owner: String,
+    pub accepted: bool,
+    pub error: Option<String>,
+    pub filename: Option<String>,
+    pub path: Option<PathBuf>,
+    pub cleanup_path: Option<PathBuf>,
+    pub expires_at_epoch: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -429,6 +453,25 @@ fn now_epoch_seconds() -> i64 {
 }
 
 impl ServerState {
+    fn retained_bundle_signal(
+        owner: &str,
+        token: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> ServerEvent {
+        targeted_signal_event(
+            owner,
+            serde_json::json!({
+                "archive": {
+                    "ready_token": token,
+                    "status": status,
+                    "error": error.unwrap_or("")
+                }
+            })
+            .to_string(),
+        )
+    }
+
     fn apply_keystore_timeout_locked(state: &mut KeystoreSessionState) -> bool {
         let was_locked = state.locked;
         state.apply_timeout();
@@ -439,7 +482,7 @@ impl ServerState {
         // Keystore support is only available for the local single-user web flow.
         // Service mode is explicitly excluded, even if a request is authenticated.
         cfg!(feature = "keystore")
-            && self.runtime_mode_policy.allows_local_artifacts()
+            && self.runtime_mode_policy.allows_local_runtime_features()
             && !self.runtime_mode_policy.requires_iap_headers()
     }
 
@@ -710,48 +753,251 @@ impl ServerState {
             .replace('\"', "'")
     }
 
+    pub async fn push_workflow_job(&self, id: u64, job: WorkflowJob) -> Option<WorkflowJob> {
+        self.workflow_jobs.write().await.insert(id, job)
+    }
+
+    pub async fn insert_retained_bundle(
+        &self,
+        owner: String,
+        filename: String,
+        path: PathBuf,
+        ttl: Duration,
+    ) -> String {
+        self.insert_retained_bundle_internal(None, owner, filename, path, None, ttl)
+            .await
+    }
+
+    pub async fn insert_retained_bundle_with_token(
+        &self,
+        token: Option<&str>,
+        owner: String,
+        filename: String,
+        path: PathBuf,
+        cleanup_path: Option<PathBuf>,
+        ttl: Duration,
+    ) -> String {
+        self.insert_retained_bundle_internal(token, owner, filename, path, cleanup_path, ttl)
+            .await
+    }
+
+    async fn insert_retained_bundle_internal(
+        &self,
+        token: Option<&str>,
+        owner: String,
+        filename: String,
+        path: PathBuf,
+        cleanup_path: Option<PathBuf>,
+        ttl: Duration,
+    ) -> String {
+        let owner_event = owner.clone();
+        let token = token
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
+        self.retained_bundles.write().await.insert(
+            token.clone(),
+            RetainedBundle {
+                owner,
+                accepted: true,
+                error: None,
+                filename: Some(filename),
+                path: Some(path),
+                cleanup_path,
+                expires_at_epoch,
+            },
+        );
+        self.publish_event(Self::retained_bundle_signal(
+            &owner_event,
+            &token,
+            "ready",
+            None,
+        ));
+        token
+    }
+
+    pub async fn accept_retained_bundle(&self, token: &str, owner: &str, ttl: Duration) {
+        if token.trim().is_empty() {
+            return;
+        }
+        let expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
+        let mut bundles = self.retained_bundles.write().await;
+        let bundle = bundles.entry(token.to_string()).or_insert(RetainedBundle {
+            owner: owner.to_string(),
+            accepted: false,
+            error: None,
+            filename: None,
+            path: None,
+            cleanup_path: None,
+            expires_at_epoch,
+        });
+        bundle.owner = owner.to_string();
+        bundle.accepted = true;
+        bundle.error = None;
+        bundle.expires_at_epoch = expires_at_epoch;
+    }
+
+    pub async fn reject_retained_bundle(
+        &self,
+        token: &str,
+        owner: &str,
+        error: impl Into<String>,
+        ttl: Duration,
+    ) {
+        if token.trim().is_empty() {
+            return;
+        }
+        let error = error.into();
+        let expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
+        let mut bundles = self.retained_bundles.write().await;
+        let bundle = bundles.entry(token.to_string()).or_insert(RetainedBundle {
+            owner: owner.to_string(),
+            accepted: false,
+            error: None,
+            filename: None,
+            path: None,
+            cleanup_path: None,
+            expires_at_epoch,
+        });
+        bundle.owner = owner.to_string();
+        bundle.accepted = false;
+        bundle.error = Some(error.clone());
+        bundle.expires_at_epoch = expires_at_epoch;
+        drop(bundles);
+        self.publish_event(Self::retained_bundle_signal(owner, token, "error", Some(&error)));
+    }
+
+    pub async fn retained_bundle(&self, token: &str) -> Option<RetainedBundle> {
+        self.retained_bundles.read().await.get(token).cloned()
+    }
+
+    pub async fn touch_retained_bundle(&self, token: &str, ttl: Duration) -> bool {
+        let mut bundles = self.retained_bundles.write().await;
+        let Some(bundle) = bundles.get_mut(token) else {
+            return false;
+        };
+        bundle.expires_at_epoch = now_epoch_seconds() + ttl.as_secs() as i64;
+        true
+    }
+
+    pub async fn discard_retained_bundle(&self, token: &str) {
+        let (path, cleanup_path) = self
+            .retained_bundles
+            .write()
+            .await
+            .remove(token)
+            .map(|bundle| (bundle.path, bundle.cleanup_path))
+            .unwrap_or((None, None));
+        if let Some(path) = path
+            && let Err(err) = tokio::fs::remove_file(&path).await
+        {
+            tracing::debug!(
+                "Failed to remove retained bundle {}: {}",
+                path.display(),
+                err
+            );
+        }
+        if let Some(path) = cleanup_path
+            && let Err(err) = tokio::fs::remove_dir_all(&path).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::debug!(
+                "Failed to remove retained bundle directory {}: {}",
+                path.display(),
+                err
+            );
+        }
+    }
+
+    pub fn schedule_retained_bundle_cleanup(self: &Arc<Self>, token: String, delay: Duration) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let should_cleanup = state
+                .retained_bundle(&token)
+                .await
+                .map(|bundle| bundle.expires_at_epoch <= now_epoch_seconds())
+                .unwrap_or(false);
+            if should_cleanup {
+                state.discard_retained_bundle(&token).await;
+            }
+        });
+    }
+
+    pub async fn pop_workflow_job(&self, id: u64) -> Option<WorkflowJob> {
+        tracing::debug!("Popping workflow job id: {id}");
+        self.workflow_jobs.write().await.remove(&id)
+    }
+
+    pub async fn discard_workflow_job(&self, id: u64) {
+        if let Some(job) = self.workflow_jobs.write().await.remove(&id) {
+            job.cleanup().await;
+        }
+    }
+
     pub async fn push_key(
         &self,
         id: u64,
         identifiers: Identifiers,
         host: KnownHost,
-    ) -> Option<(Identifiers, KnownHost)> {
-        self.keys.write().await.insert(id, (identifiers, host))
-    }
-
-    pub async fn pop_key(&self, id: u64) -> Option<(Identifiers, KnownHost)> {
-        tracing::debug!("Popping api key id: {id}");
-        self.keys.write().await.remove(&id)
+        diagnostic_type: String,
+    ) -> Option<WorkflowJob> {
+        self.push_workflow_job(
+            id,
+            WorkflowJob {
+                identifiers,
+                input: WorkflowInput::FromRemoteHost {
+                    source: host.get_url().to_string(),
+                    host,
+                    diagnostic_type,
+                },
+            },
+        )
+        .await
     }
 
     pub async fn push_link(
         &self,
         id: u64,
         identifiers: Identifiers,
+        filename: String,
         uri: Uri,
-    ) -> Option<(Identifiers, Uri)> {
+    ) -> Option<WorkflowJob> {
         tracing::debug!("Pushing service link id: {id}");
-        self.links.write().await.insert(id, (identifiers, uri))
-    }
-
-    pub async fn pop_link(&self, id: u64) -> Option<(Identifiers, Uri)> {
-        tracing::debug!("Popping service link id: {id}");
-        self.links.write().await.remove(&id)
+        self.push_workflow_job(
+            id,
+            WorkflowJob {
+                identifiers,
+                input: WorkflowInput::FromServiceLink {
+                    source: filename,
+                    uri,
+                },
+            },
+        )
+        .await
     }
 
     pub async fn push_upload(
         &self,
         id: u64,
         filename: String,
-        data: Bytes,
-    ) -> Option<(String, Bytes)> {
+        path: PathBuf,
+    ) -> Option<WorkflowJob> {
         tracing::debug!("Pushing file upload id: {id}");
-        self.uploads.write().await.insert(id, (filename, data))
-    }
-
-    pub async fn pop_upload(&self, id: u64) -> Option<(String, Bytes)> {
-        tracing::debug!("Popping file upload id: {id}");
-        self.uploads.write().await.remove(&id)
+        self.push_workflow_job(
+            id,
+            WorkflowJob {
+                identifiers: Identifiers::default(),
+                input: WorkflowInput::LocalArchive {
+                    source: filename.clone(),
+                    filename,
+                    path: path.clone(),
+                    cleanup_path: Some(path),
+                },
+            },
+        )
+        .await
     }
 
     pub fn shutdown_receiver(&self) -> watch::Receiver<bool> {
@@ -811,14 +1057,36 @@ async fn require_authenticated_user(
     request: Request,
     next: Next,
 ) -> Response {
-    let path = request.uri().path();
-    let path_is_routable_without_iap =
-        request.method() == axum::http::Method::OPTIONS || path.starts_with("/keystore/");
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let path_is_routable_without_iap = method == axum::http::Method::OPTIONS
+        || path.starts_with("/.well-known/")
+        || matches!(
+            path.as_str(),
+            "/datastar.js"
+                | "/datastar.js.map"
+                | "/documentation-outline.js"
+                | "/esdiag.svg"
+                | "/favicon.ico"
+                | "/prism.js"
+                | "/prism-bash.js"
+                | "/prism-json.js"
+                | "/prism-json5.js"
+                | "/prism-rust.js"
+                | "/prism.css"
+                | "/style.css"
+                | "/theme-borealis.css"
+        );
     if state.runtime_mode_policy.requires_iap_headers()
         && !path_is_routable_without_iap
         && let Err(err) = state.resolve_user_email(request.headers())
     {
-        tracing::warn!("Rejected unauthenticated request: {}", err);
+        tracing::warn!(
+            "Rejected unauthenticated request for {} {}: {}",
+            method,
+            path,
+            err
+        );
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -831,12 +1099,11 @@ pub(crate) fn test_server_state() -> Arc<ServerState> {
     let runtime_mode = RuntimeMode::User;
     Arc::new(ServerState {
         exporter: Arc::new(RwLock::new(Exporter::default())),
-        keys: Arc::new(RwLock::new(HashMap::new())),
         kibana_url: Arc::new(RwLock::new(String::new())),
-        links: Arc::new(RwLock::new(HashMap::new())),
         signals: Arc::new(RwLock::new(Signals::default())),
         stats: Arc::new(RwLock::new(Stats::default())),
-        uploads: Arc::new(RwLock::new(HashMap::new())),
+        workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
+        retained_bundles: Arc::new(RwLock::new(HashMap::new())),
         runtime_mode,
         runtime_mode_policy: RuntimeModePolicy::new(runtime_mode),
         keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
@@ -902,6 +1169,10 @@ pub struct Signals {
     pub loading: bool,
     pub message: String,
     pub metadata: Identifiers,
+    #[serde(default)]
+    pub archive: ArchiveSignals,
+    #[serde(default)]
+    pub workflow: Workflow,
     pub file_upload: FileUpload,
     pub service_link: ServiceLink,
     pub es_api: EsApiKey,
@@ -910,6 +1181,7 @@ pub struct Signals {
     #[serde(default)]
     pub keystore: KeystoreSignals,
     pub stats: Stats,
+    #[serde(default)]
     pub tab: Tab,
 }
 
@@ -921,6 +1193,8 @@ impl Default for Signals {
             loading: false,
             message: String::new(),
             metadata: Identifiers::default(),
+            archive: ArchiveSignals::default(),
+            workflow: Workflow::default(),
             file_upload: FileUpload { job_id: 0 },
             service_link: ServiceLink {
                 url: Uri::default(),
@@ -937,6 +1211,20 @@ impl Default for Signals {
             tab: Tab::FileUpload,
         }
     }
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub struct ArchiveSignals {
+    #[serde(default)]
+    pub download_token: String,
+    #[serde(default)]
+    pub pending_token: String,
+    #[serde(default)]
+    pub ready_token: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub error: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -957,9 +1245,192 @@ fn default_keystore_locked() -> bool {
     true
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub struct Workflow {
+    pub collect: CollectStage,
+    pub process: ProcessStage,
+    pub send: SendStage,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct CollectStage {
+    pub mode: CollectMode,
+    pub source: CollectSource,
+    #[serde(default)]
+    pub known_host: String,
+    #[serde(default)]
+    pub diagnostic_type: String,
+    #[serde(default)]
+    pub save: bool,
+    #[serde(default)]
+    pub save_dir: String,
+}
+
+impl Default for CollectStage {
+    fn default() -> Self {
+        Self {
+            mode: CollectMode::Collect,
+            source: CollectSource::KnownHost,
+            known_host: String::new(),
+            diagnostic_type: "standard".to_string(),
+            save: false,
+            save_dir: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct ProcessStage {
+    pub mode: ProcessMode,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub product: String,
+    #[serde(default)]
+    pub diagnostic_type: String,
+    #[serde(default)]
+    pub advanced: bool,
+    #[serde(default)]
+    pub selected: String,
+}
+
+impl Default for ProcessStage {
+    fn default() -> Self {
+        Self {
+            mode: ProcessMode::Process,
+            enabled: true,
+            product: "elasticsearch".to_string(),
+            diagnostic_type: "standard".to_string(),
+            advanced: false,
+            selected: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct SendStage {
+    pub mode: SendMode,
+    #[serde(default)]
+    pub remote_target: String,
+    #[serde(default)]
+    pub local_target: String,
+    #[serde(default)]
+    pub local_directory: String,
+}
+
+impl Default for SendStage {
+    fn default() -> Self {
+        Self {
+            mode: SendMode::Remote,
+            remote_target: String::new(),
+            local_target: String::new(),
+            local_directory: String::new(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone)]
+pub struct WorkflowJob {
+    pub identifiers: Identifiers,
+    pub input: WorkflowInput,
+}
+
+impl WorkflowJob {
+    pub fn source(&self) -> &str {
+        self.input.source()
+    }
+
+    pub async fn cleanup(&self) {
+        self.input.cleanup().await;
+    }
+}
+
+#[derive(Clone)]
+pub enum WorkflowInput {
+    LocalArchive {
+        source: String,
+        filename: String,
+        path: PathBuf,
+        cleanup_path: Option<PathBuf>,
+    },
+    FromServiceLink {
+        source: String,
+        uri: Uri,
+    },
+    FromRemoteHost {
+        source: String,
+        host: KnownHost,
+        diagnostic_type: String,
+    },
+}
+
+impl WorkflowInput {
+    pub fn source(&self) -> &str {
+        match self {
+            Self::LocalArchive { source, .. } => source,
+            Self::FromServiceLink { source, .. } => source,
+            Self::FromRemoteHost { source, .. } => source,
+        }
+    }
+
+    pub async fn cleanup(&self) {
+        if let Self::LocalArchive {
+            cleanup_path: Some(path),
+            ..
+        } = self
+        {
+            let metadata = tokio::fs::metadata(path).await;
+            let result = match metadata {
+                Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir_all(path).await,
+                Ok(_) => tokio::fs::remove_file(path).await,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(err),
+            };
+            if let Err(err) = result {
+                tracing::debug!("Failed to clean workflow input {}: {}", path.display(), err);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CollectMode {
+    Collect,
+    Upload,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CollectSource {
+    KnownHost,
+    ApiKey,
+    ServiceLink,
+    UploadFile,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessMode {
+    Process,
+    Forward,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SendMode {
+    Remote,
+    Local,
+}
+
+#[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Tab {
+    #[default]
     FileUpload,
     ServiceLink,
     ApiKey,
@@ -1011,6 +1482,7 @@ pub fn patch_job_feed(template: impl Template) -> Result<Event, Infallible> {
 #[derive(Debug, Clone)]
 pub enum ServerEvent {
     Signals(String),
+    TargetedSignals { user: String, payload: String },
     Template(String),
     JobFeed(String),
     AppendBody(String),
@@ -1020,6 +1492,13 @@ pub enum ServerEvent {
 
 pub fn signal_event(signals: impl Into<String>) -> ServerEvent {
     ServerEvent::Signals(signals.into())
+}
+
+pub fn targeted_signal_event(user: impl Into<String>, signals: impl Into<String>) -> ServerEvent {
+    ServerEvent::TargetedSignals {
+        user: user.into(),
+        payload: signals.into(),
+    }
 }
 
 pub fn template_event(template: impl Template) -> ServerEvent {
@@ -1054,6 +1533,9 @@ pub fn execute_script_event(script: impl Into<String>) -> ServerEvent {
 pub fn server_event_to_sse(event: ServerEvent) -> Result<Event, Infallible> {
     let sse_event = match event {
         ServerEvent::Signals(payload) => PatchSignals::new(payload).write_as_axum_sse_event(),
+        ServerEvent::TargetedSignals { payload, .. } => {
+            PatchSignals::new(payload).write_as_axum_sse_event()
+        }
         ServerEvent::Template(html) => PatchElements::new(html).write_as_axum_sse_event(),
         ServerEvent::JobFeed(html) => PatchElements::new(html)
             .selector("#job-feed")
@@ -1088,16 +1570,17 @@ pub fn receiver_stream(
 fn broadcast_receiver_stream(
     rx: broadcast::Receiver<ServerEvent>,
     initial: Option<ServerEvent>,
+    user: String,
     shutdown: watch::Receiver<bool>,
 ) -> impl futures::Stream<Item = Result<Event, Infallible>> {
     stream::unfold(
-        (rx, initial, shutdown),
-        |(mut rx, mut initial, mut shutdown)| async move {
+        (rx, initial, user, shutdown),
+        |(mut rx, mut initial, user, mut shutdown)| async move {
             if *shutdown.borrow() {
                 return None;
             }
             if let Some(event) = initial.take() {
-                return Some((server_event_to_sse(event), (rx, initial, shutdown)));
+                return Some((server_event_to_sse(event), (rx, initial, user, shutdown)));
             }
             loop {
                 tokio::select! {
@@ -1108,7 +1591,12 @@ fn broadcast_receiver_stream(
                     }
                     recv = rx.recv() => {
                         match recv {
-                            Ok(event) => return Some((server_event_to_sse(event), (rx, initial, shutdown))),
+                            Ok(event) => {
+                                if !event_visible_to_user(&event, &user) {
+                                    continue;
+                                }
+                                return Some((server_event_to_sse(event), (rx, initial, user, shutdown)));
+                            }
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => return None,
                         }
@@ -1121,15 +1609,29 @@ fn broadcast_receiver_stream(
 
 async fn events(
     axum::extract::State(state): axum::extract::State<Arc<ServerState>>,
+    headers: HeaderMap,
 ) -> impl axum::response::IntoResponse {
     tracing::debug!("Started events stream");
+    let (_, request_user) = state
+        .resolve_user_email(&headers)
+        .unwrap_or_else(|_| (false, "Anonymous".to_string()));
     let initial_stats = state.get_stats().await;
     let initial = signal_event(format!(r#"{{"stats":{}}}"#, initial_stats));
     Sse::new(broadcast_receiver_stream(
         state.event_sender().subscribe(),
         Some(initial),
+        request_user,
         state.shutdown_receiver(),
     ))
+}
+
+fn event_visible_to_user(event: &ServerEvent, user: &str) -> bool {
+    match event {
+        ServerEvent::TargetedSignals {
+            user: target_user, ..
+        } => target_user == user,
+        _ => true,
+    }
 }
 
 fn parse_cookie(headers: &HeaderMap, key: &str) -> Option<String> {
@@ -1190,11 +1692,11 @@ async fn add_client_hint_headers(mut response: Response) -> Response {
 mod tests {
     use super::{
         KeystoreSessionState, RuntimeMode, RuntimeModePolicy, Server, ServerEvent, ServerState,
-        Signals, Stats, receiver_stream, test_server_state,
+        Signals, Stats, event_visible_to_user, receiver_stream, signal_event,
+        targeted_signal_event, test_server_state,
     };
     use crate::exporter::Exporter;
     use axum::http::HeaderMap;
-    use bytes::Bytes;
     use futures::StreamExt;
     use std::{collections::HashMap, sync::Arc};
     use tokio::{
@@ -1208,9 +1710,8 @@ mod tests {
             exporter: Arc::new(RwLock::new(Exporter::default())),
             kibana_url: Arc::new(RwLock::new(String::new())),
             signals: Arc::new(RwLock::new(Signals::default())),
-            uploads: Arc::new(RwLock::new(HashMap::<u64, (String, Bytes)>::new())),
-            links: Arc::new(RwLock::new(HashMap::new())),
-            keys: Arc::new(RwLock::new(HashMap::new())),
+            workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
+            retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             runtime_mode: mode,
             runtime_mode_policy: RuntimeModePolicy::new(mode),
             keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
@@ -1252,6 +1753,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn workflow_signals_deserialize_without_tab_field() {
+        let payload = r#"{"loading":true,"processing":false,"message":"Collecting from known host...","stats":{"jobs":{"total":0,"success":0,"failed":0,"active":0},"docs":{"total":0,"errors":0}},"service_link":{"token":"","url":"","filename":""},"file_upload":{"job_id":0},"es_api":{"url":"","key":""},"workflow":{"send":{"mode":"remote","remote_target":"b8b9a090-21fa-419f-a731-ae8676fdd835","local_target":"directory","local_directory":"Directory /tmp/output"},"process":{"mode":"forward","enabled":false,"product":"elasticsearch","diagnostic_type":"standard","selected":""},"collect":{"mode":"collect","source":"known-host","known_host":"esdiag-prod","diagnostic_type":"standard","save":true,"save_dir":"/Users/reno/Downloads"}},"keystore":{"locked":false,"lock_time":1773881448},"metadata":{"user":"Anonymous","account":"","case_number":"","opportunity":""},"auth":{"header":false},"theme":{"dark":true}}"#;
+
+        let parsed = serde_json::from_str::<Signals>(payload)
+            .expect("workflow signals payload without tab should deserialize");
+        assert!(matches!(parsed.tab, super::Tab::FileUpload));
+        assert_eq!(parsed.workflow.collect.known_host, "esdiag-prod");
+    }
+
+    #[test]
+    fn legacy_signals_deserialize_without_workflow_field() {
+        let payload = r#"{"loading":false,"processing":false,"tab":"file-upload","message":"","stats":{"jobs":{"total":0,"success":0,"failed":0},"docs":{"total":0,"errors":0}},"es_api":{"url":"","key":""},"service_link":{"token":"","url":"","filename":""},"file_upload":{"job_id":22775},"metadata":{"user":"Anonymous","account":"","case_number":"","opportunity":""},"auth":{"header":false}}"#;
+
+        let parsed = serde_json::from_str::<Signals>(payload)
+            .expect("legacy signals payload without workflow should deserialize");
+        assert!(matches!(parsed.workflow.collect.mode, super::CollectMode::Collect));
+        assert!(matches!(
+            parsed.workflow.collect.source,
+            super::CollectSource::KnownHost
+        ));
+        assert!(parsed.archive.download_token.is_empty());
+    }
+
     #[tokio::test]
     async fn receiver_stream_preserves_event_order() {
         let _state = test_server_state();
@@ -1266,6 +1791,22 @@ mod tests {
 
         let events: Vec<_> = receiver_stream(rx).collect().await;
         assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn targeted_events_only_reach_matching_user() {
+        assert!(event_visible_to_user(
+            &targeted_signal_event("alice@example.com", r#"{"archive":{"status":"ready"}}"#),
+            "alice@example.com"
+        ));
+        assert!(!event_visible_to_user(
+            &targeted_signal_event("alice@example.com", r#"{"archive":{"status":"ready"}}"#),
+            "bob@example.com"
+        ));
+        assert!(event_visible_to_user(
+            &signal_event(r#"{"stats":{"jobs":{"total":1}}}"#),
+            "bob@example.com"
+        ));
     }
 
     #[tokio::test]

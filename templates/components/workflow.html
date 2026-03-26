@@ -1,0 +1,1018 @@
+<content
+    id="main-content"
+    class="workflow-content"
+    data-signals:loading="false"
+    data-signals:processing="false"
+    data-signals:_file_selected="false"
+    data-signals:_pending_workflow_action="''"
+    data-signals:archive.download_token="''"
+    data-signals:archive.pending_token="''"
+    data-signals:archive.ready_token="''"
+    data-signals:archive.status="'idle'"
+    data-signals:archive.error="''"
+    data-signals:_collect_secure_hosts="{{ collect_secure_hosts_json }}"
+    data-signals:_send_secure_hosts="{{ send_secure_hosts_json }}"
+    data-on:datastar-fetch-error="$loading = false; $processing = false; $message = evt.detail.error || 'Request failed'"
+    data-on:datastar-fetch-retries-failed="$loading = false; $processing = false"
+    data-effect="if (!$keystore.locked && $_pending_workflow_action === 'known-host') { $_pending_workflow_action = ''; document.getElementById('known-host-button')?.click(); } else if (!$keystore.locked && $_pending_workflow_action === 'api-key') { $_pending_workflow_action = ''; document.getElementById('es-api-key-button')?.click(); } else if (!$keystore.locked && $_pending_workflow_action === 'service-link') { $_pending_workflow_action = ''; document.getElementById('service-link-button')?.click(); } else if (!$keystore.locked && $_pending_workflow_action === 'upload-process') { $_pending_workflow_action = ''; document.getElementById('workflow-upload-process-button')?.click(); } if ($workflow.collect.save && !$archive.download_token && !$loading && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')) { $archive.download_token = crypto.randomUUID(); } if ($archive.ready_token && $archive.pending_token && $archive.ready_token === $archive.pending_token && $archive.status === 'ready') { window.esdiagStartRetainedDownload?.({ token: $archive.ready_token, anchorId: 'workflow-download-anchor' }); $archive.pending_token = ''; $archive.ready_token = ''; $archive.status = 'idle'; $archive.error = ''; } else if ($archive.ready_token && $archive.pending_token && $archive.ready_token === $archive.pending_token && $archive.status === 'error') { $message = $archive.error || 'Download failed'; $archive.pending_token = ''; $archive.ready_token = ''; $archive.status = 'idle'; }"
+    data-signals:workflow.collect.mode="'upload'"
+    data-signals:workflow.collect.source="'upload-file'"
+    data-signals:workflow.collect.known_host="''"
+    data-signals:workflow.collect.diagnostic_type="'standard'"
+    data-signals:workflow.collect.save="false"
+    data-signals:workflow.collect.save_dir="'{{ default_save_dir }}'"
+    data-signals:workflow.process.mode="'process'"
+    data-signals:workflow.process.enabled="true"
+    data-signals:workflow.process.product="'elasticsearch'"
+    data-signals:workflow.process.diagnostic_type="'standard'"
+    data-signals:workflow.process.selected="''"
+    data-signals:workflow.send.mode="'{{ initial_send_mode }}'"
+    data-signals:workflow.send.remote_target="'{{ initial_remote_target }}'"
+    data-signals:workflow.send.local_target="'{{ initial_local_target }}'"
+    data-signals:workflow.send.local_directory="'{% if configured_local_path != "" %}{{ configured_local_path }}{% else %}{{ default_save_dir }}{% endif %}'"
+>
+    <workflow-grid>
+        <card class="workflow-card">
+            <card-badge>Collect</card-badge>
+            <card-body>
+            <tab-links class="stage-options">
+                <button
+                    class="tab active"
+                    data-on:click="{
+                        $workflow.collect.mode = 'upload',
+                        $workflow.collect.source = $workflow.collect.source === 'service-link' ? 'service-link' : 'upload-file',
+                        $workflow.collect.source !== 'service-link' ? ($workflow.collect.save = false, $archive.download_token = '') : null
+                    }"
+                    data-class:active="$workflow.collect.mode === 'upload'"
+                >
+                    Existing
+                </button>
+                <button
+                    class="tab"
+                    data-on:click="{
+                        $workflow.collect.mode = 'collect',
+                        $workflow.collect.source = {% if runtime_mode == "user" %}'known-host'{% else %}'api-key'{% endif %}
+                    }"
+                    data-class:active="$workflow.collect.mode === 'collect'"
+                >
+                    New
+                </button>
+            </tab-links>
+
+            <div data-show="$workflow.collect.mode === 'collect'">
+                <button-group
+                    class="stage-options nested"
+                    role="group"
+                    aria-label="Choose a collection method"
+                >
+                    {% if runtime_mode == "user" %}
+                    <button
+                        type="button"
+                        data-on:click="$workflow.collect.source = 'known-host'"
+                        data-attr:aria-pressed="$workflow.collect.source === 'known-host' ? 'true' : 'false'"
+                    >
+                        Known Host
+                    </button>
+                    {% endif %}
+                    <button
+                        type="button"
+                        data-on:click="$workflow.collect.source = 'api-key'"
+                        data-attr:aria-pressed="$workflow.collect.source === 'api-key' ? 'true' : 'false'"
+                    >
+                        API Key
+                    </button>
+                </button-group>
+
+                {% if runtime_mode == "user" %}
+                <form
+                    id="known-host-form"
+                    data-show="$workflow.collect.source === 'known-host'"
+                    style="display: none"
+                >
+                    <info-text class="margin-after">Collect from a saved known host.</info-text>
+                    <input-group>
+                        <label for="collect-known-host" class="form-label">Known Host</label>
+                        <select
+                            id="collect-known-host"
+                            class="form-input"
+                            data-bind:workflow.collect.known_host
+                        >
+                            <option value="">Select a known host</option>
+                            {% for host in collect_hosts %}
+                            <option value="{{ host }}">{{ host }}</option>
+                            {% endfor %}
+                        </select>
+                    </input-group>
+                    <input-group>
+                        <label for="collect-diagnostic-type" class="form-label">Diagnostic Type</label>
+                        <select
+                            id="collect-diagnostic-type"
+                            class="form-input"
+                            data-bind:workflow.collect.diagnostic_type
+                        >
+                            <option value="minimal">minimal</option>
+                            <option value="light">light</option>
+                            <option value="standard">standard</option>
+                            <option value="support">support</option>
+                        </select>
+                    </input-group>
+                    <info-text>Saved-host collection wiring is handled in the workflow implementation layer.</info-text>
+                    <input
+                        id="known-host-button"
+                        class="button"
+                        type="button"
+                        value="Collect"
+                        data-on:click="{% if can_use_keystore %}if ($keystore.locked && (($_collect_secure_hosts.includes($workflow.collect.known_host)) || ($workflow.send.mode === 'remote' && $_send_secure_hosts.includes($workflow.send.remote_target)) || ($workflow.send.mode === 'local' && $_send_secure_hosts.includes($workflow.send.local_target)))) { $_pending_workflow_action = 'known-host'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process'); } else { $loading = true; $message = 'Collecting from known host...'; @post('/known_host'); }{% else %}$loading = true; $message = 'Collecting from known host...'; @post('/known_host');{% endif %}"
+                        data-attr:disabled="$loading || !$workflow.collect.known_host"
+                        style="display: none"
+                    />
+                </form>
+                {% endif %}
+
+                <form
+                    id="api-key-form"
+                    data-show="$workflow.collect.source === 'api-key'"
+                    style="{% if runtime_mode != "user" %}display: block{% else %}display: none{% endif %}"
+                >
+                    <info-text class="margin-after">Collect directly from a remote Elasticsearch API.</info-text>
+                    <input-group>
+                        <label for="elasticsearch-url" class="form-label">Elasticsearch URL</label>
+                        <input
+                            type="url"
+                            id="elasticsearch-url"
+                            name="url"
+                            autocomplete="username"
+                            data-bind:es_api.url
+                            class="form-input"
+                            required
+                            placeholder="https://elasticsearch.example.com/"
+                        />
+                    </input-group>
+                    <input-group>
+                        <label for="api-key" class="form-label">Elasticsearch API Key</label>
+                        <input
+                            type="password"
+                            id="api-key"
+                            name="api-key"
+                            autocomplete="current-password"
+                            data-bind:es_api.key
+                            class="form-input"
+                            required
+                            placeholder="Cluster API key"
+                        />
+                        <info-text><i>API keys are not saved or logged.</i></info-text>
+                    </input-group>
+                    <input-group>
+                        <label for="collect-api-type" class="form-label">Diagnostic Type</label>
+                        <select
+                            id="collect-api-type"
+                            class="form-input"
+                            data-bind:workflow.collect.diagnostic_type
+                        >
+                            <option value="minimal">minimal</option>
+                            <option value="light">light</option>
+                            <option value="standard">standard</option>
+                            <option value="support">support</option>
+                        </select>
+                    </input-group>
+                    <input
+                        id="es-api-key-button"
+                        class="button"
+                        type="button"
+                        value="Collect"
+                        data-on:click="{% if can_use_keystore %}if ($keystore.locked && (($workflow.send.mode === 'remote' && $_send_secure_hosts.includes($workflow.send.remote_target)) || ($workflow.send.mode === 'local' && $_send_secure_hosts.includes($workflow.send.local_target)))) { $_pending_workflow_action = 'api-key'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process'); } else { $loading = true; $message = 'Connecting with API key...'; @post('/api_key'); }{% else %}$loading = true; $message = 'Connecting with API key...'; @post('/api_key');{% endif %}"
+                        data-attr:disabled="$loading || !$es_api.url || !$es_api.key"
+                        style="display: none"
+                    />
+                </form>
+
+            </div>
+
+            <div data-show="$workflow.collect.mode === 'upload'" style="display: none">
+                <button-group
+                    class="stage-options nested"
+                    role="group"
+                    aria-label="Choose an existing diagnostic source"
+                >
+                    <button
+                        type="button"
+                        data-on:click="{ $workflow.collect.source = 'upload-file', $workflow.collect.save = false, $archive.download_token = '' }"
+                        data-attr:aria-pressed="$workflow.collect.source === 'upload-file' ? 'true' : 'false'"
+                    >
+                        Local File
+                    </button>
+                    <button
+                        type="button"
+                        data-on:click="$workflow.collect.source = 'service-link'"
+                        data-attr:aria-pressed="$workflow.collect.source === 'service-link' ? 'true' : 'false'"
+                    >
+                        Service Link
+                    </button>
+                </button-group>
+
+                <form
+                    id="upload-form"
+                    data-show="$workflow.collect.source === 'upload-file'"
+                    data-signals:file_upload.job_id="0"
+                    enctype="multipart/form-data"
+                    style="display: none"
+                >
+                    <info-text class="margin-after">Upload an existing diagnostic archive from your local machine.</info-text>
+                    <input
+                        type="file"
+                        id="file-input"
+                        name="file"
+                        accept=".zip"
+                        required
+                        value=""
+                        style="opacity: 0"
+                        data-on:change="$_file_selected = evt.target.files && evt.target.files.length > 0"
+                    />
+                    <div
+                        id="dropzone"
+                        data-on:dragenter="$_drag-on=true"
+                        data-on:dragover="$_drag-on=true"
+                        data-on:dragleave="$_drag-on=false"
+                        data-on:drop="$_drag-on=false"
+                        data-class:drag-over="$_drag-on"
+                        class="dropzone"
+                    >
+                        <div class="file-icon">
+                            <icon-upload></icon-upload>
+                        </div>
+                        <div id="upload-instructions">
+                            <p>Select or drag and drop a <code>.zip</code> file</p>
+                        </div>
+                        <div id="file-info" class="file-info hidden">
+                            <span id="file-name" class="file-name"></span>
+                        </div>
+                        <div class="upload-progress-container" id="upload-progress-container">
+                            <div class="upload-progress-bar" id="upload-progress-bar"></div>
+                        </div>
+                        <div class="upload-progress-text" id="upload-progress-text">0%</div>
+                    </div>
+                    <input
+                        id="upload-button"
+                        class="button"
+                        type="submit"
+                        value="Upload"
+                        disabled
+                        style="display: none"
+                    />
+                    <button
+                        id="workflow-upload-process-button"
+                        type="button"
+                        style="display: none"
+                        data-on:click="$loading = true; $message = 'Processing diagnostic...'; @post('/upload/process', {openWhenHidden: true})"
+                    ></button>
+                </form>
+
+                <form
+                    id="service-link-form"
+                    enctype="multipart/form-data"
+                    data-show="$workflow.collect.source === 'service-link'"
+                    style="display: none"
+                >
+                    <info-text class="margin-after">
+                        Load an existing diagnostic from an Elastic upload service link:
+                        <a href="https://upload.elastic.co" target="_blank">https://upload.elastic.co</a>
+                    </info-text>
+                    <input-group>
+                        <label for="curl-command" class="form-label">Curl Command or Case Comment (Optional)</label>
+                        <textarea
+                            id="curl-command"
+                            class="curl-textarea"
+                            placeholder="Paste a curl command or case comment to auto-fill the form"
+                            data-bind:service_link._curl
+                            data-on:input="{
+                            $service_link.url = parseUrl($service_link._curl),
+                            $service_link.token = parseToken($service_link._curl),
+                            $service_link.filename = parseFilename($service_link._curl)
+                        }"
+                        ></textarea>
+                        <text-link
+                            id="curl-command-clear"
+                            data-show="$service_link._curl !== ''"
+                            data-on:click="{
+                            $service_link._curl = '';
+                            $service_link.url = '';
+                            $service_link.token = '';
+                            $service_link.filename = '';
+                        }"
+                            style="display: none"
+                        >
+                            Clear
+                        </text-link>
+                    </input-group>
+                    <input-group>
+                        <label for="service-token" class="form-label">Token</label>
+                        <input
+                            type="text"
+                            id="service-token"
+                            name="token"
+                            data-bind:service_link.token
+                            data-attr:readonly="$service_link._curl !== ''"
+                            class="form-input"
+                            required
+                            placeholder="Enter authentication token"
+                        />
+                    </input-group>
+                    <input-group>
+                        <label for="service-url" class="form-label">URL</label>
+                        <input
+                            type="url"
+                            id="service-url"
+                            name="url"
+                            data-bind:service_link.url
+                            data-attr:readonly="$service_link._curl !== ''"
+                            class="form-input"
+                            required
+                            placeholder="https://example.com/path/to/diagnostic.zip"
+                        />
+                    </input-group>
+                    <input-group>
+                        <label for="service-filename" class="form-label">Filename</label>
+                        <input
+                            type="text"
+                            id="service-filename"
+                            name="filename"
+                            data-bind:service_link.filename
+                            data-attr:readonly="$service_link._curl !== ''"
+                            class="form-input"
+                            required
+                            placeholder="diagnostic.zip"
+                        />
+                    </input-group>
+                    <input
+                        id="service-link-button"
+                        class="button"
+                        type="button"
+                        value="Load"
+                        data-on:click="{% if can_use_keystore %}if ($keystore.locked && (($workflow.send.mode === 'remote' && $_send_secure_hosts.includes($workflow.send.remote_target)) || ($workflow.send.mode === 'local' && $_send_secure_hosts.includes($workflow.send.local_target)))) { $_pending_workflow_action = 'service-link'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process'); } else { $loading = true; $message = 'Connecting to Elastic Upload service...'; @post('/service_link'); }{% else %}$loading = true; $message = 'Connecting to Elastic Upload service...'; @post('/service_link');{% endif %}"
+                        data-attr:disabled="$loading || !$service_link.url || !$service_link.token"
+                        style="display: none"
+                    />
+                </form>
+
+                <script>
+                    const dropzone = document.getElementById("dropzone");
+                    const fileInput = document.getElementById("file-input");
+                    const fileName = document.getElementById("file-name");
+                    const uploadInstructions = document.getElementById("upload-instructions");
+
+                    ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
+                        dropzone.addEventListener(eventName, preventDefaults, false);
+                        document.body.addEventListener(eventName, preventDefaults, false);
+                    });
+
+                    function preventDefaults(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }
+
+                    dropzone.addEventListener("drop", handleDrop, false);
+
+                    function handleDrop(e) {
+                        const dt = e.dataTransfer;
+                        const files = dt.files;
+                        handleFiles(files);
+                    }
+
+                    function handleFiles(files) {
+                        if (files.length > 0) {
+                            fileInput.files = files;
+                            fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+                            updateFileInfo(files[0]);
+                        }
+                    }
+
+                    function updateFileInfo(file) {
+                        const uploadButton = document.getElementById("upload-button");
+                        const fileIcon = document.querySelector(".file-icon");
+                        const fileInfo = document.querySelector(".file-info");
+
+                        if (file) {
+                            fileName.textContent = file.name;
+                            fileInfo.classList.remove("hidden");
+                            uploadButton.disabled = false;
+                            uploadInstructions.classList.add("hidden");
+                            dropzone.classList.add("active");
+                            fileIcon.style.color = "var(--primary)";
+                            fileIcon.innerHTML = "<icon-check></icon-check>";
+                        } else {
+                            fileInput.value = "";
+                            fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+                            fileInfo.classList.add("hidden");
+                            uploadButton.disabled = true;
+                            uploadInstructions.classList.remove("hidden");
+                            dropzone.classList.remove("active");
+                            fileIcon.style.color = "var(--text-subdued-color)";
+                            fileIcon.innerHTML = "<icon-upload></icon-upload>";
+                        }
+                    }
+
+                    dropzone.addEventListener("click", () => {
+                        fileInput.click();
+                    });
+
+                    fileInput.addEventListener("change", function () {
+                        if (this.files && this.files[0]) {
+                            updateFileInfo(this.files[0]);
+                        }
+                    });
+
+                    document.addEventListener("DOMContentLoaded", function () {
+                        const uploadButton = document.getElementById("upload-button");
+                        uploadButton.disabled = fileInput.files.length === 0;
+                    });
+
+                    document.getElementById("upload-form").addEventListener("submit", function (e) {
+                        e.preventDefault();
+                        const formData = new FormData(this);
+                        const xhr = new XMLHttpRequest();
+                        const progressBar = document.getElementById("upload-progress-bar");
+                        const progressContainer = document.getElementById("upload-progress-container");
+                        const progressText = document.getElementById("upload-progress-text");
+
+                        progressContainer.classList.add("active");
+                        progressText.classList.add("active");
+                        progressBar.style.width = "0%";
+                        progressText.textContent = "0%";
+
+                        xhr.upload.addEventListener("progress", function (event) {
+                            if (event.lengthComputable) {
+                                const percentComplete = (event.loaded / event.total) * 100;
+                                const percentFormatted = Math.round(percentComplete) + "%";
+                                progressBar.style.width = percentFormatted;
+                                progressText.textContent = percentFormatted;
+                            }
+                        });
+
+                        xhr.onload = function () {
+                            const jobFeed = document.getElementById("job-feed");
+                            if (xhr.status >= 200 && xhr.status < 300) {
+                                setTimeout(() => {
+                                    progressBar.style.width = "0%";
+                                    progressContainer.classList.remove("active");
+                                    progressText.classList.remove("active");
+                                    updateFileInfo(null);
+                                    document.getElementById("dropzone").style.pointerEvents = "";
+                                }, 500);
+                            } else {
+                                progressContainer.classList.remove("active");
+                                progressText.classList.remove("active");
+                                updateFileInfo(null);
+                                document.getElementById("dropzone").style.pointerEvents = "";
+                            }
+                            jobFeed.insertAdjacentHTML("afterend", xhr.responseText);
+                        };
+
+                        xhr.onerror = function () {
+                            progressContainer.classList.remove("active");
+                            progressText.classList.remove("active");
+                            updateFileInfo(null);
+                            document.getElementById("dropzone").style.pointerEvents = "";
+                        };
+
+                        xhr.open("POST", "/upload/submit", true);
+                        xhr.send(formData);
+                    });
+
+                    const parseToken = (cmd) => {
+                        const token = cmd.match(/Authorization(?: Token)?:\s*([^ '"]+[^ '"])/);
+                        return token ? token[1] : null;
+                    };
+
+                    const parseFilename = (cmd) => {
+                        const filename =
+                            cmd.match(/File name:\s*(\S+)/) ||
+                            cmd.match(/-o\s+['"]([^'"]+)['"]/) ||
+                            cmd.match(/-o\s+(\S+)/) ||
+                            cmd.match(/--output\s+['"]([^'"]+)['"]/) ||
+                            cmd.match(/--output\s+(\S+)/);
+                        return filename ? filename[1] : null;
+                    };
+
+                    const parseUrl = (cmd) => {
+                        const match = cmd.match(/https?:\/\/\S+/);
+                        const url = match ? match[0].replace(/\.$/, "") : null;
+                        return url;
+                    };
+                </script>
+            </div>
+
+            <stage-divider></stage-divider>
+            <h3>Metadata</h3>
+            <input-group>
+                <label for="username" class="form-label">User</label>
+                <input
+                    type="text"
+                    id="username"
+                    name="username"
+                    data-bind:metadata.user
+                    placeholder="Username"
+                    autocomplete="none"
+                    class="form-input"
+                    data-attr:disabled="$auth.header || $processing || $loading"
+                />
+            </input-group>
+            <input-group>
+                <label for="account" class="form-label">Account</label>
+                <input
+                    type="text"
+                    id="account"
+                    name="account"
+                    data-bind:metadata.account
+                    placeholder="Account"
+                    class="form-input"
+                    data-attr:disabled="$loading || $processing"
+                />
+            </input-group>
+            <input-group>
+                <label for="case-number" class="form-label">Case Number</label>
+                <input
+                    type="text"
+                    id="case-number"
+                    name="case-number"
+                    data-bind:metadata.case_number
+                    placeholder="Case Number"
+                    class="form-input"
+                    data-attr:disabled="$loading || $processing"
+                />
+            </input-group>
+            <input-group>
+                <label for="opportunity" class="form-label">Opportunity</label>
+                <input
+                    type="text"
+                    id="opportunity"
+                    name="opportunity"
+                    data-bind:metadata.opportunity
+                    placeholder="Opportunity"
+                    class="form-input"
+                    data-attr:disabled="$loading || $processing"
+                />
+            </input-group>
+            </card-body>
+            <footer class="workflow-card-footer">
+                <choice-row class="footer-choice">
+                    <input
+                        id="collect-save-toggle"
+                        type="checkbox"
+                        class="switch"
+                        data-bind:workflow.collect.save
+                        data-on:change="if (evt.target.checked) { $archive.download_token = $archive.download_token || crypto.randomUUID(); } else { $archive.download_token = ''; }"
+                        data-attr:disabled="$workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file'"
+                    />
+                    <switch-clip>
+                        <switch-glyphs data-class="{'switch-on': $workflow.collect.save, 'switch-off': !$workflow.collect.save}">
+                            <svg viewBox="0 0 50 20" aria-hidden="true" focusable="false">
+                                <path class="glyph" d="M2 9 L6 13 L13 6"></path>
+                                <circle class="glyph filled" cx="26" cy="10" r="7"></circle>
+                                <path class="glyph" d="M41 6 L49 14 M49 6 L41 14"></path>
+                            </svg>
+                        </switch-glyphs>
+                    </switch-clip>
+                    <label for="collect-save-toggle">Download Archive</label>
+                </choice-row>
+            </footer>
+        </card>
+
+        <card class="workflow-card" data-class:disabled="!$workflow.process.enabled">
+            <card-badge>Process</card-badge>
+            <card-body>
+            <div data-show="$workflow.process.enabled">
+                <input-group>
+                    <label for="process-product" class="form-label">Product</label>
+                    <select id="process-product" class="form-input" data-bind:workflow.process.product>
+                        <option value="elasticsearch">Elasticsearch</option>
+                        <option value="logstash">Logstash</option>
+                    </select>
+                </input-group>
+                <input-group>
+                    <label for="process-type" class="form-label">Diagnostic Processors</label>
+                    <select id="process-type" class="form-input" data-bind:workflow.process.diagnostic_type>
+                        <option value="minimal">minimal</option>
+                        <option value="light">light</option>
+                        <option value="standard">standard</option>
+                        <option value="support">support</option>
+                        <option value="custom">custom</option>
+                    </select>
+                </input-group>
+                <input-group>
+                    <details
+                        id="process-custom-processors"
+                        class="processor-accordion"
+                        data-show="$workflow.process.diagnostic_type === 'custom'"
+                        data-preserve-attr="open"
+                        style="display: none"
+                        open
+                    >
+                        <summary>API Selection</summary>
+                        <advanced-panel>
+                            <info-text>Only fully implemented processors are shown. Required processors stay locked on.</info-text>
+                            <processor-list id="process-option-list"></processor-list>
+                        </advanced-panel>
+                    </details>
+                </input-group>
+                <input type="hidden" id="process-selected-options" data-bind:workflow.process.selected />
+            </div>
+
+            <div data-show="!$workflow.process.enabled" style="display: none">
+                <info-text>Forward preserves the raw diagnostic archive without processing it into documents.</info-text>
+            </div>
+            </card-body>
+            <footer class="workflow-card-footer">
+                <choice-row class="footer-choice">
+                    <input
+                        id="process-enabled-toggle"
+                        type="checkbox"
+                        class="switch"
+                        data-bind:workflow.process.enabled
+                        data-on:change="{
+                            $workflow.process.mode = $workflow.process.enabled ? 'process' : 'forward',
+                            !$workflow.process.enabled && $workflow.send.mode === 'local' && $workflow.collect.source !== 'upload-file'
+                                ? $workflow.collect.save = true
+                                : null
+                        }"
+                    />
+                    <switch-clip>
+                        <switch-glyphs data-class="{'switch-on': $workflow.process.enabled, 'switch-off': !$workflow.process.enabled}">
+                            <svg viewBox="0 0 50 20" aria-hidden="true" focusable="false">
+                                <path class="glyph" d="M2 9 L6 13 L13 6"></path>
+                                <circle class="glyph filled" cx="26" cy="10" r="7"></circle>
+                                <path class="glyph" d="M41 6 L49 14 M49 6 L41 14"></path>
+                            </svg>
+                        </switch-glyphs>
+                    </switch-clip>
+                    <label for="process-enabled-toggle">Enabled</label>
+                </choice-row>
+            </footer>
+        </card>
+
+        <card class="workflow-card">
+            <card-badge>Send</card-badge>
+            <card-body>
+            <tab-links class="stage-options">
+                <button
+                    class="tab active"
+                    data-on:click="$workflow.send.mode = 'remote'"
+                    data-class:active="$workflow.send.mode === 'remote'"
+                >
+                    Remote
+                </button>
+                <button
+                    class="tab"
+                    data-on:click="{
+                        $workflow.send.mode = 'local',
+                        !$workflow.process.enabled && $workflow.collect.source !== 'upload-file'
+                            ? $workflow.collect.save = true
+                            : null
+                    }"
+                    data-class:active="$workflow.send.mode === 'local'"
+                >
+                    Local
+                </button>
+            </tab-links>
+
+            <div data-show="$workflow.send.mode === 'remote'">
+                <input-group data-show="$workflow.process.enabled">
+                    <label for="send-remote-target" class="form-label">Remote Target</label>
+                    <select
+                        id="send-remote-target"
+                        class="form-input"
+                        data-bind:workflow.send.remote_target
+                    >
+                        {% if configured_remote_target != "" %}
+                        <option value="{{ configured_remote_target }}">{{ configured_remote_target }}</option>
+                        {% endif %}
+                        {% for host in send_remote_hosts %}
+                        <option value="{{ host }}">{{ host }}</option>
+                        {% endfor %}
+                    </select>
+                </input-group>
+                <input-group data-show="!$workflow.process.enabled" style="display: none">
+                    <label for="send-forward-upload" class="form-label">Upload ID</label>
+                    <input
+                        id="send-forward-upload"
+                        type="text"
+                        class="form-input"
+                        data-bind:workflow.send.remote_target
+                        placeholder="00000000-0000-0000-0000-000000000000"
+                    />
+                </input-group>
+                <info-text data-show="$workflow.process.enabled">
+                    Remote send uses the configured output target for processed diagnostics.
+                </info-text>
+                <info-text data-show="!$workflow.process.enabled" style="display: none">
+                    Upload the archive to the Elastic Upload Service:
+                </info-text>
+                <a href="https://upload.elastic.co" target="_blank">https://upload.elastic.co</a>
+            </div>
+
+            <div data-show="$workflow.send.mode === 'local'" style="display: none">
+                <input-group data-show="$workflow.process.enabled">
+                    <label for="send-local-target" class="form-label">Local Target</label>
+                    <select
+                        id="send-local-target"
+                        class="form-input"
+                        data-bind:workflow.send.local_target
+                    >
+                        <option value="">Select local target</option>
+                        {% for host in send_local_hosts %}
+                        <option value="{{ host }}">{{ host }}</option>
+                        {% endfor %}
+                        <option value="directory">{% if configured_local_path != "" %}Configured local path{% else %}Local directory{% endif %}</option>
+                    </select>
+                </input-group>
+                <info-text data-show="$workflow.process.enabled">
+                    Local send supports localhost diagnostic clusters or local directory output.
+                </info-text>
+                <input-group
+                    data-show="$workflow.process.enabled && $workflow.send.local_target === 'directory'"
+                    style="display: none"
+                >
+                    <label for="send-local-directory" class="form-label">Local Directory</label>
+                    <input
+                        id="send-local-directory"
+                        type="text"
+                        class="form-input"
+                        data-bind:workflow.send.local_directory
+                        placeholder="{% if configured_local_path != "" %}{{ configured_local_path }}{% else %}{{ default_save_dir }}{% endif %}"
+                    />
+                </input-group>
+                <info-text data-show="!$workflow.process.enabled" style="display: none">
+                    Download the archive from&nbsp;<strong>Collect</strong>.
+                </info-text>
+            </div>
+            <info-text
+                data-show="!$workflow.process.enabled && $workflow.send.mode === 'local' && $workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file'"
+                style="display: none"
+            >
+                Existing local files stay in place. Choose `Remote` or use a save-capable collect source to create a new saved archive.
+            </info-text>
+            </card-body>
+            <footer class="workflow-card-footer send-card-footer">
+                <button
+                    id="workflow-go-button"
+                    type="button"
+                    data-on:click="{
+                        const shouldDownload = $workflow.collect.save && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file');
+                        const secureSendTarget =
+                            ($workflow.send.mode === 'remote' && $_send_secure_hosts.includes($workflow.send.remote_target)) ||
+                            ($workflow.send.mode === 'local' && $_send_secure_hosts.includes($workflow.send.local_target));
+                        const secureCollectTarget =
+                            $workflow.collect.mode === 'collect' &&
+                            $workflow.collect.source === 'known-host' &&
+                            $_collect_secure_hosts.includes($workflow.collect.known_host);
+                        const needsUnlock = {% if can_use_keystore %}$keystore.locked && (secureCollectTarget || secureSendTarget){% else %}false{% endif %};
+                        {% if can_use_keystore %}
+                        if (needsUnlock) {
+                            evt.preventDefault();
+                            $_pending_workflow_action =
+                                $workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file'
+                                    ? 'upload-process'
+                                    : $workflow.collect.mode === 'upload' && $workflow.collect.source === 'service-link'
+                                        ? 'service-link'
+                                        : $workflow.collect.mode === 'collect' && $workflow.collect.source === 'api-key'
+                                            ? 'api-key'
+                                            : 'known-host';
+                            $message = 'Unlock keystore to continue...';
+                            @get('/keystore/modal/process');
+                        } else {
+                        {% endif %}
+                            const requestDownload = () => {
+                                if (!shouldDownload) return;
+                                const token = $archive.download_token || crypto.randomUUID();
+                                $archive.download_token = token;
+                                $archive.pending_token = token;
+                                $archive.ready_token = '';
+                                $archive.status = 'waiting';
+                                $archive.error = '';
+                            };
+                            requestDownload();
+                            $workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file'
+                                ? document.getElementById('upload-form').requestSubmit()
+                                : null;
+                            $workflow.collect.mode === 'upload' && $workflow.collect.source === 'service-link'
+                                ? document.getElementById('service-link-button').click()
+                                : null;
+                            $workflow.collect.mode === 'collect' && $workflow.collect.source === 'api-key'
+                                ? document.getElementById('es-api-key-button').click()
+                                : null;
+                            $workflow.collect.mode === 'collect' && $workflow.collect.source === 'known-host'
+                                ? document.getElementById('known-host-button')?.click()
+                                : null;
+                        {% if can_use_keystore %}
+                        }
+                        {% endif %}
+                    }"
+                    data-attr:disabled="$loading || $processing || !((
+                        (
+                            ($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file' && $_file_selected) ||
+                            ($workflow.collect.mode === 'upload' && $workflow.collect.source === 'service-link' && $service_link.url !== '' && $service_link.token !== '' && $service_link.filename !== '') ||
+                            ($workflow.collect.mode === 'collect' && $workflow.collect.source === 'api-key' && $es_api.url !== '' && $es_api.key !== '') ||
+                            ($workflow.collect.mode === 'collect' && $workflow.collect.source === 'known-host' && $workflow.collect.known_host !== '')
+                        )
+                    ) && (
+                        (
+                            $workflow.process.enabled &&
+                            (
+                                ($workflow.send.mode === 'remote' && $workflow.send.remote_target !== '') ||
+                                ($workflow.send.mode === 'local' && $workflow.send.local_target !== '' && ($workflow.send.local_target !== 'directory' || $workflow.send.local_directory !== ''))
+                            )
+                        ) ||
+                        (
+                            !$workflow.process.enabled &&
+                            (
+                                ($workflow.send.mode === 'local' && $workflow.collect.save && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')) ||
+                                ($workflow.send.mode === 'remote' && $workflow.send.remote_target !== '')
+                            )
+                        )
+                    ))"
+                >
+                    Go
+                </button>
+                <span
+                    id="workflow-step-label"
+                    class="footer-status"
+                >
+                    <span class="workflow-step-segment">collect</span>
+                    <svg
+                        data-show="$workflow.collect.save && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                        focusable="false"
+                        style="display: none"
+                    >
+                        <path d="M6 3L11 8L6 13"></path>
+                    </svg>
+                    <span
+                        class="workflow-step-segment"
+                        data-show="$workflow.collect.save && !($workflow.collect.mode === 'upload' && $workflow.collect.source === 'upload-file')"
+                        style="display: none"
+                    >
+                        download
+                    </span>
+                    <svg
+                        data-show="$workflow.process.enabled"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                        focusable="false"
+                        style="display: none"
+                    >
+                        <path d="M6 3L11 8L6 13"></path>
+                    </svg>
+                    <span
+                        class="workflow-step-segment"
+                        data-show="$workflow.process.enabled"
+                        style="display: none"
+                    >
+                        process
+                    </span>
+                    <svg
+                        data-show="$workflow.process.enabled || $workflow.send.mode === 'remote'"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                        focusable="false"
+                        style="display: none"
+                    >
+                        <path d="M6 3L11 8L6 13"></path>
+                    </svg>
+                    <span
+                        class="workflow-step-segment"
+                        data-show="$workflow.process.enabled || $workflow.send.mode === 'remote'"
+                        style="display: none"
+                    >
+                        send
+                    </span>
+                </span>
+            </footer>
+        </card>
+    </workflow-grid>
+
+    <workflow-results>
+    <div id="current-status" data-show="$loading && $_job_id === '' " class="status-box loading" style="display: none">
+        <div class="spinner"></div>
+        <span id="status-message" data-text="$message">Uploading...</span>
+    </div>
+    <div id="job-feed"></div>
+    {% if let Some(key_id) = key_id %}
+    <div
+        id="job-{{ key_id }}"
+        data-init="$loading = true; $workflow.collect.mode='collect'; $workflow.collect.source='api-key'; $message = 'Processing api key {{ key_id }}'; @post('/api_key/{{ key_id }}')"
+        data-signals:_job_id="true"
+        class="status-box loading"
+    >
+        <div class="spinner"></div>
+        Processing api key for {{ key_id }}
+    </div>
+    {% else if let Some(link_id) = link_id %}
+    <div
+        id="job-{{ link_id }}"
+        data-init="$loading = true; $workflow.collect.mode='upload'; $workflow.collect.source='service-link'; $message = 'Forwarding service link {{ link_id }}'; @post('/service_link/{{ link_id }}')"
+        data-signals:_job_id="true"
+        class="status-box loading"
+    >
+        <div class="spinner"></div>
+        Loading service link {{ link_id }}
+    </div>
+    {% else if let Some(upload_id) = upload_id %}
+    <div
+        id="job-{{ upload_id }}"
+        data-init="$loading = true; $message = 'Processing file upload {{ upload_id }}'; @post('/file_upload/{{ upload_id }}')"
+        data-signals:_job_id="true"
+        class="status-box loading"
+    >
+        <div class="spinner"></div>
+        Loading file upload {{ upload_id }}
+    </div>
+    {% endif %}
+    </workflow-results>
+    <a
+        id="workflow-download-anchor"
+        href=""
+        data-attr:href="$archive.download_token ? `/workflow/download/${$archive.download_token}` : null"
+        aria-hidden="true"
+        tabindex="-1"
+        style="position: fixed; left: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none"
+    ></a>
+    <script>
+        const PROCESS_OPTIONS = {{ process_options_json|safe }};
+        const clickRetainedDownloadAnchor = (anchorId, token) => {
+            const anchor = document.getElementById(anchorId);
+            if (!anchor || !token) return;
+            anchor.href = `/workflow/download/${token}`;
+            anchor.click();
+        };
+
+        window.esdiagStartRetainedDownload = window.esdiagStartRetainedDownload || (({ token, anchorId }) => {
+            clickRetainedDownloadAnchor(anchorId, token);
+        });
+
+        const getProcessOptions = () => {
+            const product = document.getElementById("process-product")?.value ?? "elasticsearch";
+            const diagnosticType = document.getElementById("process-type")?.value ?? "standard";
+            return PROCESS_OPTIONS?.[product]?.[diagnosticType] ?? [];
+        };
+
+        const parseSelectedOptions = () => {
+            const hidden = document.getElementById("process-selected-options");
+            return new Set(
+                (hidden?.value ?? "")
+                    .split(",")
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+            );
+        };
+
+        const writeSelectedOptions = (values) => {
+            const hidden = document.getElementById("process-selected-options");
+            if (!hidden) return;
+            hidden.value = [...values].join(",");
+            hidden.dispatchEvent(new Event("input", { bubbles: true }));
+            hidden.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+
+        const renderProcessOptions = () => {
+            const list = document.getElementById("process-option-list");
+            if (!list) return;
+
+            const options = getProcessOptions();
+            const selected = parseSelectedOptions();
+            list.innerHTML = "";
+
+            options.forEach((option) => {
+                const row = document.createElement("label");
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.checked = selected.size === 0 ? option.selected : selected.has(option.key);
+                checkbox.disabled = option.required;
+                checkbox.addEventListener("change", () => {
+                    const current = parseSelectedOptions();
+                    if (checkbox.checked) {
+                        current.add(option.key);
+                    } else {
+                        current.delete(option.key);
+                    }
+                    writeSelectedOptions(current);
+                });
+                row.appendChild(checkbox);
+                row.append(` ${option.key}${option.required ? " (required)" : ""}`);
+                list.appendChild(row);
+            });
+        };
+
+        document.addEventListener("DOMContentLoaded", () => {
+            ["process-product", "process-type"].forEach((id) => {
+                document.getElementById(id)?.addEventListener("change", () => {
+                    writeSelectedOptions(new Set());
+                    renderProcessOptions();
+                });
+            });
+            renderProcessOptions();
+        });
+    </script>
+    {% if show_keystore_bootstrap %}
+    <div id="keystore-bootstrap-init" data-init="@get('/keystore/bootstrap-modal')"></div>
+    {% endif %}
+</content>

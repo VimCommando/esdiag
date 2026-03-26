@@ -1,8 +1,5 @@
-use super::{
-    ServerState, Signals, Tab, api_key, append_body_event, execute_script_event, file_upload,
-    html_event, service_link, signal_event,
-};
-use crate::data::{KnownHost, Settings, authenticate, keystore_exists};
+use super::{ServerState, append_body_event, execute_script_event, html_event, signal_event};
+use crate::data::{HostRole, KnownHost, Settings, authenticate, keystore_exists};
 use crate::server::template::{
     self, KeystoreBootstrapModal, KeystoreProcessUnlockModal, KeystoreUnlockModal,
 };
@@ -12,7 +9,6 @@ use axum::{
     http::{HeaderMap, HeaderValue, header::RETRY_AFTER},
     response::{IntoResponse, Response},
 };
-use datastar::axum::ReadSignals;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -188,8 +184,8 @@ pub async fn bootstrap(
     state.publish_event(execute_script_event(
         "if (window.location.pathname === '/settings') { window.location.reload(); }",
     ));
-    state.publish_event(html_event(
-        r#"<div id="keystore-bootstrap-modal" data-init="document.getElementById('keystore-bootstrap-modal')?.remove();"></div>"#,
+    state.publish_event(execute_script_event(
+        "document.getElementById('keystore-bootstrap-modal')?.remove();",
     ));
     axum::http::StatusCode::NO_CONTENT.into_response()
 }
@@ -228,8 +224,11 @@ pub async fn unlock(
             state.publish_event(execute_script_event(
                 "if (window.location.pathname === '/settings') { window.location.reload(); }",
             ));
-            state.publish_event(html_event(
-                r#"<div id="keystore-unlock-modal" data-init="document.getElementById('keystore-unlock-modal')?.remove();"></div>"#,
+            state.publish_event(execute_script_event(
+                "document.getElementById('keystore-unlock-modal')?.remove();",
+            ));
+            state.publish_event(execute_script_event(
+                "document.getElementById('keystore-process-unlock-modal')?.remove();",
             ));
             axum::http::StatusCode::NO_CONTENT.into_response()
         }
@@ -243,69 +242,6 @@ pub async fn unlock(
             ));
             tracing::warn!("Keystore unlock failed: {}", err);
             axum::http::StatusCode::UNAUTHORIZED.into_response()
-        }
-    }
-}
-
-pub async fn unlock_and_run(
-    State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
-    ReadSignals(signals): ReadSignals<Signals>,
-) -> Response {
-    let user = resolve_request_user(&state, &headers);
-    if !keystore_exists().unwrap_or(false) {
-        return missing_keystore_response(&state, headers.clone()).await;
-    }
-
-    if let Some(response) = blocked_unlock_response(&state, &user).await {
-        return response;
-    }
-
-    let password = signals.keystore.password.trim().to_string();
-    if password.is_empty() {
-        state.publish_event(signal_event(
-            r#"{"message":"Keystore password is required."}"#,
-        ));
-        state.publish_event(signal_event(
-            r#"{"keystore":{"password":"","invalid":true}}"#,
-        ));
-        return axum::http::StatusCode::NO_CONTENT.into_response();
-    }
-
-    match authenticate(&password) {
-        Ok(_) => {
-            state.set_keystore_unlocked_for(&user, password).await;
-            state.publish_event(signal_event(
-                r#"{"keystore":{"password":"","invalid":false}}"#,
-            ));
-            state.publish_event(html_event(
-                r#"<div id="keystore-process-unlock-modal" data-init="document.getElementById('keystore-process-unlock-modal')?.remove();"></div>"#,
-            ));
-
-            match signals.tab {
-                Tab::FileUpload => {
-                    file_upload::process(State(state), headers, ReadSignals(signals))
-                        .await
-                        .into_response()
-                }
-                Tab::ServiceLink => service_link::form(State(state), headers, ReadSignals(signals))
-                    .await
-                    .into_response(),
-                Tab::ApiKey => api_key::form(State(state), headers, ReadSignals(signals))
-                    .await
-                    .into_response(),
-            }
-        }
-        Err(err) => {
-            state.record_keystore_failed_attempt_for(&user).await;
-            state.publish_event(signal_event(
-                r#"{"message":"Invalid keystore password. Try again."}"#,
-            ));
-            state.publish_event(signal_event(
-                r#"{"keystore":{"password":"","invalid":true}}"#,
-            ));
-            tracing::warn!("Keystore unlock-and-run failed: {}", err);
-            axum::http::StatusCode::NO_CONTENT.into_response()
         }
     }
 }
@@ -324,25 +260,36 @@ pub async fn ensure_unlocked_for_active_output(
     user: &str,
 ) -> Result<(), String> {
     let exporter = state.exporter.read().await.clone();
-    if !cfg!(feature = "keystore") || !state.runtime_mode_policy.allows_local_artifacts() {
+    if !cfg!(feature = "keystore") || !state.runtime_mode_policy.allows_local_runtime_features() {
         // When the keystore is unavailable, the active exporter can still be valid if its
         // credentials were provided directly by the runtime environment instead of local
-        // keystore-backed artifacts. In that mode there is nothing to unlock here.
+        // keystore-backed settings. In that mode there is nothing to unlock here.
         let _ = exporter;
         return Ok(());
     }
 
     let hosts_by_name = KnownHost::parse_hosts_yml().unwrap_or_default();
+    let send_hosts: Vec<String> = hosts_by_name
+        .iter()
+        .filter(|(_, h)| h.has_role(HostRole::Send))
+        .map(|(name, _)| name.clone())
+        .collect();
     let preferred_target = Settings::load()
         .ok()
         .and_then(|settings| settings.active_target);
     let (_output_options, selected_output, _exporter_label) = template::build_footer_output_context(
         &hosts_by_name,
+        &send_hosts,
         &exporter,
         preferred_target.as_deref(),
     );
 
-    if !template::active_output_requires_keystore(&hosts_by_name, &selected_output, &exporter) {
+    if !template::active_output_requires_keystore(
+        &hosts_by_name,
+        &send_hosts,
+        &selected_output,
+        &exporter,
+    ) {
         return Ok(());
     }
 
@@ -359,14 +306,14 @@ pub async fn ensure_unlocked_for_active_output(
 mod tests {
     use super::{
         KeystoreForm, bootstrap, ensure_unlocked_for_active_output, get_process_unlock_modal,
-        get_unlock_modal, lock, unlock, unlock_and_run,
+        get_unlock_modal, lock, unlock,
     };
     use crate::{
         data::{KnownHost, Settings, authenticate},
         exporter::Exporter,
         server::{
             KeystoreSessionState, RuntimeMode, RuntimeModePolicy, ServerEvent, ServerState,
-            Signals, Stats, Tab, test_server_state,
+            Signals, Stats, test_server_state,
         },
     };
     use axum::{
@@ -374,8 +321,6 @@ mod tests {
         http::{HeaderMap, StatusCode},
         response::IntoResponse,
     };
-    use bytes::Bytes;
-    use datastar::axum::ReadSignals;
     use std::{
         collections::{BTreeMap, HashMap},
         path::PathBuf,
@@ -415,9 +360,8 @@ mod tests {
             exporter: Arc::new(RwLock::new(Exporter::default())),
             kibana_url: Arc::new(RwLock::new(String::new())),
             signals: Arc::new(RwLock::new(Signals::default())),
-            uploads: Arc::new(RwLock::new(HashMap::<u64, (String, Bytes)>::new())),
-            links: Arc::new(RwLock::new(HashMap::new())),
-            keys: Arc::new(RwLock::new(HashMap::new())),
+            workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
+            retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             runtime_mode,
             runtime_mode_policy: RuntimeModePolicy::new(runtime_mode),
             keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
@@ -871,7 +815,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_mode_secure_output_bypasses_unlock_and_does_not_touch_local_artifacts() {
+    async fn service_mode_secure_output_bypasses_unlock_and_does_not_touch_local_runtime_features()
+    {
         let _guard = env_lock().lock().expect("env lock");
         let (tmp, hosts_path, _keystore_path) = setup_env();
         let settings_path = tmp.path().join(".esdiag").join("settings.yml");
@@ -936,63 +881,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unlock_and_run_success_unlocks_and_resumes_processing() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
-        authenticate("pw").expect("create keystore");
-
-        let state = test_server_state();
-        let mut signals = Signals {
-            tab: Tab::FileUpload,
-            ..Signals::default()
-        };
-        signals.keystore.password = "pw".to_string();
-
-        let response =
-            unlock_and_run(State(state.clone()), HeaderMap::new(), ReadSignals(signals)).await;
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert!(
-            !state.keystore_status().await.0,
-            "successful preflight should unlock the keystore"
-        );
-    }
-
-    #[tokio::test]
-    async fn unlock_and_run_failure_keeps_processing_blocked_and_marks_invalid() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
-        authenticate("pw").expect("create keystore");
-
-        let state = test_server_state();
-        let mut events = state.subscribe_events();
-        let mut signals = Signals {
-            tab: Tab::ApiKey,
-            ..Signals::default()
-        };
-        signals.keystore.password = "wrong".to_string();
-
-        let response =
-            unlock_and_run(State(state.clone()), HeaderMap::new(), ReadSignals(signals)).await;
-
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-        assert!(
-            state.keystore_status().await.0,
-            "state should remain locked"
-        );
-
-        let mut saw_invalid = false;
-        while let Ok(event) = events.try_recv() {
-            if let ServerEvent::Signals(payload) = event
-                && payload.contains(r#""keystore":{"password":"","invalid":true}"#)
-            {
-                saw_invalid = true;
-            }
-        }
-        assert!(saw_invalid, "expected invalid-password keystore signal");
-    }
-
-    #[tokio::test]
     async fn unlock_empty_password_marks_field_invalid() {
         let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts_path, _keystore_path) = setup_env();
@@ -1021,69 +909,5 @@ mod tests {
             }
         }
         assert!(saw_invalid, "expected empty-password keystore signal");
-    }
-
-    #[tokio::test]
-    async fn unlock_and_run_requires_existing_keystore_before_processing() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, keystore_path) = setup_env();
-        assert!(!keystore_path.exists(), "keystore should start missing");
-
-        let state = test_server_state();
-        let mut events = state.subscribe_events();
-        let mut signals = Signals {
-            tab: Tab::FileUpload,
-            ..Signals::default()
-        };
-        signals.keystore.password = "pw".to_string();
-
-        let response = unlock_and_run(State(state), HeaderMap::new(), ReadSignals(signals)).await;
-
-        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-
-        let first = events.recv().await.expect("missing keystore message event");
-        match first {
-            ServerEvent::Signals(payload) => {
-                assert!(payload.contains("Create a keystore before unlocking."));
-            }
-            other => panic!("expected missing keystore signal, got {other:?}"),
-        }
-
-        let second = events.recv().await.expect("bootstrap modal event");
-        match second {
-            ServerEvent::AppendBody(html) => {
-                assert!(html.contains("keystore-bootstrap-modal"));
-                assert!(html.contains("Create Keystore"));
-            }
-            other => panic!("expected bootstrap modal append event, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn unlock_and_run_respects_backoff_and_retry_after() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
-        authenticate("pw").expect("create keystore");
-
-        let state = test_server_state();
-        for _ in 0..4 {
-            state.record_keystore_failed_attempt().await;
-        }
-
-        let mut signals = Signals {
-            tab: Tab::FileUpload,
-            ..Signals::default()
-        };
-        signals.keystore.password = "pw".to_string();
-
-        let response = unlock_and_run(State(state), HeaderMap::new(), ReadSignals(signals)).await;
-
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert!(
-            response
-                .headers()
-                .contains_key(axum::http::header::RETRY_AFTER),
-            "blocked unlock-and-run should include Retry-After"
-        );
     }
 }

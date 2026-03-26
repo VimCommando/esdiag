@@ -13,12 +13,13 @@ use esdiag::{
     client::Client,
     data::{
         HostRole, KnownHost, KnownHostBuilder, Product, SecretAuth, Uri, add_secret,
-        get_password_for_secret_commands, remove_secret,
+        get_password_for_secret_commands, remove_secret, resolve_secret_auth,
     },
     env::LOG_LEVEL,
     exporter::Exporter,
     processor::{Collector, Identifiers, Processor},
     receiver::Receiver,
+    uploader,
 };
 use eyre::{Result, eyre};
 use std::sync::Arc;
@@ -40,10 +41,6 @@ struct Cli {
     /// Enable debug logging
     #[arg(global = true, long)]
     debug: bool,
-    /// Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow.
-    /// The file must match the active product or the command fails before collection/processing.
-    #[arg(global = true, long)]
-    sources: Option<String>,
     /// Commands
     #[command(subcommand)]
     command: Option<Commands>,
@@ -80,6 +77,10 @@ enum Commands {
             value_delimiter = ','
         )]
         exclude: Option<Vec<String>>,
+        /// Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow.
+        /// The file must match the active product or the command fails before collection.
+        #[arg(long)]
+        sources: Option<String>,
         /// Diagnostic report account name
         #[arg(help = "Diagnostic report account name", long, short)]
         account: Option<String>,
@@ -109,6 +110,9 @@ enum Commands {
             long_help = "Target to send the processed diagnostic documents to (known host, file, stdout, or env). Strings will be checked against the known hosts stored in `~/.esdiag/hosts.yml` and will fallback to a filename if not found. Use `-` for stdout. If nothing is provided, the output will try using the environment variables: ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, and ESDIAG_OUTPUT_PASSWORD."
         )]
         output: Option<String>,
+        /// Web runtime mode for the server
+        #[arg(long, value_enum, help = "Web runtime mode: user or service")]
+        mode: Option<RuntimeMode>,
         /// Kibana URL to display in the web interface
         #[arg(
             long,
@@ -197,6 +201,26 @@ enum Commands {
         /// Diagnostic report user
         #[arg(help = "Diagnostic report user", long, short)]
         user: Option<String>,
+        /// Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow.
+        /// The file must match the active product or the command fails before processing.
+        #[arg(long)]
+        sources: Option<String>,
+    },
+    /// Upload a raw diagnostic archive to Elastic Upload Service
+    Upload {
+        /// Local diagnostic archive to upload
+        #[arg(help = "Local diagnostic archive file path")]
+        file_name: String,
+        /// Elastic Upload Service upload id or URL
+        #[arg(help = "Upload id or Elastic Upload Service URL")]
+        upload_id: String,
+        /// Upload API base URL
+        #[arg(
+            long,
+            default_value = uploader::DEFAULT_UPLOAD_API_URL,
+            help = "Elastic Upload Service base URL"
+        )]
+        api_url: String,
     },
     #[cfg(feature = "setup")]
     /// Import assets (templates, ingest pipelines, etc.) to a known Elasticsearch host
@@ -263,8 +287,17 @@ enum KeystoreCommands {
     Migrate,
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<()> {
+const TOKIO_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(TOKIO_THREAD_STACK_SIZE)
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     // Parse CLI early to check for debug flag
     let cli = Cli::parse();
 
@@ -274,9 +307,7 @@ async fn main() -> Result<()> {
     } else {
         EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new(LOG_LEVEL))
     };
-    // Bridge log crate events from third-party dependencies into the tracing pipeline
-    tracing_log::LogTracer::init().ok();
-    fmt().with_env_filter(filter).init();
+    init_tracing(filter);
 
     std::panic::set_hook(Box::new(|panic| {
         // Log any panics as errors
@@ -298,9 +329,21 @@ async fn main() -> Result<()> {
     }
 }
 
+fn init_tracing(filter: EnvFilter) {
+    // Bridge `log` records from dependencies when available, but tolerate hosts that
+    // already installed a global logger before invoking this binary.
+    if let Err(err) = tracing_log::LogTracer::init() {
+        eprintln!("tracing log bridge already initialized: {err}");
+    }
+
+    let subscriber = fmt().with_env_filter(filter).finish();
+    if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("tracing subscriber already initialized: {err}");
+    }
+}
+
 #[tracing::instrument(skip_all)]
 async fn run(cli: Cli) -> Result<&'static str> {
-    let sources_override = cli.sources.clone();
     // If there are CLI arguments but no subcommand, avoid starting the desktop/Tauri
     // entrypoint. The desktop UI should only start when launched absolutely without arguments.
     if should_error_for_missing_subcommand(std::env::args_os().len(), cli.command.is_none()) {
@@ -318,6 +361,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
             Commands::Serve {
                 port,
                 output,
+                mode,
                 kibana,
             } => {
                 tracing::info!("Starting ESDiag server");
@@ -334,9 +378,9 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     }
                 });
 
+                let runtime_mode = resolve_serve_runtime_mode(mode)?;
                 let (mut server, _bound_addr) =
-                    Server::start([0, 0, 0, 0], port, exporter, kibana_url, RuntimeMode::User)
-                        .await?;
+                    Server::start([0, 0, 0, 0], port, exporter, kibana_url, runtime_mode).await?;
 
                 wait_for_shutdown_signal().await?;
 
@@ -349,6 +393,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 r#type,
                 include,
                 exclude,
+                sources,
                 account,
                 case,
                 opportunity,
@@ -362,7 +407,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     | Uri::ElasticGovCloudAdmin(host) => {
                         ensure_host_role(&host, HostRole::Collect, "collect")?;
                         let product = host.app().clone();
-                        if let Some(sources) = sources_override.clone() {
+                        if let Some(sources) = sources {
                             esdiag::processor::init_sources(
                                 sources_product_key(&product)?,
                                 sources,
@@ -418,6 +463,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
             } => {
                 tracing::info!("Configuring host {name}");
                 let host = if let (Some(app), Some(url)) = (app, url) {
+                    let secret_auth = resolve_host_secret_auth(secret.as_deref())?;
                     let mut builder = KnownHostBuilder::new(url)
                         .product(app)
                         .accept_invalid_certs(accept_invalid_certs)
@@ -428,7 +474,10 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     if let Some(roles) = roles {
                         builder = builder.roles(roles);
                     }
-                    builder.build()?
+                    match secret_auth {
+                        Some(secret_auth) => builder.build_with_secret_auth(secret_auth)?,
+                        None => builder.build()?,
+                    }
                 } else {
                     KnownHost::get_known(&name).ok_or(eyre!(
                         "Host {name} not found, must include `url` and `app` to setup a new host."
@@ -437,17 +486,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
 
                 let uri = Uri::try_from(host.clone())?;
 
-                let valid_connection = match Client::try_from(uri)?.test_connection().await {
-                    Ok(message) => {
-                        tracing::info!("Host {name}: {}", &message);
-                        true
-                    }
-                    Err(message) => {
-                        tracing::error!("Host connection: FAILED ❌ {}", &message);
-                        tracing::warn!("Check your URL and certificates!");
-                        false
-                    }
-                };
+                let valid_connection = validate_host_connection(&name, uri).await?;
 
                 if valid_connection {
                     if !nosave {
@@ -501,6 +540,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 case,
                 opportunity,
                 user,
+                sources,
             } => {
                 let has_explicit_output = output.is_some();
                 let input_uri = Uri::try_from(input)?;
@@ -513,7 +553,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 tracing::info!("input: {}", input_uri);
 
                 let receiver = Receiver::try_from(input_uri.clone())?;
-                if let Some(sources) = sources_override.clone() {
+                if let Some(sources) = sources {
                     let product = detect_sources_product_for_process(&input_uri, &receiver).await?;
                     esdiag::processor::init_sources(sources_product_key(&product)?, sources)?;
                 }
@@ -546,6 +586,21 @@ async fn run(cli: Cli) -> Result<&'static str> {
                         Err(eyre!("{}", processor))
                     }
                 }
+            }
+            Commands::Upload {
+                file_name,
+                upload_id,
+                api_url,
+            } => {
+                let file_path = uploader::default_upload_path(&file_name);
+                tracing::info!(
+                    "Uploading raw diagnostic archive {} to {}",
+                    file_path.display(),
+                    upload_id
+                );
+                let response = uploader::upload_file(&file_path, &upload_id, &api_url).await?;
+                tracing::info!("Upload complete for slug {}", response.slug);
+                Ok("upload")
             }
             #[cfg(feature = "setup")]
             Commands::Setup { host } => {
@@ -762,6 +817,50 @@ fn ensure_uri_role(uri: &Uri, role: HostRole, context: &str) -> Result<()> {
     }
 }
 
+fn resolve_host_secret_auth(secret_id: Option<&str>) -> Result<Option<SecretAuth>> {
+    let Some(secret_id) = secret_id else {
+        return Ok(None);
+    };
+
+    let keystore_password = get_password_for_secret_commands()?;
+    let secret_auth = resolve_secret_auth(secret_id, &keystore_password)?
+        .ok_or_else(|| eyre!("Secret '{secret_id}' was not found in keystore"))?;
+    Ok(Some(secret_auth))
+}
+
+fn host_connection_uses_receiver(uri: &Uri) -> bool {
+    matches!(
+        uri,
+        Uri::ElasticCloudAdmin(_) | Uri::ElasticGovCloudAdmin(_)
+    )
+}
+
+async fn validate_host_connection(name: &str, uri: Uri) -> Result<bool> {
+    if host_connection_uses_receiver(&uri) {
+        let receiver = Receiver::try_from(uri)?;
+        if receiver.is_connected().await {
+            tracing::info!("Host {name}: connected to Elastic Cloud Admin proxy");
+            return Ok(true);
+        }
+
+        tracing::error!("Host connection: FAILED ❌ Elastic Cloud Admin proxy connection failed");
+        tracing::warn!("Check your URL, certificates, and secret credentials!");
+        return Ok(false);
+    }
+
+    match Client::try_from(uri)?.test_connection().await {
+        Ok(message) => {
+            tracing::info!("Host {name}: {}", &message);
+            Ok(true)
+        }
+        Err(message) => {
+            tracing::error!("Host connection: FAILED ❌ {}", &message);
+            tracing::warn!("Check your URL and certificates!");
+            Ok(false)
+        }
+    }
+}
+
 fn should_error_for_missing_subcommand(arg_count: usize, has_no_command: bool) -> bool {
     arg_count > 1 && has_no_command
 }
@@ -792,11 +891,52 @@ fn clear_last_run_files() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "server")]
+fn resolve_serve_runtime_mode(mode: Option<RuntimeMode>) -> Result<RuntimeMode> {
+    if let Some(mode) = mode {
+        return Ok(mode);
+    }
+    match std::env::var("ESDIAG_MODE") {
+        Ok(value) => RuntimeMode::from_env(&value),
+        Err(std::env::VarError::NotPresent) => Ok(RuntimeMode::User),
+        Err(err) => Err(eyre!("Failed to read ESDIAG_MODE: {err}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Commands, should_error_for_missing_subcommand};
+    #[cfg(feature = "server")]
+    use super::resolve_serve_runtime_mode;
+    use super::{
+        Cli, Commands, host_connection_uses_receiver, resolve_host_secret_auth,
+        should_error_for_missing_subcommand,
+    };
     use clap::Parser;
-    use esdiag::data::HostRole;
+    use esdiag::data::{
+        ElasticCloud, HostRole, KnownHost, Product, SecretAuth, Uri, upsert_secret_auth,
+    };
+    #[cfg(feature = "server")]
+    use esdiag::server::RuntimeMode;
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::TempDir;
+    use url::Url;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn setup_env() -> TempDir {
+        let tmp = TempDir::new().expect("temp dir");
+        let hosts = tmp.path().join("hosts.yml");
+        let keystore = tmp.path().join("secrets.yml");
+        unsafe {
+            std::env::set_var("ESDIAG_HOSTS", &hosts);
+            std::env::set_var("ESDIAG_KEYSTORE", &keystore);
+            std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
+        }
+        tmp
+    }
 
     #[test]
     fn no_args_and_no_command_allows_desktop_path() {
@@ -831,6 +971,136 @@ mod tests {
             }
             _ => panic!("expected host command"),
         }
+    }
+
+    #[test]
+    fn upload_command_parses_file_and_upload_id() {
+        let cli = Cli::parse_from(["esdiag", "upload", "diag.zip", "abc123"]);
+        match cli.command.expect("command") {
+            Commands::Upload {
+                file_name,
+                upload_id,
+                api_url,
+            } => {
+                assert_eq!(file_name, "diag.zip");
+                assert_eq!(upload_id, "abc123");
+                assert_eq!(api_url, esdiag::uploader::DEFAULT_UPLOAD_API_URL);
+            }
+            _ => panic!("expected upload command"),
+        }
+    }
+
+    #[test]
+    fn elastic_cloud_admin_hosts_validate_via_receiver() {
+        let uri = Uri::ElasticCloudAdmin(KnownHost::ApiKey {
+            accept_invalid_certs: false,
+            apikey: None,
+            app: Product::Elasticsearch,
+            cloud_id: Some(ElasticCloud::ElasticCloudAdmin),
+            roles: vec![HostRole::Collect],
+            secret: Some("ada-admin".to_string()),
+            viewer: None,
+            url: Url::parse(
+                "https://admin.found.no/api/v1/deployments/test/elasticsearch/main-elasticsearch/proxy",
+            )
+            .expect("valid url"),
+        });
+
+        assert!(host_connection_uses_receiver(&uri));
+    }
+
+    #[test]
+    fn standard_known_hosts_validate_via_client() {
+        let uri = Uri::KnownHost(KnownHost::NoAuth {
+            app: Product::Elasticsearch,
+            roles: vec![HostRole::Collect],
+            viewer: None,
+            url: Url::parse("http://localhost:9200").expect("valid url"),
+        });
+
+        assert!(!host_connection_uses_receiver(&uri));
+    }
+
+    #[test]
+    fn host_secret_auth_resolution_detects_apikey() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        upsert_secret_auth(
+            "api-secret",
+            SecretAuth::ApiKey {
+                apikey: "secret-key".to_string(),
+            },
+            "pw",
+        )
+        .expect("save api secret");
+
+        let resolved = resolve_host_secret_auth(Some("api-secret")).expect("resolve auth");
+        assert!(matches!(resolved, Some(SecretAuth::ApiKey { .. })));
+    }
+
+    #[test]
+    fn host_secret_auth_resolution_detects_basic() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        upsert_secret_auth(
+            "basic-secret",
+            SecretAuth::Basic {
+                username: "elastic".to_string(),
+                password: "secret-password".to_string(),
+            },
+            "pw",
+        )
+        .expect("save basic secret");
+
+        let resolved = resolve_host_secret_auth(Some("basic-secret")).expect("resolve auth");
+        assert!(matches!(resolved, Some(SecretAuth::Basic { .. })));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_runtime_mode_prefers_explicit_flag_over_env() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_MODE", "service");
+        }
+
+        let resolved = resolve_serve_runtime_mode(Some(RuntimeMode::User)).expect("resolve mode");
+
+        assert_eq!(resolved, RuntimeMode::User);
+
+        unsafe {
+            std::env::remove_var("ESDIAG_MODE");
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_runtime_mode_uses_env_when_flag_missing() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_MODE", "service");
+        }
+
+        let resolved = resolve_serve_runtime_mode(None).expect("resolve mode");
+
+        assert_eq!(resolved, RuntimeMode::Service);
+
+        unsafe {
+            std::env::remove_var("ESDIAG_MODE");
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_runtime_mode_defaults_to_user_without_flag_or_env() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::remove_var("ESDIAG_MODE");
+        }
+
+        let resolved = resolve_serve_runtime_mode(None).expect("resolve mode");
+
+        assert_eq!(resolved, RuntimeMode::User);
     }
 }
 

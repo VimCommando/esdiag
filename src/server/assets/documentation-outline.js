@@ -1,489 +1,524 @@
 class DocumentationOutline extends HTMLElement {
-  constructor() {
-    super();
-    this._initialized = false;
-    this._initRetries = 0;
-    this._maxInitRetries = 120;
-    this._initRafId = null;
-    this._mutationRafId = null;
-    this._observer = null;
-    this._flatNodes = [];
-    this._activeIndex = 0;
-    this._lastScrollY = 0;
-    this._pointerDown = false;
-    this._pendingMouseId = null;
-    this._rafPending = false;
-    this._suppressViewportUntil = 0;
-    this._linkById = new Map();
-    this._topScopeById = new Map();
-    this._topScopeElements = new Map();
-    this._headingById = new Map();
-
-    this._onViewportChanged = this._onViewportChanged.bind(this);
-    this._onMouseDown = this._onMouseDown.bind(this);
-    this._onMouseUp = this._onMouseUp.bind(this);
-    this._onClick = this._onClick.bind(this);
-  }
-
-  connectedCallback() {
-    if (this._initialized) return;
-
-    this._startObserving();
-    queueMicrotask(() => this._initialize());
-  }
-
-  _initialize() {
-    this._rebuildOutline();
-  }
-
-  disconnectedCallback() {
-    this._unbindEvents();
-    this._initialized = false;
-    this._stopObserving();
-    this._clearInitializeRetry();
-    this._clearMutationFrame();
-  }
-
-  _scheduleInitializeRetry() {
-    if (this._initRafId !== null) return;
-    if (this._initRetries >= this._maxInitRetries) return;
-    this._initRetries += 1;
-    this._initRafId = requestAnimationFrame(() => {
-      this._initRafId = null;
-      this._initialize();
-    });
-  }
-
-  _clearInitializeRetry() {
-    if (this._initRafId !== null) {
-      cancelAnimationFrame(this._initRafId);
-      this._initRafId = null;
-    }
-    this._initRetries = 0;
-  }
-
-  _startObserving() {
-    if (this._observer) return;
-    const viewer = this.closest("documentation-viewer");
-    const body =
-      this.previousElementSibling?.tagName?.toLowerCase() === "documentation-body"
-        ? this.previousElementSibling
-        : viewer?.querySelector("documentation-body");
-    const target = body || viewer || this.parentElement;
-    if (!target) return;
-
-    this._observer = new MutationObserver(() => {
-      if (this._mutationRafId !== null) return;
-      this._mutationRafId = requestAnimationFrame(() => {
-        this._mutationRafId = null;
-        this._rebuildOutline();
-      });
-    });
-    this._observer.observe(target, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["id"],
-    });
-  }
-
-  _stopObserving() {
-    if (!this._observer) return;
-    this._observer.disconnect();
-    this._observer = null;
-  }
-
-  _clearMutationFrame() {
-    if (this._mutationRafId !== null) {
-      cancelAnimationFrame(this._mutationRafId);
-      this._mutationRafId = null;
-    }
-  }
-
-  _rebuildOutline() {
-    const outline = this._resolveOutlineData();
-    if (!Array.isArray(outline) || outline.length === 0) {
-      if (this._initialized) {
-        this._unbindEvents();
-        this.innerHTML = "";
+    constructor() {
+        super();
+        this._initialized = false;
+        this._retryCount = 0;
         this._flatNodes = [];
         this._activeIndex = 0;
-        this._initialized = false;
-      }
-      this._scheduleInitializeRetry();
-      return;
+        this._lastScrollY = 0;
+        this._pointerDown = false;
+        this._pendingMouseId = null;
+        this._rafPending = false;
+        this._suppressViewportUntil = 0;
+        this._linkById = new Map();
+        this._topScopeById = new Map();
+        this._topScopeElements = new Map();
+        this._headingById = new Map();
+        this._bodyObserver = null;
+        this._observedBody = null;
+        this._refreshPending = false;
+
+        this._onViewportChanged = this._onViewportChanged.bind(this);
+        this._onMouseDown = this._onMouseDown.bind(this);
+        this._onMouseUp = this._onMouseUp.bind(this);
+        this._onClick = this._onClick.bind(this);
+        this._onBodyMutated = this._onBodyMutated.bind(this);
     }
 
-    const flatNodes = this._flattenOutline(outline);
-    if (flatNodes.length === 0) {
-      if (this._initialized) {
-        this._unbindEvents();
-        this.innerHTML = "";
-        this._flatNodes = [];
-        this._activeIndex = 0;
-        this._initialized = false;
-      }
-      this._scheduleInitializeRetry();
-      return;
+    connectedCallback() {
+        this._observeDocumentBody();
+        queueMicrotask(() => this._initialize());
     }
 
-    if (this._initialized) {
-      this._unbindEvents();
-    }
+    _initialize() {
+        this._observeDocumentBody();
 
-    this._flatNodes = flatNodes;
-    this._render(outline);
-    this._cacheReferences();
-    this._bindEvents();
-    this._activeIndex = this._resolveActiveIndex();
-    this._applyActiveState(this._activeIndex);
-    this._initialized = true;
-    this._clearInitializeRetry();
-  }
-
-  _readOutlineData() {
-    const dataScript = this.querySelector(
-      'script[type="application/json"][data-outline]',
-    );
-    if (!dataScript) return null;
-
-    try {
-      return JSON.parse(dataScript.textContent || "[]");
-    } catch (error) {
-      console.error("Invalid documentation-outline JSON:", error);
-      return null;
-    }
-  }
-
-  _resolveOutlineData() {
-    const explicitOutline = this._readOutlineData();
-    if (Array.isArray(explicitOutline) && explicitOutline.length > 0) {
-      return explicitOutline;
-    }
-    return this._buildOutlineFromDocumentBody();
-  }
-
-  _buildOutlineFromDocumentBody() {
-    const viewer = this.closest("documentation-viewer");
-    const body =
-      this.previousElementSibling?.tagName?.toLowerCase() === "documentation-body"
-        ? this.previousElementSibling
-        : viewer?.querySelector("documentation-body");
-    if (!body) return [];
-
-    const headings = Array.from(
-      body.querySelectorAll(
-        "h2[id], h3[id], section-title[id]",
-      ),
-    );
-    if (headings.length === 0) return [];
-
-    const outline = [];
-    const stack = [];
-
-    headings.forEach((heading) => {
-      const tagName = heading.tagName.toLowerCase();
-      const levelMap = {
-        h2: 2,
-        h3: 3,
-        "section-title": 2,
-      };
-      const level = levelMap[tagName];
-      if (!Number.isFinite(level) || level < 1 || level > 3) return;
-
-      const id = heading.id.trim();
-      if (!id) return;
-
-      const label = heading.textContent?.trim().replace(/\s+/g, " ") || id;
-      const node = { id, label, level };
-
-      while (stack.length > 0 && stack[stack.length - 1].level >= level) {
-        stack.pop();
-      }
-
-      if (stack.length === 0) {
-        outline.push(node);
-      } else {
-        const parentNode = stack[stack.length - 1].node;
-        if (!Array.isArray(parentNode.children)) {
-          parentNode.children = [];
+        const outline = this._resolveOutlineData();
+        if (!Array.isArray(outline) || outline.length === 0) {
+            if (this._retryCount < 12) {
+                this._retryCount += 1;
+                requestAnimationFrame(() => this._initialize());
+            }
+            return;
         }
-        parentNode.children.push(node);
-      }
+        this._retryCount = 0;
 
-      stack.push({ level, node });
-    });
+        this._flatNodes = this._flattenOutline(outline);
+        if (this._flatNodes.length === 0) {
+            return;
+        }
 
-    return outline;
-  }
-
-  _flattenOutline(nodes, depth = 1, sectionScopeId = null, acc = []) {
-    if (depth > 3 || !Array.isArray(nodes)) return acc;
-
-    nodes.forEach((node) => {
-      if (
-        !node ||
-        typeof node.id !== "string" ||
-        typeof node.label !== "string"
-      ) {
-        return;
-      }
-
-      const nodeSectionScopeId = node.level === 2 ? node.id : sectionScopeId;
-      acc.push({
-        id: node.id,
-        label: node.label,
-        depth,
-        sectionScopeId: nodeSectionScopeId,
-      });
-
-      this._flattenOutline(node.children, depth + 1, nodeSectionScopeId, acc);
-    });
-
-    return acc;
-  }
-
-  _render(outline) {
-    this.innerHTML = this._renderList(outline, 1, null);
-  }
-
-  _renderList(nodes, depth, topScopeId) {
-    const items = nodes
-      .filter(
-        (node) =>
-          node && typeof node.id === "string" && typeof node.label === "string",
-      )
-      .map((node) => {
-        const escapedId = this._escapeHtml(node.id);
-        const escapedLabel = this._escapeHtml(node.label);
-        const scopeId = this._escapeHtml(topScopeId || node.id);
-        const childHtml =
-          depth < 3 && Array.isArray(node.children) && node.children.length > 0
-            ? this._renderList(node.children, depth + 1, topScopeId || node.id)
-            : "";
-
-        return `<li data-outline-id="${escapedId}" data-outline-scope="${scopeId}"><a href="#${escapedId}">${escapedLabel}</a>${childHtml}</li>`;
-      })
-      .join("");
-
-    return `<ul>${items}</ul>`;
-  }
-
-  _cacheReferences() {
-    this._linkById.clear();
-    this._topScopeById.clear();
-    this._topScopeElements.clear();
-    this._headingById.clear();
-
-    const links = this.querySelectorAll('a[href^="#"]');
-    links.forEach((link) => {
-      const id = link.getAttribute("href").slice(1);
-      this._linkById.set(id, link);
-    });
-
-    this._flatNodes.forEach((node) => {
-      this._topScopeById.set(node.id, node.sectionScopeId || null);
-      const heading = document.getElementById(node.id);
-      if (heading) this._headingById.set(node.id, heading);
-    });
-
-    const items = this.querySelectorAll("li[data-outline-id]");
-    items.forEach((item) => {
-      const id = item.getAttribute("data-outline-id");
-      if (id) this._topScopeElements.set(id, item);
-    });
-  }
-
-  _bindEvents() {
-    window.addEventListener("scroll", this._onViewportChanged, { passive: true });
-    window.addEventListener("resize", this._onViewportChanged);
-    window.addEventListener("mouseup", this._onMouseUp, true);
-    this.addEventListener("mousedown", this._onMouseDown);
-    this.addEventListener("click", this._onClick);
-  }
-
-  _unbindEvents() {
-    window.removeEventListener("scroll", this._onViewportChanged);
-    window.removeEventListener("resize", this._onViewportChanged);
-    window.removeEventListener("mouseup", this._onMouseUp, true);
-    this.removeEventListener("mousedown", this._onMouseDown);
-    this.removeEventListener("click", this._onClick);
-  }
-
-  _onViewportChanged() {
-    if (this._pointerDown || this._rafPending) return;
-    if (performance.now() < this._suppressViewportUntil) return;
-    this._rafPending = true;
-    requestAnimationFrame(() => {
-      this._rafPending = false;
-      const nextIndex = this._resolveActiveIndex();
-      this._applyActiveState(nextIndex);
-    });
-  }
-
-  _onMouseDown(event) {
-    const target =
-      event.target instanceof Element ? event.target : event.target?.parentElement;
-    if (!target) return;
-    const link = target.closest('a[href^="#"]');
-    if (!link || !this.contains(link)) return;
-    event.preventDefault();
-
-    const id = link.getAttribute("href").slice(1);
-    this._pointerDown = true;
-    this._pendingMouseId = id;
-    this._smoothScrollToId(id);
-  }
-
-  _onMouseUp() {
-    const id = this._pendingMouseId;
-    if (!id) return;
-    this._pendingMouseId = null;
-    this._pointerDown = false;
-    this._applyActiveState(this._indexById(id));
-  }
-
-  _onClick(event) {
-    const target =
-      event.target instanceof Element ? event.target : event.target?.parentElement;
-    if (!target) return;
-    const link = target.closest('a[href^="#"]');
-    if (!link || !this.contains(link)) return;
-    event.preventDefault();
-
-    if (event.detail === 0) {
-      const id = link.getAttribute("href").slice(1);
-      this._smoothScrollToId(id);
-      this._applyActiveState(this._indexById(id));
-    }
-  }
-
-  _resolveActiveIndex() {
-    if (this._flatNodes.length === 0) return 0;
-
-    const maxIndex = this._flatNodes.length - 1;
-    if (window.scrollY <= 2) {
-      this._lastScrollY = window.scrollY;
-      return 0;
+        this._unbindEvents();
+        this._render(outline);
+        this._cacheReferences();
+        this._bindEvents();
+        this._activeIndex = this._resolveActiveIndex();
+        this._applyActiveState(this._activeIndex);
+        this._initialized = true;
     }
 
-    if (
-      window.innerHeight + window.scrollY >=
-      document.documentElement.scrollHeight - 2
-    ) {
-      this._lastScrollY = window.scrollY;
-      return maxIndex;
+    disconnectedCallback() {
+        this._unbindEvents();
+        this._disconnectBodyObserver();
+        this._initialized = false;
+        this._retryCount = 0;
+        this._refreshPending = false;
     }
 
-    const header = document.querySelector("header");
-    const headerBottom = header ? header.getBoundingClientRect().bottom : 52;
-    const headingTop = (idx) => {
-      const id = this._flatNodes[idx]?.id;
-      const heading = id ? this._headingById.get(id) : null;
-      return heading ? heading.getBoundingClientRect().top : Number.POSITIVE_INFINITY;
-    };
-    let index = 0;
+    _readOutlineData() {
+        const dataScript = this.querySelector(
+            'script[type="application/json"][data-outline]',
+        );
+        if (!dataScript) return null;
 
-    for (let idx = 0; idx <= maxIndex; idx += 1) {
-      if (headingTop(idx) <= headerBottom) {
-        index = idx;
-      } else {
-        break;
-      }
+        try {
+            return JSON.parse(dataScript.textContent || "[]");
+        } catch (error) {
+            console.error("Invalid documentation-outline JSON:", error);
+            return null;
+        }
     }
 
-    this._lastScrollY = window.scrollY;
-    return index;
-  }
+    _resolveOutlineData() {
+        const explicitOutline = this._readOutlineData();
+        if (Array.isArray(explicitOutline) && explicitOutline.length > 0) {
+            return explicitOutline;
+        }
+        return this._buildOutlineFromDocumentBody();
+    }
 
-  _applyActiveState(index) {
-    const maxIndex = this._flatNodes.length - 1;
-    const safeIndex = Math.max(0, Math.min(maxIndex, index));
-    this._activeIndex = safeIndex;
-    const activeId = this._flatNodes[safeIndex]?.id;
-    if (!activeId) return;
+    _buildOutlineFromDocumentBody() {
+        const body = this._resolveDocumentBody();
+        if (!body) return [];
 
-    this._linkById.forEach((link, id) => {
-      const active = id === activeId;
-      link.classList.toggle("active-item", active);
-      if (active) {
-        link.setAttribute("aria-current", "location");
-      } else {
-        link.removeAttribute("aria-current");
-      }
-    });
+        const headings = Array.from(
+            body.querySelectorAll(
+                "h1[id], h2[id], h3[id], page-title[id], section-title[id]",
+            ),
+        );
+        if (headings.length === 0) return [];
 
-    const activeScope = this._topScopeById.get(activeId);
-    this._topScopeElements.forEach((element) => {
-      const elementScope =
-        (element.dataset && element.dataset.outlineScope) ||
-        element.getAttribute("data-outline-scope");
-      element.classList.toggle("active-scope", elementScope === activeScope);
-    });
-  }
+        const outline = [];
+        let firstPageTitleSkipped = false;
+        let currentH2 = null;
 
-  _smoothScrollToId(id) {
-    const heading = this._headingById.get(id);
-    if (!heading) return;
+        headings.forEach((heading) => {
+            const normalized = this._normalizeHeading(heading);
+            if (!normalized) return;
 
-    const header = document.querySelector("header");
-    const headerHeight = header ? header.getBoundingClientRect().height : 52;
-    const unclampedTarget = Math.max(
-      0,
-      heading.getBoundingClientRect().top + window.scrollY - headerHeight - 8,
-    );
-    const maxScrollTop = Math.max(
-      0,
-      document.documentElement.scrollHeight - window.innerHeight,
-    );
-    const targetTop = Math.min(unclampedTarget, maxScrollTop);
-    const prefersReducedMotion = window.matchMedia(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
+            if (normalized.level === 1 && !firstPageTitleSkipped) {
+                firstPageTitleSkipped = true;
+                currentH2 = null;
+                return;
+            }
 
-    if (prefersReducedMotion) {
-      this._suppressViewportUntil = performance.now() + 80;
-      window.scrollTo(0, targetTop);
-    } else {
-      const startTop = window.scrollY;
-      const delta = targetTop - startTop;
-      const durationMs = 140;
-      if (Math.abs(delta) < 1) {
+            const node = {
+                id: normalized.id,
+                label: normalized.label,
+                level: normalized.level,
+            };
+
+            if (normalized.level === 1) {
+                outline.push(node);
+                currentH2 = null;
+                return;
+            }
+
+            if (normalized.level === 2) {
+                outline.push(node);
+                currentH2 = node;
+                return;
+            }
+
+            if (normalized.level === 3 && currentH2) {
+                if (!Array.isArray(currentH2.children)) {
+                    currentH2.children = [];
+                }
+                currentH2.children.push(node);
+                return;
+            }
+
+            outline.push(node);
+        });
+
+        return outline;
+    }
+
+    _normalizeHeading(heading) {
+        const tagName = heading.tagName.toLowerCase();
+        const levelMap = {
+            h1: 1,
+            h2: 2,
+            h3: 3,
+            "page-title": 1,
+            "section-title": 2,
+        };
+        const level = levelMap[tagName];
+        if (!Number.isFinite(level) || level < 1 || level > 3) return null;
+
+        const id = heading.id.trim();
+        if (!id) return null;
+
+        const label = heading.textContent?.trim().replace(/\s+/g, " ") || id;
+        return { id, label, level };
+    }
+
+    _resolveDocumentBody() {
+        const viewer = this.closest("documentation-viewer");
+        return this.previousElementSibling?.tagName?.toLowerCase() ===
+            "documentation-body"
+            ? this.previousElementSibling
+            : viewer?.querySelector("documentation-body");
+    }
+
+    _flattenOutline(nodes, depth = 1, topScopeId = null, acc = []) {
+        if (depth > 3 || !Array.isArray(nodes)) return acc;
+
+        nodes.forEach((node) => {
+            if (
+                !node ||
+                typeof node.id !== "string" ||
+                typeof node.label !== "string"
+            ) {
+                return;
+            }
+
+            const nodeLevel = Number.isFinite(node.level) ? node.level : depth;
+            const nodeTopScopeId =
+                nodeLevel === 2 ? node.id : topScopeId || null;
+            acc.push({
+                id: node.id,
+                label: node.label,
+                depth,
+                level: nodeLevel,
+                topScopeId: nodeTopScopeId,
+            });
+
+            this._flattenOutline(node.children, depth + 1, nodeTopScopeId, acc);
+        });
+
+        return acc;
+    }
+
+    _render(outline) {
+        this.innerHTML = this._renderList(outline, 1, null);
+    }
+
+    _renderList(nodes, depth, topScopeId) {
+        const items = nodes
+            .filter(
+                (node) =>
+                    node &&
+                    typeof node.id === "string" &&
+                    typeof node.label === "string",
+            )
+            .map((node) => {
+                const escapedId = this._escapeHtml(node.id);
+                const escapedLabel = this._escapeHtml(node.label);
+                const nodeLevel = Number.isFinite(node.level)
+                    ? node.level
+                    : depth;
+                const scopeId = topScopeId || (nodeLevel === 2 ? node.id : "");
+                const escapedScopeId = this._escapeHtml(scopeId);
+                const childHtml =
+                    depth < 3 &&
+                    Array.isArray(node.children) &&
+                    node.children.length > 0
+                        ? this._renderList(
+                              node.children,
+                              depth + 1,
+                              topScopeId || node.id,
+                          )
+                        : "";
+
+                return `<li data-outline-id="${escapedId}" data-outline-level="${nodeLevel}" data-outline-scope="${escapedScopeId}"><a href="#${escapedId}">${escapedLabel}</a>${childHtml}</li>`;
+            })
+            .join("");
+
+        return `<ul>${items}</ul>`;
+    }
+
+    _cacheReferences() {
+        this._linkById.clear();
+        this._topScopeById.clear();
+        this._topScopeElements.clear();
+        this._headingById.clear();
+
+        const links = this.querySelectorAll('a[href^="#"]');
+        links.forEach((link) => {
+            const id = link.getAttribute("href").slice(1);
+            this._linkById.set(id, link);
+        });
+
+        this._flatNodes.forEach((node) => {
+            this._topScopeById.set(node.id, node.topScopeId);
+            const heading = document.getElementById(node.id);
+            if (heading) this._headingById.set(node.id, heading);
+        });
+
+        const topItems = this.querySelectorAll(
+            ':scope > ul > li[data-outline-level="2"]',
+        );
+        topItems.forEach((item) => {
+            const scopeId = item.getAttribute("data-outline-id");
+            if (scopeId) this._topScopeElements.set(scopeId, item);
+        });
+    }
+
+    _bindEvents() {
+        if (this._eventsBound) return;
+        window.addEventListener("scroll", this._onViewportChanged, {
+            passive: true,
+        });
+        window.addEventListener("resize", this._onViewportChanged);
+        window.addEventListener("mouseup", this._onMouseUp, true);
+        this.addEventListener("mousedown", this._onMouseDown);
+        this.addEventListener("click", this._onClick);
+        this._eventsBound = true;
+    }
+
+    _unbindEvents() {
+        if (!this._eventsBound) return;
+        window.removeEventListener("scroll", this._onViewportChanged);
+        window.removeEventListener("resize", this._onViewportChanged);
+        window.removeEventListener("mouseup", this._onMouseUp, true);
+        this.removeEventListener("mousedown", this._onMouseDown);
+        this.removeEventListener("click", this._onClick);
+        this._eventsBound = false;
+    }
+
+    _observeDocumentBody() {
+        const body = this._resolveDocumentBody();
+        if (!body || body === this._observedBody) return;
+
+        this._disconnectBodyObserver();
+        this._bodyObserver = new MutationObserver(this._onBodyMutated);
+        this._bodyObserver.observe(body, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+        });
+        this._observedBody = body;
+    }
+
+    _disconnectBodyObserver() {
+        if (this._bodyObserver) {
+            this._bodyObserver.disconnect();
+            this._bodyObserver = null;
+        }
+        this._observedBody = null;
+    }
+
+    _onBodyMutated() {
+        if (this._refreshPending) return;
+        this._refreshPending = true;
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                this._refreshPending = false;
+                this._retryCount = 0;
+                this._initialize();
+            });
+        });
+    }
+
+    _clear() {
+        this._flatNodes = [];
+        this._activeIndex = 0;
+        this._linkById.clear();
+        this._topScopeById.clear();
+        this._topScopeElements.clear();
+        this._headingById.clear();
+        this._unbindEvents();
+        this.innerHTML = "";
+        this._initialized = false;
+    }
+
+    _onViewportChanged() {
+        if (this._pointerDown || this._rafPending) return;
+        if (performance.now() < this._suppressViewportUntil) return;
+        this._rafPending = true;
+        requestAnimationFrame(() => {
+            this._rafPending = false;
+            const nextIndex = this._resolveActiveIndex();
+            this._applyActiveState(nextIndex);
+        });
+    }
+
+    _onMouseDown(event) {
+        const link = this._eventLink(event);
+        if (!link || !this.contains(link)) return;
+        event.preventDefault();
+
+        const id = link.getAttribute("href").slice(1);
+        this._pointerDown = true;
+        this._pendingMouseId = id;
+        this._smoothScrollToId(id);
+    }
+
+    _onMouseUp() {
+        const id = this._pendingMouseId;
+        if (!id) return;
+        this._pendingMouseId = null;
+        this._pointerDown = false;
+        this._applyActiveState(this._indexById(id));
+    }
+
+    _onClick(event) {
+        const link = this._eventLink(event);
+        if (!link || !this.contains(link)) return;
+        event.preventDefault();
+
+        if (event.detail === 0) {
+            const id = link.getAttribute("href").slice(1);
+            this._smoothScrollToId(id);
+            this._applyActiveState(this._indexById(id));
+        }
+    }
+
+    _resolveActiveIndex() {
+        if (this._flatNodes.length === 0) return 0;
+
+        const maxIndex = this._flatNodes.length - 1;
+        if (window.scrollY <= 2) {
+            this._lastScrollY = window.scrollY;
+            return 0;
+        }
+
+        if (
+            window.innerHeight + window.scrollY >=
+            document.documentElement.scrollHeight - 2
+        ) {
+            this._lastScrollY = window.scrollY;
+            return maxIndex;
+        }
+
+        const header = document.querySelector("header");
+        const headerBottom = header
+            ? header.getBoundingClientRect().bottom
+            : 52;
+        const goingUp = window.scrollY < this._lastScrollY;
+        let index = Math.max(0, Math.min(maxIndex, this._activeIndex));
+
+        const headingTop = (idx) => {
+            const id = this._flatNodes[idx]?.id;
+            const heading = id ? this._headingById.get(id) : null;
+            return heading
+                ? heading.getBoundingClientRect().top
+                : Number.POSITIVE_INFINITY;
+        };
+
+        if (goingUp) {
+            if (index > 0 && headingTop(index - 1) >= headerBottom) {
+                index -= 1;
+            }
+        } else {
+            if (index < maxIndex && headingTop(index + 1) <= headerBottom) {
+                index += 1;
+            }
+        }
+
+        this._lastScrollY = window.scrollY;
+        return index;
+    }
+
+    _applyActiveState(index) {
+        const maxIndex = this._flatNodes.length - 1;
+        const safeIndex = Math.max(0, Math.min(maxIndex, index));
+        this._activeIndex = safeIndex;
+        const activeId = this._flatNodes[safeIndex]?.id;
+        if (!activeId) return;
+
+        this._linkById.forEach((link, id) => {
+            const active = id === activeId;
+            link.classList.toggle("active-item", active);
+            if (active) {
+                link.setAttribute("aria-current", "location");
+            } else {
+                link.removeAttribute("aria-current");
+            }
+        });
+
+        const activeScope = this._topScopeById.get(activeId);
+        this._topScopeElements.forEach((element, scopeId) => {
+            element.classList.toggle("active-scope", scopeId === activeScope);
+        });
+    }
+
+    _smoothScrollToId(id) {
+        const heading = this._headingById.get(id);
+        if (!heading) return;
+
+        const header = document.querySelector("header");
+        const headerHeight = header
+            ? header.getBoundingClientRect().height
+            : 52;
+        const unclampedTarget = Math.max(
+            0,
+            heading.getBoundingClientRect().top +
+                window.scrollY -
+                headerHeight -
+                8,
+        );
+        const maxScrollTop = Math.max(
+            0,
+            document.documentElement.scrollHeight - window.innerHeight,
+        );
+        const targetTop = Math.min(unclampedTarget, maxScrollTop);
+        const prefersReducedMotion = window.matchMedia(
+            "(prefers-reduced-motion: reduce)",
+        ).matches;
+
+        if (prefersReducedMotion) {
+            this._suppressViewportUntil = performance.now() + 80;
+            window.scrollTo(0, targetTop);
+        } else {
+            const startTop = window.scrollY;
+            const delta = targetTop - startTop;
+            const durationMs = 140;
+            if (Math.abs(delta) < 1) {
+                history.replaceState(null, "", `#${id}`);
+                return;
+            }
+
+            this._suppressViewportUntil = performance.now() + durationMs + 40;
+            const startTime = performance.now();
+            const easeOutCubic = (value) => 1 - Math.pow(1 - value, 3);
+
+            const tick = (now) => {
+                const progress = Math.min((now - startTime) / durationMs, 1);
+                const eased = easeOutCubic(progress);
+                window.scrollTo(0, startTop + delta * eased);
+                if (progress < 1) requestAnimationFrame(tick);
+            };
+
+            requestAnimationFrame(tick);
+        }
+
         history.replaceState(null, "", `#${id}`);
-        return;
-      }
-
-      this._suppressViewportUntil = performance.now() + durationMs + 40;
-      const startTime = performance.now();
-      const easeOutCubic = (value) => 1 - Math.pow(1 - value, 3);
-
-      const tick = (now) => {
-        const progress = Math.min((now - startTime) / durationMs, 1);
-        const eased = easeOutCubic(progress);
-        window.scrollTo(0, startTop + delta * eased);
-        if (progress < 1) requestAnimationFrame(tick);
-      };
-
-      requestAnimationFrame(tick);
     }
 
-    history.replaceState(null, "", `#${id}`);
-  }
+    _indexById(id) {
+        const idx = this._flatNodes.findIndex((node) => node.id === id);
+        return idx === -1 ? 0 : idx;
+    }
 
-  _indexById(id) {
-    const idx = this._flatNodes.findIndex((node) => node.id === id);
-    return idx === -1 ? 0 : idx;
-  }
+    _eventLink(event) {
+        const target =
+            event.target instanceof Element
+                ? event.target
+                : event.target?.parentElement;
+        return target?.closest('a[href^="#"]') ?? null;
+    }
 
-  _escapeHtml(value) {
-    return String(value)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;");
-  }
+    _escapeHtml(value) {
+        return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;");
+    }
 }
 
 if (!customElements.get("documentation-outline")) {
-  customElements.define("documentation-outline", DocumentationOutline);
+    customElements.define("documentation-outline", DocumentationOutline);
 }

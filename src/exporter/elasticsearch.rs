@@ -61,7 +61,9 @@ impl RetryConfig {
 }
 
 fn backoff_ms(attempt: u16, config: &RetryConfig) -> u64 {
-    let base = config.initial_ms.saturating_mul(1u64 << u32::from(attempt).min(30));
+    let base = config
+        .initial_ms
+        .saturating_mul(1u64 << u32::from(attempt).min(30));
     let jitter = 0.75 + rand::random::<f64>() * 0.5;
     let jittered = (base as f64 * jitter) as u64;
     jittered.min(config.max_ms)
@@ -221,7 +223,11 @@ impl Export for ElasticsearchExporter {
         for attempt in 0..=config.max_retries {
             let batch: Vec<BulkOperation<Arc<Value>>> = values
                 .iter()
-                .map(|doc| BulkOperation::create(Arc::clone(doc)).pipeline("esdiag").into())
+                .map(|doc| {
+                    BulkOperation::create(Arc::clone(doc))
+                        .pipeline("esdiag")
+                        .into()
+                })
                 .collect();
 
             let response = timeout(
@@ -379,7 +385,11 @@ async fn parse_response(
         .json()
         .await
         .map_err(|e| ExporterError::Fatal(e.into()))?;
-    let mut items: Vec<Value> = body.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut items: Vec<Value> = body
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let item_count = items.len();
 
     let error_items: Vec<Value> = items
@@ -416,10 +426,30 @@ async fn parse_response(
             doc_count,
             error_count
         ),
-        400 => return Err(ExporterError::Fatal(eyre!("{} - http 400 bad request", index))),
-        401 => return Err(ExporterError::Fatal(eyre!("{} - http 401 unauthorized", index))),
-        403 => return Err(ExporterError::Fatal(eyre!("{} - http 403 forbidden", index))),
-        404 => return Err(ExporterError::Fatal(eyre!("{} - http 404 not found", index))),
+        400 => {
+            return Err(ExporterError::Fatal(eyre!(
+                "{} - http 400 bad request",
+                index
+            )));
+        }
+        401 => {
+            return Err(ExporterError::Fatal(eyre!(
+                "{} - http 401 unauthorized",
+                index
+            )));
+        }
+        403 => {
+            return Err(ExporterError::Fatal(eyre!(
+                "{} - http 403 forbidden",
+                index
+            )));
+        }
+        404 => {
+            return Err(ExporterError::Fatal(eyre!(
+                "{} - http 404 not found",
+                index
+            )));
+        }
         413 => {
             return Err(ExporterError::Fatal(eyre!(
                 "{} - http 413 request too large",
@@ -466,8 +496,9 @@ mod tests {
     use super::*;
     use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
     use serde_json::json;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
 
     /// Spin up a minimal Axum server that returns `status_sequence` in order,
     /// falling back to 200 once the sequence is exhausted.
@@ -480,7 +511,7 @@ mod tests {
 
         async fn bulk_handler(State(state): State<MockState>) -> impl IntoResponse {
             let idx = {
-                let mut c = state.call_count.lock().unwrap();
+                let mut c = state.call_count.lock().await;
                 let v = *c;
                 *c += 1;
                 v
@@ -504,10 +535,7 @@ mod tests {
                     "error": {"type": "error", "reason": "error"}
                 }),
             };
-            (
-                StatusCode::from_u16(status).unwrap(),
-                axum::Json(body),
-            )
+            (StatusCode::from_u16(status).unwrap(), axum::Json(body))
         }
 
         let call_count = Arc::new(Mutex::new(0usize));
@@ -531,7 +559,7 @@ mod tests {
         (url, call_count)
     }
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
     struct RetryEnvGuard {
         prev_max: Option<String>,
@@ -549,7 +577,11 @@ mod tests {
                 std::env::set_var("ESDIAG_EXPORT_RETRY_INITIAL_MS", "1");
                 std::env::set_var("ESDIAG_EXPORT_RETRY_MAX_MS", "5");
             }
-            Self { prev_max, prev_initial, prev_max_ms }
+            Self {
+                prev_max,
+                prev_initial,
+                prev_max_ms,
+            }
         }
     }
 
@@ -574,7 +606,7 @@ mod tests {
 
     #[tokio::test]
     async fn retries_on_429_then_succeeds() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().await;
         let _env = RetryEnvGuard::set("5");
         let (url, call_count) = mock_bulk_server(vec![429, 429, 200]).await;
         let exporter = ElasticsearchExporter::try_new(url, Auth::None).unwrap();
@@ -587,33 +619,31 @@ mod tests {
         let br = result.unwrap();
         assert_eq!(br.retries, 2, "expected 2 retries");
         assert_eq!(br.errors, 0);
-        assert_eq!(*call_count.lock().unwrap(), 3, "expected 3 total attempts");
+        assert_eq!(*call_count.lock().await, 3, "expected 3 total attempts");
     }
 
     #[tokio::test]
     async fn exhausted_retries_returns_ok_with_errors() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().await;
         // max_retries=2 → 1 initial + 2 retries = 3 total, all 429
         let _env = RetryEnvGuard::set("2");
         let (url, call_count) = mock_bulk_server(vec![429, 429, 429]).await;
         let exporter = ElasticsearchExporter::try_new(url, Auth::None).unwrap();
 
         let docs = vec![json!({"a": 1}), json!({"b": 2})];
-        let result = exporter
-            .batch_send("test-index".to_string(), docs)
-            .await;
+        let result = exporter.batch_send("test-index".to_string(), docs).await;
 
         assert!(result.is_ok(), "exhaustion should return Ok, not Err");
         let br = result.unwrap();
         assert_eq!(br.errors, 2, "all docs should be counted as errors");
         assert_eq!(br.retries, 2);
         assert_eq!(br.status_code, 429);
-        assert_eq!(*call_count.lock().unwrap(), 3, "expected 3 total attempts");
+        assert_eq!(*call_count.lock().await, 3, "expected 3 total attempts");
     }
 
     #[tokio::test]
     async fn fatal_status_not_retried() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().await;
         let _env = RetryEnvGuard::set("5");
         let (url, call_count) = mock_bulk_server(vec![400]).await;
         let exporter = ElasticsearchExporter::try_new(url, Auth::None).unwrap();
@@ -623,6 +653,6 @@ mod tests {
             .await;
 
         assert!(result.is_err(), "expected Err for 400");
-        assert_eq!(*call_count.lock().unwrap(), 1, "400 must not be retried");
+        assert_eq!(*call_count.lock().await, 1, "400 must not be retried");
     }
 }
