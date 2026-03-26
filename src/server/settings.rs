@@ -456,6 +456,7 @@ mod tests {
         hosts.insert(
             "saved-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Send],
                 viewer: None,
@@ -491,6 +492,7 @@ mod tests {
         hosts.insert(
             "collector-only".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Collect],
                 viewer: None,

@@ -129,8 +129,21 @@ async fn start_mock_elasticsearch() -> (String, tokio::sync::oneshot::Sender<()>
             .expect("serve mock elasticsearch");
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    (format!("http://{addr}"), shutdown_tx)
+    let url = format!("http://{addr}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(response) = reqwest::get(&url).await {
+            if response.status().is_success() {
+                break;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "mock elasticsearch did not become ready in time"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    (url, shutdown_tx)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

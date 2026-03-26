@@ -140,7 +140,7 @@ Options:
       --roles <ROLES>
           Comma-separated host roles
   -n, --nosave
-          Don't save the host configuration on succesful connection
+          Don't save the host configuration on successful connection
   -h, --help
           Print help
 ```

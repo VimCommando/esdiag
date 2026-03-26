@@ -225,6 +225,7 @@ impl KnownHostBuilder {
                 viewer: self.viewer,
             }),
             (None, None, None, None) => Ok(KnownHost::NoAuth {
+                accept_invalid_certs: self.accept_invalid_certs,
                 app: self.product,
                 roles: self.roles,
                 url: self.url,
@@ -349,6 +350,8 @@ pub enum KnownHost {
     /// A host with no authentication
     #[serde(alias = "None")]
     NoAuth {
+        #[serde(default)]
+        accept_invalid_certs: bool,
         app: Product,
         #[serde(
             default = "default_collect_roles",
@@ -408,7 +411,10 @@ impl KnownHost {
                 accept_invalid_certs,
                 ..
             } => *accept_invalid_certs,
-            Self::NoAuth { .. } => false,
+            Self::NoAuth {
+                accept_invalid_certs,
+                ..
+            } => *accept_invalid_certs,
         }
     }
 
@@ -712,6 +718,7 @@ impl KnownHost {
 
     pub fn from_url(url: &Url) -> Self {
         KnownHost::NoAuth {
+            accept_invalid_certs: false,
             app: Product::Elasticsearch,
             roles: default_collect_roles(),
             viewer: None,
@@ -997,6 +1004,7 @@ mod tests {
         hosts.insert(
             "default-role".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: Vec::new(),
                 viewer: None,
@@ -1018,6 +1026,7 @@ mod tests {
         hosts.insert(
             "kb-invalid-send".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::Send],
                 viewer: None,
@@ -1037,6 +1046,7 @@ mod tests {
         hosts.insert(
             "collect-only".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Collect],
                 viewer: None,
@@ -1046,6 +1056,7 @@ mod tests {
         hosts.insert(
             "collect-send".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Collect, HostRole::Send],
                 viewer: None,
@@ -1055,6 +1066,7 @@ mod tests {
         hosts.insert(
             "view-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::View],
                 viewer: None,
@@ -1083,6 +1095,7 @@ mod tests {
         hosts.insert(
             "source".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Collect],
                 viewer: Some("viewer-host".to_string()),
@@ -1092,6 +1105,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::View],
                 viewer: None,
@@ -1110,6 +1124,7 @@ mod tests {
         hosts.insert(
             "source".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Send],
                 viewer: Some("viewer-host".to_string()),
@@ -1119,6 +1134,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::Collect],
                 viewer: None,
@@ -1137,6 +1153,7 @@ mod tests {
         hosts.insert(
             "source".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Send],
                 viewer: Some("viewer-host".to_string()),
@@ -1146,6 +1163,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::View],
                 viewer: None,
@@ -1524,6 +1542,7 @@ mod tests {
         hosts.insert(
             "prod-es".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Collect],
                 viewer: None,

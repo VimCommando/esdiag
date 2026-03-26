@@ -65,7 +65,7 @@ pub struct Processing {
     sub_processors: FuturesUnordered<JoinHandle<()>>,
 }
 
-/// The `Completed` state represents a succesfull processing job
+/// The `Completed` state represents a successful processing job
 pub struct Completed {
     pub report: DiagnosticReport,
     pub runtime: u128,

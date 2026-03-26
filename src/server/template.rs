@@ -447,6 +447,7 @@ mod tests {
         hosts.insert(
             "localhost".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Send],
                 viewer: None,
@@ -500,6 +501,7 @@ mod tests {
         let send_hosts = vec!["localhost".to_string(), "secure-prod".to_string()];
 
         let secure_exporter = Exporter::try_from(KnownHost::NoAuth {
+            accept_invalid_certs: false,
             app: Product::Elasticsearch,
             roles: vec![HostRole::Send],
             viewer: None,

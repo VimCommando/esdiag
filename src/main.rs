@@ -164,7 +164,7 @@ enum Commands {
         roles: Option<Vec<HostRole>>,
         /// Save the host configuration
         #[arg(
-            help = "Don't save the host configuration on succesful connection",
+            help = "Don't save the host configuration on successful connection",
             long,
             short,
             conflicts_with = "delete"
@@ -1185,6 +1185,7 @@ mod tests {
     #[test]
     fn standard_known_hosts_validate_via_client() {
         let uri = Uri::KnownHost(KnownHost::NoAuth {
+            accept_invalid_certs: false,
             app: Product::Elasticsearch,
             roles: vec![HostRole::Collect],
             viewer: None,
