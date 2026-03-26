@@ -974,7 +974,7 @@ impl From<KnownHost> for Url {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{get_secret, upsert_secret_auth};
+    use crate::data::{get_secret, upsert_secret_auth, write_unlock_lease};
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -1237,6 +1237,45 @@ mod tests {
         unsafe {
             std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
         }
+    }
+
+    #[test]
+    fn explicit_secret_uses_unlock_lease_when_env_password_is_absent() {
+        let _guard = env_lock().lock().expect("env lock");
+        let (_tmp, _hosts, _keystore) = setup_env();
+        upsert_secret_auth(
+            "lease-secret",
+            SecretAuth::ApiKey {
+                apikey: "unlock-key".to_string(),
+            },
+            "pw",
+        )
+        .expect("upsert secret");
+        write_unlock_lease("pw", std::time::Duration::from_secs(300))
+            .expect("write unlock lease");
+        unsafe {
+            std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
+        }
+
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "prod-es".to_string(),
+            KnownHost::Basic {
+                accept_invalid_certs: false,
+                app: Product::Elasticsearch,
+                password: None,
+                roles: default_collect_roles(),
+                secret: Some("lease-secret".to_string()),
+                viewer: None,
+                url: Url::parse("http://localhost:9200").expect("url"),
+                username: None,
+            },
+        );
+        write_hosts(hosts);
+
+        let host = KnownHost::get_known(&"prod-es".to_string()).expect("host");
+        let auth = host.get_auth().expect("auth from unlock lease");
+        assert!(matches!(auth, Auth::Apikey(key) if key == "unlock-key"));
     }
 
     #[test]
