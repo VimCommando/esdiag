@@ -7,7 +7,7 @@ use super::{
     WorkflowJob, job_feed_event, signal_event, template, template_event,
 };
 use crate::{
-    data::{HostRole, Uri},
+    data::{HostRole, Product, Uri},
     exporter::Exporter,
     processor::{
         Collector, Identifiers, Processor,
@@ -582,7 +582,9 @@ async fn select_processed_exporter(state: Arc<ServerState>, signals: &Signals) -
             if target.is_empty() || target == configured_target {
                 Ok(configured)
             } else {
-                Exporter::try_from(Uri::try_from(target.to_string())?)
+                let uri = Uri::try_from(target.to_string())?;
+                validate_remote_send_uri(&uri)?;
+                Exporter::try_from(uri)
             }
         }
         SendMode::Local => {
@@ -683,6 +685,22 @@ fn validate_local_send_uri(uri: &Uri) -> Result<()> {
             "Local processed send must target a localhost known host or a local directory"
         )),
     }
+}
+
+fn validate_remote_send_uri(uri: &Uri) -> Result<()> {
+    if let Uri::KnownHost(host) = uri {
+        if !host.has_role(HostRole::Send) {
+            return Err(eyre!(
+                "Remote known-host send targets must have the `send` role"
+            ));
+        }
+        if host.app() != &Product::Elasticsearch {
+            return Err(eyre!(
+                "Remote known-host send targets must be Elasticsearch hosts"
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn collect_remote_archive(
@@ -907,10 +925,11 @@ async fn cleanup_local_path(path: &Path) {
 mod tests {
     use super::{
         download_service_link_to_path, select_processed_exporter, validate_local_send_uri,
+        validate_remote_send_uri,
         validate_workflow_request,
     };
     use crate::{
-        data::{HostRole, KnownHostBuilder, Uri},
+        data::{HostRole, KnownHostBuilder, Product, Uri},
         exporter::Exporter,
         server::{
             CollectSource, KeystoreSessionState, ProcessMode, RetainedBundle, RuntimeMode,
@@ -1054,6 +1073,18 @@ mod tests {
             .expect("select exporter");
         assert_eq!(selected.target_uri(), configured.target_uri());
         assert_eq!(selected.to_string(), configured.to_string());
+    }
+
+    #[tokio::test]
+    async fn remote_send_validation_rejects_collect_only_known_host() {
+        let host = KnownHostBuilder::new(Url::parse("https://example.com:9200").unwrap())
+            .product(Product::Elasticsearch)
+            .roles(vec![HostRole::Collect])
+            .build()
+            .unwrap();
+
+        let uri = Uri::try_from(host).expect("known-host uri");
+        assert!(validate_remote_send_uri(&uri).is_err());
     }
 
     #[tokio::test]

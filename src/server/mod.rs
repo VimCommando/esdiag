@@ -453,8 +453,14 @@ fn now_epoch_seconds() -> i64 {
 }
 
 impl ServerState {
-    fn retained_bundle_signal(token: &str, status: &str, error: Option<&str>) -> ServerEvent {
-        signal_event(
+    fn retained_bundle_signal(
+        owner: &str,
+        token: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> ServerEvent {
+        targeted_signal_event(
+            owner,
             serde_json::json!({
                 "archive": {
                     "ready_token": token,
@@ -784,6 +790,7 @@ impl ServerState {
         cleanup_path: Option<PathBuf>,
         ttl: Duration,
     ) -> String {
+        let owner_event = owner.clone();
         let token = token
             .filter(|value| !value.trim().is_empty())
             .map(str::to_string)
@@ -801,7 +808,12 @@ impl ServerState {
                 expires_at_epoch,
             },
         );
-        self.publish_event(Self::retained_bundle_signal(&token, "ready", None));
+        self.publish_event(Self::retained_bundle_signal(
+            &owner_event,
+            &token,
+            "ready",
+            None,
+        ));
         token
     }
 
@@ -853,7 +865,7 @@ impl ServerState {
         bundle.error = Some(error.clone());
         bundle.expires_at_epoch = expires_at_epoch;
         drop(bundles);
-        self.publish_event(Self::retained_bundle_signal(token, "error", Some(&error)));
+        self.publish_event(Self::retained_bundle_signal(owner, token, "error", Some(&error)));
     }
 
     pub async fn retained_bundle(&self, token: &str) -> Option<RetainedBundle> {
@@ -1470,6 +1482,7 @@ pub fn patch_job_feed(template: impl Template) -> Result<Event, Infallible> {
 #[derive(Debug, Clone)]
 pub enum ServerEvent {
     Signals(String),
+    TargetedSignals { user: String, payload: String },
     Template(String),
     JobFeed(String),
     AppendBody(String),
@@ -1479,6 +1492,13 @@ pub enum ServerEvent {
 
 pub fn signal_event(signals: impl Into<String>) -> ServerEvent {
     ServerEvent::Signals(signals.into())
+}
+
+pub fn targeted_signal_event(user: impl Into<String>, signals: impl Into<String>) -> ServerEvent {
+    ServerEvent::TargetedSignals {
+        user: user.into(),
+        payload: signals.into(),
+    }
 }
 
 pub fn template_event(template: impl Template) -> ServerEvent {
@@ -1513,6 +1533,9 @@ pub fn execute_script_event(script: impl Into<String>) -> ServerEvent {
 pub fn server_event_to_sse(event: ServerEvent) -> Result<Event, Infallible> {
     let sse_event = match event {
         ServerEvent::Signals(payload) => PatchSignals::new(payload).write_as_axum_sse_event(),
+        ServerEvent::TargetedSignals { payload, .. } => {
+            PatchSignals::new(payload).write_as_axum_sse_event()
+        }
         ServerEvent::Template(html) => PatchElements::new(html).write_as_axum_sse_event(),
         ServerEvent::JobFeed(html) => PatchElements::new(html)
             .selector("#job-feed")
@@ -1547,16 +1570,17 @@ pub fn receiver_stream(
 fn broadcast_receiver_stream(
     rx: broadcast::Receiver<ServerEvent>,
     initial: Option<ServerEvent>,
+    user: String,
     shutdown: watch::Receiver<bool>,
 ) -> impl futures::Stream<Item = Result<Event, Infallible>> {
     stream::unfold(
-        (rx, initial, shutdown),
-        |(mut rx, mut initial, mut shutdown)| async move {
+        (rx, initial, user, shutdown),
+        |(mut rx, mut initial, user, mut shutdown)| async move {
             if *shutdown.borrow() {
                 return None;
             }
             if let Some(event) = initial.take() {
-                return Some((server_event_to_sse(event), (rx, initial, shutdown)));
+                return Some((server_event_to_sse(event), (rx, initial, user, shutdown)));
             }
             loop {
                 tokio::select! {
@@ -1567,7 +1591,12 @@ fn broadcast_receiver_stream(
                     }
                     recv = rx.recv() => {
                         match recv {
-                            Ok(event) => return Some((server_event_to_sse(event), (rx, initial, shutdown))),
+                            Ok(event) => {
+                                if !event_visible_to_user(&event, &user) {
+                                    continue;
+                                }
+                                return Some((server_event_to_sse(event), (rx, initial, user, shutdown)));
+                            }
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => return None,
                         }
@@ -1580,15 +1609,29 @@ fn broadcast_receiver_stream(
 
 async fn events(
     axum::extract::State(state): axum::extract::State<Arc<ServerState>>,
+    headers: HeaderMap,
 ) -> impl axum::response::IntoResponse {
     tracing::debug!("Started events stream");
+    let (_, request_user) = state
+        .resolve_user_email(&headers)
+        .unwrap_or_else(|_| (false, "Anonymous".to_string()));
     let initial_stats = state.get_stats().await;
     let initial = signal_event(format!(r#"{{"stats":{}}}"#, initial_stats));
     Sse::new(broadcast_receiver_stream(
         state.event_sender().subscribe(),
         Some(initial),
+        request_user,
         state.shutdown_receiver(),
     ))
+}
+
+fn event_visible_to_user(event: &ServerEvent, user: &str) -> bool {
+    match event {
+        ServerEvent::TargetedSignals {
+            user: target_user, ..
+        } => target_user == user,
+        _ => true,
+    }
 }
 
 fn parse_cookie(headers: &HeaderMap, key: &str) -> Option<String> {
@@ -1649,7 +1692,8 @@ async fn add_client_hint_headers(mut response: Response) -> Response {
 mod tests {
     use super::{
         KeystoreSessionState, RuntimeMode, RuntimeModePolicy, Server, ServerEvent, ServerState,
-        Signals, Stats, receiver_stream, test_server_state,
+        Signals, Stats, event_visible_to_user, receiver_stream, signal_event,
+        targeted_signal_event, test_server_state,
     };
     use crate::exporter::Exporter;
     use axum::http::HeaderMap;
@@ -1747,6 +1791,22 @@ mod tests {
 
         let events: Vec<_> = receiver_stream(rx).collect().await;
         assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn targeted_events_only_reach_matching_user() {
+        assert!(event_visible_to_user(
+            &targeted_signal_event("alice@example.com", r#"{"archive":{"status":"ready"}}"#),
+            "alice@example.com"
+        ));
+        assert!(!event_visible_to_user(
+            &targeted_signal_event("alice@example.com", r#"{"archive":{"status":"ready"}}"#),
+            "bob@example.com"
+        ));
+        assert!(event_visible_to_user(
+            &signal_event(r#"{"stats":{"jobs":{"total":1}}}"#),
+            "bob@example.com"
+        ));
     }
 
     #[tokio::test]
