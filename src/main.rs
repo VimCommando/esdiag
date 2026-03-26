@@ -307,7 +307,7 @@ async fn async_main() -> Result<()> {
     } else {
         EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new(LOG_LEVEL))
     };
-    fmt().with_env_filter(filter).init();
+    init_tracing(filter);
 
     std::panic::set_hook(Box::new(|panic| {
         // Log any panics as errors
@@ -326,6 +326,19 @@ async fn async_main() -> Result<()> {
             tracing::error!("{}", e);
             Err(eyre!(e))
         }
+    }
+}
+
+fn init_tracing(filter: EnvFilter) {
+    // Bridge `log` records from dependencies when available, but tolerate hosts that
+    // already installed a global logger before invoking this binary.
+    if let Err(err) = tracing_log::LogTracer::init() {
+        eprintln!("tracing log bridge already initialized: {err}");
+    }
+
+    let subscriber = fmt().with_env_filter(filter).finish();
+    if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("tracing subscriber already initialized: {err}");
     }
 }
 

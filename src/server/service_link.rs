@@ -142,6 +142,8 @@ pub(super) async fn run_service_link_form(
                 }),
             )
             .await;
+            send_event(&tx, signal_event(r#"{"loading":false}"#)).await;
+            return;
         }
         if url.set_password(Some(&service_link.token)).is_err() {
             state
@@ -161,6 +163,8 @@ pub(super) async fn run_service_link_form(
                 }),
             )
             .await;
+            send_event(&tx, signal_event(r#"{"loading":false}"#)).await;
+            return;
         }
         Uri::ServiceLink(url)
     } else {
