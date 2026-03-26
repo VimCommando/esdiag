@@ -4,7 +4,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use clap::{Parser, Subcommand, builder::styling};
+use clap::{Parser, Subcommand, builder::BoolishValueParser, builder::styling};
 #[cfg(feature = "server")]
 use esdiag::server::{RuntimeMode, Server};
 #[cfg(feature = "setup")]
@@ -12,8 +12,8 @@ use esdiag::setup;
 use esdiag::{
     client::Client,
     data::{
-        HostRole, KnownHost, KnownHostBuilder, Product, SecretAuth, Uri, add_secret,
-        get_password_for_secret_commands, remove_secret, resolve_secret_auth,
+        HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, Product, SecretAuth, Settings,
+        Uri, add_secret, get_password_for_secret_commands, remove_secret, resolve_secret_auth,
     },
     env::LOG_LEVEL,
     exporter::Exporter,
@@ -126,43 +126,48 @@ enum Commands {
         #[arg(help = "A name to identify this host")]
         name: String,
         /// Application of this host (elasticsearch, kibana, logstash, etc.)
-        #[arg(help = "Application of this host (elasticsearch, kibana, logstash, etc.)")]
+        #[arg(help = "Application of this host (elasticsearch, kibana, logstash, etc.)", conflicts_with = "delete")]
         app: Option<Product>,
         /// A host URL to connect to
-        #[arg(help = "A host URL to connect to")]
+        #[arg(help = "A host URL to connect to", conflicts_with = "delete")]
         url: Option<Url>,
         /// Accept invalid certificates
-        #[arg(help = "Accept invalid certificates", long)]
-        accept_invalid_certs: bool,
+        #[arg(help = "Accept invalid certificates", long, value_parser = BoolishValueParser::new(), conflicts_with = "delete")]
+        accept_invalid_certs: Option<bool>,
+        /// Delete the saved host configuration
+        #[arg(help = "Delete the saved host configuration", long, conflicts_with_all = &["app", "url", "accept_invalid_certs", "apikey", "username", "password", "secret", "roles", "nosave"])]
+        delete: bool,
         /// ApiKey for authentication
-        #[arg(help = "ApiKey, passed as http header ", long, short, conflicts_with_all = &["username", "password"])]
+        #[arg(help = "ApiKey, passed as http header ", long, short, conflicts_with_all = &["username", "password", "delete"])]
         apikey: Option<String>,
         /// Username for authentication
         #[arg(
             help = "Username for authentication",
             long = "user",
             visible_alias = "username",
-            short
+            short,
+            conflicts_with = "delete"
         )]
         username: Option<String>,
         /// Password for authentication
-        #[arg(help = "Password for authentication", long, short)]
+        #[arg(help = "Password for authentication", long, short, conflicts_with = "delete")]
         password: Option<String>,
         /// Secret identifier in the encrypted keystore
         #[arg(
             help = "Secret identifier in the encrypted keystore",
             long,
-            conflicts_with_all = &["apikey", "username", "password"]
+            conflicts_with_all = &["apikey", "username", "password", "delete"]
         )]
         secret: Option<String>,
         /// Comma-separated host roles (collect,send,view)
-        #[arg(help = "Comma-separated host roles", long, value_delimiter = ',')]
+        #[arg(help = "Comma-separated host roles", long, value_delimiter = ',', conflicts_with = "delete")]
         roles: Option<Vec<HostRole>>,
         /// Save the host configuration
         #[arg(
             help = "Don't save the host configuration on succesful connection",
             long,
-            short
+            short,
+            conflicts_with = "delete"
         )]
         nosave: bool,
     },
@@ -454,6 +459,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 app,
                 url,
                 accept_invalid_certs,
+                delete,
                 apikey,
                 username,
                 password,
@@ -462,26 +468,51 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 nosave,
             } => {
                 tracing::info!("Configuring host {name}");
-                let host = if let (Some(app), Some(url)) = (app, url) {
-                    let secret_auth = resolve_host_secret_auth(secret.as_deref())?;
-                    let mut builder = KnownHostBuilder::new(url)
-                        .product(app)
-                        .accept_invalid_certs(accept_invalid_certs)
-                        .apikey(apikey)
-                        .username(username)
-                        .password(password)
-                        .secret(secret);
-                    if let Some(roles) = roles {
-                        builder = builder.roles(roles);
+                let update = build_host_cli_update(
+                    accept_invalid_certs,
+                    apikey,
+                    username,
+                    password,
+                    secret,
+                    roles,
+                );
+                let mode = resolve_host_command_mode(delete, &app, &url, &update)?;
+
+                if mode == HostCommandMode::Delete {
+                    let hostfile = delete_host_from_cli(&name)?;
+                    tracing::info!("Host {name} successfully deleted from {hostfile}");
+                    return Ok("host");
+                }
+
+                let host = match mode {
+                    HostCommandMode::CreateOrReplace => {
+                        let secret_auth = resolve_host_secret_auth(update.secret.as_deref())?;
+                        build_host_from_definition(
+                            app.expect("app required for create-or-replace"),
+                            url.expect("url required for create-or-replace"),
+                            &update,
+                            secret_auth,
+                        )?
                     }
-                    match secret_auth {
-                        Some(secret_auth) => builder.build_with_secret_auth(secret_auth)?,
-                        None => builder.build()?,
+                    HostCommandMode::IncrementalUpdate => {
+                        let existing = KnownHost::get_known(&name).ok_or_else(|| {
+                            eyre!(
+                                "Host {name} not found, must include `url` and `app` to setup a new host."
+                            )
+                        })?;
+                        let secret_auth = if update.secret.is_some() {
+                            resolve_host_secret_auth(update.secret.as_deref())?
+                        } else {
+                            None
+                        };
+                        existing.merge_cli_update(&update, secret_auth)?
                     }
-                } else {
-                    KnownHost::get_known(&name).ok_or(eyre!(
-                        "Host {name} not found, must include `url` and `app` to setup a new host."
-                    ))?
+                    HostCommandMode::ValidateOnly => KnownHost::get_known(&name).ok_or_else(|| {
+                        eyre!(
+                            "Host {name} not found, must include `url` and `app` to setup a new host."
+                        )
+                    })?,
+                    HostCommandMode::Delete => unreachable!("delete handled earlier"),
                 };
 
                 let uri = Uri::try_from(host.clone())?;
@@ -797,6 +828,98 @@ fn expected_secret_auth(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostCommandMode {
+    CreateOrReplace,
+    Delete,
+    IncrementalUpdate,
+    ValidateOnly,
+}
+
+fn build_host_cli_update(
+    accept_invalid_certs: Option<bool>,
+    apikey: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    secret: Option<String>,
+    roles: Option<Vec<HostRole>>,
+) -> KnownHostCliUpdate {
+    KnownHostCliUpdate {
+        accept_invalid_certs,
+        apikey,
+        password,
+        roles,
+        secret,
+        username,
+    }
+}
+
+fn resolve_host_command_mode(
+    delete: bool,
+    app: &Option<Product>,
+    url: &Option<Url>,
+    update: &KnownHostCliUpdate,
+) -> Result<HostCommandMode> {
+    if app.is_some() ^ url.is_some() {
+        return Err(eyre!(
+            "Host definition requires both `app` and `url` when creating or replacing a host."
+        ));
+    }
+
+    if delete {
+        return Ok(HostCommandMode::Delete);
+    }
+
+    if app.is_some() && url.is_some() {
+        return Ok(HostCommandMode::CreateOrReplace);
+    }
+
+    if update.is_empty() {
+        Ok(HostCommandMode::ValidateOnly)
+    } else {
+        Ok(HostCommandMode::IncrementalUpdate)
+    }
+}
+
+fn build_host_from_definition(
+    app: Product,
+    url: Url,
+    update: &KnownHostCliUpdate,
+    secret_auth: Option<SecretAuth>,
+) -> Result<KnownHost> {
+    let mut builder = KnownHostBuilder::new(url)
+        .product(app)
+        .accept_invalid_certs(update.accept_invalid_certs.unwrap_or(false))
+        .apikey(update.apikey.clone())
+        .username(update.username.clone())
+        .password(update.password.clone())
+        .secret(update.secret.clone());
+    if let Some(roles) = update.roles.clone() {
+        builder = builder.roles(roles);
+    }
+    match secret_auth {
+        Some(secret_auth) => builder.build_with_secret_auth(secret_auth),
+        None => builder.build(),
+    }
+}
+
+fn cleanup_settings_after_host_delete(name: &str) -> Result<()> {
+    let mut settings = Settings::load()?;
+    if settings.active_target.as_deref() != Some(name) {
+        return Ok(());
+    }
+
+    let hosts = KnownHost::parse_hosts_yml()?;
+    settings.active_target = hosts.keys().next().cloned();
+    settings.save()
+}
+
+fn delete_host_from_cli(name: &str) -> Result<String> {
+    let path = KnownHost::remove_saved(name)?;
+    cleanup_settings_after_host_delete(name)?;
+    Ok(path)
+}
+
 fn ensure_host_role(host: &KnownHost, role: HostRole, context: &str) -> Result<()> {
     if host.has_role(role.clone()) {
         Ok(())
@@ -971,6 +1094,56 @@ mod tests {
             }
             _ => panic!("expected host command"),
         }
+    }
+
+    #[test]
+    fn host_accept_invalid_certs_cli_parses_explicit_bool_values() {
+        let cli_true = Cli::parse_from([
+            "esdiag",
+            "host",
+            "prod-es",
+            "--accept-invalid-certs",
+            "true",
+        ]);
+        match cli_true.command.expect("command") {
+            Commands::Host {
+                accept_invalid_certs,
+                ..
+            } => {
+                assert_eq!(accept_invalid_certs, Some(true));
+            }
+            _ => panic!("expected host command"),
+        }
+
+        let cli_false = Cli::parse_from([
+            "esdiag",
+            "host",
+            "prod-es",
+            "--accept-invalid-certs",
+            "false",
+        ]);
+        match cli_false.command.expect("command") {
+            Commands::Host {
+                accept_invalid_certs,
+                ..
+            } => {
+                assert_eq!(accept_invalid_certs, Some(false));
+            }
+            _ => panic!("expected host command"),
+        }
+    }
+
+    #[test]
+    fn host_delete_conflicts_with_update_fields() {
+        let result = Cli::try_parse_from([
+            "esdiag",
+            "host",
+            "prod-es",
+            "--delete",
+            "--secret",
+            "rotated",
+        ]);
+        assert!(result.is_err(), "delete should conflict with update fields");
     }
 
     #[test]

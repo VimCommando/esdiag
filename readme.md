@@ -185,14 +185,15 @@ Arguments:
   [URL]   A host URL to connect to
 
 Options:
-      --accept-invalid-certs  Accept invalid certificates
-  -a, --apikey <APIKEY>       ApiKey, passed as http header
-  -u, --user <USERNAME>       Username for authentication (alias: --username)
-  -p, --password <PASSWORD>   Password for authentication
-      --secret <SECRET>       Secret identifier in the encrypted keystore
-      --roles <ROLES>         Comma-separated host roles (collect,send,view)
-  -n, --nosave                Don't save the host configuration on succesful connection
-  -h, --help                  Print help
+      --accept-invalid-certs <ACCEPT_INVALID_CERTS>  Accept invalid certificates
+      --delete                                     Delete the saved host configuration
+  -a, --apikey <APIKEY>                            ApiKey, passed as http header
+  -u, --user <USERNAME>                            Username for authentication (alias: --username)
+  -p, --password <PASSWORD>                        Password for authentication
+      --secret <SECRET>                            Secret identifier in the encrypted keystore
+      --roles <ROLES>                              Comma-separated host roles (collect,send,view)
+  -n, --nosave                                     Don't save the host configuration on succesful connection
+  -h, --help                                       Print help
 ```
 
 Examples:
@@ -203,6 +204,12 @@ esdiag host prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
 
 # Host with explicit roles for workflow filtering
 esdiag host prod-es elasticsearch http://localhost:9200 --roles collect,send
+
+# Update only the saved certificate setting in place
+esdiag host prod-es --accept-invalid-certs false
+
+# Delete a saved host
+esdiag host prod-es --delete
 ```
 
 #### Keystore

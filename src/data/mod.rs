@@ -22,7 +22,7 @@ pub use keystore::{
     list_secret_names, remove_secret, resolve_secret_auth, upsert_secret_auth,
     with_scoped_keystore_password,
 };
-pub use known_host::{ElasticCloud, HostRole, KnownHost, KnownHostBuilder};
+pub use known_host::{ElasticCloud, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate};
 pub use product::Product;
 pub use settings::Settings;
 pub use uri::Uri;
