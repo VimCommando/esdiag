@@ -110,7 +110,7 @@ pub(super) async fn run_service_link_form(
             .await;
         send_event(
             &tx,
-            template_event(template::JobFailed {
+            job_feed_event(template::JobFailed {
                 job_id: new_job_id(),
                 error: &err,
                 source: "output target",
