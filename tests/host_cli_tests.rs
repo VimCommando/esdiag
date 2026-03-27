@@ -132,10 +132,10 @@ async fn start_mock_elasticsearch() -> (String, tokio::sync::oneshot::Sender<()>
     let url = format!("http://{addr}");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(response) = reqwest::get(&url).await {
-            if response.status().is_success() {
-                break;
-            }
+        if let Ok(response) = reqwest::get(&url).await
+            && response.status().is_success()
+        {
+            break;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
