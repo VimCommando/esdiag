@@ -170,7 +170,7 @@ Options:
 
 #### Host
 
-The `esdiag host` command allows you configure and test authentication information. On a successful connection test, it writes the configuration to your `~/.esdiag/hosts.yml` file for easy re-use.
+The `esdiag host` command allows you to configure and test authentication information. On a successful connection test, it writes the configuration to your `~/.esdiag/hosts.yml` file for easy re-use.
 
 Alternatively you can use a `.env` file and set `ESDIAG_OUTPUT_*` values; see `example.env`.
 
