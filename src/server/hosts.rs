@@ -1268,6 +1268,7 @@ async fn apply_upsert_host(
     let cloud_id = ElasticCloud::try_from(&url).ok();
     let host = match auth.as_str() {
         "none" => KnownHost::NoAuth {
+            accept_invalid_certs,
             app,
             roles,
             viewer,
@@ -1348,6 +1349,7 @@ async fn apply_upsert_cluster(
     let kibana_name = format!("{name}-kb");
     let elasticsearch_host = match auth.as_str() {
         "none" => KnownHost::NoAuth {
+            accept_invalid_certs,
             app: Product::Elasticsearch,
             roles: vec![HostRole::Send],
             viewer: Some(kibana_name.clone()),
@@ -1377,6 +1379,7 @@ async fn apply_upsert_cluster(
     };
     let kibana_host = match auth.as_str() {
         "none" => KnownHost::NoAuth {
+            accept_invalid_certs,
             app: Product::Kibana,
             roles: vec![HostRole::View],
             viewer: None,
@@ -2035,6 +2038,7 @@ mod tests {
         hosts.insert(
             "old-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Send],
                 viewer: None,
@@ -2218,6 +2222,7 @@ mod tests {
         hosts.insert(
             "collector".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Collect],
                 viewer: None,
@@ -2273,6 +2278,7 @@ mod tests {
         hosts.insert(
             "old-cluster".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Send],
                 viewer: Some("old-cluster-kb".to_string()),
@@ -2282,6 +2288,7 @@ mod tests {
         hosts.insert(
             "old-cluster-kb".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::View],
                 viewer: None,

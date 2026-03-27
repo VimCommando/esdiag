@@ -260,6 +260,7 @@ mod tests {
 
         let state = test_server_state();
         *state.exporter.write().await = Exporter::try_from(KnownHost::NoAuth {
+            accept_invalid_certs: false,
             app: Product::Elasticsearch,
             roles: vec![HostRole::Send],
             viewer: None,

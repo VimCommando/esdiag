@@ -151,6 +151,7 @@ fn run_external_logstash_collect_test(
 
     if config.accept_invalid_certs {
         host_args.push("--accept-invalid-certs".to_string());
+        host_args.push("true".to_string());
     }
 
     let host_arg_refs: Vec<&str> = host_args.iter().map(String::as_str).collect();

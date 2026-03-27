@@ -732,6 +732,7 @@ mod tests {
         let (_tmp, _hosts_path, _keystore_path) = setup_env();
 
         let noauth_host = KnownHost::NoAuth {
+            accept_invalid_certs: false,
             app: crate::data::Product::Elasticsearch,
             roles: vec![crate::data::HostRole::Send],
             viewer: None,
@@ -772,6 +773,7 @@ mod tests {
         settings.active_target = Some("secure".to_string());
         settings.save().expect("save secure settings");
         *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::NoAuth {
+            accept_invalid_certs: false,
             app: crate::data::Product::Elasticsearch,
             roles: vec![crate::data::HostRole::Send],
             viewer: None,
@@ -799,6 +801,7 @@ mod tests {
     async fn service_mode_non_secure_output_bypasses_keystore_preflight() {
         let state = test_service_state();
         *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::NoAuth {
+            accept_invalid_certs: false,
             app: crate::data::Product::Elasticsearch,
             roles: vec![crate::data::HostRole::Send],
             viewer: None,

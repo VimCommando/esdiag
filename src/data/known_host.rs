@@ -225,6 +225,7 @@ impl KnownHostBuilder {
                 viewer: self.viewer,
             }),
             (None, None, None, None) => Ok(KnownHost::NoAuth {
+                accept_invalid_certs: self.accept_invalid_certs,
                 app: self.product,
                 roles: self.roles,
                 url: self.url,
@@ -284,6 +285,27 @@ impl KnownHostBuilder {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KnownHostCliUpdate {
+    pub accept_invalid_certs: Option<bool>,
+    pub apikey: Option<String>,
+    pub password: Option<String>,
+    pub roles: Option<Vec<HostRole>>,
+    pub secret: Option<String>,
+    pub username: Option<String>,
+}
+
+impl KnownHostCliUpdate {
+    pub fn is_empty(&self) -> bool {
+        self.accept_invalid_certs.is_none()
+            && self.apikey.is_none()
+            && self.password.is_none()
+            && self.roles.is_none()
+            && self.secret.is_none()
+            && self.username.is_none()
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "auth")]
 pub enum KnownHost {
@@ -328,6 +350,8 @@ pub enum KnownHost {
     /// A host with no authentication
     #[serde(alias = "None")]
     NoAuth {
+        #[serde(default)]
+        accept_invalid_certs: bool,
         app: Product,
         #[serde(
             default = "default_collect_roles",
@@ -387,7 +411,10 @@ impl KnownHost {
                 accept_invalid_certs,
                 ..
             } => *accept_invalid_certs,
-            Self::NoAuth { .. } => false,
+            Self::NoAuth {
+                accept_invalid_certs,
+                ..
+            } => *accept_invalid_certs,
         }
     }
 
@@ -444,6 +471,86 @@ impl KnownHost {
         KnownHost::write_hosts_yml(&hosts)
     }
 
+    pub fn merge_cli_update(
+        &self,
+        update: &KnownHostCliUpdate,
+        secret_auth: Option<SecretAuth>,
+    ) -> Result<Self> {
+        let app = self.app().clone();
+        let url = self.get_url();
+        let viewer = self.viewer().map(str::to_string);
+        let roles = update.roles.clone().unwrap_or_else(|| self.roles().to_vec());
+        let accept_invalid_certs = update
+            .accept_invalid_certs
+            .unwrap_or_else(|| self.accept_invalid_certs());
+
+        if let Some(secret_id) = &update.secret {
+            let secret_auth = secret_auth.ok_or_else(|| {
+                eyre!("Invalid KnownHost configuration: missing secret auth for secret update")
+            })?;
+            return match secret_auth {
+                SecretAuth::ApiKey { .. } => Ok(Self::ApiKey {
+                    accept_invalid_certs,
+                    apikey: None,
+                    app,
+                    cloud_id: ElasticCloud::try_from(&url).ok(),
+                    roles,
+                    secret: Some(secret_id.clone()),
+                    viewer,
+                    url,
+                }),
+                SecretAuth::Basic { .. } => Ok(Self::Basic {
+                    accept_invalid_certs,
+                    app,
+                    password: None,
+                    roles,
+                    secret: Some(secret_id.clone()),
+                    url,
+                    username: None,
+                    viewer,
+                }),
+            };
+        }
+
+        if let Some(apikey) = &update.apikey {
+            return Ok(Self::ApiKey {
+                accept_invalid_certs,
+                apikey: Some(apikey.clone()),
+                app,
+                cloud_id: ElasticCloud::try_from(&url).ok(),
+                roles,
+                secret: None,
+                viewer,
+                url,
+            });
+        }
+
+        if update.username.is_some() || update.password.is_some() {
+            let username = update.username.clone();
+            let password = update.password.clone();
+            if username.is_none() || password.is_none() {
+                return Err(eyre!(
+                    "Invalid Basic auth update: either provide a secret reference or both username and password"
+                ));
+            }
+            return Ok(Self::Basic {
+                accept_invalid_certs,
+                app,
+                password,
+                roles,
+                secret: None,
+                url,
+                username,
+                viewer,
+            });
+        }
+
+        let mut merged = self.clone();
+        merged.set_roles(roles);
+        merged.set_accept_invalid_certs(accept_invalid_certs);
+        Ok(merged)
+    }
+
     fn strip_plaintext_when_secret_present(&mut self) {
         match self {
             Self::ApiKey { apikey, secret, .. } => {
@@ -484,6 +591,14 @@ impl KnownHost {
                 .join(", ")
         );
         hosts.get(host).cloned()
+    }
+
+    pub fn remove_saved(name: &str) -> Result<String> {
+        let mut hosts = Self::parse_hosts_yml()?;
+        if hosts.remove(name).is_none() {
+            return Err(eyre!("Host '{name}' not found"));
+        }
+        Self::write_hosts_yml(&hosts)
     }
 
     pub fn has_legacy_secret(&self) -> bool {
@@ -602,6 +717,7 @@ impl KnownHost {
 
     pub fn from_url(url: &Url) -> Self {
         KnownHost::NoAuth {
+            accept_invalid_certs: false,
             app: Product::Elasticsearch,
             roles: default_collect_roles(),
             viewer: None,
@@ -673,6 +789,40 @@ impl KnownHost {
         let writer = BufWriter::new(file);
         serde_yaml::to_writer(writer, &hosts)?;
         Ok(format!("{}", &path.display()))
+    }
+
+    fn set_accept_invalid_certs(&mut self, accept_invalid_certs: bool) {
+        match self {
+            Self::ApiKey {
+                accept_invalid_certs: current,
+                ..
+            } => *current = accept_invalid_certs,
+            Self::Basic {
+                accept_invalid_certs: current,
+                ..
+            } => *current = accept_invalid_certs,
+            Self::NoAuth {
+                accept_invalid_certs: current,
+                ..
+            } => *current = accept_invalid_certs,
+        }
+    }
+
+    fn set_roles(&mut self, roles: Vec<HostRole>) {
+        match self {
+            Self::ApiKey {
+                roles: current_roles,
+                ..
+            } => *current_roles = roles,
+            Self::Basic {
+                roles: current_roles,
+                ..
+            } => *current_roles = roles,
+            Self::NoAuth {
+                roles: current_roles,
+                ..
+            } => *current_roles = roles,
+        }
     }
 
     fn normalize_and_validate_roles(&mut self, host_name: &str) -> Result<()> {
@@ -856,6 +1006,7 @@ mod tests {
         hosts.insert(
             "default-role".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: Vec::new(),
                 viewer: None,
@@ -877,6 +1028,7 @@ mod tests {
         hosts.insert(
             "kb-invalid-send".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::Send],
                 viewer: None,
@@ -896,6 +1048,7 @@ mod tests {
         hosts.insert(
             "collect-only".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Collect],
                 viewer: None,
@@ -905,6 +1058,7 @@ mod tests {
         hosts.insert(
             "collect-send".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Collect, HostRole::Send],
                 viewer: None,
@@ -914,6 +1068,7 @@ mod tests {
         hosts.insert(
             "view-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::View],
                 viewer: None,
@@ -942,6 +1097,7 @@ mod tests {
         hosts.insert(
             "source".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Collect],
                 viewer: Some("viewer-host".to_string()),
@@ -951,6 +1107,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::View],
                 viewer: None,
@@ -969,6 +1126,7 @@ mod tests {
         hosts.insert(
             "source".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Send],
                 viewer: Some("viewer-host".to_string()),
@@ -978,6 +1136,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::Collect],
                 viewer: None,
@@ -996,6 +1155,7 @@ mod tests {
         hosts.insert(
             "source".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Elasticsearch,
                 roles: vec![HostRole::Send],
                 viewer: Some("viewer-host".to_string()),
@@ -1005,6 +1165,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHost::NoAuth {
+                accept_invalid_certs: false,
                 app: Product::Kibana,
                 roles: vec![HostRole::View],
                 viewer: None,
@@ -1277,5 +1438,183 @@ mod tests {
         assert!(
             matches!(migrated_kb_auth, Auth::Basic(user, pass) if user == "elastic" && pass == "pass-1")
         );
+    }
+
+    #[test]
+    fn merge_cli_update_preserves_omitted_fields() {
+        let host = KnownHost::ApiKey {
+            accept_invalid_certs: true,
+            apikey: Some("legacy-key".to_string()),
+            app: Product::Elasticsearch,
+            cloud_id: None,
+            roles: vec![HostRole::Collect],
+            secret: None,
+            viewer: None,
+            url: Url::parse("http://localhost:9200").expect("url"),
+        };
+        let update = KnownHostCliUpdate {
+            roles: Some(vec![HostRole::Collect, HostRole::Send]),
+            ..KnownHostCliUpdate::default()
+        };
+
+        let merged = host
+            .merge_cli_update(&update, None)
+            .expect("merge should succeed");
+
+        match merged {
+            KnownHost::ApiKey {
+                accept_invalid_certs,
+                apikey,
+                roles,
+                secret,
+                ..
+            } => {
+                assert!(accept_invalid_certs, "certificate setting should be preserved");
+                assert_eq!(apikey.as_deref(), Some("legacy-key"));
+                assert_eq!(secret, None);
+                assert_eq!(roles, vec![HostRole::Collect, HostRole::Send]);
+            }
+            _ => panic!("expected api key host after merge"),
+        }
+    }
+
+    #[test]
+    fn merge_cli_update_switches_secret_host_to_apikey() {
+        let host = KnownHost::Basic {
+            accept_invalid_certs: false,
+            app: Product::Elasticsearch,
+            password: None,
+            roles: vec![HostRole::Collect],
+            secret: Some("old-secret".to_string()),
+            viewer: None,
+            url: Url::parse("http://localhost:9200").expect("url"),
+            username: None,
+        };
+        let update = KnownHostCliUpdate {
+            apikey: Some("new-key".to_string()),
+            ..KnownHostCliUpdate::default()
+        };
+
+        let merged = host
+            .merge_cli_update(&update, None)
+            .expect("merge should succeed");
+
+        match merged {
+            KnownHost::ApiKey { apikey, secret, .. } => {
+                assert_eq!(apikey.as_deref(), Some("new-key"));
+                assert!(secret.is_none(), "secret reference should be cleared");
+            }
+            _ => panic!("expected api key host after merge"),
+        }
+    }
+
+    #[test]
+    fn merge_cli_update_applies_explicit_false_for_accept_invalid_certs() {
+        let host = KnownHost::ApiKey {
+            accept_invalid_certs: true,
+            apikey: Some("legacy-key".to_string()),
+            app: Product::Elasticsearch,
+            cloud_id: None,
+            roles: vec![HostRole::Collect],
+            secret: None,
+            viewer: None,
+            url: Url::parse("http://localhost:9200").expect("url"),
+        };
+        let update = KnownHostCliUpdate {
+            accept_invalid_certs: Some(false),
+            ..KnownHostCliUpdate::default()
+        };
+
+        let merged = host
+            .merge_cli_update(&update, None)
+            .expect("merge should succeed");
+
+        assert!(
+            !merged.accept_invalid_certs(),
+            "explicit false should clear accept_invalid_certs"
+        );
+    }
+
+    #[test]
+    fn merge_cli_update_rejects_partial_basic_auth_without_secret() {
+        let host = KnownHost::NoAuth {
+            accept_invalid_certs: false,
+            app: Product::Elasticsearch,
+            roles: vec![HostRole::Collect],
+            viewer: None,
+            url: Url::parse("http://localhost:9200").expect("url"),
+        };
+        let update = KnownHostCliUpdate {
+            username: Some("elastic".to_string()),
+            ..KnownHostCliUpdate::default()
+        };
+
+        let err = match host.merge_cli_update(&update, None) {
+            Ok(_) => panic!("partial basic auth should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "either provide a secret reference or both username and password"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn merge_cli_update_rejects_partial_basic_auth_for_existing_basic_host() {
+        let host = KnownHost::Basic {
+            accept_invalid_certs: false,
+            app: Product::Elasticsearch,
+            password: Some("old-pass".to_string()),
+            roles: vec![HostRole::Collect],
+            secret: None,
+            viewer: None,
+            url: Url::parse("http://localhost:9200").expect("url"),
+            username: Some("old-user".to_string()),
+        };
+        let update = KnownHostCliUpdate {
+            username: Some("new-user".to_string()),
+            ..KnownHostCliUpdate::default()
+        };
+
+        let err = match host.merge_cli_update(&update, None) {
+            Ok(_) => panic!("partial basic auth should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "either provide a secret reference or both username and password"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn remove_saved_deletes_existing_host_and_errors_for_missing() {
+        let _guard = env_lock().lock().expect("env lock");
+        let (_tmp, _hosts, _keystore) = setup_env();
+
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "prod-es".to_string(),
+            KnownHost::NoAuth {
+                accept_invalid_certs: false,
+                app: Product::Elasticsearch,
+                roles: vec![HostRole::Collect],
+                viewer: None,
+                url: Url::parse("http://localhost:9200").expect("url"),
+            },
+        );
+        write_hosts(hosts);
+
+        KnownHost::remove_saved("prod-es").expect("remove existing host");
+        let remaining = KnownHost::parse_hosts_yml().expect("re-read hosts");
+        assert!(!remaining.contains_key("prod-es"));
+
+        let err = KnownHost::remove_saved("prod-es").expect_err("missing host should error");
+        assert!(err.to_string().contains("not found"));
     }
 }
