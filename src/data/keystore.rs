@@ -182,7 +182,7 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
 fn secure_output_file(path: &Path) -> Result<File> {
     ensure_parent_dir(path)?;
     let mut options = OpenOptions::new();
-    options.create(true).truncate(true).write(true);
+    options.create_new(true).write(true);
     #[cfg(unix)]
     options.mode(0o600);
     let file = options.open(path)?;
@@ -448,7 +448,9 @@ fn write_unlock_lease_until(keystore_password: &str, expires_at_epoch: i64) -> R
 }
 
 pub fn write_unlock_lease(keystore_password: &str, ttl: Duration) -> Result<PathBuf> {
-    let expires_at_epoch = current_epoch_seconds() + ttl.as_secs() as i64;
+    let now = current_epoch_seconds();
+    let ttl_secs_i64 = i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX);
+    let expires_at_epoch = now.saturating_add(ttl_secs_i64);
     write_unlock_lease_until(keystore_password, expires_at_epoch)
 }
 
@@ -898,5 +900,28 @@ mod tests {
             !unlock_path.exists(),
             "stale unlock lease should be cleared on invalid password"
         );
+    }
+
+    #[test]
+    fn secure_output_file_rejects_preexisting_paths() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let (_tmp, keystore_path, _unlock_path) = setup_env();
+        std::fs::write(&keystore_path, "occupied").expect("seed existing file");
+
+        assert!(
+            secure_output_file(&keystore_path).is_err(),
+            "exclusive temp writer should reject existing paths"
+        );
+    }
+
+    #[test]
+    fn write_unlock_lease_saturates_large_ttls() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let (_tmp, _keystore_path, _unlock_path) = setup_env();
+
+        write_unlock_lease("pw", Duration::from_secs(u64::MAX)).expect("write large lease");
+
+        let status = get_unlock_status().expect("unlock status");
+        assert_eq!(status.expires_at_epoch, Some(i64::MAX));
     }
 }
