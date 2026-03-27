@@ -191,6 +191,51 @@ fn secure_output_file(path: &Path) -> Result<File> {
     Ok(file)
 }
 
+fn temp_output_path(path: &Path) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("Path '{}' has no parent directory", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| eyre!("Path '{}' has no file name", path.display()))?
+        .to_string_lossy();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_nanos();
+    Ok(parent.join(format!(
+        ".{file_name}.tmp-{}-{unique}",
+        std::process::id()
+    )))
+}
+
+fn replace_file_atomic(path: &Path, temp_path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
+    std::fs::rename(temp_path, path)?;
+    Ok(())
+}
+
+fn write_yaml_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let temp_path = temp_output_path(path)?;
+    let write_result = (|| -> Result<()> {
+        let file = secure_output_file(&temp_path)?;
+        let mut writer = BufWriter::new(file);
+        serde_yaml::to_writer(&mut writer, value)?;
+        writer.flush()?;
+        drop(writer);
+        replace_file_atomic(path, &temp_path)
+    })();
+    if write_result.is_err() && temp_path.exists() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
 pub fn get_keystore_path() -> Result<PathBuf> {
     if let Ok(path) = env::var("ESDIAG_KEYSTORE") {
         let path = PathBuf::from(path);
@@ -398,10 +443,7 @@ fn write_unlock_lease_until(keystore_password: &str, expires_at_epoch: i64) -> R
     };
     let envelope = encrypt_unlock_lease(&data)?;
     let path = get_unlock_path()?;
-    let file = secure_output_file(&path)?;
-    let mut writer = BufWriter::new(file);
-    serde_yaml::to_writer(&mut writer, &envelope)?;
-    writer.flush()?;
+    write_yaml_atomic(&path, &envelope)?;
     Ok(path)
 }
 
@@ -412,7 +454,7 @@ pub fn write_unlock_lease(keystore_password: &str, ttl: Duration) -> Result<Path
 
 pub fn clear_unlock_lease() -> Result<bool> {
     let path = get_unlock_path()?;
-    if !path.exists() {
+    if !path.is_file() {
         return Ok(false);
     }
     std::fs::remove_file(path)?;
@@ -702,10 +744,7 @@ fn write_store(store: &KeystoreData, keystore_password: &str) -> Result<()> {
     };
 
     let path = get_keystore_path()?;
-    let file = secure_output_file(&path)?;
-    let mut writer = BufWriter::new(file);
-    serde_yaml::to_writer(&mut writer, &envelope)?;
-    writer.flush()?;
+    write_yaml_atomic(&path, &envelope)?;
     Ok(())
 }
 
@@ -791,5 +830,15 @@ mod tests {
             get_keystore_password().expect("unlock lease password"),
             "new-pw"
         );
+    }
+
+    #[test]
+    fn clear_unlock_lease_treats_non_file_paths_as_absent() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let (_tmp, _keystore_path, unlock_path) = setup_env();
+        std::fs::create_dir_all(&unlock_path).expect("create unlock directory");
+
+        assert!(!clear_unlock_lease().expect("clear unlock lease"));
+        assert!(unlock_path.is_dir(), "non-file unlock path should be left alone");
     }
 }
