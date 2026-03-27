@@ -247,6 +247,80 @@ async fn host_update_preserves_omitted_fields_and_applies_cert_overrides() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_update_applies_cert_overrides_for_noauth_hosts() {
+    let (url, shutdown_tx) = start_mock_elasticsearch().await;
+    let home = setup_home();
+    let home_path = home.path().to_path_buf();
+
+    let create = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "plain-es".to_string(),
+            "elasticsearch".to_string(),
+            url,
+            "--accept-invalid-certs".to_string(),
+            "true".to_string(),
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_success(&create, "create noauth host");
+
+    let disable_certs = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "plain-es".to_string(),
+            "--accept-invalid-certs".to_string(),
+            "false".to_string(),
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_success(&disable_certs, "disable noauth cert override");
+
+    let hosts = read_hosts(&home);
+    match hosts.get("plain-es").expect("saved host exists") {
+        KnownHost::NoAuth {
+            accept_invalid_certs,
+            ..
+        } => assert!(
+            !accept_invalid_certs,
+            "explicit false should clear accept_invalid_certs for noauth hosts"
+        ),
+        _ => panic!("expected noauth host"),
+    }
+
+    let enable_certs = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "plain-es".to_string(),
+            "--accept-invalid-certs".to_string(),
+            "true".to_string(),
+        ],
+        home_path,
+        vec![],
+    )
+    .await;
+    assert_success(&enable_certs, "enable noauth cert override");
+
+    let hosts = read_hosts(&home);
+    match hosts.get("plain-es").expect("saved host exists") {
+        KnownHost::NoAuth {
+            accept_invalid_certs,
+            ..
+        } => assert!(
+            *accept_invalid_certs,
+            "explicit true should set accept_invalid_certs for noauth hosts"
+        ),
+        _ => panic!("expected noauth host"),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_update_supports_secret_rotation_and_apikey_override() {
     let (url, shutdown_tx) = start_mock_elasticsearch().await;
     let home = setup_home();

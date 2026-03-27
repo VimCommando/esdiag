@@ -802,7 +802,10 @@ impl KnownHost {
                 accept_invalid_certs: current,
                 ..
             } => *current = accept_invalid_certs,
-            Self::NoAuth { .. } => {}
+            Self::NoAuth {
+                accept_invalid_certs: current,
+                ..
+            } => *current = accept_invalid_certs,
         }
     }
 
