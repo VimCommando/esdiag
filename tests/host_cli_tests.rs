@@ -130,7 +130,7 @@ async fn start_mock_elasticsearch() -> (String, tokio::sync::oneshot::Sender<()>
     });
 
     let url = format!("http://{addr}");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         if let Ok(response) = reqwest::get(&url).await {
             if response.status().is_success() {
@@ -503,4 +503,104 @@ fn host_delete_conflicts_and_missing_host_updates_fail() {
 
     let missing_delete = run_esdiag(&["host", "missing-es", "--delete"], &home, &[]);
     assert_failure_contains(&missing_delete, "Host 'missing-es' not found", "missing delete");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_update_rejects_partial_basic_auth_without_secret() {
+    let (url, shutdown_tx) = start_mock_elasticsearch().await;
+    let home = setup_home();
+    let home_path = home.path().to_path_buf();
+
+    let create = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "plain-es".to_string(),
+            "elasticsearch".to_string(),
+            url,
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_success(&create, "create noauth host");
+
+    let update = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "plain-es".to_string(),
+            "--user".to_string(),
+            "elastic".to_string(),
+        ],
+        home_path,
+        vec![],
+    )
+    .await;
+    assert_failure_contains(
+        &update,
+        "either provide a secret reference or both username and password",
+        "partial basic auth update",
+    );
+
+    let hosts = read_hosts(&home);
+    assert!(
+        matches!(hosts.get("plain-es"), Some(KnownHost::NoAuth { .. })),
+        "failed update should leave the saved host unchanged"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_delete_succeeds_even_if_settings_cleanup_fails() {
+    let (url, shutdown_tx) = start_mock_elasticsearch().await;
+    let home = setup_home();
+    let home_path = home.path().to_path_buf();
+
+    let create = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "prod-es".to_string(),
+            "elasticsearch".to_string(),
+            url,
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_success(&create, "create host");
+
+    write_settings(
+        &home,
+        &Settings {
+            active_target: Some("prod-es".to_string()),
+            kibana_url: None,
+        },
+    );
+    std::fs::write(
+        home.path().join(".esdiag").join("settings.yml"),
+        "active_target: [broken\n",
+    )
+    .expect("write invalid settings");
+
+    let delete = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "prod-es".to_string(),
+            "--delete".to_string(),
+        ],
+        home_path,
+        vec![],
+    )
+    .await;
+    assert_success(&delete, "delete host with invalid settings");
+    assert!(
+        String::from_utf8_lossy(&delete.stderr).contains("failed to update settings"),
+        "expected settings cleanup warning, stderr was:\n{}",
+        String::from_utf8_lossy(&delete.stderr)
+    );
+
+    let hosts = read_hosts(&home);
+    assert!(!hosts.contains_key("prod-es"));
+
+    let _ = shutdown_tx.send(());
 }

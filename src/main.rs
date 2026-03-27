@@ -916,7 +916,12 @@ fn cleanup_settings_after_host_delete(name: &str) -> Result<()> {
 
 fn delete_host_from_cli(name: &str) -> Result<String> {
     let path = KnownHost::remove_saved(name)?;
-    cleanup_settings_after_host_delete(name)?;
+    if let Err(err) = cleanup_settings_after_host_delete(name) {
+        eprintln!(
+            "Warning: host '{}' was removed, but failed to update settings: {err}",
+            name
+        );
+    }
     Ok(path)
 }
 

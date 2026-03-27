@@ -534,6 +534,11 @@ impl KnownHost {
             };
             let username = update.username.clone().or(existing_username);
             let password = update.password.clone().or(existing_password);
+            if username.is_none() || password.is_none() {
+                return Err(eyre!(
+                    "Invalid Basic auth update: either provide a secret reference or both username and password"
+                ));
+            }
             return Ok(Self::Basic {
                 accept_invalid_certs,
                 app,
@@ -1533,6 +1538,33 @@ mod tests {
         assert!(
             !merged.accept_invalid_certs(),
             "explicit false should clear accept_invalid_certs"
+        );
+    }
+
+    #[test]
+    fn merge_cli_update_rejects_partial_basic_auth_without_secret() {
+        let host = KnownHost::NoAuth {
+            accept_invalid_certs: false,
+            app: Product::Elasticsearch,
+            roles: vec![HostRole::Collect],
+            viewer: None,
+            url: Url::parse("http://localhost:9200").expect("url"),
+        };
+        let update = KnownHostCliUpdate {
+            username: Some("elastic".to_string()),
+            ..KnownHostCliUpdate::default()
+        };
+
+        let err = match host.merge_cli_update(&update, None) {
+            Ok(_) => panic!("partial basic auth should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "either provide a secret reference or both username and password"
+            ),
+            "unexpected error: {err}"
         );
     }
 
