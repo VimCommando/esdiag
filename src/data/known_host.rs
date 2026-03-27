@@ -526,14 +526,8 @@ impl KnownHost {
         }
 
         if update.username.is_some() || update.password.is_some() {
-            let (existing_username, existing_password) = match self {
-                Self::Basic {
-                    username, password, ..
-                } => (username.clone(), password.clone()),
-                _ => (None, None),
-            };
-            let username = update.username.clone().or(existing_username);
-            let password = update.password.clone().or(existing_password);
+            let username = update.username.clone();
+            let password = update.password.clone();
             if username.is_none() || password.is_none() {
                 return Err(eyre!(
                     "Invalid Basic auth update: either provide a secret reference or both username and password"
@@ -1552,6 +1546,36 @@ mod tests {
         };
         let update = KnownHostCliUpdate {
             username: Some("elastic".to_string()),
+            ..KnownHostCliUpdate::default()
+        };
+
+        let err = match host.merge_cli_update(&update, None) {
+            Ok(_) => panic!("partial basic auth should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "either provide a secret reference or both username and password"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn merge_cli_update_rejects_partial_basic_auth_for_existing_basic_host() {
+        let host = KnownHost::Basic {
+            accept_invalid_certs: false,
+            app: Product::Elasticsearch,
+            password: Some("old-pass".to_string()),
+            roles: vec![HostRole::Collect],
+            secret: None,
+            viewer: None,
+            url: Url::parse("http://localhost:9200").expect("url"),
+            username: Some("old-user".to_string()),
+        };
+        let update = KnownHostCliUpdate {
+            username: Some("new-user".to_string()),
             ..KnownHostCliUpdate::default()
         };
 

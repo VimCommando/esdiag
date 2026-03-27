@@ -551,6 +551,64 @@ async fn host_update_rejects_partial_basic_auth_without_secret() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_update_rejects_partial_basic_auth_for_existing_basic_host() {
+    let (url, shutdown_tx) = start_mock_elasticsearch().await;
+    let home = setup_home();
+    let home_path = home.path().to_path_buf();
+
+    let create = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "basic-es".to_string(),
+            "elasticsearch".to_string(),
+            url,
+            "--user".to_string(),
+            "elastic".to_string(),
+            "--password".to_string(),
+            "old-pass".to_string(),
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_success(&create, "create basic host");
+
+    let update = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "basic-es".to_string(),
+            "--user".to_string(),
+            "new-user".to_string(),
+        ],
+        home_path,
+        vec![],
+    )
+    .await;
+    assert_failure_contains(
+        &update,
+        "either provide a secret reference or both username and password",
+        "partial basic auth update for existing basic host",
+    );
+
+    let hosts = read_hosts(&home);
+    match hosts.get("basic-es").expect("saved host exists") {
+        KnownHost::Basic {
+            username,
+            password,
+            secret,
+            ..
+        } => {
+            assert_eq!(username.as_deref(), Some("elastic"));
+            assert_eq!(password.as_deref(), Some("old-pass"));
+            assert!(secret.is_none(), "failed update should not add a secret reference");
+        }
+        _ => panic!("expected basic host"),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_delete_succeeds_even_if_settings_cleanup_fails() {
     let (url, shutdown_tx) = start_mock_elasticsearch().await;
     let home = setup_home();
