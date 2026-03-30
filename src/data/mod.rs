@@ -10,10 +10,14 @@ mod keystore;
 mod known_host;
 /// Elastic stack products
 mod product;
+/// Saved job configurations
+pub mod saved_jobs;
 /// Application Settings
 pub mod settings;
 /// Universal resource identifiers
 mod uri;
+/// Workflow configuration types
+pub mod workflow;
 
 pub use auth::{Auth, AuthType};
 pub use keystore::{
@@ -28,7 +32,12 @@ pub use keystore::{
 pub use known_host::{ElasticCloud, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate};
 pub use product::Product;
 pub use settings::Settings;
+pub use saved_jobs::{SavedJob, SavedJobs, load_saved_jobs, save_saved_jobs};
 pub use uri::Uri;
+pub use workflow::{
+    CollectMode, CollectSource, CollectStage, ProcessMode, ProcessStage, SendMode, SendStage,
+    Workflow,
+};
 
 use crate::env;
 use eyre::Result;

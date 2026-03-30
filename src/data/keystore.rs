@@ -2,6 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use super::{KnownHost, load_saved_jobs};
 use crate::env::ESDIAG_KEYSTORE_PASSWORD;
 use aes_gcm_siv::{
     Aes256GcmSiv, Nonce,
@@ -633,6 +634,10 @@ pub fn remove_secret(
     keystore_password: &str,
 ) -> Result<String> {
     let mut store = read_store(keystore_password)?;
+    if !store.secrets.contains_key(secret_id) {
+        return Err(eyre!("Secret '{secret_id}' not found"));
+    }
+    ensure_secret_is_unreferenced(secret_id)?;
     let entry = store
         .secrets
         .get_mut(secret_id)
@@ -654,6 +659,62 @@ pub fn remove_secret(
 
     write_store(&store, keystore_password)?;
     Ok(get_keystore_path()?.display().to_string())
+}
+
+fn ensure_secret_is_unreferenced(secret_id: &str) -> Result<()> {
+    let hosts = KnownHost::parse_hosts_yml()?;
+    let host_references: Vec<String> = hosts
+        .iter()
+        .filter(|(_, host)| host.secret_reference() == Some(secret_id))
+        .map(|(name, _)| name.clone())
+        .collect();
+    let saved_jobs = load_saved_jobs()?;
+    let job_references: Vec<String> = saved_jobs
+        .iter()
+        .filter(|(_, job)| {
+            referenced_job_hosts(job)
+                .into_iter()
+                .filter_map(|host_name| hosts.get(host_name))
+                .any(|host| host.secret_reference() == Some(secret_id))
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    if host_references.is_empty() && job_references.is_empty() {
+        return Ok(());
+    }
+
+    let mut parts = Vec::new();
+    if !host_references.is_empty() {
+        parts.push(format!("hosts: {}", host_references.join(", ")));
+    }
+    if !job_references.is_empty() {
+        parts.push(format!("saved jobs: {}", job_references.join(", ")));
+    }
+
+    Err(eyre!(
+        "Cannot remove secret '{secret_id}' because it is still referenced by {}",
+        parts.join("; ")
+    ))
+}
+
+fn referenced_job_hosts(job: &crate::data::SavedJob) -> Vec<&str> {
+    let mut hosts = Vec::new();
+    if !job.workflow.collect.known_host.trim().is_empty() {
+        hosts.push(job.workflow.collect.known_host.trim());
+    }
+
+    if !job.workflow.send.remote_target.trim().is_empty() {
+        hosts.push(job.workflow.send.remote_target.trim());
+    }
+
+    if !job.workflow.send.local_target.trim().is_empty()
+        && job.workflow.send.local_target.trim() != "directory"
+    {
+        hosts.push(job.workflow.send.local_target.trim());
+    }
+
+    hosts
 }
 
 pub fn get_secret(secret_id: &str, keystore_password: &str) -> Result<Option<SecretEntry>> {
@@ -826,8 +887,13 @@ fn derive_key(password: &str, salt: &[u8]) -> [u8; KEY_SIZE] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::{
+        CollectMode, CollectSource, CollectStage, HostRole, KnownHostBuilder, ProcessStage,
+        Product, SavedJob, SavedJobs, SendStage, Workflow, save_saved_jobs,
+    };
     use crate::test_env_lock;
     use tempfile::TempDir;
+    use url::Url;
 
     fn setup_env() -> (TempDir, PathBuf, PathBuf) {
         let tmp = TempDir::new().expect("temp dir");
@@ -835,10 +901,12 @@ mod tests {
         std::fs::create_dir_all(&config_dir).expect("create config dir");
         let keystore_path = config_dir.join("secrets.yml");
         let unlock_path = config_dir.join("keystore.unlock");
+        let hosts_path = config_dir.join("hosts.yml");
         unsafe {
             std::env::set_var("HOME", tmp.path());
             std::env::set_var("USERPROFILE", tmp.path());
             std::env::set_var("ESDIAG_KEYSTORE", &keystore_path);
+            std::env::set_var("ESDIAG_HOSTS", &hosts_path);
             std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
         }
         (tmp, keystore_path, unlock_path)
@@ -1084,5 +1152,101 @@ mod tests {
         unsafe {
             std::env::remove_var("ESDIAG_KEYSTORE");
         }
+    }
+
+    fn save_secret_backed_host(secret_id: &str, host_name: &str) {
+        let host = KnownHostBuilder::new(Url::parse("https://prod.example.com:9200").expect("url"))
+            .product(Product::Elasticsearch)
+            .roles(vec![HostRole::Collect, HostRole::Send])
+            .secret(Some(secret_id.to_string()))
+            .build_with_secret_auth(SecretAuth::Basic {
+                username: "elastic".to_string(),
+                password: "pw".to_string(),
+            })
+            .expect("build host");
+        host.save(host_name).expect("save host");
+    }
+
+    #[test]
+    fn remove_secret_blocks_direct_host_reference() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let (_tmp, _keystore_path, _unlock_path) = setup_env();
+        authenticate("pw").expect("create keystore");
+        upsert_secret_auth(
+            "used-secret",
+            SecretAuth::Basic {
+                username: "elastic".to_string(),
+                password: "super-secret-password".to_string(),
+            },
+            "pw",
+        )
+        .expect("store secret");
+        save_secret_backed_host("used-secret", "prod");
+
+        let err = remove_secret("used-secret", None, "pw").expect_err("secret should be protected");
+
+        assert!(err.to_string().contains("hosts: prod"));
+        assert!(get_secret("used-secret", "pw").expect("read secret").is_some());
+    }
+
+    #[test]
+    fn remove_secret_reports_saved_job_references() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let (_tmp, _keystore_path, _unlock_path) = setup_env();
+        authenticate("pw").expect("create keystore");
+        upsert_secret_auth(
+            "used-secret",
+            SecretAuth::Basic {
+                username: "elastic".to_string(),
+                password: "super-secret-password".to_string(),
+            },
+            "pw",
+        )
+        .expect("store secret");
+        save_secret_backed_host("used-secret", "prod");
+
+        let mut jobs = SavedJobs::default();
+        jobs.insert(
+            "nightly-prod".to_string(),
+            SavedJob {
+                identifiers: Default::default(),
+                workflow: Workflow {
+                    collect: CollectStage {
+                        mode: CollectMode::Collect,
+                        source: CollectSource::KnownHost,
+                        known_host: "prod".to_string(),
+                        ..Default::default()
+                    },
+                    process: ProcessStage::default(),
+                    send: SendStage::default(),
+                },
+            },
+        );
+        save_saved_jobs(&jobs).expect("save jobs");
+
+        let err = remove_secret("used-secret", None, "pw").expect_err("secret should be protected");
+
+        assert!(err.to_string().contains("hosts: prod"));
+        assert!(err.to_string().contains("saved jobs: nightly-prod"));
+        assert!(get_secret("used-secret", "pw").expect("read secret").is_some());
+    }
+
+    #[test]
+    fn remove_secret_succeeds_when_unreferenced() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let (_tmp, _keystore_path, _unlock_path) = setup_env();
+        authenticate("pw").expect("create keystore");
+        upsert_secret_auth(
+            "unused-secret",
+            SecretAuth::ApiKey {
+                apikey: "super-secret-api-key".to_string(),
+            },
+            "pw",
+        )
+        .expect("store secret");
+
+        remove_secret("unused-secret", None, "pw").expect("remove secret");
+
+        assert!(get_secret("unused-secret", "pw").expect("read secret").is_none());
     }
 }

@@ -8,7 +8,7 @@ ESDiag's `/jobs` page lets users configure a multi-step diagnostic workflow (col
 - Persist named job configurations to `~/.esdiag/jobs.yml` (YAML, Serde-compatible).
 - Web UI: Save button + left-panel job list on `/jobs` page (User mode only).
 - CLI: `esdiag job run <name>` executes a saved job using the existing CLI collect/process pipeline.
-- CLI: `esdiag job list` lists saved job names.
+- CLI: `esdiag job list` prints a text table describing saved jobs.
 - CLI: `esdiag job delete <name>` removes a saved job from `jobs.yml`.
 - Selecting a saved job in the UI restores full workflow signal state.
 
@@ -62,7 +62,7 @@ The `/jobs` template already uses a single-page Datastar component. The left pan
 
 ### 5. Only known-host collect sources are valid for saved jobs
 
-Direct uploads (`LocalArchive`) and service link downloads (`FromServiceLink`) reference one-time paths/URIs. Saved jobs are intended to collect a _new_ diagnostic each time they run, so only `FromRemoteHost` (known host) is a valid collect source. The Save button SHALL be disabled when the workflow is configured for upload or service link collection.
+Direct uploads (`LocalArchive`), service link downloads (`FromServiceLink`), and direct API-key collection all depend on ephemeral credentials or one-time paths/URIs. Saved jobs are intended to collect a _new_ diagnostic each time they run, so only `FromRemoteHost` (known host) is a valid collect source. The Save button SHALL be disabled when the workflow is configured for any non-known-host collect source.
 
 ### 6. Default job name derived from workflow state; user may override
 
@@ -76,17 +76,21 @@ The name field is pre-populated using the pattern `{host}-{action}-{destination}
 | process, write to local directory | `prod-process-directory` |
 | process, write to local file | `prod-process-file` |
 
-### 7. `keystore` is a required feature for saved jobs
+### 7. `keystore` remains available for saved jobs when hosts need it
 
-The shared runner needs to resolve secret-backed host credentials at execution time. The `keystore` feature MUST be a compile-time dependency for the saved jobs module. Users may be prompted to unlock the keystore when running `esdiag job run`.
+The shared runner needs to resolve secret-backed host credentials at execution time, so the `keystore` feature remains a compile-time dependency for the saved jobs module. Saved jobs SHALL be limited to known hosts from `hosts.yml`, but those hosts may either use keystore-backed credentials or no authentication at all. Users may be prompted to unlock the keystore when running `esdiag job run` only when the selected hosts actually depend on stored secrets.
 
-### 8. Extract job state machine for CLI/web shared use
+### 8. Prevent deleting in-use secrets
 
-The collect → process → send execution flow currently lives inside `server/workflow.rs` and is tightly coupled to `ServerState` and SSE streaming. Rather than duplicating this logic for the CLI, the core job execution state machine SHALL be extracted into a standalone module (e.g., `job/runner.rs`) with no dependency on Axum or SSE. The web server and `esdiag job run` both call into this shared runner; the web layer wraps it with SSE progress events, the CLI layer writes progress to stdout.
+Because some saved jobs transitively depend on secret-backed known hosts, keystore deletion needs an additional guard. Removing a secret SHALL fail when any host still references that secret, and the error message SHALL also identify any saved jobs that depend on hosts using that secret.
 
-This refactor is a prerequisite for `esdiag job run` and should be scoped as its own task group. The shared runner MUST compile and function correctly without the `server` feature flag — verified by building with `--no-default-features`.
+### 9. Standalone job runner for CLI use
 
-Alternative considered: CLI calls into `workflow.rs` directly by constructing a minimal `ServerState` — rejected because it drags in web server dependencies and is not a clean abstraction boundary.
+The collect → process → send execution flow in `server/workflow.rs` is tightly coupled to `ServerState` and SSE streaming. Rather than refactoring `workflow.rs` (high risk to the working web path), a standalone runner (`src/job.rs`) is built from the same library primitives (`Collector`, `Processor`, `Exporter`, `Receiver`) that both the web and CLI already use. The web workflow continues to use `server/workflow.rs` for its SSE-driven flow; `esdiag job run` calls the standalone runner for stdout-driven execution.
+
+The standalone runner MUST compile and function correctly without the `server` feature flag — verified by building with `--no-default-features`. The `keystore` feature IS required since saved jobs need host credential resolution.
+
+Alternative considered: refactoring `workflow.rs` to delegate to a shared runner — deferred because the web flow handles significantly more cases (retained bundles, service links, upload handoffs, SSE progress) that the CLI path does not need, making a shared abstraction premature.
 
 ## Risks / Trade-offs
 

@@ -3,8 +3,8 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{
-    CollectSource, ProcessMode, SendMode, ServerEvent, ServerState, Signals, WorkflowInput,
-    WorkflowJob, job_feed_event, signal_event, template, template_event,
+    CollectSource, ProcessMode, SendMode, ServerEvent, ServerState, WorkflowInput, WorkflowJob,
+    WorkflowRunSignals, job_feed_event, signal_event, template, template_event,
 };
 use crate::{
     data::{HostRole, Product, Uri},
@@ -34,7 +34,7 @@ struct JobDescriptor<'a> {
 
 struct WorkflowExecutionContext<'a> {
     state: Arc<ServerState>,
-    signals: &'a Signals,
+    signals: &'a WorkflowRunSignals,
     job_id: u64,
     source: &'a str,
     identifiers: Identifiers,
@@ -44,7 +44,7 @@ struct WorkflowExecutionContext<'a> {
 
 pub async fn run_job(
     state: Arc<ServerState>,
-    signals: Signals,
+    signals: WorkflowRunSignals,
     job_id: u64,
     request_user: String,
     tx: mpsc::Sender<ServerEvent>,
@@ -180,7 +180,7 @@ pub async fn run_job(
 
 async fn execute_local_archive_job(
     state: Arc<ServerState>,
-    signals: &Signals,
+    signals: &WorkflowRunSignals,
     job_id: u64,
     path: PathBuf,
     source: &str,
@@ -478,7 +478,7 @@ async fn run_processor_job(
     }
 }
 
-fn explicit_process_selection(signals: &Signals) -> Result<Option<ProcessSelection>> {
+fn explicit_process_selection(signals: &WorkflowRunSignals) -> Result<Option<ProcessSelection>> {
     let has_explicit_choice = !signals.workflow.process.selected.trim().is_empty()
         || signals.workflow.process.product != "elasticsearch"
         || signals.workflow.process.diagnostic_type != "standard";
@@ -511,7 +511,7 @@ fn explicit_process_selection(signals: &Signals) -> Result<Option<ProcessSelecti
 async fn run_forward_job(
     state: Arc<ServerState>,
     tx: &mpsc::Sender<ServerEvent>,
-    signals: &Signals,
+    signals: &WorkflowRunSignals,
     job_id: u64,
     source: &str,
     path: &Path,
@@ -573,7 +573,10 @@ async fn run_forward_job(
     Ok(())
 }
 
-async fn select_processed_exporter(state: Arc<ServerState>, signals: &Signals) -> Result<Exporter> {
+async fn select_processed_exporter(
+    state: Arc<ServerState>,
+    signals: &WorkflowRunSignals,
+) -> Result<Exporter> {
     match signals.workflow.send.mode {
         SendMode::Remote => {
             let configured = state.exporter.read().await.clone();
@@ -613,7 +616,7 @@ async fn select_processed_exporter(state: Arc<ServerState>, signals: &Signals) -
 
 async fn validate_workflow_request(
     state: &ServerState,
-    signals: &Signals,
+    signals: &WorkflowRunSignals,
     job: &WorkflowJob,
 ) -> Result<()> {
     if signals.workflow.collect.source == CollectSource::KnownHost
@@ -707,7 +710,7 @@ async fn collect_remote_archive(
     job_id: u64,
     host: crate::data::KnownHost,
     diagnostic_type: &str,
-    signals: &Signals,
+    signals: &WorkflowRunSignals,
     identifiers: Identifiers,
 ) -> Result<WorkflowJob> {
     let temp_dir = std::env::temp_dir().join(format!("esdiag-workflow-{job_id}"));
@@ -754,7 +757,7 @@ async fn collect_service_link_archive(
     job_id: u64,
     uri: Uri,
     source: &str,
-    signals: &Signals,
+    signals: &WorkflowRunSignals,
     identifiers: Identifiers,
 ) -> Result<WorkflowJob> {
     let filename = local_archive_filename(source, job_id)?;
@@ -933,8 +936,8 @@ mod tests {
         exporter::Exporter,
         server::{
             CollectSource, KeystoreSessionState, ProcessMode, RetainedBundle, RuntimeMode,
-            RuntimeModePolicy, SendMode, ServerEvent, ServerState, Signals, Stats, WorkflowInput,
-            WorkflowJob,
+            RuntimeModePolicy, SendMode, ServerEvent, ServerState, Stats, WorkflowInput, WorkflowJob,
+            WorkflowRunSignals,
         },
     };
     use axum::{Router, http::StatusCode, routing::get};
@@ -948,7 +951,6 @@ mod tests {
         ServerState {
             exporter: Arc::new(RwLock::new(Exporter::default())),
             kibana_url: Arc::new(RwLock::new(String::new())),
-            signals: Arc::new(RwLock::new(Signals::default())),
             workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
             retained_bundles: Arc::new(RwLock::new(HashMap::<String, RetainedBundle>::new())),
             runtime_mode: mode,
@@ -985,7 +987,7 @@ mod tests {
     #[tokio::test]
     async fn service_mode_allows_bundle_save_downloads() {
         let state = test_state(RuntimeMode::Service);
-        let mut signals = Signals::default();
+        let mut signals = WorkflowRunSignals::default();
         signals.workflow.collect.source = CollectSource::ApiKey;
         signals.workflow.collect.save = true;
 
@@ -1009,7 +1011,7 @@ mod tests {
     #[tokio::test]
     async fn service_link_save_does_not_require_directory() {
         let state = test_state(RuntimeMode::User);
-        let mut signals = Signals::default();
+        let mut signals = WorkflowRunSignals::default();
         signals.workflow.collect.save = true;
 
         let job = WorkflowJob {
@@ -1032,7 +1034,7 @@ mod tests {
     #[tokio::test]
     async fn forward_local_temp_upload_requires_save_server_side() {
         let state = test_state(RuntimeMode::User);
-        let mut signals = Signals::default();
+        let mut signals = WorkflowRunSignals::default();
         signals.workflow.process.mode = ProcessMode::Forward;
         signals.workflow.send.mode = SendMode::Local;
 
@@ -1064,7 +1066,7 @@ mod tests {
             Exporter::try_from(Uri::try_from(host).unwrap()).expect("configured exporter");
         *state.exporter.write().await = configured.clone();
 
-        let mut signals = Signals::default();
+        let mut signals = WorkflowRunSignals::default();
         signals.workflow.send.mode = SendMode::Remote;
         signals.workflow.send.remote_target = configured.target_uri();
 

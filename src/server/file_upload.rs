@@ -3,8 +3,8 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{
-    ServerEvent, ServerState, Signals, receiver_stream, signal_event, template, template_event,
-    workflow,
+    ServerEvent, ServerState, UploadProcessSignals, receiver_stream, signal_event, template,
+    template_event, workflow,
 };
 use crate::processor::new_job_id;
 use axum::{
@@ -58,7 +58,7 @@ pub async fn submit(
             let upload_file_element = format!(
                 r#"<div id="job-{job_id}"
                     class="status-box history-item processing"
-                    data-init="$loading=false; $file_upload.job_id={job_id}; if ({can_use_keystore} && $keystore.locked && $output.secure) {{ $_pending_workflow_action = 'upload-process'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process'); }} else {{ @post('/upload/process', {{openWhenHidden: true}}); }}"
+                    data-init="$loading=false; $file_upload.job_id={job_id}; if ({can_use_keystore} && $keystore.locked && $output.secure) {{ $_pending_workflow_action = 'upload-process'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process', {{filterSignals: {{exclude: /.*/}}}}); }} else {{ @post('/upload/process', {{openWhenHidden: true, filterSignals: {{include: /^(metadata|archive|workflow|file_upload)(\.|$)/}}}}); }}"
                 >
                     <div class="spinner"></div>
                     <span>Processing diagnostic</span>
@@ -146,7 +146,7 @@ async fn stage_upload_field(
 pub async fn process(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
-    ReadSignals(signals): ReadSignals<Signals>,
+    ReadSignals(signals): ReadSignals<UploadProcessSignals>,
 ) -> impl IntoResponse {
     // Use the signal job_id to override the job.id created in this function
     let job_id = signals.file_upload.job_id;
@@ -196,7 +196,7 @@ async fn send_terminal_signal(tx: &mpsc::Sender<ServerEvent>, state: &ServerStat
 
 pub(super) async fn run_upload_job(
     state: Arc<ServerState>,
-    signals: Signals,
+    signals: UploadProcessSignals,
     job_id: u64,
     request_user: String,
     tx: mpsc::Sender<ServerEvent>,
@@ -232,19 +232,19 @@ pub(super) async fn run_upload_job(
             return;
         }
     };
-    workflow::run_job(state, signals, job_id, request_user, tx, job).await;
+    workflow::run_job(state, signals.into(), job_id, request_user, tx, job).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::{run_upload_job, send_terminal_signal};
-    use crate::server::{ServerEvent, Signals, test_server_state};
+    use crate::server::{ServerEvent, UploadProcessSignals, test_server_state};
     use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn run_upload_job_missing_upload_emits_failure_and_terminal_signal() {
         let state = test_server_state();
-        let signals = Signals::default();
+        let signals = UploadProcessSignals::default();
         let (tx, mut rx) = mpsc::channel(8);
 
         run_upload_job(state, signals, 42, "Anonymous".to_string(), tx).await;
@@ -287,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn run_upload_job_completes_when_client_disconnected() {
         let state = test_server_state();
-        let signals = Signals::default();
+        let signals = UploadProcessSignals::default();
         let (tx, rx) = mpsc::channel(1);
         drop(rx);
 

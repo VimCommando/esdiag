@@ -7,7 +7,7 @@ Defines persistence, retrieval, and execution of named diagnostic job configurat
 ## ADDED Requirements
 
 ### Requirement: Job Configuration Persistence
-The system SHALL persist named job configurations to `~/.esdiag/jobs.yml` as a YAML map from job name to `SavedJob`. A `SavedJob` SHALL contain the workflow stages (collect, process, send) and optional `Identifiers` metadata. No session-specific or credential-bearing state SHALL be included in the persisted payload.
+The system SHALL persist named job configurations to `~/.esdiag/jobs.yml` as a YAML map from job name to `SavedJob`. A `SavedJob` SHALL contain the workflow stages (collect, process, send) and optional `Identifiers` metadata. No session-specific or credential-bearing state SHALL be included in the persisted payload. Saved jobs therefore depend on persisted known-host definitions from `hosts.yml` rather than embedding API keys, passwords, or other secrets inside `jobs.yml`.
 
 #### Scenario: Save new job
 - **WHEN** the user provides a non-empty name and clicks Save on the `/jobs` page
@@ -23,7 +23,7 @@ The system SHALL persist named job configurations to `~/.esdiag/jobs.yml` as a Y
 - **THEN** the system rejects the request with a validation error and makes no change to `jobs.yml`
 
 ### Requirement: Valid Collect Sources for Saved Jobs
-Only `FromRemoteHost` (known host) SHALL be a valid collect source for saved jobs. Direct uploads and service link downloads reference one-time paths/URIs and are not repeatable. The Save button SHALL be disabled when the workflow is configured for upload or service link collection.
+Only known-host collection SHALL be valid for saved jobs. Direct API key collection, direct uploads, and service link downloads either depend on non-persistent credentials or reference one-time paths/URIs and therefore are not repeatable. The Save button SHALL be disabled when the workflow is configured for any collect source other than known host.
 
 #### Scenario: Save disabled for upload workflow
 - **WHEN** the workflow collect source is set to direct file upload
@@ -36,6 +36,23 @@ Only `FromRemoteHost` (known host) SHALL be a valid collect source for saved job
 #### Scenario: Save enabled for known host workflow
 - **WHEN** the workflow collect source is set to a known host
 - **THEN** the Save button is enabled
+
+#### Scenario: Save disabled for API key workflow
+- **WHEN** the workflow collect source is set to an API key
+- **THEN** the Save button is disabled and cannot be clicked
+
+### Requirement: Saved Jobs Use Persisted Known Hosts
+Saved jobs SHALL be created and executed only for known hosts that exist in `hosts.yml`. If a referenced host uses a keystore `secret`, that credential SHALL still be resolved at runtime. Known hosts that use no authentication SHALL also remain valid saved-job collection sources.
+
+#### Scenario: Save allowed for host without secret reference
+- **GIVEN** the selected known host uses no authentication
+- **WHEN** the user attempts to save the job
+- **THEN** the save succeeds
+
+#### Scenario: Run allowed for host without secret reference
+- **GIVEN** a saved job references a known host that exists in `hosts.yml` and uses no authentication
+- **WHEN** `esdiag job run <name>` is executed for that job
+- **THEN** the system runs the saved job using that host configuration
 
 ### Requirement: Default Job Name
 The system SHALL derive a default job name from the current workflow configuration using the pattern `{host}-{action}-{destination}`, pre-populating the name field so the user can accept or override it before saving.
@@ -100,11 +117,11 @@ The system SHALL allow the user to delete a saved job by name from the `/jobs` p
 - **THEN** the entry is removed from `jobs.yml` and disappears from the left panel
 
 ### Requirement: CLI Job Listing
-The system SHALL provide `esdiag job list` as a CLI subcommand that prints the names of all saved jobs from `~/.esdiag/jobs.yml`.
+The system SHALL provide `esdiag job list` as a CLI subcommand that prints a text table of all saved jobs from `~/.esdiag/jobs.yml`. The table SHALL include the columns **Name**, **Collection target**, **Processing**, and **Send target**.
 
 #### Scenario: List saved jobs
 - **WHEN** the user runs `esdiag job list` and `jobs.yml` contains entries
-- **THEN** the system prints each job name to stdout, one per line, and exits with code 0
+- **THEN** the system prints a text table describing each saved job and exits with code 0
 
 #### Scenario: List with no saved jobs
 - **WHEN** the user runs `esdiag job list` and `jobs.yml` does not exist or is empty

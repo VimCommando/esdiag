@@ -240,6 +240,29 @@ enum Commands {
         )]
         host: Option<String>,
     },
+    /// Manage saved diagnostic jobs
+    #[cfg(feature = "keystore")]
+    Job {
+        #[command(subcommand)]
+        command: JobCommands,
+    },
+}
+
+#[cfg(feature = "keystore")]
+#[derive(Debug, Subcommand)]
+enum JobCommands {
+    /// Run a saved job by name
+    Run {
+        /// Name of the saved job to run
+        name: String,
+    },
+    /// List all saved jobs
+    List,
+    /// Delete a saved job by name
+    Delete {
+        /// Name of the saved job to delete
+        name: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -426,9 +449,8 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 kibana,
             } => {
                 tracing::info!("Starting ESDiag server");
-
-                let output_uri = Uri::try_from(output)?;
-                let exporter = Exporter::try_from(output_uri)?;
+                let runtime_mode = resolve_serve_runtime_mode(mode)?;
+                let exporter = resolve_serve_exporter(output, runtime_mode)?;
 
                 let kibana_url = kibana.unwrap_or_else(|| {
                     let url = esdiag::env::get_string("ESDIAG_KIBANA_URL")
@@ -439,7 +461,6 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     }
                 });
 
-                let runtime_mode = resolve_serve_runtime_mode(mode)?;
                 let (mut server, _bound_addr) =
                     Server::start([0, 0, 0, 0], port, exporter, kibana_url, runtime_mode).await?;
 
@@ -796,6 +817,23 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     tracing::info!("Setting up Kibana assets in {kb_client}");
                     setup::assets(&kb_client).await?;
                     Ok("setup")
+                }
+            }
+            #[cfg(feature = "keystore")]
+            Commands::Job { command } => {
+                match command {
+                    JobCommands::List => {
+                        handle_job_list()?;
+                        Ok("job list")
+                    }
+                    JobCommands::Run { name } => {
+                        handle_job_run(&name).await?;
+                        Ok("job run")
+                    }
+                    JobCommands::Delete { name } => {
+                        handle_job_delete(&name)?;
+                        Ok("job delete")
+                    }
                 }
             }
         }
@@ -1303,6 +1341,95 @@ fn clear_last_run_files() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "keystore")]
+fn handle_job_list() -> Result<()> {
+    use esdiag::data::load_saved_jobs;
+
+    let jobs = load_saved_jobs()?;
+    if jobs.is_empty() {
+        return Ok(());
+    }
+
+    let hosts = KnownHost::parse_hosts_yml().unwrap_or_default();
+
+    #[allow(clippy::literal_string_with_formatting_args)]
+    let header = format!(
+        "{:<24} {:<24} {:<16} {}",
+        "Name", "Collection target", "Processing", "Send target"
+    );
+    println!("{header}");
+    let separator: String = "-".repeat(80);
+    println!("{separator}");
+
+    for (name, job) in &jobs {
+        let collect_target = &job.workflow.collect.known_host;
+        let stale = !collect_target.is_empty() && !hosts.contains_key(collect_target);
+        let collect_display = if stale {
+            format!("\x1b[31m{collect_target}\x1b[0m")
+        } else {
+            collect_target.clone()
+        };
+
+        let processing = if job.workflow.process.enabled {
+            &job.workflow.process.diagnostic_type
+        } else {
+            "skipped"
+        };
+
+        let send_target = match job.workflow.send.mode {
+            esdiag::data::SendMode::Remote => job.workflow.send.remote_target.clone(),
+            esdiag::data::SendMode::Local => {
+                if job.workflow.send.local_target == "directory" {
+                    format!("dir:{}", job.workflow.send.local_directory)
+                } else {
+                    job.workflow.send.local_target.clone()
+                }
+            }
+        };
+
+        println!("{:<24} {:<24} {:<16} {}", name, collect_display, processing, send_target);
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "keystore")]
+async fn handle_job_run(name: &str) -> Result<()> {
+    use esdiag::data::load_saved_jobs;
+    use esdiag::job::run_saved_job;
+
+    let jobs = load_saved_jobs()?;
+    let job = jobs
+        .get(name)
+        .ok_or_else(|| eyre!("Saved job '{}' not found", name))?;
+
+    let host_name = &job.workflow.collect.known_host;
+    if host_name.is_empty() {
+        return Err(eyre!("Saved job '{}' has no collection host configured", name));
+    }
+
+    let host = KnownHost::get_known(host_name)
+        .ok_or_else(|| eyre!("Host '{}' referenced by job '{}' not found in hosts.yml", host_name, name))?;
+
+    tracing::info!("Running saved job '{name}'");
+    run_saved_job(&job.workflow, job.identifiers.clone(), host).await?;
+    tracing::info!("Saved job '{name}' completed successfully");
+    Ok(())
+}
+
+#[cfg(feature = "keystore")]
+fn handle_job_delete(name: &str) -> Result<()> {
+    use esdiag::data::{load_saved_jobs, save_saved_jobs};
+
+    let mut jobs = load_saved_jobs()?;
+    if jobs.shift_remove(name).is_none() {
+        return Err(eyre!("Saved job '{}' not found", name));
+    }
+    save_saved_jobs(&jobs)?;
+    tracing::info!("Deleted saved job '{name}'");
+    Ok(())
+}
+
 #[cfg(feature = "server")]
 fn resolve_serve_runtime_mode(mode: Option<RuntimeMode>) -> Result<RuntimeMode> {
     if let Some(mode) = mode {
@@ -1315,10 +1442,19 @@ fn resolve_serve_runtime_mode(mode: Option<RuntimeMode>) -> Result<RuntimeMode> 
     }
 }
 
+#[cfg(feature = "server")]
+fn resolve_serve_exporter(output: Option<String>, runtime_mode: RuntimeMode) -> Result<Exporter> {
+    match output {
+        Some(output) => Exporter::try_from(Uri::try_from(output)?),
+        None if runtime_mode == RuntimeMode::User => Ok(Exporter::default()),
+        None => Exporter::try_from(Uri::try_from_output_env()?),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "server")]
-    use super::resolve_serve_runtime_mode;
+    use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
     use super::{
         Cli, Commands, KeystoreCommands, format_remaining_duration_from,
         host_connection_uses_receiver, resolve_host_secret_auth,
@@ -1625,6 +1761,42 @@ mod tests {
         let resolved = resolve_serve_runtime_mode(None).expect("resolve mode");
 
         assert_eq!(resolved, RuntimeMode::User);
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_exporter_defaults_to_stdout_in_user_mode_without_output_env() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::remove_var("ESDIAG_OUTPUT_URL");
+            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
+            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
+            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
+        }
+
+        let exporter =
+            resolve_serve_exporter(None, RuntimeMode::User).expect("resolve user-mode exporter");
+
+        assert_eq!(exporter.target_uri(), "stdio://stdout");
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_exporter_requires_output_env_in_service_mode_without_output_flag() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::remove_var("ESDIAG_OUTPUT_URL");
+            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
+            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
+            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
+        }
+
+        let err = match resolve_serve_exporter(None, RuntimeMode::Service) {
+            Ok(_) => panic!("service mode should still require configured output"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("ESDIAG_OUTPUT_URL is not defined"));
     }
 }
 

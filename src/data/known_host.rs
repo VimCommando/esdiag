@@ -431,6 +431,14 @@ impl KnownHost {
         )
     }
 
+    pub fn secret_reference(&self) -> Option<&str> {
+        match self {
+            Self::ApiKey { secret, .. } => secret.as_deref(),
+            Self::Basic { secret, .. } => secret.as_deref(),
+            Self::NoAuth { .. } => None,
+        }
+    }
+
     pub fn get_auth(&self) -> Result<Auth> {
         match self {
             Self::ApiKey { apikey, secret, .. } => {
