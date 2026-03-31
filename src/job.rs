@@ -6,7 +6,7 @@
 //! Used by both the CLI (`esdiag job run`) and the web server.
 
 use crate::{
-    data::{CollectMode, KnownHost, ProcessMode, SendMode, Uri, Workflow},
+    data::{CollectMode, CollectSource, KnownHost, ProcessMode, SendMode, Uri, Workflow},
     exporter::Exporter,
     processor::{
         Collector, Identifiers, Processor,
@@ -23,6 +23,7 @@ pub async fn run_saved_job(
     identifiers: Identifiers,
     host: KnownHost,
 ) -> Result<()> {
+    validate_saved_job_workflow(workflow)?;
     let host_url = host.get_url().to_string();
     tracing::info!("Running saved job against {host_url}");
 
@@ -91,6 +92,16 @@ pub async fn run_saved_job(
     } else {
         Err(eyre!("Saved job has no valid execution path"))
     }
+}
+
+fn validate_saved_job_workflow(workflow: &Workflow) -> Result<()> {
+    if workflow.collect.mode != CollectMode::Collect {
+        return Err(eyre!("Saved jobs require collect mode"));
+    }
+    if workflow.collect.source != CollectSource::KnownHost {
+        return Err(eyre!("Saved jobs require a known-host collection source"));
+    }
+    Ok(())
 }
 
 async fn run_saved_job_collect_only(
@@ -227,8 +238,8 @@ impl Drop for TempDirCleanup {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_output_dir, explicit_process_selection};
-    use crate::data::Workflow;
+    use super::{collect_output_dir, explicit_process_selection, validate_saved_job_workflow};
+    use crate::data::{CollectSource, Workflow};
     use std::path::PathBuf;
 
     #[test]
@@ -255,5 +266,18 @@ mod tests {
 
         assert_eq!(selection.product, "logstash");
         assert!(selection.selected.iter().any(|item| item == "node"));
+    }
+
+    #[test]
+    fn validate_saved_job_workflow_rejects_non_known_host_sources() {
+        let mut workflow = Workflow::default();
+        workflow.collect.source = CollectSource::UploadFile;
+
+        assert_eq!(
+            validate_saved_job_workflow(&workflow)
+                .expect_err("upload-file saved jobs should be rejected")
+                .to_string(),
+            "Saved jobs require a known-host collection source"
+        );
     }
 }

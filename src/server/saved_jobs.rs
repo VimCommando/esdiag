@@ -89,10 +89,19 @@ fn validate_saved_job_name(name: &str) -> Result<(), &'static str> {
 }
 
 pub async fn list_saved_jobs(signals: Option<ReadSignals<ListSavedJobsSignals>>) -> Response {
-    let jobs = match load_saved_jobs() {
-        Ok(jobs) => jobs,
-        Err(err) => {
+    let _guard = saved_jobs_write_lock().lock().await;
+    let jobs = match task::spawn_blocking(load_saved_jobs).await {
+        Ok(Ok(jobs)) => jobs,
+        Ok(Err(err)) => {
             tracing::error!("Failed to load saved jobs: {err}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load saved jobs",
+            )
+                .into_response();
+        }
+        Err(err) => {
+            tracing::error!("Saved jobs list task failed: {err}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to load saved jobs",

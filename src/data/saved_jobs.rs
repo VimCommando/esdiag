@@ -33,7 +33,9 @@ pub fn load_saved_jobs() -> Result<SavedJobs> {
 pub fn save_saved_jobs(jobs: &SavedJobs) -> Result<()> {
     let path = get_jobs_path()?;
     let content = serde_yaml::to_string(jobs)?;
-    fs::write(path, content)?;
+    let temp_path = path.with_extension("yml.tmp");
+    fs::write(&temp_path, content)?;
+    fs::rename(&temp_path, &path)?;
     Ok(())
 }
 
@@ -47,4 +49,38 @@ fn get_jobs_path() -> Result<PathBuf> {
         fs::create_dir_all(&esdiag_dir)?;
     }
     Ok(esdiag_dir.join("jobs.yml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_env_lock;
+    use tempfile::TempDir;
+
+    fn setup_env() -> TempDir {
+        let tmp = TempDir::new().expect("temp dir");
+        let hosts = tmp.path().join("hosts.yml");
+        unsafe {
+            std::env::set_var("ESDIAG_HOSTS", &hosts);
+        }
+        tmp
+    }
+
+    #[test]
+    fn save_saved_jobs_overwrites_existing_file() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+
+        let mut jobs = SavedJobs::default();
+        jobs.insert("first".to_string(), SavedJob::default());
+        save_saved_jobs(&jobs).expect("save initial jobs");
+
+        let mut updated_jobs = SavedJobs::default();
+        updated_jobs.insert("second".to_string(), SavedJob::default());
+        save_saved_jobs(&updated_jobs).expect("overwrite jobs");
+
+        let loaded_jobs = load_saved_jobs().expect("load saved jobs");
+        assert!(loaded_jobs.contains_key("second"));
+        assert!(!loaded_jobs.contains_key("first"));
+    }
 }

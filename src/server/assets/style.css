@@ -1309,6 +1309,12 @@ content-layout.jobs-layout {
     outline-offset: 2px;
 }
 
+@media (hover: none), (pointer: coarse) {
+    .saved-job-delete {
+        opacity: 1;
+    }
+}
+
 .jobs-nav-actions {
     display: flex;
     gap: var(--size-xs);
