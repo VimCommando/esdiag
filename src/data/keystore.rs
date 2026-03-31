@@ -707,17 +707,27 @@ fn referenced_job_hosts(job: &crate::data::SavedJob) -> Vec<&str> {
         hosts.push(job.workflow.collect.known_host.trim());
     }
 
-    if !job.workflow.send.remote_target.trim().is_empty() {
-        hosts.push(job.workflow.send.remote_target.trim());
-    }
-
-    if !job.workflow.send.local_target.trim().is_empty()
-        && job.workflow.send.local_target.trim() != "directory"
-    {
-        hosts.push(job.workflow.send.local_target.trim());
+    match job.workflow.send.mode {
+        crate::data::SendMode::Remote => {
+            let remote = job.workflow.send.remote_target.trim();
+            if is_probable_hostname(remote) {
+                hosts.push(remote);
+            }
+        }
+        crate::data::SendMode::Local => {
+            let local = job.workflow.send.local_target.trim();
+            if is_probable_hostname(local) && local != "directory" {
+                hosts.push(local);
+            }
+        }
     }
 
     hosts
+}
+
+fn is_probable_hostname(target: &str) -> bool {
+    let trimmed = target.trim();
+    !trimmed.is_empty() && !trimmed.contains("://")
 }
 
 pub fn get_secret(secret_id: &str, keystore_password: &str) -> Result<Option<SecretEntry>> {
@@ -892,7 +902,7 @@ mod tests {
     use super::*;
     use crate::data::{
         CollectMode, CollectSource, CollectStage, HostRole, KnownHostBuilder, ProcessStage,
-        Product, SavedJob, SavedJobs, SendStage, Workflow, save_saved_jobs,
+        Product, SavedJob, SavedJobs, SendMode, SendStage, Workflow, save_saved_jobs,
     };
     use crate::test_env_lock;
     use tempfile::TempDir;
@@ -1271,5 +1281,53 @@ mod tests {
                 .expect("read secret")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn referenced_job_hosts_only_uses_active_send_mode_targets() {
+        let job = SavedJob {
+            identifiers: Default::default(),
+            workflow: Workflow {
+                collect: CollectStage {
+                    mode: CollectMode::Collect,
+                    source: CollectSource::KnownHost,
+                    known_host: "collector".to_string(),
+                    ..Default::default()
+                },
+                process: ProcessStage::default(),
+                send: SendStage {
+                    mode: SendMode::Local,
+                    remote_target: "stale-remote".to_string(),
+                    local_target: "sender".to_string(),
+                    local_directory: String::new(),
+                },
+            },
+        };
+
+        assert_eq!(referenced_job_hosts(&job), vec!["collector", "sender"]);
+    }
+
+    #[test]
+    fn referenced_job_hosts_ignores_remote_urls() {
+        let job = SavedJob {
+            identifiers: Default::default(),
+            workflow: Workflow {
+                collect: CollectStage {
+                    mode: CollectMode::Collect,
+                    source: CollectSource::KnownHost,
+                    known_host: "collector".to_string(),
+                    ..Default::default()
+                },
+                process: ProcessStage::default(),
+                send: SendStage {
+                    mode: SendMode::Remote,
+                    remote_target: "https://upload.elastic.co/g/abc123".to_string(),
+                    local_target: String::new(),
+                    local_directory: String::new(),
+                },
+            },
+        };
+
+        assert_eq!(referenced_job_hosts(&job), vec!["collector"]);
     }
 }

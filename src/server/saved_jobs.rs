@@ -1,5 +1,7 @@
 use super::ServerState;
-use crate::data::{CollectSource, KnownHost, SavedJob, Workflow, load_saved_jobs, save_saved_jobs};
+use crate::data::{
+    CollectSource, HostRole, KnownHost, SavedJob, Workflow, load_saved_jobs, save_saved_jobs,
+};
 use crate::processor::Identifiers;
 use askama::Template;
 use axum::{
@@ -167,9 +169,12 @@ fn validate_saved_job(signals: &SaveJobSignals) -> Result<(), &'static str> {
     }
 
     let hosts = KnownHost::parse_hosts_yml().map_err(|_| "Failed to read known hosts.")?;
-    hosts
+    let host = hosts
         .get(host_name)
         .ok_or("Saved jobs require a known host that exists in hosts.yml.")?;
+    if !host.has_role(HostRole::Collect) {
+        return Err("Saved jobs require a known host with the collect role.");
+    }
 
     Ok(())
 }
@@ -285,6 +290,32 @@ mod tests {
         ));
 
         assert!(result.is_ok(), "no-auth known hosts should be savable");
+    }
+
+    #[test]
+    fn validate_saved_job_rejects_known_hosts_without_collect_role() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "send-only".to_string(),
+            KnownHost::NoAuth {
+                accept_invalid_certs: false,
+                app: Product::Elasticsearch,
+                roles: vec![HostRole::Send],
+                viewer: None,
+                url: Url::parse("http://localhost:9200").expect("url"),
+            },
+        );
+        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
+
+        let result = validate_saved_job(&save_signals(CollectSource::KnownHost, "send-only"));
+
+        assert_eq!(
+            result.expect_err("send-only known hosts should be rejected"),
+            "Saved jobs require a known host with the collect role."
+        );
     }
 
     #[test]
