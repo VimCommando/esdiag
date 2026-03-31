@@ -459,11 +459,7 @@ impl SavedJobDefaults {
                     .unwrap_or_else(|_| format!("\"{}\"", send_defaults.mode)),
                 remote_target: job.workflow.send.remote_target.clone(),
                 local_target: job.workflow.send.local_target.clone(),
-                local_directory: if job.workflow.send.local_directory.is_empty() {
-                    default_save_dir.to_string()
-                } else {
-                    job.workflow.send.local_directory.clone()
-                },
+                local_directory: job.workflow.send.local_directory.clone(),
                 user: job.identifiers.user.clone().unwrap_or_default(),
                 account: job.identifiers.account.clone().unwrap_or_default(),
                 case_number: job.identifiers.case_number.clone().unwrap_or_default(),

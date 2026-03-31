@@ -28,18 +28,22 @@ pub async fn run_saved_job(
 
     if need_collect && need_process {
         // Collect → Process → Send
-        let temp_dir = std::env::temp_dir().join(format!(
-            "esdiag-job-{}",
-            uuid::Uuid::new_v4().as_u64_pair().0
-        ));
-        std::fs::create_dir_all(&temp_dir)?;
-        let _cleanup = TempDirCleanup(temp_dir.clone());
+        let (output_dir, _cleanup) = if workflow.collect.save {
+            (collect_output_dir(workflow)?, None)
+        } else {
+            let temp_dir = std::env::temp_dir().join(format!(
+                "esdiag-job-{}",
+                uuid::Uuid::new_v4().as_u64_pair().0
+            ));
+            std::fs::create_dir_all(&temp_dir)?;
+            (temp_dir.clone(), Some(TempDirCleanup(temp_dir)))
+        };
 
         tracing::info!("Collecting diagnostic from {host_url}");
         let product = host.app().clone();
         let diagnostic_type = workflow.collect.diagnostic_type.clone();
         let receiver = Receiver::try_from(host)?;
-        let collect_exporter = Exporter::for_collect_archive(temp_dir)?;
+        let collect_exporter = Exporter::for_collect_archive(output_dir)?;
         let collector = Collector::try_new(
             receiver,
             collect_exporter,
@@ -56,7 +60,7 @@ pub async fn run_saved_job(
 
         // Process the collected archive
         let exporter = resolve_exporter(workflow)?;
-        let receiver = Arc::new(Receiver::try_from(Uri::File(archive_path))?);
+        let receiver = Arc::new(Receiver::try_from(Uri::File(archive_path.clone()))?);
         let exporter = Arc::new(exporter);
         let processor = Processor::try_new(receiver, exporter, identifiers).await?;
         let processor = processor
@@ -69,6 +73,9 @@ pub async fn run_saved_job(
                     "Processing complete in {:.3}s",
                     completed.state.runtime as f64 / 1000.0
                 );
+                if workflow.collect.save {
+                    tracing::info!("Retained collected archive: {}", archive_path.display());
+                }
                 Ok(())
             }
             Err(failed) => Err(eyre!("{}", failed)),
