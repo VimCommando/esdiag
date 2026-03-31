@@ -30,7 +30,10 @@ pub use keystore::{
 };
 pub use known_host::{ElasticCloud, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate};
 pub use product::Product;
-pub use saved_jobs::{SavedJob, SavedJobs, load_saved_jobs, save_saved_jobs};
+pub use saved_jobs::{
+    SavedJob, SavedJobs, load_saved_jobs, load_saved_jobs_async, save_saved_jobs,
+    with_saved_jobs_async,
+};
 pub use settings::Settings;
 pub use uri::Uri;
 pub use workflow::{

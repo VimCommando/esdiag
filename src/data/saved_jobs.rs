@@ -1,7 +1,14 @@
 use eyre::Result;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{
+    fs::{self, File},
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
+    sync::OnceLock,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tokio::{sync::Mutex, task};
 
 use super::workflow::Workflow;
 use crate::processor::Identifiers;
@@ -15,6 +22,11 @@ pub struct SavedJob {
 }
 
 pub type SavedJobs = IndexMap<String, SavedJob>;
+
+fn saved_jobs_io_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 pub fn load_saved_jobs() -> Result<SavedJobs> {
     let path = get_jobs_path()?;
@@ -32,11 +44,29 @@ pub fn load_saved_jobs() -> Result<SavedJobs> {
 
 pub fn save_saved_jobs(jobs: &SavedJobs) -> Result<()> {
     let path = get_jobs_path()?;
-    let content = serde_yaml::to_string(jobs)?;
-    let temp_path = path.with_extension("yml.tmp");
-    fs::write(&temp_path, content)?;
-    fs::rename(&temp_path, &path)?;
+    write_yaml_atomic(&path, jobs)?;
     Ok(())
+}
+
+pub async fn load_saved_jobs_async() -> Result<SavedJobs> {
+    let _guard = saved_jobs_io_lock().lock().await;
+    task::spawn_blocking(load_saved_jobs)
+        .await
+        .map_err(|err| eyre::eyre!("Saved jobs load task failed: {err}"))?
+}
+
+pub async fn with_saved_jobs_async<T, F>(operation: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut SavedJobs) -> Result<T> + Send + 'static,
+{
+    let _guard = saved_jobs_io_lock().lock().await;
+    task::spawn_blocking(move || {
+        let mut jobs = load_saved_jobs()?;
+        operation(&mut jobs)
+    })
+    .await
+    .map_err(|err| eyre::eyre!("Saved jobs update task failed: {err}"))?
 }
 
 fn get_jobs_path() -> Result<PathBuf> {
@@ -49,6 +79,90 @@ fn get_jobs_path() -> Result<PathBuf> {
         fs::create_dir_all(&esdiag_dir)?;
     }
     Ok(esdiag_dir.join("jobs.yml"))
+}
+
+fn secure_output_file(path: &Path) -> Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        options.mode(0o600);
+        let file = options.open(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        Ok(file)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(options.open(path)?)
+    }
+}
+
+fn temp_output_path(path: &Path) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre::eyre!("Path '{}' has no parent directory", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| eyre::eyre!("Path '{}' has no file name", path.display()))?
+        .to_string_lossy();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_nanos();
+    Ok(parent.join(format!(".{file_name}.tmp-{}-{unique}", std::process::id())))
+}
+
+fn replace_file_atomic(path: &Path, temp_path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        let backup_path = path.with_extension("bak");
+        let mut backup_created = false;
+
+        if path.exists() {
+            if backup_path.exists() {
+                let _ = fs::remove_file(&backup_path);
+            }
+            fs::rename(path, &backup_path)?;
+            backup_created = true;
+        }
+
+        match fs::rename(temp_path, path) {
+            Ok(()) => {
+                if backup_created {
+                    let _ = fs::remove_file(&backup_path);
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                if backup_created && !path.exists() {
+                    let _ = fs::rename(&backup_path, path);
+                }
+                return Err(err.into());
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fs::rename(temp_path, path)?;
+    Ok(())
+}
+
+fn write_yaml_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let temp_path = temp_output_path(path)?;
+    let write_result = (|| -> Result<()> {
+        let file = secure_output_file(&temp_path)?;
+        let mut writer = BufWriter::new(file);
+        serde_yaml::to_writer(&mut writer, value)?;
+        writer.flush()?;
+        drop(writer);
+        replace_file_atomic(path, &temp_path)
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
 }
 
 #[cfg(test)]

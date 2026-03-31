@@ -1,6 +1,7 @@
 use super::ServerState;
 use crate::data::{
-    CollectSource, HostRole, KnownHost, SavedJob, Workflow, load_saved_jobs, save_saved_jobs,
+    CollectSource, HostRole, KnownHost, SavedJob, Workflow, load_saved_jobs_async,
+    save_saved_jobs, with_saved_jobs_async,
 };
 use crate::processor::Identifiers;
 use askama::Template;
@@ -11,8 +12,7 @@ use axum::{
 };
 use datastar::{axum::ReadSignals, consts::ElementPatchMode, patch_elements::PatchElements};
 use serde::Deserialize;
-use std::sync::{Arc, OnceLock};
-use tokio::{sync::Mutex, task};
+use std::sync::Arc;
 
 #[derive(Template)]
 #[template(path = "components/saved_jobs_list.html")]
@@ -66,11 +66,6 @@ fn sse_response(events: Vec<String>) -> Response {
     ([(CONTENT_TYPE, "text/event-stream")], events.join("\n\n")).into_response()
 }
 
-fn saved_jobs_write_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
 fn validate_saved_job_name(name: &str) -> Result<(), &'static str> {
     let trimmed = name.trim();
 
@@ -89,19 +84,10 @@ fn validate_saved_job_name(name: &str) -> Result<(), &'static str> {
 }
 
 pub async fn list_saved_jobs(signals: Option<ReadSignals<ListSavedJobsSignals>>) -> Response {
-    let _guard = saved_jobs_write_lock().lock().await;
-    let jobs = match task::spawn_blocking(load_saved_jobs).await {
-        Ok(Ok(jobs)) => jobs,
-        Ok(Err(err)) => {
-            tracing::error!("Failed to load saved jobs: {err}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to load saved jobs",
-            )
-                .into_response();
-        }
+    let jobs = match load_saved_jobs_async().await {
+        Ok(jobs) => jobs,
         Err(err) => {
-            tracing::error!("Saved jobs list task failed: {err}");
+            tracing::error!("Failed to load saved jobs: {err}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to load saved jobs",
@@ -139,23 +125,17 @@ pub async fn save_job(signals: ReadSignals<SaveJobSignals>) -> Response {
         workflow: signals.workflow,
     };
 
-    let _guard = saved_jobs_write_lock().lock().await;
     let name_for_save = name.clone();
-    let names = match task::spawn_blocking(move || {
-        let mut jobs = load_saved_jobs()?;
+    let names = match with_saved_jobs_async(move |jobs| {
         jobs.insert(name_for_save, saved_job);
         save_saved_jobs(&jobs)?;
         Ok::<Vec<String>, eyre::Report>(jobs.keys().cloned().collect())
     })
     .await
     {
-        Ok(Ok(names)) => names,
-        Ok(Err(err)) => {
-            tracing::error!("Failed to save jobs: {err}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save jobs").into_response();
-        }
+        Ok(names) => names,
         Err(err) => {
-            tracing::error!("Saved jobs save task failed: {err}");
+            tracing::error!("Failed to save jobs: {err}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save jobs").into_response();
         }
     };
@@ -209,10 +189,8 @@ pub async fn delete_saved_job(
     }
     let name = name.trim().to_string();
 
-    let _guard = saved_jobs_write_lock().lock().await;
     let name_for_delete = name.clone();
-    let names = match task::spawn_blocking(move || {
-        let mut jobs = load_saved_jobs()?;
+    let names = match with_saved_jobs_async(move |jobs| {
         if jobs.shift_remove(&name_for_delete).is_none() {
             return Ok::<Option<Vec<String>>, eyre::Report>(None);
         }
@@ -221,14 +199,10 @@ pub async fn delete_saved_job(
     })
     .await
     {
-        Ok(Ok(Some(names))) => names,
-        Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "Job not found").into_response(),
-        Ok(Err(err)) => {
-            tracing::error!("Failed to delete job: {err}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to delete job").into_response();
-        }
+        Ok(Some(names)) => names,
+        Ok(None) => return (StatusCode::NOT_FOUND, "Job not found").into_response(),
         Err(err) => {
-            tracing::error!("Saved jobs delete task failed: {err}");
+            tracing::error!("Failed to delete job: {err}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to delete job").into_response();
         }
     };

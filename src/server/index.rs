@@ -4,7 +4,7 @@
 
 use super::{ServerState, get_theme_dark, template};
 use crate::data::{
-    HostRole, KnownHost, Product, SavedJob, Settings, keystore_exists, load_saved_jobs,
+    HostRole, KnownHost, Product, SavedJob, Settings, keystore_exists, load_saved_jobs_async,
 };
 use crate::exporter::Exporter;
 use crate::processor::api::ApiResolver;
@@ -304,7 +304,7 @@ async fn build_jobs_page(
 
     // Resolve saved job if a name was provided
     let (saved_job, job_not_found, job_load_error) = if let Some(ref name) = saved_job_name {
-        match load_saved_jobs() {
+        match load_saved_jobs_async().await {
             Ok(jobs) => match jobs.get(name).cloned() {
                 Some(job) => (Some(job), false, None),
                 None => (None, true, None),
