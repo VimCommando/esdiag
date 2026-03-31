@@ -14,7 +14,7 @@
             class="saved-job-delete"
             title="Delete {{ job.name }}"
             aria-label="Delete saved job {{ job.name }}"
-            data-on:click="$pending_delete_job = '{{ job.name }}'; $show_delete_job_modal = true"
+            data-on:click="$pending_delete_job = {{ job.name|json }}; $show_delete_job_modal = true"
         >&times;</button>
     </li>
     {% endfor %}

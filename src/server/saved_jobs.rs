@@ -9,7 +9,7 @@ use axum::{
 };
 use datastar::{axum::ReadSignals, consts::ElementPatchMode, patch_elements::PatchElements};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Template)]
 #[template(path = "components/saved_jobs_list.html")]
@@ -55,6 +55,26 @@ fn sse_response(events: Vec<String>) -> Response {
     ([(CONTENT_TYPE, "text/event-stream")], events.join("\n\n")).into_response()
 }
 
+fn saved_jobs_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn validate_saved_job_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() {
+        return Err("Job name cannot be empty");
+    }
+
+    if name
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | '?' | '#' | '%'))
+    {
+        return Err("Job name contains unsupported path characters");
+    }
+
+    Ok(())
+}
+
 pub async fn list_saved_jobs(signals: Option<ReadSignals<ListSavedJobsSignals>>) -> Response {
     let jobs = match load_saved_jobs() {
         Ok(jobs) => jobs,
@@ -81,12 +101,20 @@ pub struct SaveJobSignals {
 pub async fn save_job(signals: ReadSignals<SaveJobSignals>) -> Response {
     let ReadSignals(signals) = signals;
     let name = signals.job_name.trim().to_string();
-    if name.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Job name cannot be empty").into_response();
+    if let Err(err) = validate_saved_job_name(&name) {
+        return (StatusCode::BAD_REQUEST, err).into_response();
     }
     if let Err(err) = validate_saved_job(&signals) {
         return (StatusCode::BAD_REQUEST, err).into_response();
     }
+
+    let _guard = match saved_jobs_write_lock().lock() {
+        Ok(guard) => guard,
+        Err(err) => {
+            tracing::warn!("Saved jobs write lock was poisoned, continuing");
+            err.into_inner()
+        }
+    };
 
     let mut jobs = match load_saved_jobs() {
         Ok(jobs) => jobs,
@@ -133,7 +161,10 @@ pub async fn load_saved_job(
     State(state): State<Arc<ServerState>>,
     Path(name): Path<String>,
     headers: HeaderMap,
-) -> impl IntoResponse {
+) -> Response {
+    if let Err(err) = validate_saved_job_name(&name) {
+        return (StatusCode::BAD_REQUEST, err).into_response();
+    }
     super::index::jobs_page_with_saved_job(state, name, headers).await
 }
 
@@ -141,6 +172,18 @@ pub async fn delete_saved_job(
     Path(name): Path<String>,
     signals: Option<ReadSignals<ListSavedJobsSignals>>,
 ) -> Response {
+    if let Err(err) = validate_saved_job_name(&name) {
+        return (StatusCode::BAD_REQUEST, err).into_response();
+    }
+
+    let _guard = match saved_jobs_write_lock().lock() {
+        Ok(guard) => guard,
+        Err(err) => {
+            tracing::warn!("Saved jobs write lock was poisoned, continuing");
+            err.into_inner()
+        }
+    };
+
     let mut jobs = match load_saved_jobs() {
         Ok(jobs) => jobs,
         Err(err) => {
@@ -238,5 +281,22 @@ mod tests {
             result.expect_err("api-key jobs should be rejected"),
             "Saved jobs require a known-host collection source."
         );
+    }
+
+    #[test]
+    fn validate_saved_job_name_rejects_path_unsafe_characters() {
+        assert_eq!(
+            validate_saved_job_name("bad/job").expect_err("slash should be rejected"),
+            "Job name contains unsupported path characters"
+        );
+        assert_eq!(
+            validate_saved_job_name("bad%job").expect_err("percent should be rejected"),
+            "Job name contains unsupported path characters"
+        );
+    }
+
+    #[test]
+    fn validate_saved_job_name_allows_spaces() {
+        assert!(validate_saved_job_name("daily prod collect").is_ok());
     }
 }
