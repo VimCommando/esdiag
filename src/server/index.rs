@@ -253,7 +253,9 @@ pub async fn jobs_page_with_saved_job(
     name: String,
     headers: HeaderMap,
 ) -> Response {
-    build_jobs_page(state, Some(name), None, headers).await.into_response()
+    build_jobs_page(state, Some(name), None, headers)
+        .await
+        .into_response()
 }
 
 async fn build_jobs_page(
@@ -302,7 +304,10 @@ async fn build_jobs_page(
 
     // Resolve saved job if a name was provided
     let (saved_job, job_not_found) = if let Some(ref name) = saved_job_name {
-        match load_saved_jobs().ok().and_then(|jobs| jobs.get(name).cloned()) {
+        match load_saved_jobs()
+            .ok()
+            .and_then(|jobs| jobs.get(name).cloned())
+        {
             Some(job) => (Some(job), false),
             None => (None, true),
         }
@@ -318,7 +323,10 @@ async fn build_jobs_page(
     let saved = SavedJobDefaults::from_job(saved_job.as_ref(), &send_defaults, &default_save_dir);
 
     let message = if job_not_found {
-        format!("Job '{}' not found", saved_job_name.as_deref().unwrap_or(""))
+        format!(
+            "Job '{}' not found",
+            saved_job_name.as_deref().unwrap_or("")
+        )
     } else if stale_host {
         format!(
             "Warning: host '{}' referenced by job '{}' is no longer configured",
@@ -657,8 +665,16 @@ mod tests {
         assert!(options.send_remote_hosts.contains(&"es-local".to_string()));
         assert_eq!(options.send_local_hosts, vec!["es-local".to_string()]);
         assert!(options.collect_hosts.contains(&"kb-collect".to_string()));
-        assert!(!options.send_remote_hosts.contains(&"kb-collect".to_string()));
+        assert!(
+            !options
+                .send_remote_hosts
+                .contains(&"kb-collect".to_string())
+        );
         assert!(!options.send_local_hosts.contains(&"kb-collect".to_string()));
-        assert!(!options.send_secure_hosts.contains(&"kb-collect".to_string()));
+        assert!(
+            !options
+                .send_secure_hosts
+                .contains(&"kb-collect".to_string())
+        );
     }
 }

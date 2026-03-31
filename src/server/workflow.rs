@@ -920,7 +920,11 @@ async fn cleanup_local_path(path: &Path) {
     if let Err(err) = fs::remove_file(path).await
         && err.kind() != std::io::ErrorKind::NotFound
     {
-        tracing::debug!("Failed to clean local workflow path {}: {}", path.display(), err);
+        tracing::debug!(
+            "Failed to clean local workflow path {}: {}",
+            path.display(),
+            err
+        );
     }
 }
 
@@ -928,16 +932,15 @@ async fn cleanup_local_path(path: &Path) {
 mod tests {
     use super::{
         download_service_link_to_path, select_processed_exporter, validate_local_send_uri,
-        validate_remote_send_uri,
-        validate_workflow_request,
+        validate_remote_send_uri, validate_workflow_request,
     };
     use crate::{
         data::{HostRole, KnownHostBuilder, Product, Uri},
         exporter::Exporter,
         server::{
             CollectSource, KeystoreSessionState, ProcessMode, RetainedBundle, RuntimeMode,
-            RuntimeModePolicy, SendMode, ServerEvent, ServerState, Stats, WorkflowInput, WorkflowJob,
-            WorkflowRunSignals,
+            RuntimeModePolicy, SendMode, ServerEvent, ServerState, Stats, WorkflowInput,
+            WorkflowJob, WorkflowRunSignals,
         },
     };
     use axum::{Router, http::StatusCode, routing::get};
@@ -1100,9 +1103,12 @@ mod tests {
             .expect("bind listener");
         let addr = listener.local_addr().expect("listener addr");
         tokio::spawn(async move {
-            axum::serve(listener, Router::new().route("/archive.zip", get(unauthorized)))
-                .await
-                .expect("serve mock upload endpoint");
+            axum::serve(
+                listener,
+                Router::new().route("/archive.zip", get(unauthorized)),
+            )
+            .await
+            .expect("serve mock upload endpoint");
         });
 
         let uri = Uri::ServiceLink(
@@ -1118,6 +1124,9 @@ mod tests {
             err.to_string().contains("HTTP 401 Unauthorized"),
             "expected status-bearing error, got: {err}"
         );
-        assert!(!path.exists(), "failed download should not create output file");
+        assert!(
+            !path.exists(),
+            "failed download should not create output file"
+        );
     }
 }

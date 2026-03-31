@@ -749,12 +749,18 @@ impl ServerState {
             Ok(Some(password)) => password,
             Ok(None) => return,
             Err(err) => {
-                tracing::warn!("Failed to inspect CLI unlock lease for web session seed: {}", err);
+                tracing::warn!(
+                    "Failed to inspect CLI unlock lease for web session seed: {}",
+                    err
+                );
                 return;
             }
         };
         if let Err(err) = crate::data::validate_existing_keystore_password(&password) {
-            tracing::warn!("Ignoring invalid CLI unlock lease for web session seed: {}", err);
+            tracing::warn!(
+                "Ignoring invalid CLI unlock lease for web session seed: {}",
+                err
+            );
             return;
         }
         self.set_keystore_unlocked_for(user, password).await;
@@ -913,7 +919,12 @@ impl ServerState {
         bundle.error = Some(error.clone());
         bundle.expires_at_epoch = expires_at_epoch;
         drop(bundles);
-        self.publish_event(Self::retained_bundle_signal(owner, token, "error", Some(&error)));
+        self.publish_event(Self::retained_bundle_signal(
+            owner,
+            token,
+            "error",
+            Some(&error),
+        ));
     }
 
     pub async fn retained_bundle(&self, token: &str) -> Option<RetainedBundle> {
@@ -1653,8 +1664,7 @@ mod tests {
     use super::{
         ApiKeyFormSignals, KeystoreSessionState, RuntimeMode, RuntimeModePolicy, Server,
         ServerEvent, ServerState, Stats, WorkflowRunSignals, event_visible_to_user,
-        receiver_stream, signal_event,
-        targeted_signal_event, test_server_state,
+        receiver_stream, signal_event, targeted_signal_event, test_server_state,
     };
     use crate::data::{create_keystore, write_unlock_lease};
     use crate::exporter::Exporter;

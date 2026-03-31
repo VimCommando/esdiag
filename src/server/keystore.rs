@@ -312,8 +312,8 @@ mod tests {
         data::{KnownHost, Settings, authenticate},
         exporter::Exporter,
         server::{
-            KeystoreSessionState, RuntimeMode, RuntimeModePolicy, ServerEvent, ServerState,
-            Stats, test_server_state,
+            KeystoreSessionState, RuntimeMode, RuntimeModePolicy, ServerEvent, ServerState, Stats,
+            test_server_state,
         },
     };
     use axum::{

@@ -192,7 +192,15 @@ async fn run_api_key_id(
             return;
         }
     };
-    workflow::run_job(state, WorkflowRunSignals::default(), job_id, request_user, tx, job).await;
+    workflow::run_job(
+        state,
+        WorkflowRunSignals::default(),
+        job_id,
+        request_user,
+        tx,
+        job,
+    )
+    .await;
 }
 
 #[cfg(test)]
@@ -289,7 +297,9 @@ mod tests {
             match event {
                 ServerEvent::JobFeed(html)
                     if html.contains("output target")
-                        && html.contains("Keystore is locked. Unlock it before processing secure outputs.") =>
+                        && html.contains(
+                            "Keystore is locked. Unlock it before processing secure outputs.",
+                        ) =>
                 {
                     saw_failure = true;
                 }

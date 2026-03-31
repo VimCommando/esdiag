@@ -10,6 +10,7 @@ use crate::{
     exporter::Exporter,
     processor::{Collector, Identifiers, Processor},
     receiver::Receiver,
+    uploader,
 };
 use eyre::{Result, eyre};
 use std::{path::PathBuf, sync::Arc};
@@ -23,8 +24,7 @@ pub async fn run_saved_job(
     tracing::info!("Running saved job against {host_url}");
 
     let need_collect = workflow.collect.mode == CollectMode::Collect;
-    let need_process = workflow.process.enabled
-        && workflow.process.mode == ProcessMode::Process;
+    let need_process = workflow.process.enabled && workflow.process.mode == ProcessMode::Process;
 
     if need_collect && need_process {
         // Collect → Process → Send
@@ -74,32 +74,63 @@ pub async fn run_saved_job(
             Err(failed) => Err(eyre!("{}", failed)),
         }
     } else if need_collect {
-        // Collect only (save to disk)
-        let save_dir = if workflow.collect.save_dir.is_empty() {
-            std::env::current_dir()?
-        } else {
-            PathBuf::from(&workflow.collect.save_dir)
-        };
-        tracing::info!("Collecting diagnostic from {host_url}");
-        let product = host.app().clone();
-        let diagnostic_type = workflow.collect.diagnostic_type.clone();
-        let receiver = Receiver::try_from(host)?;
-        let collect_exporter = Exporter::for_collect_archive(save_dir)?;
-        let collector = Collector::try_new(
-            receiver,
-            collect_exporter,
-            product,
-            diagnostic_type,
-            None,
-            None,
-            identifiers,
-        )
-        .await?;
-        let result = collector.collect().await?;
-        tracing::info!("Collected archive: {}", result.path);
-        Ok(())
+        run_saved_job_collect_only(workflow, identifiers, host, &host_url).await
     } else {
         Err(eyre!("Saved job has no valid execution path"))
+    }
+}
+
+async fn run_saved_job_collect_only(
+    workflow: &Workflow,
+    identifiers: Identifiers,
+    host: KnownHost,
+    host_url: &str,
+) -> Result<()> {
+    let output_dir = collect_output_dir(workflow)?;
+    tracing::info!("Collecting diagnostic from {host_url}");
+    let product = host.app().clone();
+    let diagnostic_type = workflow.collect.diagnostic_type.clone();
+    let receiver = Receiver::try_from(host)?;
+    let collect_exporter = Exporter::for_collect_archive(output_dir)?;
+    let collector = Collector::try_new(
+        receiver,
+        collect_exporter,
+        product,
+        diagnostic_type,
+        None,
+        None,
+        identifiers,
+    )
+    .await?;
+    let result = collector.collect().await?;
+    let archive_path = PathBuf::from(&result.path);
+
+    if workflow.process.mode == ProcessMode::Forward && workflow.send.mode == SendMode::Remote {
+        let target = workflow.send.remote_target.trim();
+        if target.is_empty() {
+            return Err(eyre!(
+                "Remote forward requires an Elastic Upload Service upload id or URL"
+            ));
+        }
+
+        let response =
+            uploader::upload_file(&archive_path, target, uploader::DEFAULT_UPLOAD_API_URL).await?;
+        tracing::info!(
+            "Forwarded archive to https://upload.elastic.co/g/{}",
+            response.slug
+        );
+        return Ok(());
+    }
+
+    tracing::info!("Collected archive: {}", archive_path.display());
+    Ok(())
+}
+
+fn collect_output_dir(workflow: &Workflow) -> Result<PathBuf> {
+    if workflow.collect.save_dir.is_empty() {
+        Ok(std::env::current_dir()?)
+    } else {
+        Ok(PathBuf::from(&workflow.collect.save_dir))
     }
 }
 
@@ -117,15 +148,11 @@ fn resolve_exporter(workflow: &Workflow) -> Result<Exporter> {
             if target == "directory" {
                 let directory = workflow.send.local_directory.trim();
                 if directory.is_empty() {
-                    return Err(eyre!(
-                        "Local directory output requires a directory path"
-                    ));
+                    return Err(eyre!("Local directory output requires a directory path"));
                 }
                 Exporter::try_from(Uri::try_from(directory.to_string())?)
             } else if target.is_empty() {
-                Err(eyre!(
-                    "Local send requires a target"
-                ))
+                Err(eyre!("Local send requires a target"))
             } else {
                 Exporter::try_from(Uri::try_from(target.to_string())?)
             }
@@ -138,5 +165,23 @@ struct TempDirCleanup(PathBuf);
 impl Drop for TempDirCleanup {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_output_dir;
+    use crate::data::Workflow;
+    use std::path::PathBuf;
+
+    #[test]
+    fn collect_output_dir_prefers_saved_directory() {
+        let mut workflow = Workflow::default();
+        workflow.collect.save_dir = "/tmp/esdiag-saved-jobs".to_string();
+
+        assert_eq!(
+            collect_output_dir(&workflow).expect("save dir"),
+            PathBuf::from("/tmp/esdiag-saved-jobs")
+        );
     }
 }

@@ -13,6 +13,8 @@ use eyre::{Result, eyre};
 use pbkdf2::pbkdf2_hmac;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     collections::BTreeMap,
     env,
@@ -22,8 +24,6 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-#[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 const KDF_ROUNDS: u32 = 100_000;
 const KEY_SIZE: usize = 32;
@@ -207,10 +207,7 @@ fn temp_output_path(path: &Path) -> Result<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0))
         .as_nanos();
-    Ok(parent.join(format!(
-        ".{file_name}.tmp-{}-{unique}",
-        std::process::id()
-    )))
+    Ok(parent.join(format!(".{file_name}.tmp-{}-{unique}", std::process::id())))
 }
 
 fn replace_file_atomic(path: &Path, temp_path: &Path) -> Result<()> {
@@ -278,9 +275,12 @@ pub fn get_keystore_path() -> Result<PathBuf> {
 
 pub fn get_unlock_path() -> Result<PathBuf> {
     let keystore_path = get_keystore_path()?;
-    let parent = keystore_path
-        .parent()
-        .ok_or_else(|| eyre!("Keystore path '{}' has no parent directory", keystore_path.display()))?;
+    let parent = keystore_path.parent().ok_or_else(|| {
+        eyre!(
+            "Keystore path '{}' has no parent directory",
+            keystore_path.display()
+        )
+    })?;
     Ok(parent.join(UNLOCK_FILE))
 }
 
@@ -553,7 +553,10 @@ where
         .await
 }
 
-fn get_password_for_secret_commands_with_prompt<F>(interactive: bool, prompt_fn: F) -> Result<String>
+fn get_password_for_secret_commands_with_prompt<F>(
+    interactive: bool,
+    prompt_fn: F,
+) -> Result<String>
 where
     F: FnOnce(&str) -> Result<String>,
 {
@@ -934,7 +937,10 @@ mod tests {
 
         let status = get_unlock_status().expect("status");
         assert!(!status.unlock_active);
-        assert!(!unlock_path.exists(), "expired unlock file should be deleted");
+        assert!(
+            !unlock_path.exists(),
+            "expired unlock file should be deleted"
+        );
         assert!(
             get_keystore_password().is_err(),
             "expired lease should not provide password"
@@ -976,7 +982,10 @@ mod tests {
         std::fs::create_dir_all(&unlock_path).expect("create unlock directory");
 
         assert!(!clear_unlock_lease().expect("clear unlock lease"));
-        assert!(unlock_path.is_dir(), "non-file unlock path should be left alone");
+        assert!(
+            unlock_path.is_dir(),
+            "non-file unlock path should be left alone"
+        );
     }
 
     #[test]
@@ -1010,9 +1019,10 @@ mod tests {
         write_unlock_lease_until("stale-pw", current_epoch_seconds() + 300).expect("write lease");
 
         let err = get_keystore_password().expect_err("stale lease should be rejected");
-        assert!(err
-            .to_string()
-            .contains("no valid unlock lease is available"));
+        assert!(
+            err.to_string()
+                .contains("no valid unlock lease is available")
+        );
         assert!(
             !unlock_path.exists(),
             "stale unlock lease should be cleared on invalid password"
@@ -1059,9 +1069,10 @@ mod tests {
         write_unlock_lease_until("pw", current_epoch_seconds() + 300).expect("write lease");
 
         let err = get_keystore_password().expect_err("missing keystore should reject lease");
-        assert!(err
-            .to_string()
-            .contains("no valid unlock lease is available"));
+        assert!(
+            err.to_string()
+                .contains("no valid unlock lease is available")
+        );
         assert!(
             !unlock_path.exists(),
             "unlock lease should be cleared when keystore is absent"
@@ -1186,7 +1197,11 @@ mod tests {
         let err = remove_secret("used-secret", None, "pw").expect_err("secret should be protected");
 
         assert!(err.to_string().contains("hosts: prod"));
-        assert!(get_secret("used-secret", "pw").expect("read secret").is_some());
+        assert!(
+            get_secret("used-secret", "pw")
+                .expect("read secret")
+                .is_some()
+        );
     }
 
     #[test]
@@ -1228,7 +1243,11 @@ mod tests {
 
         assert!(err.to_string().contains("hosts: prod"));
         assert!(err.to_string().contains("saved jobs: nightly-prod"));
-        assert!(get_secret("used-secret", "pw").expect("read secret").is_some());
+        assert!(
+            get_secret("used-secret", "pw")
+                .expect("read secret")
+                .is_some()
+        );
     }
 
     #[test]
@@ -1247,6 +1266,10 @@ mod tests {
 
         remove_secret("unused-secret", None, "pw").expect("remove secret");
 
-        assert!(get_secret("unused-secret", "pw").expect("read secret").is_none());
+        assert!(
+            get_secret("unused-secret", "pw")
+                .expect("read secret")
+                .is_none()
+        );
     }
 }

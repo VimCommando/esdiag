@@ -487,7 +487,10 @@ impl KnownHost {
         let app = self.app().clone();
         let url = self.get_url();
         let viewer = self.viewer().map(str::to_string);
-        let roles = update.roles.clone().unwrap_or_else(|| self.roles().to_vec());
+        let roles = update
+            .roles
+            .clone()
+            .unwrap_or_else(|| self.roles().to_vec());
         let accept_invalid_certs = update
             .accept_invalid_certs
             .unwrap_or_else(|| self.accept_invalid_certs());
@@ -746,8 +749,7 @@ impl KnownHost {
                 // Check if the `.esdiag` directory exists, if not, create it
                 let esdiag = home_dir.join(".esdiag");
                 if !esdiag.exists() {
-                    std::fs::create_dir_all(&esdiag)
-                        .expect("Failed to create ~/.esdiag directory");
+                    std::fs::create_dir_all(&esdiag).expect("Failed to create ~/.esdiag directory");
                 }
 
                 home_dir.join(".esdiag").join("hosts.yml")
@@ -1260,8 +1262,7 @@ mod tests {
             "pw",
         )
         .expect("upsert secret");
-        write_unlock_lease("pw", std::time::Duration::from_secs(300))
-            .expect("write unlock lease");
+        write_unlock_lease("pw", std::time::Duration::from_secs(300)).expect("write unlock lease");
         unsafe {
             std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
         }
@@ -1517,7 +1518,10 @@ mod tests {
                 secret,
                 ..
             } => {
-                assert!(accept_invalid_certs, "certificate setting should be preserved");
+                assert!(
+                    accept_invalid_certs,
+                    "certificate setting should be preserved"
+                );
                 assert_eq!(apikey.as_deref(), Some("legacy-key"));
                 assert_eq!(secret, None);
                 assert_eq!(roles, vec![HostRole::Collect, HostRole::Send]);
@@ -1603,9 +1607,8 @@ mod tests {
         };
 
         assert!(
-            err.to_string().contains(
-                "either provide a secret reference or both username and password"
-            ),
+            err.to_string()
+                .contains("either provide a secret reference or both username and password"),
             "unexpected error: {err}"
         );
     }
@@ -1633,9 +1636,8 @@ mod tests {
         };
 
         assert!(
-            err.to_string().contains(
-                "either provide a secret reference or both username and password"
-            ),
+            err.to_string()
+                .contains("either provide a secret reference or both username and password"),
             "unexpected error: {err}"
         );
     }

@@ -235,5 +235,13 @@ async fn run_service_link_id(
             return;
         }
     };
-    workflow::run_job(state, WorkflowRunSignals::default(), job_id, request_user, tx, job).await;
+    workflow::run_job(
+        state,
+        WorkflowRunSignals::default(),
+        job_id,
+        request_user,
+        tx,
+        job,
+    )
+    .await;
 }

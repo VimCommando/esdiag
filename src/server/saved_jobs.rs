@@ -9,7 +9,8 @@ use axum::{
 };
 use datastar::{axum::ReadSignals, consts::ElementPatchMode, patch_elements::PatchElements};
 use serde::Deserialize;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+use tokio::{sync::Mutex, task};
 
 #[derive(Template)]
 #[template(path = "components/saved_jobs_list.html")]
@@ -80,7 +81,11 @@ pub async fn list_saved_jobs(signals: Option<ReadSignals<ListSavedJobsSignals>>)
         Ok(jobs) => jobs,
         Err(err) => {
             tracing::error!("Failed to load saved jobs: {err}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load saved jobs").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load saved jobs",
+            )
+                .into_response();
         }
     };
     let names: Vec<String> = jobs.keys().cloned().collect();
@@ -108,38 +113,40 @@ pub async fn save_job(signals: ReadSignals<SaveJobSignals>) -> Response {
         return (StatusCode::BAD_REQUEST, err).into_response();
     }
 
-    let _guard = match saved_jobs_write_lock().lock() {
-        Ok(guard) => guard,
-        Err(err) => {
-            tracing::warn!("Saved jobs write lock was poisoned, continuing");
-            err.into_inner()
-        }
-    };
-
-    let mut jobs = match load_saved_jobs() {
-        Ok(jobs) => jobs,
-        Err(err) => {
-            tracing::error!("Failed to load saved jobs: {err}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load saved jobs").into_response();
-        }
-    };
-
     let saved_job = SavedJob {
         identifiers: signals.metadata,
         workflow: signals.workflow,
     };
-    jobs.insert(name.clone(), saved_job);
 
-    if let Err(err) = save_saved_jobs(&jobs) {
-        tracing::error!("Failed to save jobs: {err}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save jobs").into_response();
-    }
+    let _guard = saved_jobs_write_lock().lock().await;
+    let name_for_save = name.clone();
+    let names = match task::spawn_blocking(move || {
+        let mut jobs = load_saved_jobs()?;
+        jobs.insert(name_for_save, saved_job);
+        save_saved_jobs(&jobs)?;
+        Ok::<Vec<String>, eyre::Report>(jobs.keys().cloned().collect())
+    })
+    .await
+    {
+        Ok(Ok(names)) => names,
+        Ok(Err(err)) => {
+            tracing::error!("Failed to save jobs: {err}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save jobs").into_response();
+        }
+        Err(err) => {
+            tracing::error!("Saved jobs save task failed: {err}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save jobs").into_response();
+        }
+    };
 
-    let names: Vec<String> = jobs.keys().cloned().collect();
     sse_response(vec![patch_saved_jobs_list(&names, Some(name.as_str()))])
 }
 
 fn validate_saved_job(signals: &SaveJobSignals) -> Result<(), &'static str> {
+    if signals.workflow.collect.mode != crate::data::CollectMode::Collect {
+        return Err("Saved jobs require collect mode.");
+    }
+
     if signals.workflow.collect.source != CollectSource::KnownHost {
         return Err("Saved jobs require a known-host collection source.");
     }
@@ -176,32 +183,30 @@ pub async fn delete_saved_job(
         return (StatusCode::BAD_REQUEST, err).into_response();
     }
 
-    let _guard = match saved_jobs_write_lock().lock() {
-        Ok(guard) => guard,
+    let _guard = saved_jobs_write_lock().lock().await;
+    let name_for_delete = name.clone();
+    let names = match task::spawn_blocking(move || {
+        let mut jobs = load_saved_jobs()?;
+        if jobs.shift_remove(&name_for_delete).is_none() {
+            return Ok::<Option<Vec<String>>, eyre::Report>(None);
+        }
+        save_saved_jobs(&jobs)?;
+        Ok(Some(jobs.keys().cloned().collect()))
+    })
+    .await
+    {
+        Ok(Ok(Some(names))) => names,
+        Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "Job not found").into_response(),
+        Ok(Err(err)) => {
+            tracing::error!("Failed to save jobs: {err}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save jobs").into_response();
+        }
         Err(err) => {
-            tracing::warn!("Saved jobs write lock was poisoned, continuing");
-            err.into_inner()
+            tracing::error!("Saved jobs delete task failed: {err}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save jobs").into_response();
         }
     };
 
-    let mut jobs = match load_saved_jobs() {
-        Ok(jobs) => jobs,
-        Err(err) => {
-            tracing::error!("Failed to load saved jobs: {err}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to load saved jobs").into_response();
-        }
-    };
-
-    if jobs.shift_remove(&name).is_none() {
-        return (StatusCode::NOT_FOUND, "Job not found").into_response();
-    }
-
-    if let Err(err) = save_saved_jobs(&jobs) {
-        tracing::error!("Failed to save jobs: {err}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to save jobs").into_response();
-    }
-
-    let names: Vec<String> = jobs.keys().cloned().collect();
     let current_job_name = signals
         .as_ref()
         .map(|ReadSignals(signals)| signals.loaded_job_name.trim())
@@ -280,6 +285,20 @@ mod tests {
         assert_eq!(
             result.expect_err("api-key jobs should be rejected"),
             "Saved jobs require a known-host collection source."
+        );
+    }
+
+    #[test]
+    fn validate_saved_job_rejects_non_collect_mode() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+
+        let mut signals = save_signals(CollectSource::KnownHost, "elasticsearch-local");
+        signals.workflow.collect.mode = crate::data::CollectMode::Upload;
+
+        assert_eq!(
+            validate_saved_job(&signals).expect_err("upload mode should be rejected"),
+            "Saved jobs require collect mode."
         );
     }
 

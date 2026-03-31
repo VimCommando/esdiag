@@ -3,8 +3,8 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{
-    KnownHostFormSignals, ServerEvent, ServerState, job_feed_event, receiver_stream,
-    signal_event, template, workflow,
+    KnownHostFormSignals, ServerEvent, ServerState, job_feed_event, receiver_stream, signal_event,
+    template, workflow,
 };
 use crate::{
     data::{KnownHost, with_scoped_keystore_password},
