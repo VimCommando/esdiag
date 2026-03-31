@@ -70,11 +70,13 @@ fn saved_jobs_write_lock() -> &'static Mutex<()> {
 }
 
 fn validate_saved_job_name(name: &str) -> Result<(), &'static str> {
-    if name.is_empty() {
+    let trimmed = name.trim();
+
+    if trimmed.is_empty() {
         return Err("Job name cannot be empty");
     }
 
-    if name
+    if trimmed
         .chars()
         .any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | '?' | '#' | '%'))
     {

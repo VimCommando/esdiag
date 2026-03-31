@@ -1357,7 +1357,7 @@ fn handle_job_list() -> Result<()> {
         return Ok(());
     }
 
-    let hosts = KnownHost::parse_hosts_yml().unwrap_or_default();
+    let hosts = KnownHost::parse_hosts_yml()?;
 
     #[allow(clippy::literal_string_with_formatting_args)]
     let header = format!(

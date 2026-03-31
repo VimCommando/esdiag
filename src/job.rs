@@ -86,7 +86,19 @@ async fn run_saved_job_collect_only(
     host: KnownHost,
     host_url: &str,
 ) -> Result<()> {
-    let output_dir = collect_output_dir(workflow)?;
+    let use_temp_output = workflow.process.mode == ProcessMode::Forward
+        && workflow.send.mode == SendMode::Remote
+        && !workflow.collect.save;
+    let (output_dir, _cleanup) = if use_temp_output {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "esdiag-job-forward-{}",
+            uuid::Uuid::new_v4().as_u64_pair().0
+        ));
+        std::fs::create_dir_all(&temp_dir)?;
+        (temp_dir.clone(), Some(TempDirCleanup(temp_dir)))
+    } else {
+        (collect_output_dir(workflow)?, None)
+    };
     tracing::info!("Collecting diagnostic from {host_url}");
     let product = host.app().clone();
     let diagnostic_type = workflow.collect.diagnostic_type.clone();
@@ -119,6 +131,9 @@ async fn run_saved_job_collect_only(
             "Forwarded archive to https://upload.elastic.co/g/{}",
             response.slug
         );
+        if workflow.collect.save {
+            tracing::info!("Retained collected archive: {}", archive_path.display());
+        }
         return Ok(());
     }
 
