@@ -831,15 +831,15 @@ async fn run(cli: Cli) -> Result<&'static str> {
             #[cfg(feature = "keystore")]
             Commands::Job { command } => match command {
                 JobCommands::List => {
-                    handle_job_list()?;
+                    esdiag::job::handle_job_list()?;
                     Ok("job list")
                 }
                 JobCommands::Run { name } => {
-                    handle_job_run(&name).await?;
+                    esdiag::job::handle_job_run(&name).await?;
                     Ok("job run")
                 }
                 JobCommands::Delete { name } => {
-                    handle_job_delete(&name)?;
+                    esdiag::job::handle_job_delete(&name)?;
                     Ok("job delete")
                 }
             },
@@ -1345,107 +1345,6 @@ fn clear_last_run_files() -> Result<()> {
         // Ignore "file not found" errors on delete
         let _ = std::fs::remove_file(file);
     }
-    Ok(())
-}
-
-#[cfg(feature = "keystore")]
-fn handle_job_list() -> Result<()> {
-    use esdiag::data::load_saved_jobs;
-
-    let jobs = load_saved_jobs()?;
-    if jobs.is_empty() {
-        return Ok(());
-    }
-
-    let hosts = KnownHost::parse_hosts_yml()?;
-
-    #[allow(clippy::literal_string_with_formatting_args)]
-    let header = format!(
-        "{:<24} {:<24} {:<16} {}",
-        "Name", "Collection target", "Processing", "Send target"
-    );
-    println!("{header}");
-    let separator: String = "-".repeat(80);
-    println!("{separator}");
-    let use_color = std::io::stdout().is_terminal();
-
-    for (name, job) in &jobs {
-        let collect_target = &job.workflow.collect.known_host;
-        let stale = !collect_target.is_empty() && !hosts.contains_key(collect_target);
-        let collect_display = if stale && use_color {
-            format!("\x1b[31m{collect_target}\x1b[0m")
-        } else {
-            collect_target.clone()
-        };
-
-        let processing = if job.workflow.process.enabled {
-            &job.workflow.process.diagnostic_type
-        } else {
-            "skipped"
-        };
-
-        let send_target = match job.workflow.send.mode {
-            esdiag::data::SendMode::Remote => job.workflow.send.remote_target.clone(),
-            esdiag::data::SendMode::Local => {
-                if job.workflow.send.local_target == "directory" {
-                    format!("dir:{}", job.workflow.send.local_directory)
-                } else {
-                    job.workflow.send.local_target.clone()
-                }
-            }
-        };
-
-        println!(
-            "{:<24} {:<24} {:<16} {}",
-            name, collect_display, processing, send_target
-        );
-    }
-
-    Ok(())
-}
-
-#[cfg(feature = "keystore")]
-async fn handle_job_run(name: &str) -> Result<()> {
-    use esdiag::data::load_saved_jobs;
-    use esdiag::job::run_saved_job;
-
-    let jobs = load_saved_jobs()?;
-    let job = jobs
-        .get(name)
-        .ok_or_else(|| eyre!("Saved job '{}' not found", name))?;
-
-    let host_name = &job.workflow.collect.known_host;
-    if host_name.is_empty() {
-        return Err(eyre!(
-            "Saved job '{}' has no collection host configured",
-            name
-        ));
-    }
-
-    let host = KnownHost::get_known(host_name).ok_or_else(|| {
-        eyre!(
-            "Host '{}' referenced by job '{}' not found in hosts.yml",
-            host_name,
-            name
-        )
-    })?;
-
-    tracing::info!("Running saved job '{name}'");
-    run_saved_job(&job.workflow, job.identifiers.clone(), host).await?;
-    tracing::info!("Saved job '{name}' completed successfully");
-    Ok(())
-}
-
-#[cfg(feature = "keystore")]
-fn handle_job_delete(name: &str) -> Result<()> {
-    use esdiag::data::{load_saved_jobs, save_saved_jobs};
-
-    let mut jobs = load_saved_jobs()?;
-    if jobs.shift_remove(name).is_none() {
-        return Err(eyre!("Saved job '{}' not found", name));
-    }
-    save_saved_jobs(&jobs)?;
-    tracing::info!("Deleted saved job '{name}'");
     Ok(())
 }
 
