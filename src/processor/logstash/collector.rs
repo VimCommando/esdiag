@@ -11,7 +11,7 @@ use crate::{
         api::{ApiResolver, ApiWeight, DiagnosticType, LogstashApi},
         collector::{CollectOptions, CollectionResult},
     },
-    receiver::Receiver,
+    receiver::{LogstashRequestError, Receiver},
 };
 use eyre::{Result, WrapErr};
 use futures::stream::{self, StreamExt};
@@ -116,6 +116,14 @@ impl LogstashCollector {
             match self.save_api(api).await {
                 Ok(success) => return success,
                 Err(e) => {
+                    if !should_retry_logstash_error(&e) {
+                        tracing::warn!(
+                            "Skipping non-retriable authentication failure for {}: {}",
+                            api.as_str(),
+                            e
+                        );
+                        return 0;
+                    }
                     if start_time.elapsed() > max_duration {
                         tracing::error!(
                             "Failed to save {} after {} attempts (5 min timeout): {}",
@@ -280,5 +288,46 @@ impl LogstashCollector {
         self.exporter.save(path, content).await?;
         tracing::info!("Saved {filename}");
         Ok(1)
+    }
+}
+
+fn should_retry_logstash_error(error: &eyre::Report) -> bool {
+    if let Some(request_error) = error.downcast_ref::<LogstashRequestError>() {
+        return request_error.status != reqwest::StatusCode::UNAUTHORIZED
+            && request_error.status != reqwest::StatusCode::FORBIDDEN;
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn retry_policy_skips_authentication_errors() {
+        let unauthorized = eyre::Report::from(LogstashRequestError {
+            status: StatusCode::UNAUTHORIZED,
+            body: "unauthorized".to_string(),
+        });
+        let forbidden = eyre::Report::from(LogstashRequestError {
+            status: StatusCode::FORBIDDEN,
+            body: "forbidden".to_string(),
+        });
+
+        assert!(!should_retry_logstash_error(&unauthorized));
+        assert!(!should_retry_logstash_error(&forbidden));
+    }
+
+    #[test]
+    fn retry_policy_retries_non_auth_failures() {
+        let rate_limited = eyre::Report::from(LogstashRequestError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: "slow down".to_string(),
+        });
+        let transport = eyre::eyre!("connection reset");
+
+        assert!(should_retry_logstash_error(&rate_limited));
+        assert!(should_retry_logstash_error(&transport));
     }
 }
