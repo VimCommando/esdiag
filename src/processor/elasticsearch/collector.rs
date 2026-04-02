@@ -12,7 +12,11 @@ use super::{
     NodesStats, PendingTasks, Repositories, SearchableSnapshotsCacheStats,
     SearchableSnapshotsStats, SlmPolicies, Snapshots, Tasks,
 };
-use crate::{data::Product, exporter::ArchiveExporter, receiver::Receiver};
+use crate::{
+    data::Product,
+    exporter::ArchiveExporter,
+    receiver::{ElasticsearchRequestError, Receiver},
+};
 use eyre::{Result, WrapErr};
 use std::path::PathBuf;
 
@@ -120,6 +124,14 @@ impl ElasticsearchCollector {
             match self.save_api(api).await {
                 Ok(success) => return success,
                 Err(e) => {
+                    if !should_retry_elasticsearch_error(&e) {
+                        tracing::warn!(
+                            "Skipping non-retriable authentication failure for {}: {}",
+                            api.as_str(),
+                            e
+                        );
+                        return attempt;
+                    }
                     if start_time.elapsed() > max_duration {
                         tracing::error!(
                             "Failed to save {} after {} attempts (5 min timeout): {}",
@@ -127,7 +139,7 @@ impl ElasticsearchCollector {
                             attempt,
                             e
                         );
-                        return 0;
+                        return attempt;
                     }
                     tracing::warn!(
                         "Attempt {} failed for {}: {}. Retrying in {:?}...",
@@ -290,5 +302,45 @@ impl ElasticsearchCollector {
         self.exporter.save(path, content).await?;
         tracing::info!("Saved {filename}");
         Ok(1)
+    }
+}
+
+fn should_retry_elasticsearch_error(error: &eyre::Report) -> bool {
+    if let Some(request_error) = error.downcast_ref::<ElasticsearchRequestError>() {
+        return request_error.status.as_u16() != 401 && request_error.status.as_u16() != 403;
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use elasticsearch::http::StatusCode;
+
+    #[test]
+    fn retry_policy_skips_authentication_errors() {
+        let unauthorized = eyre::Report::from(ElasticsearchRequestError {
+            status: StatusCode::UNAUTHORIZED,
+            body: "unauthorized".to_string(),
+        });
+        let forbidden = eyre::Report::from(ElasticsearchRequestError {
+            status: StatusCode::FORBIDDEN,
+            body: "forbidden".to_string(),
+        });
+
+        assert!(!should_retry_elasticsearch_error(&unauthorized));
+        assert!(!should_retry_elasticsearch_error(&forbidden));
+    }
+
+    #[test]
+    fn retry_policy_retries_non_auth_failures() {
+        let rate_limited = eyre::Report::from(ElasticsearchRequestError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: "slow down".to_string(),
+        });
+        let transport = eyre::eyre!("connection reset");
+
+        assert!(should_retry_elasticsearch_error(&rate_limited));
+        assert!(should_retry_elasticsearch_error(&transport));
     }
 }

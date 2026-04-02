@@ -17,9 +17,9 @@ mod logstash;
 /// Get file from https://upload.elastic.co/
 mod upload_service;
 
-pub use elasticsearch::ElasticsearchReceiver;
+pub use elasticsearch::{ElasticsearchReceiver, ElasticsearchRequestError};
 pub use kibana::{KibanaReceiver, KibanaRequestError};
-pub use logstash::LogstashReceiver;
+pub use logstash::{LogstashReceiver, LogstashRequestError};
 
 use super::{
     data::{KnownHost, Product, Uri},

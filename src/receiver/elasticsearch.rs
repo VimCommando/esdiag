@@ -18,6 +18,20 @@ use url::Url;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
+#[derive(Debug)]
+pub struct ElasticsearchRequestError {
+    pub status: http::StatusCode,
+    pub body: String,
+}
+
+impl std::fmt::Display for ElasticsearchRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "http {} - {}", self.status, self.body)
+    }
+}
+
+impl std::error::Error for ElasticsearchRequestError {}
+
 #[derive(Clone)]
 pub struct ElasticsearchReceiver {
     client: Elasticsearch,
@@ -26,6 +40,12 @@ pub struct ElasticsearchReceiver {
 }
 
 impl ElasticsearchReceiver {
+    fn format_error_body(body: &str) -> String {
+        serde_json::from_str::<Value>(body)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|_| body.to_string())
+    }
+
     pub fn new(url: Url) -> Result<Self> {
         let client = Elasticsearch::default();
         Ok(Self {
@@ -50,8 +70,16 @@ impl ElasticsearchReceiver {
                         None,
                     )
                     .await?;
-                let bytes = response.bytes().await?;
-                let cluster: Value = serde_json::from_slice(&bytes)?;
+                let status = response.status_code();
+                let body = response.text().await?;
+                if !status.is_success() {
+                    return Err(ElasticsearchRequestError {
+                        status,
+                        body: Self::format_error_body(&body),
+                    }
+                    .into());
+                }
+                let cluster: Value = serde_json::from_str(&body)?;
                 let version_str = cluster
                     .get("version")
                     .and_then(|version| version.get("number").and_then(|number| number.as_str()))
@@ -85,8 +113,17 @@ impl ElasticsearchReceiver {
                 None,
             )
             .await?;
+        let status = response.status_code();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(ElasticsearchRequestError {
+                status,
+                body: Self::format_error_body(&body),
+            }
+            .into());
+        }
 
-        response.text().await.map_err(Into::into)
+        Ok(body)
     }
 }
 
@@ -167,13 +204,14 @@ impl Receive for ElasticsearchReceiver {
         match response.status_code() {
             http::StatusCode::OK => response.json::<T>().await.map_err(Into::into),
             status => {
-                let body: Value = response.json::<Value>().await?;
-                tracing::debug!("Failed to get API response: {}", body);
-                let reason = body
-                    .get("error")
-                    .and_then(|e| e.get("reason").and_then(|r| r.as_str()))
-                    .unwrap_or("Unknown");
-                Err(eyre!("http {} - {}", status, reason))
+                let body = response.text().await?;
+                let formatted_body = Self::format_error_body(&body);
+                tracing::debug!("Failed to get API response: {}", formatted_body);
+                Err(ElasticsearchRequestError {
+                    status,
+                    body: formatted_body,
+                }
+                .into())
             }
         }
     }

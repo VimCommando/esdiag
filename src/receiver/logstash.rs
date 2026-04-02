@@ -23,7 +23,27 @@ pub struct LogstashReceiver {
     version: Arc<OnceCell<semver::Version>>,
 }
 
+#[derive(Debug)]
+pub struct LogstashRequestError {
+    pub status: reqwest::StatusCode,
+    pub body: String,
+}
+
+impl std::fmt::Display for LogstashRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "http {} - {}", self.status, self.body)
+    }
+}
+
+impl std::error::Error for LogstashRequestError {}
+
 impl LogstashReceiver {
+    fn format_error_body(body: &str) -> String {
+        serde_json::from_str::<Value>(body)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|_| body.to_string())
+    }
+
     pub async fn get_version(&self) -> Result<&semver::Version> {
         self.version
             .get_or_try_init(|| async {
@@ -32,7 +52,16 @@ impl LogstashReceiver {
                     .client
                     .request(Method::GET, &HashMap::new(), "/", None)
                     .await?;
-                let body: Value = response.json().await?;
+                let status = response.status();
+                let body = response.text().await?;
+                if !status.is_success() {
+                    return Err(LogstashRequestError {
+                        status,
+                        body: Self::format_error_body(&body),
+                    }
+                    .into());
+                }
+                let body: Value = serde_json::from_str(&body)?;
                 let version_str = body
                     .get("version")
                     .and_then(|version| version.as_str())
@@ -56,8 +85,17 @@ impl LogstashReceiver {
             .client
             .request(Method::GET, &headers, path, None)
             .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(LogstashRequestError {
+                status,
+                body: Self::format_error_body(&body),
+            }
+            .into());
+        }
 
-        response.text().await.map_err(Into::into)
+        Ok(body)
     }
 }
 
@@ -106,8 +144,13 @@ impl Receive for LogstashReceiver {
             reqwest::StatusCode::OK => response.json::<T>().await.map_err(Into::into),
             status => {
                 let body = response.text().await.unwrap_or_default();
-                tracing::debug!("Failed to get Logstash API response: {}", body);
-                Err(eyre!("http {} - {}", status, body))
+                let formatted_body = Self::format_error_body(&body);
+                tracing::debug!("Failed to get Logstash API response: {}", formatted_body);
+                Err(LogstashRequestError {
+                    status,
+                    body: formatted_body,
+                }
+                .into())
             }
         }
     }
