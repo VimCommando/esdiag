@@ -4,11 +4,13 @@
             <img id="logo" src="/esdiag.svg" alt="Elastic Stack Diagnostics Logo" />
             <h1>Elastic Stack Diagnostics</h1>
         </a>
+        {% if runtime_mode == "user" %}
         <header-nav>
             <a href="/" data-attr:aria-selected="window.location.pathname == '/'">Home</a>
             <a href="/workflow" data-attr:aria-selected="window.location.pathname == '/workflow'">Advanced</a>
             <a href="/jobs" data-attr:aria-selected="window.location.pathname == '/jobs'">Job Builder</a>
         </header-nav>
+        {% endif %}
     </div>
     <header-links>
         <header-icon id="docs" title="Documentation">

@@ -50,8 +50,8 @@
 - [x] 7.1 Run `cargo clippy` and fix all warnings
 - [x] 7.2 Run `cargo test` and fix any failures
 - [x] 7.2a Add regression tests covering protected secret deletion when hosts or saved jobs still reference the secret
-- [ ] 7.3 Manually verify: save a job in the UI, reload the page, load the job; confirm `jobs.yml` is written correctly
-- [ ] 7.4 Manually verify: `esdiag job run <name>` executes the saved job end-to-end
+- [x] 7.3 Manually verify: save a job in the UI, reload the page, load the job; confirm `jobs.yml` is written correctly
+- [x] 7.4 Manually verify: `esdiag job run <name>` executes the saved job end-to-end
 - [x] 7.5 Build without `server` feature (`cargo build --no-default-features`) and verify `esdiag job run <name>` still compiles and executes correctly; confirms the shared runner has no server-feature dependency
-- [ ] 7.6 Manually verify: `esdiag job delete <name>` removes the entry from `jobs.yml`
-- [ ] 7.7 Manually verify: service mode does not expose the user-mode `/jobs` or `/workflow` pages
+- [x] 7.6 Manually verify: `esdiag job delete <name>` removes the entry from `jobs.yml`
+- [x] 7.7 Manually verify: service mode does not expose the user-mode `/jobs` or `/workflow` pages
