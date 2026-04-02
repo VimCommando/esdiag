@@ -12,6 +12,9 @@ pub mod embeds;
 pub mod env;
 /// Exports data to various destinations
 pub mod exporter;
+/// Shared job runner for saved diagnostic jobs
+#[cfg(feature = "keystore")]
+pub mod job;
 /// Data transformation and processing logic
 pub mod processor;
 /// Receive data from various sources
@@ -22,3 +25,13 @@ pub mod server;
 /// Send pre-built assets (index templates, etc) to Elasticsearch
 #[cfg(feature = "setup")]
 pub mod setup;
+/// Upload raw diagnostic archives to Elastic Upload Service
+pub mod uploader;
+
+#[cfg(test)]
+pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {
+    use std::sync::{Mutex, OnceLock};
+
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}

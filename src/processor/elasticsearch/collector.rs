@@ -3,8 +3,8 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::{
-    collector::{CollectOptions, CollectionResult},
     SourceContext,
+    collector::{CollectOptions, CollectionResult},
 };
 use super::{
     AliasList, Cluster, ClusterSettings, DataSource, DataStreams, DiagnosticManifest, HealthReport,
@@ -12,7 +12,11 @@ use super::{
     NodesStats, PendingTasks, Repositories, SearchableSnapshotsCacheStats,
     SearchableSnapshotsStats, SlmPolicies, Snapshots, Tasks,
 };
-use crate::{data::Product, exporter::ArchiveExporter, receiver::Receiver};
+use crate::{
+    data::Product,
+    exporter::ArchiveExporter,
+    receiver::{ElasticsearchRequestError, Receiver},
+};
 use eyre::{Result, WrapErr};
 use std::path::PathBuf;
 
@@ -59,7 +63,7 @@ impl ElasticsearchCollector {
             )?;
 
             let api_names: Vec<&str> = apis.iter().map(|a| a.as_str()).collect();
-            log::debug!("Resolved APIs for collection: {:?}", api_names);
+            tracing::debug!("Resolved APIs for collection: {:?}", api_names);
 
             let mut result = CollectionResult {
                 path: self.exporter.to_string(),
@@ -120,8 +124,16 @@ impl ElasticsearchCollector {
             match self.save_api(api).await {
                 Ok(success) => return success,
                 Err(e) => {
+                    if !should_retry_elasticsearch_error(&e) {
+                        tracing::warn!(
+                            "Skipping non-retriable authentication failure for {}: {}",
+                            api.as_str(),
+                            e
+                        );
+                        return 0;
+                    }
                     if start_time.elapsed() > max_duration {
-                        log::error!(
+                        tracing::error!(
                             "Failed to save {} after {} attempts (5 min timeout): {}",
                             api.as_str(),
                             attempt,
@@ -129,7 +141,7 @@ impl ElasticsearchCollector {
                         );
                         return 0;
                     }
-                    log::warn!(
+                    tracing::warn!(
                         "Attempt {} failed for {}: {}. Retrying in {:?}...",
                         attempt,
                         api.as_str(),
@@ -180,7 +192,7 @@ impl ElasticsearchCollector {
             {
                 Ok((_, conf)) => conf,
                 Err(e) => {
-                    log::debug!("Skipping {} collection: {}", name, e);
+                    tracing::debug!("Skipping {} collection: {}", name, e);
                     return Ok(0);
                 }
             };
@@ -189,12 +201,14 @@ impl ElasticsearchCollector {
             Receiver::Elasticsearch(r) => match r.get_version().await {
                 Ok(v) => v,
                 Err(e) => {
-                    log::debug!("Cannot collect raw API without version: {}", e);
+                    tracing::debug!("Cannot collect raw API without version: {}", e);
                     return Ok(0);
                 }
             },
             Receiver::ElasticCloudAdmin(_) => {
-                log::debug!("ElasticCloudAdmin receiver not fully supported for raw by path yet");
+                tracing::debug!(
+                    "ElasticCloudAdmin receiver not fully supported for raw by path yet"
+                );
                 return Ok(0);
             }
             _ => return Ok(0),
@@ -203,7 +217,7 @@ impl ElasticsearchCollector {
         let path = match source_conf.get_url(version) {
             Ok(p) => p,
             Err(e) => {
-                log::debug!("Skipping {} collection on version {}: {}", name, version, e);
+                tracing::debug!("Skipping {} collection on version {}: {}", name, version, e);
                 return Ok(0);
             }
         };
@@ -212,7 +226,7 @@ impl ElasticsearchCollector {
         let content = match self.receiver.get_raw_by_path(&path, extension).await {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("Failed to get raw API {}: {}", name, e);
+                tracing::warn!("Failed to get raw API {}: {}", name, e);
                 return Err(eyre::eyre!(e));
             }
         };
@@ -222,11 +236,11 @@ impl ElasticsearchCollector {
 
         match self.exporter.save(file_path, content).await {
             Ok(()) => {
-                log::info!("Saved {filename}");
+                tracing::info!("Saved {filename}");
                 Ok(1)
             }
             Err(e) => {
-                log::error!("Failed to save {filename}: {e}");
+                tracing::error!("Failed to save {filename}: {e}");
                 Ok(0)
             }
         }
@@ -242,7 +256,7 @@ impl ElasticsearchCollector {
                 if let Some(ds_err) =
                     e.downcast_ref::<crate::processor::diagnostic::data_source::DataSourceError>()
                 {
-                    log::debug!("Skipping {} collection: {}", T::name(), ds_err);
+                    tracing::debug!("Skipping {} collection: {}", T::name(), ds_err);
                     return Ok(0);
                 }
                 return Err(e);
@@ -253,11 +267,11 @@ impl ElasticsearchCollector {
         let filename = format!("{}", path.display());
         match self.exporter.save(path, content).await {
             Ok(()) => {
-                log::info!("Saved {filename}");
+                tracing::info!("Saved {filename}");
                 Ok(1)
             }
             Err(e) => {
-                log::error!("Failed to save {filename}: {e}");
+                tracing::error!("Failed to save {filename}: {e}");
                 Ok(0)
             }
         }
@@ -286,7 +300,47 @@ impl ElasticsearchCollector {
         let filename = format!("{}", path.display());
         let content = serde_json::to_string_pretty(&manifest)?;
         self.exporter.save(path, content).await?;
-        log::info!("Saved {filename}");
+        tracing::info!("Saved {filename}");
         Ok(1)
+    }
+}
+
+fn should_retry_elasticsearch_error(error: &eyre::Report) -> bool {
+    if let Some(request_error) = error.downcast_ref::<ElasticsearchRequestError>() {
+        return request_error.status.as_u16() != 401 && request_error.status.as_u16() != 403;
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use elasticsearch::http::StatusCode;
+
+    #[test]
+    fn retry_policy_skips_authentication_errors() {
+        let unauthorized = eyre::Report::from(ElasticsearchRequestError {
+            status: StatusCode::UNAUTHORIZED,
+            body: "unauthorized".to_string(),
+        });
+        let forbidden = eyre::Report::from(ElasticsearchRequestError {
+            status: StatusCode::FORBIDDEN,
+            body: "forbidden".to_string(),
+        });
+
+        assert!(!should_retry_elasticsearch_error(&unauthorized));
+        assert!(!should_retry_elasticsearch_error(&forbidden));
+    }
+
+    #[test]
+    fn retry_policy_retries_non_auth_failures() {
+        let rate_limited = eyre::Report::from(ElasticsearchRequestError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: "slow down".to_string(),
+        });
+        let transport = eyre::eyre!("connection reset");
+
+        assert!(should_retry_elasticsearch_error(&rate_limited));
+        assert!(should_retry_elasticsearch_error(&transport));
     }
 }

@@ -338,7 +338,11 @@ fn test_process_zip_accepts_output_directory_with_dot() {
     let dotted_out = dir.path().join("out.v1.ndjson");
 
     let status = Command::new(env!("CARGO_BIN_EXE_esdiag"))
-        .args(["process", "elasticsearch-local", dotted_out.to_str().unwrap()])
+        .args([
+            "process",
+            "elasticsearch-local",
+            dotted_out.to_str().unwrap(),
+        ])
         .status()
         .expect("Failed to execute process with dotted output file");
 
@@ -454,6 +458,7 @@ fn test_collect_no_auth_with_ephemeral_container() {
             "elasticsearch",
             &host_url,
             "--accept-invalid-certs",
+            "true",
         ],
         &test_home,
         &[],
@@ -525,6 +530,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
             "--password",
             elastic_password,
             "--accept-invalid-certs",
+            "true",
         ],
         &test_home,
         &[],
@@ -557,6 +563,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
             "--secret",
             "it-basic-secret",
             "--accept-invalid-certs",
+            "true",
         ],
         &test_home,
         &[("ESDIAG_KEYSTORE_PASSWORD", keystore_password)],
@@ -580,6 +587,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
             "--apikey",
             &api_key,
             "--accept-invalid-certs",
+            "true",
         ],
         &test_home,
         &[],
@@ -604,6 +612,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
             "--secret",
             "it-apikey-secret",
             "--accept-invalid-certs",
+            "true",
         ],
         &test_home,
         &[("ESDIAG_KEYSTORE_PASSWORD", keystore_password)],
@@ -969,7 +978,12 @@ fn run_kibana_collect_matrix_case(host_env: &str) {
 fn test_collect_kibana_localhost_no_auth() {
     let home = tempdir().expect("temp home");
     let host_output = run_esdiag(
-        &["host", "localhost-kibana", "kibana", "http://localhost:5601"],
+        &[
+            "host",
+            "localhost-kibana",
+            "kibana",
+            "http://localhost:5601",
+        ],
         &home,
         &[],
     );

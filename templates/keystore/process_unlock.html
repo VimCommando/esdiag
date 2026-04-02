@@ -1,0 +1,55 @@
+<div id="keystore-process-unlock-modal" class="modal">
+    <div class="modal-content">
+        <button
+            type="button"
+            class="close-button"
+            aria-label="Close keystore unlock"
+            data-on:click="$_pending_workflow_action = ''; document.getElementById('keystore-process-unlock-modal')?.remove()"
+        >
+            <icon-x></icon-x>
+        </button>
+        <h2>Unlock Keystore</h2>
+        <p>Unlock the keystore to continue with the selected secure workflow action or output target.</p>
+        <form
+            id="keystore-process-unlock-form"
+            data-on:submit__prevent="{
+                const workflow = typeof $workflow === 'undefined' ? null : $workflow;
+                const archive = typeof $archive === 'undefined' ? null : $archive;
+                if (workflow && archive && workflow.collect.save && !(workflow.collect.mode === 'upload' && workflow.collect.source === 'upload-file')) {
+                    const token = archive.download_token || crypto.randomUUID();
+                    $archive.download_token = token;
+                    $archive.pending_token = token;
+                    $archive.ready_token = '';
+                    $archive.status = 'waiting';
+                    $archive.error = '';
+                }
+                @post('/keystore/unlock', {contentType: 'form'});
+            }"
+        >
+            <input-group>
+                <label for="keystore-process-password" class="form-label">Keystore Password</label>
+                <input
+                    type="password"
+                    id="keystore-process-password"
+                    name="password"
+                    data-bind:keystore.password
+                    data-class:error="$keystore.invalid"
+                    data-on:input="$keystore.invalid = false"
+                    class="form-input"
+                    autocomplete="current-password"
+                    required
+                />
+            </input-group>
+            <form-actions>
+                <input class="button" type="submit" value="Unlock and Continue" />
+                <button
+                    type="button"
+                    class="button is-neutral"
+                    data-on:click="$_pending_workflow_action = ''; document.getElementById('keystore-process-unlock-modal')?.remove()"
+                >
+                    Cancel
+                </button>
+            </form-actions>
+        </form>
+    </div>
+</div>

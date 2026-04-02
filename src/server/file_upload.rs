@@ -3,47 +3,29 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{
-    Identifiers, ServerEvent, ServerState, Signals, receiver_stream, signal_event, template,
-    template_event,
+    ServerEvent, ServerState, UploadProcessSignals, receiver_stream, replace_job_event,
+    signal_event, template, workflow,
 };
-use crate::{
-    data::Uri,
-    processor::{Processor, new_job_id},
-    receiver::Receiver,
-};
+use crate::processor::new_job_id;
 use axum::{
     extract::{Multipart, State},
     http::HeaderMap,
     response::{Html, IntoResponse, Sse},
 };
-use bytes::Bytes;
 use datastar::axum::ReadSignals;
 use reqwest::StatusCode;
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::{fs::File, io::AsyncWriteExt};
 use uuid::Uuid;
-
-struct TempFileCleanup {
-    path: PathBuf,
-}
-
-impl Drop for TempFileCleanup {
-    fn drop(&mut self) {
-        if let Err(err) = std::fs::remove_file(&self.path) {
-            log::debug!(
-                "Failed to remove temp upload file {}: {}",
-                self.path.display(),
-                err
-            );
-        }
-    }
-}
 
 pub async fn submit(
     State(state): State<Arc<ServerState>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     let job_id = new_job_id();
+    let can_use_keystore =
+        cfg!(feature = "keystore") && state.runtime_mode_policy.allows_local_runtime_features();
 
     // Process the multipart form
     if let Ok(Some(field)) = multipart.next_field().await {
@@ -54,7 +36,7 @@ pub async fn submit(
                     return (
                         StatusCode::BAD_REQUEST,
                         Html(format!(
-                            r#"<div id="job-{job_id}" class="status-box history-item error">
+                            r#"<div id="job-{job_id}" class="status-box history-item status-error">
                         🛑 Invalid file type, only .zip files are allowed.
                     </div>"#
                         )),
@@ -65,7 +47,7 @@ pub async fn submit(
                     return (
                         StatusCode::BAD_REQUEST,
                         Html(format!(
-                            r#"<div id="job-{job_id}" class="status-box history-item error">
+                            r#"<div id="job-{job_id}" class="status-box history-item status-error">
                             🛑 Missing file name
                         </div>"#
                         )),
@@ -75,39 +57,51 @@ pub async fn submit(
 
             let upload_file_element = format!(
                 r#"<div id="job-{job_id}"
-                    class="status-box history-item processing"
-                    data-init="$loading=false; $file_upload.job_id={job_id}; @post('upload/process', {{openWhenHidden: true}})"
+                    class="status-box history-item status-processing"
+                    data-init="$loading=false; $file_upload.job_id={job_id}; if ({can_use_keystore} && $keystore.locked && $output.secure) {{ $_pending_workflow_action = 'upload-process'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process', {{filterSignals: {{exclude: /.*/}}}}); }} else {{ @post('/upload/process', {{openWhenHidden: true, filterSignals: {{include: /^(metadata|archive|workflow|file_upload)(\.|$)/}}}}); }}"
                 >
-                    <div class="spinner"></div> Processing diagnostic
-                        <p><b>Filename:</b> {filename}</p>
-                    </div>
+                    <div class="spinner"></div>
+                    <span>Processing diagnostic</span>
+                    <p><b>Filename:</b> {filename}</p>
                 </div>"#
             );
 
-            match field.bytes().await {
-                Ok(data) => {
-                    state.push_upload(job_id, filename, data).await;
+            let temp_upload_path =
+                std::env::temp_dir().join(format!("esdiag-upload-{job_id}-{}.zip", Uuid::new_v4()));
+            match stage_upload_field(field, &temp_upload_path).await {
+                Ok(()) => {
+                    state.push_upload(job_id, filename, temp_upload_path).await;
 
-                    // Add a cleanup task to prevent memory leaks if /upload/process is never called
+                    // Add a cleanup task to remove abandoned staged uploads.
                     let state_clone = state.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
-                        if state_clone.pop_upload(job_id).await.is_some() {
-                            log::warn!(
-                                "Upload job {} was never processed and was removed from state to free memory",
+                        if let Some(job) = state_clone.pop_workflow_job(job_id).await {
+                            job.cleanup().await;
+                            tracing::warn!(
+                                "Upload job {} was never processed and was removed from state to clean up the staged upload",
                                 job_id
                             );
                         }
                     });
                 }
                 Err(e) => {
-                    let error_msg = format!("Failed to read upload data: {}", e);
-                    log::error!("{}", error_msg);
+                    if let Err(remove_err) = tokio::fs::remove_file(&temp_upload_path).await
+                        && remove_err.kind() != std::io::ErrorKind::NotFound
+                    {
+                        tracing::debug!(
+                            "Failed to remove partial upload {}: {}",
+                            temp_upload_path.display(),
+                            remove_err
+                        );
+                    }
+                    let error_msg = format!("Failed to stage upload data: {}", e);
+                    tracing::error!("{}", error_msg);
                     state.record_failure().await;
                     return (
                         StatusCode::BAD_REQUEST,
                         Html(format!(
-                            r#"<div id="job-{job_id}" class="status-box history-item error">
+                            r#"<div id="job-{job_id}" class="status-box history-item status-error">
                             🛑 Error {error_msg}
                         </div>"#
                         )),
@@ -120,7 +114,7 @@ pub async fn submit(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(format!(
-                    r#"<div id="job-{job_id}" class="status-box history-item error">
+                    r#"<div id="job-{job_id}" class="status-box history-item status-error">
                         🛑 Upload Failed
                     </div>"#
                 )),
@@ -130,7 +124,7 @@ pub async fn submit(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Html(format!(
-                r#"<div id="job-{job_id}" class="status-box history-item error">
+                r#"<div id="job-{job_id}" class="status-box history-item status-error">
                     🛑 Upload Failed
                 </div>"#
             )),
@@ -138,10 +132,21 @@ pub async fn submit(
     }
 }
 
+async fn stage_upload_field(
+    mut field: axum::extract::multipart::Field<'_>,
+    path: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    let mut file = File::create(path).await?;
+    while let Some(chunk) = field.chunk().await.map_err(std::io::Error::other)? {
+        file.write_all(&chunk).await?;
+    }
+    file.flush().await
+}
+
 pub async fn process(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
-    ReadSignals(signals): ReadSignals<Signals>,
+    ReadSignals(signals): ReadSignals<UploadProcessSignals>,
 ) -> impl IntoResponse {
     // Use the signal job_id to override the job.id created in this function
     let job_id = signals.file_upload.job_id;
@@ -158,11 +163,14 @@ pub async fn process(
                 state.record_failure().await;
                 send_event(
                     &tx,
-                    template_event(template::JobFailed {
+                    replace_job_event(
                         job_id,
-                        error: &format!("Unauthorized request: {}", err),
-                        source: "User upload",
-                    }),
+                        template::JobFailed {
+                            job_id,
+                            error: &format!("Unauthorized request: {}", err),
+                            source: "User upload",
+                        },
+                    ),
                 )
                 .await;
                 send_terminal_signal(&tx, &state).await;
@@ -189,168 +197,63 @@ async fn send_terminal_signal(tx: &mpsc::Sender<ServerEvent>, state: &ServerStat
     .await;
 }
 
-async fn run_upload_job(
+pub(super) async fn run_upload_job(
     state: Arc<ServerState>,
-    signals: Signals,
+    signals: UploadProcessSignals,
     job_id: u64,
     request_user: String,
     tx: mpsc::Sender<ServerEvent>,
 ) {
-    send_event(&tx, signal_event(r#"{"processing":true}"#)).await;
-    let (filename, data): (String, Bytes) = match state.pop_upload(job_id).await {
-        Some((filename, data)) => (filename, data),
-        None => {
-            send_event(
-                &tx,
-                template_event(template::JobFailed {
-                    job_id,
-                    error: "Failed to upload file",
-                    source: "User upload",
-                }),
-            )
-            .await;
-            send_terminal_signal(&tx, &state).await;
-            return;
-        }
-    };
-
-    let temp_upload_path = std::env::temp_dir().join(format!("esdiag-upload-{job_id}-{}.zip", Uuid::new_v4()));
-    if let Err(e) = std::fs::write(&temp_upload_path, &data) {
-        let error = format!("Failed to write temp upload file: {}", e);
-        log::error!("{}", error);
+    if let Err(err) = super::ensure_active_output_ready(&state, &request_user).await {
         send_event(
             &tx,
-            template_event(template::JobFailed {
+            replace_job_event(
                 job_id,
-                error: "Failed to stage uploaded file",
-                source: &filename,
-            }),
+                template::JobFailed {
+                    job_id,
+                    error: &err,
+                    source: "output target",
+                },
+            ),
         )
         .await;
         send_terminal_signal(&tx, &state).await;
         return;
     }
-    drop(data);
-    let _temp_upload_cleanup = TempFileCleanup {
-        path: temp_upload_path.clone(),
-    };
 
-    let receiver = match Receiver::try_from(Uri::File(temp_upload_path)) {
-        Ok(receiver) => Arc::new(receiver),
-        Err(e) => {
-            let error = format!("Failed to create receiver: {}", e);
-            log::error!("{}", error);
+    send_event(&tx, signal_event(r#"{"processing":true}"#)).await;
+    let job = match state.pop_workflow_job(job_id).await {
+        Some(job) => job,
+        None => {
             send_event(
                 &tx,
-                template_event(template::JobFailed {
+                replace_job_event(
                     job_id,
-                    error: "Failed to create file receiver",
-                    source: &filename,
-                }),
+                    template::JobFailed {
+                        job_id,
+                        error: "Failed to upload file",
+                        source: "User upload",
+                    },
+                ),
             )
             .await;
             send_terminal_signal(&tx, &state).await;
             return;
         }
     };
-
-    let exporter = Arc::new(state.exporter.read().await.clone());
-    let identifiers = Identifiers {
-        user: Some(request_user),
-        filename: Some(filename.clone()),
-        ..signals.metadata
-    };
-
-    let processor = match Processor::try_new(receiver, exporter, identifiers).await {
-        Ok(ready) => ready,
-        Err(error) => {
-            state.record_failure().await;
-            send_event(
-                &tx,
-                template_event(template::JobFailed {
-                    job_id,
-                    error: &error.to_string(),
-                    source: &filename,
-                }),
-            )
-            .await;
-            send_terminal_signal(&tx, &state).await;
-            return;
-        }
-    };
-
-    match processor.start().await {
-        Ok(processor) => {
-            state.record_job_started().await;
-            send_event(&tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
-            match processor.process().await {
-                Ok(completed) => {
-                    let report = &completed.state.report;
-                    state
-                        .record_success(report.diagnostic.docs.total, report.diagnostic.docs.errors)
-                        .await;
-                    send_event(
-                        &tx,
-                        template_event(template::JobCompleted {
-                            job_id,
-                            diagnostic_id: &report.diagnostic.metadata.id,
-                            docs_created: &report.diagnostic.docs.created,
-                            duration: &format!(
-                                "{:.3}",
-                                report.diagnostic.processing_duration as f64 / 1000.0
-                            ),
-                            source: &filename,
-                            kibana_link: report
-                                .diagnostic
-                                .kibana_link
-                                .as_ref()
-                                .unwrap_or(&"#".to_string()),
-                            product: &report.diagnostic.product.to_string(),
-                        }),
-                    )
-                    .await;
-                }
-                Err(failed) => {
-                    state.record_failure().await;
-                    send_event(
-                        &tx,
-                        template_event(template::JobFailed {
-                            job_id,
-                            error: &failed.state.error,
-                            source: &filename,
-                        }),
-                    )
-                    .await;
-                }
-            };
-        }
-        Err(failed) => {
-            state.record_failure().await;
-            send_event(
-                &tx,
-                template_event(template::JobFailed {
-                    job_id,
-                    error: &failed.state.error,
-                    source: &filename,
-                }),
-            )
-            .await;
-        }
-    };
-
-    send_terminal_signal(&tx, &state).await;
+    workflow::run_job(state, signals.into(), job_id, request_user, tx, job, true).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::{run_upload_job, send_terminal_signal};
-    use crate::server::{ServerEvent, Signals, test_server_state};
+    use crate::server::{ServerEvent, UploadProcessSignals, test_server_state};
     use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn run_upload_job_missing_upload_emits_failure_and_terminal_signal() {
         let state = test_server_state();
-        let signals = Signals::default();
+        let signals = UploadProcessSignals::default();
         let (tx, mut rx) = mpsc::channel(8);
 
         run_upload_job(state, signals, 42, "Anonymous".to_string(), tx).await;
@@ -360,6 +263,11 @@ mod tests {
         while let Some(event) = rx.recv().await {
             match event {
                 ServerEvent::Template(html) if html.contains("Failed to upload file") => {
+                    saw_failure = true;
+                }
+                ServerEvent::ReplaceSelector { selector, html }
+                    if selector == "#job-42" && html.contains("Failed to upload file") =>
+                {
                     saw_failure = true;
                 }
                 ServerEvent::Signals(payload) if payload.contains(r#""processing":false"#) => {
@@ -393,7 +301,7 @@ mod tests {
     #[tokio::test]
     async fn run_upload_job_completes_when_client_disconnected() {
         let state = test_server_state();
-        let signals = Signals::default();
+        let signals = UploadProcessSignals::default();
         let (tx, rx) = mpsc::channel(1);
         drop(rx);
 

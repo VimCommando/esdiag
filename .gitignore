@@ -3,7 +3,9 @@
 /output
 /assets/kibana/esdiag-dashboards*.ndjson
 .opencode/
+.claude/
 .codex/
+.claude/
 esdiag.spdx.json
 /tauri-dist
 /frontend-dist/

@@ -14,7 +14,11 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::OnceCell;
+
+const ELASTIC_CLOUD_ADMIN_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const ELASTIC_CLOUD_ADMIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub struct ElasticCloudAdminReceiver {
@@ -35,6 +39,8 @@ impl ElasticCloudAdminReceiver {
         );
         let client = ClientBuilder::new()
             .default_headers(default_headers)
+            .connect_timeout(ELASTIC_CLOUD_ADMIN_CONNECT_TIMEOUT)
+            .timeout(ELASTIC_CLOUD_ADMIN_REQUEST_TIMEOUT)
             .build()?;
         Ok(Self {
             client,
@@ -46,7 +52,7 @@ impl ElasticCloudAdminReceiver {
     pub async fn get_version(&self) -> Result<&semver::Version> {
         self.version
             .get_or_try_init(|| async {
-                log::debug!("Fetching version from {}", self.url);
+                tracing::debug!("Fetching version from {}", self.url);
                 let url = self.url.join(&format!("{}/", self.url.path()))?;
                 let response = self.client.get(url).send().await?;
                 let bytes = response.bytes().await?;
@@ -81,7 +87,7 @@ impl Receive for ElasticCloudAdminReceiver {
     }
 
     async fn is_connected(&self) -> bool {
-        log::debug!(
+        tracing::debug!(
             "Testing Elastic Cloud Admin connection to {}",
             self.url.as_str()
         );
@@ -92,10 +98,10 @@ impl Receive for ElasticCloudAdminReceiver {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
-                    log::debug!("Elastic Cloud Admin connection successful: {}", status);
+                    tracing::debug!("Elastic Cloud Admin connection successful: {}", status);
                     true
                 } else {
-                    log::error!(
+                    tracing::error!(
                         "Elastic Cloud Admin connection to {} failed: {}",
                         self.url.as_str(),
                         status
@@ -104,10 +110,15 @@ impl Receive for ElasticCloudAdminReceiver {
                 }
             }
             Err(e) => {
-                log::error!(
+                tracing::error!(
                     "Elastic Cloud Admin connection to {} failed: {e}",
                     self.url.as_str()
                 );
+                if e.is_connect() || e.is_timeout() {
+                    tracing::warn!(
+                        "Elastic Cloud Admin and Elastic GovCloud Admin hosts require VPN access; verify your VPN connection and retry."
+                    );
+                }
                 false
             }
         }
@@ -129,10 +140,10 @@ impl Receive for ElasticCloudAdminReceiver {
             _ => format!("{}/{}", self.url.path(), source_path),
         };
         let url = self.url.join(&path)?;
-        log::debug!("Getting API: {}", url);
+        tracing::debug!("Getting API: {}", url);
         let response = self.client.get(url).send().await?;
 
-        log::debug!("Get Response: {:?}", response);
+        tracing::debug!("Get Response: {:?}", response);
 
         let bytes = response.bytes().await?;
         serde_json::from_slice(&bytes).map_err(Into::into)
@@ -140,7 +151,7 @@ impl Receive for ElasticCloudAdminReceiver {
 
     async fn try_get_manifest(&self) -> Result<DiagnosticManifest> {
         let collection_date = chrono::Utc::now().to_rfc3339();
-        log::info!("Creating diagnostic manifest with collection date {collection_date}");
+        tracing::info!("Creating diagnostic manifest with collection date {collection_date}");
         let cluster = self.get::<ElasticsearchCluster>().await?;
         let manifest = ManifestBuilder::from(cluster)
             .runner("esdiag")
@@ -163,7 +174,7 @@ impl ReceiveRaw for ElasticCloudAdminReceiver {
             _ => format!("{}/{}", self.url.path(), source_path),
         };
         let url = self.url.join(&path)?;
-        log::debug!("Getting API: {}", url);
+        tracing::debug!("Getting API: {}", url);
         let response = self.client.get(url).send().await?;
 
         // Return raw text
@@ -187,12 +198,13 @@ mod tests {
         routing::get,
     };
     use tokio::task::JoinHandle;
+    use tokio::sync::oneshot;
 
     async fn status_handler(State(status): State<StatusCode>) -> (StatusCode, &'static str) {
         (status, "test response")
     }
 
-    async fn spawn_status_server(status: StatusCode) -> (Url, JoinHandle<()>) {
+    async fn spawn_status_server(status: StatusCode) -> (Url, JoinHandle<()>, oneshot::Sender<()>) {
         let app = Router::new()
             .route("/", get(status_handler))
             .with_state(status);
@@ -200,37 +212,43 @@ mod tests {
             .await
             .expect("bind test server");
         let addr = listener.local_addr().expect("listener addr");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve test app");
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .expect("serve test app");
         });
         let url = Url::parse(&format!("http://{addr}/")).expect("parse test url");
-        (url, server)
+        (url, server, shutdown_tx)
     }
 
-    async fn stop_status_server(server: JoinHandle<()>) {
-        server.abort();
-        let _ = server.await;
+    async fn stop_status_server(server: JoinHandle<()>, shutdown_tx: oneshot::Sender<()>) {
+        let _ = shutdown_tx.send(());
+        server.await.expect("test server should exit cleanly");
     }
 
     #[tokio::test]
     async fn is_connected_returns_true_for_success_status() {
-        let (url, server) = spawn_status_server(StatusCode::OK).await;
+        let (url, server, shutdown_tx) = spawn_status_server(StatusCode::OK).await;
         let receiver =
             ElasticCloudAdminReceiver::new(url, "test-api-key".to_string()).expect("receiver");
 
         assert!(receiver.is_connected().await);
 
-        stop_status_server(server).await;
+        stop_status_server(server, shutdown_tx).await;
     }
 
     #[tokio::test]
     async fn is_connected_returns_false_for_unauthorized_status() {
-        let (url, server) = spawn_status_server(StatusCode::UNAUTHORIZED).await;
+        let (url, server, shutdown_tx) = spawn_status_server(StatusCode::UNAUTHORIZED).await;
         let receiver =
             ElasticCloudAdminReceiver::new(url, "test-api-key".to_string()).expect("receiver");
 
         assert!(!receiver.is_connected().await);
 
-        stop_status_server(server).await;
+        stop_status_server(server, shutdown_tx).await;
     }
 }

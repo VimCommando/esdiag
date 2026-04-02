@@ -4,6 +4,7 @@
 
 use super::{
     DiagnosticProcessor, ProcessorSummary,
+    api::ProcessSelection,
     diagnostic::{
         DiagnosticManifest, DiagnosticMetadata, DiagnosticReport, DiagnosticReportBuilder, Lookup,
     },
@@ -28,6 +29,7 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
         receiver: Arc<Receiver>,
         _exporter: Arc<Exporter>,
         manifest: DiagnosticManifest,
+        _process_selection: Option<ProcessSelection>,
     ) -> Result<(Box<Self>, DiagnosticReport)> {
         let lookups = Arc::new(Lookups {
             k8s_node: Lookup::new(),
@@ -52,7 +54,7 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
 
     async fn process(self, _summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()> {
         self.receiver.is_connected().await;
-        log::warn!(
+        tracing::warn!(
             "Elastic Cloud Kubernetes diagnostics only process included Elasticsearch bundles"
         );
         Ok(())

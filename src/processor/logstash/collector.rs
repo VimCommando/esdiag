@@ -2,20 +2,16 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::{
-    node::Node,
-    node_stats::NodeStats,
-    version::Version,
-};
+use super::{node::Node, node_stats::NodeStats, version::Version};
 use crate::{
     data::Product,
     exporter::ArchiveExporter,
     processor::{
+        DataSource, DiagnosticManifest, SourceContext,
         api::{ApiResolver, ApiWeight, DiagnosticType, LogstashApi},
         collector::{CollectOptions, CollectionResult},
-        DataSource, DiagnosticManifest, SourceContext,
     },
-    receiver::Receiver,
+    receiver::{LogstashRequestError, Receiver},
 };
 use eyre::{Result, WrapErr};
 use futures::stream::{self, StreamExt};
@@ -61,7 +57,7 @@ impl LogstashCollector {
             )?;
 
             let api_names: Vec<&str> = apis.iter().map(|a| a.as_str()).collect();
-            log::debug!("Resolved Logstash APIs for collection: {:?}", api_names);
+            tracing::debug!("Resolved Logstash APIs for collection: {:?}", api_names);
 
             let mut result = CollectionResult {
                 path: self.exporter.to_string(),
@@ -120,8 +116,16 @@ impl LogstashCollector {
             match self.save_api(api).await {
                 Ok(success) => return success,
                 Err(e) => {
+                    if !should_retry_logstash_error(&e) {
+                        tracing::warn!(
+                            "Skipping non-retriable authentication failure for {}: {}",
+                            api.as_str(),
+                            e
+                        );
+                        return 0;
+                    }
                     if start_time.elapsed() > max_duration {
-                        log::error!(
+                        tracing::error!(
                             "Failed to save {} after {} attempts (5 min timeout): {}",
                             api.as_str(),
                             attempt,
@@ -129,7 +133,7 @@ impl LogstashCollector {
                         );
                         return 0;
                     }
-                    log::warn!(
+                    tracing::warn!(
                         "Attempt {} failed for {}: {}. Retrying in {:?}...",
                         attempt,
                         api.as_str(),
@@ -153,23 +157,20 @@ impl LogstashCollector {
     }
 
     async fn save_raw(&self, name: &str) -> Result<usize> {
-        let source_conf = match crate::processor::diagnostic::data_source::get_source(
-            "logstash",
-            name,
-            &[],
-        ) {
-            Ok((_, conf)) => conf,
-            Err(e) => {
-                log::debug!("Skipping {} collection: {}", name, e);
-                return Ok(0);
-            }
-        };
+        let source_conf =
+            match crate::processor::diagnostic::data_source::get_source("logstash", name, &[]) {
+                Ok((_, conf)) => conf,
+                Err(e) => {
+                    tracing::debug!("Skipping {} collection: {}", name, e);
+                    return Ok(0);
+                }
+            };
 
         let version = match &self.receiver {
             Receiver::Logstash(r) => match r.get_version().await {
                 Ok(v) => v,
                 Err(e) => {
-                    log::debug!("Cannot collect raw API without version: {}", e);
+                    tracing::debug!("Cannot collect raw API without version: {}", e);
                     return Ok(0);
                 }
             },
@@ -179,7 +180,7 @@ impl LogstashCollector {
         let path = match source_conf.get_url(version) {
             Ok(p) => p,
             Err(e) => {
-                log::debug!("Skipping {} collection on version {}: {}", name, version, e);
+                tracing::debug!("Skipping {} collection on version {}: {}", name, version, e);
                 return Ok(0);
             }
         };
@@ -188,7 +189,7 @@ impl LogstashCollector {
         let content = match self.receiver.get_raw_by_path(&path, extension).await {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("Failed to get raw API {}: {}", name, e);
+                tracing::warn!("Failed to get raw API {}: {}", name, e);
                 return Err(e);
             }
         };
@@ -198,11 +199,11 @@ impl LogstashCollector {
 
         match self.exporter.save(file_path, content).await {
             Ok(()) => {
-                log::info!("Saved {filename}");
+                tracing::info!("Saved {filename}");
                 Ok(1)
             }
             Err(e) => {
-                log::error!("Failed to save {filename}: {e}");
+                tracing::error!("Failed to save {filename}: {e}");
                 Ok(0)
             }
         }
@@ -218,7 +219,7 @@ impl LogstashCollector {
                 if let Some(ds_err) =
                     e.downcast_ref::<crate::processor::diagnostic::data_source::DataSourceError>()
                 {
-                    log::debug!("Skipping {} collection: {}", T::name(), ds_err);
+                    tracing::debug!("Skipping {} collection: {}", T::name(), ds_err);
                     return Ok(0);
                 }
                 return Err(e);
@@ -230,11 +231,11 @@ impl LogstashCollector {
         let filename = format!("{}", path.display());
         match self.exporter.save(path, content).await {
             Ok(()) => {
-                log::info!("Saved {filename}");
+                tracing::info!("Saved {filename}");
                 Ok(1)
             }
             Err(e) => {
-                log::error!("Failed to save {filename}: {e}");
+                tracing::error!("Failed to save {filename}: {e}");
                 Ok(0)
             }
         }
@@ -285,7 +286,48 @@ impl LogstashCollector {
         let filename = format!("{}", path.display());
         let content = serde_json::to_string_pretty(&manifest)?;
         self.exporter.save(path, content).await?;
-        log::info!("Saved {filename}");
+        tracing::info!("Saved {filename}");
         Ok(1)
+    }
+}
+
+fn should_retry_logstash_error(error: &eyre::Report) -> bool {
+    if let Some(request_error) = error.downcast_ref::<LogstashRequestError>() {
+        return request_error.status != reqwest::StatusCode::UNAUTHORIZED
+            && request_error.status != reqwest::StatusCode::FORBIDDEN;
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn retry_policy_skips_authentication_errors() {
+        let unauthorized = eyre::Report::from(LogstashRequestError {
+            status: StatusCode::UNAUTHORIZED,
+            body: "unauthorized".to_string(),
+        });
+        let forbidden = eyre::Report::from(LogstashRequestError {
+            status: StatusCode::FORBIDDEN,
+            body: "forbidden".to_string(),
+        });
+
+        assert!(!should_retry_logstash_error(&unauthorized));
+        assert!(!should_retry_logstash_error(&forbidden));
+    }
+
+    #[test]
+    fn retry_policy_retries_non_auth_failures() {
+        let rate_limited = eyre::Report::from(LogstashRequestError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: "slow down".to_string(),
+        });
+        let transport = eyre::eyre!("connection reset");
+
+        assert!(should_retry_logstash_error(&rate_limited));
+        assert!(should_retry_logstash_error(&transport));
     }
 }

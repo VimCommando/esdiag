@@ -170,7 +170,7 @@ Options:
 
 #### Host
 
-The `esdiag host` command allows you configure and test authentication information. On a succesful connection test, it writes the configuration to your `~/.esdiag/hosts.yml` file for easy re-use.
+The `esdiag host` command allows you to configure and test authentication information. On a successful connection test, it writes the configuration to your `~/.esdiag/hosts.yml` file for easy re-use.
 
 Alternatively you can use a `.env` file and set `ESDIAG_OUTPUT_*` values; see `example.env`.
 
@@ -185,14 +185,15 @@ Arguments:
   [URL]   A host URL to connect to
 
 Options:
-      --accept-invalid-certs  Accept invalid certificates
-  -a, --apikey <APIKEY>       ApiKey, passed as http header
-  -u, --user <USERNAME>       Username for authentication (alias: --username)
-  -p, --password <PASSWORD>   Password for authentication
-      --secret <SECRET>       Secret identifier in the encrypted keystore
-      --roles <ROLES>         Comma-separated host roles (collect,send,view)
-  -n, --nosave                Don't save the host configuration on succesful connection
-  -h, --help                  Print help
+      --accept-invalid-certs <ACCEPT_INVALID_CERTS>  Accept invalid certificates
+      --delete                                     Delete the saved host configuration
+  -a, --apikey <APIKEY>                            ApiKey, passed as http header
+  -u, --user <USERNAME>                            Username for authentication (alias: --username)
+  -p, --password <PASSWORD>                        Password for authentication
+      --secret <SECRET>                            Secret identifier in the encrypted keystore
+      --roles <ROLES>                              Comma-separated host roles (collect,send,view)
+  -n, --nosave                                     Don't save the host configuration on successful connection
+  -h, --help                                       Print help
 ```
 
 Examples:
@@ -203,6 +204,12 @@ esdiag host prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
 
 # Host with explicit roles for workflow filtering
 esdiag host prod-es elasticsearch http://localhost:9200 --roles collect,send
+
+# Update only the saved certificate setting in place
+esdiag host prod-es --accept-invalid-certs false
+
+# Delete a saved host
+esdiag host prod-es --delete
 ```
 
 #### Keystore
@@ -215,7 +222,12 @@ Manage encrypted secrets in the local keystore
 Usage: esdiag keystore <COMMAND>
 
 Commands:
-  add <SECRET_ID>       Add or update a secret in the encrypted keystore
+  add <SECRET_ID>       Add a new secret to the encrypted keystore
+  update <SECRET_ID>    Update an existing secret in the encrypted keystore
+  unlock                Unlock the local keystore for future CLI runs
+  lock                  Lock the local keystore for future CLI runs
+  status                Show local keystore and unlock status
+  password              Change the keystore password
   remove <SECRET_ID>    Remove a secret from the encrypted keystore
   migrate               Migrate legacy host credentials in hosts.yml into the keystore
 ```
@@ -229,6 +241,19 @@ esdiag keystore add prod-es-basic --user elastic --password changeme
 # Add an API key secret
 esdiag keystore add prod-es-apikey --apikey BASE64_ENCODED_KEY
 
+# Update an existing API key secret
+esdiag keystore update prod-es-apikey --apikey NEW_BASE64_ENCODED_KEY
+
+# Unlock the keystore for 24 hours (default)
+esdiag keystore unlock
+
+# Unlock for a custom duration
+esdiag keystore unlock --ttl 7d
+
+# Inspect or clear the local unlock lease
+esdiag keystore status
+esdiag keystore lock
+
 # Remove just the API key auth from a secret
 esdiag keystore remove prod-es-apikey --apikey BASE64_ENCODED_KEY
 
@@ -236,7 +261,16 @@ esdiag keystore remove prod-es-apikey --apikey BASE64_ENCODED_KEY
 esdiag keystore migrate
 ```
 
-Use `ESDIAG_KEYSTORE_PASSWORD` to provide the keystore password non-interactively. In interactive shells, `keystore add/remove` will prompt when it is unset.
+Use `ESDIAG_KEYSTORE_PASSWORD` to provide the keystore password non-interactively. In interactive shells, `keystore add`, `update`, `remove`, `unlock`, and `password` can prompt when values are missing or the keystore password is unset.
+
+For interactive secret entry, you can omit the value after `--apikey` or `--password` and `esdiag` will prompt with masked input:
+
+```sh
+esdiag keystore add prod-es-apikey --apikey
+esdiag keystore update prod-es-basic --user elastic --password
+```
+
+`esdiag keystore unlock` writes a local `keystore.unlock` lease file under `~/.esdiag/` (or alongside a custom `ESDIAG_KEYSTORE` path) so later CLI runs can reuse the keystore password until the lease expires. The default lease is 24 hours and the maximum is 30 days.
 
 #### Setup
 

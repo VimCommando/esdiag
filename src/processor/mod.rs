@@ -29,6 +29,7 @@ pub use elasticsearch::Cluster as ElasticsearchCluster;
 
 pub use crate::processor::diagnostic::data_source::StreamingDataSource;
 use crate::{data::Product, exporter::Exporter, receiver::Receiver};
+use api::ProcessSelection;
 use elastic_cloud_kubernetes::ElasticCloudKubernetesDiagnostic;
 use elasticsearch::ElasticsearchDiagnostic;
 use eyre::{Result, eyre};
@@ -51,6 +52,7 @@ pub struct Processor<S: State> {
 pub struct Ready {
     manifest: DiagnosticManifest,
     identifiers: Identifiers,
+    process_selection: Option<ProcessSelection>,
 }
 
 /// The `Processing` state represents an active processing job
@@ -63,7 +65,7 @@ pub struct Processing {
     sub_processors: FuturesUnordered<JoinHandle<()>>,
 }
 
-/// The `Completed` state represents a succesfull processing job
+/// The `Completed` state represents a successful processing job
 pub struct Completed {
     pub report: DiagnosticReport,
     pub runtime: u128,
@@ -95,7 +97,7 @@ fn spawn_sub_processors(
         let receiver = match receiver.clone_for_subdir(&diag_path.diag_path) {
             Ok(receiver) => receiver,
             Err(e) => {
-                log::error!("Failed to clone receiver for sub-processor: {} ", e);
+                tracing::error!("Failed to clone receiver for sub-processor: {} ", e);
                 continue;
             }
         };
@@ -107,19 +109,19 @@ fn spawn_sub_processors(
                     match processor.start().await {
                         Ok(processing) => match processing.process().await {
                             Ok(_complete) => {
-                                log::info!("Sub-processor complete");
+                                tracing::info!("Sub-processor complete");
                             }
                             Err(failed) => {
-                                log::error!("Sub-processor failed: {}", failed);
+                                tracing::error!("Sub-processor failed: {}", failed);
                             }
                         },
                         Err(failed) => {
-                            log::error!("Sub-processor failed: {}", failed);
+                            tracing::error!("Sub-processor failed: {}", failed);
                         }
                     };
                 }
                 Err(e) => {
-                    log::error!("Diagnostic sub-processor failed: {}", e);
+                    tracing::error!("Diagnostic sub-processor failed: {}", e);
                 }
             };
         });
@@ -136,6 +138,15 @@ impl Processor<Ready> {
         exporter: Arc<Exporter>,
         identifiers: Identifiers,
     ) -> Result<Self> {
+        Self::try_new_with_selection(receiver, exporter, identifiers, None).await
+    }
+
+    pub async fn try_new_with_selection(
+        receiver: Arc<Receiver>,
+        exporter: Arc<Exporter>,
+        identifiers: Identifiers,
+        process_selection: Option<ProcessSelection>,
+    ) -> Result<Self> {
         let manifest = receiver.try_get_manifest().await?;
         Ok(Self {
             receiver,
@@ -145,13 +156,14 @@ impl Processor<Ready> {
             state: Ready {
                 manifest,
                 identifiers,
+                process_selection,
             },
         })
     }
 
     /// State transition from `Ready` to `Processing`, returning the progress channel
     pub async fn start(self) -> Result<Processor<Processing>, Processor<Failed>> {
-        log::debug!("Transitioned: Processor<Processing>");
+        tracing::debug!("Transitioned: Processor<Processing>");
         let (summary_tx, summary_rx) = mpsc::channel::<ProcessorSummary>(10);
 
         let mut identifiers = self.state.identifiers.clone();
@@ -173,6 +185,7 @@ impl Processor<Ready> {
                 self.receiver.clone(),
                 self.exporter.clone(),
                 self.state.manifest.clone(),
+                self.state.process_selection.clone(),
             )
             .await
             {
@@ -224,6 +237,7 @@ impl Processor<Ready> {
             self.receiver.clone(),
             self.exporter.clone(),
             self.state.manifest,
+            self.state.process_selection,
         )
         .await
         {
@@ -260,14 +274,15 @@ impl Processor<Ready> {
 
 /// The actively `Processing` state.
 impl Processor<Processing> {
+    #[tracing::instrument(skip_all)]
     pub async fn process(mut self) -> Result<Processor<Completed>, Processor<Failed>> {
-        log::debug!("Processing with async progress updates");
+        tracing::debug!("Processing with async progress updates");
 
         let mut report = self.state.report;
         let origin = self.state.diagnostic.origin();
         let summary_handle = tokio::spawn(async move {
             while let Some(summary) = self.state.summary_rx.recv().await {
-                log::debug!("{}", summary);
+                tracing::debug!("{}", summary);
                 report.add_processor_summary(summary);
             }
             report
@@ -291,14 +306,14 @@ impl Processor<Processing> {
         let mut sub_processors = self.state.sub_processors;
         while let Some(res) = futures::stream::StreamExt::next(&mut sub_processors).await {
             if let Err(e) = res {
-                log::error!("Sub-processor task panicked or failed to join: {}", e);
+                tracing::error!("Sub-processor task panicked or failed to join: {}", e);
             }
         }
 
         let mut report = match summary_handle.await {
             Ok(report) => report,
             Err(err) => {
-                log::error!("Failed to await summary handle: {}", err);
+                tracing::error!("Failed to await summary handle: {}", err);
                 return Err(Processor {
                     receiver: self.receiver,
                     exporter: self.exporter,
@@ -312,7 +327,7 @@ impl Processor<Processing> {
             }
         };
 
-        log::info!(
+        tracing::info!(
             "Created {} documents for {} diagnostic: {}",
             report.diagnostic.docs.created,
             report.diagnostic.product,
@@ -340,15 +355,15 @@ impl Processor<Processing> {
                 "{}/app/dashboards#/view/elasticsearch-cluster-report?_g=(filters:!(('$state':(store:globalState),meta:(disabled:!f,index:'4319ebc4-df81-4b18-b8bd-6aaa55a1fd13',key:diagnostic.id,negate:!f,params:(query:'{}'),type:phrase),query:(match_phrase:(diagnostic.id:'{}')))),refreshInterval:(pause:!t,value:60000),time:({}))",
                 kibana_url, url_safe_id, url_safe_id, time_filter
             );
-            log::info!("{}", kibana_link);
+            tracing::info!("{}", kibana_link);
             report.add_kibana_link(kibana_link);
         }
-        log::debug!("{:?}", self.state.identifiers);
+        tracing::debug!("{:?}", self.state.identifiers);
         report.add_identifiers(self.state.identifiers);
         report.add_origin(origin);
         report.add_processing_duration(self.start_time.elapsed().as_millis());
         if let Err(e) = self.exporter.save_report(&report).await {
-            log::error!("Failed to save report: {}", e);
+            tracing::error!("Failed to save report: {}", e);
         }
 
         Ok(Processor {
@@ -392,31 +407,57 @@ impl Diagnostic {
         receiver: Arc<Receiver>,
         exporter: Arc<Exporter>,
         manifest: DiagnosticManifest,
+        process_selection: Option<ProcessSelection>,
     ) -> Result<(Self, DiagnosticReport)> {
-        log::info!("Processing {} diagnostic", manifest.product);
-        log::trace!(
+        tracing::info!("Processing {} diagnostic", manifest.product);
+        tracing::trace!(
             "Diagnostic Manifest: {}",
             serde_json::to_string(&manifest).unwrap()
         );
+        if let Some(selection) = &process_selection
+            && product_key(&manifest.product) != selection.product
+        {
+            return Err(eyre!(
+                "Selected processing product '{}' does not match diagnostic product '{}'",
+                selection.product,
+                product_key(&manifest.product)
+            ));
+        }
         match manifest.product {
             Product::Elasticsearch => {
-                let (diagnostic, report) =
-                    ElasticsearchDiagnostic::try_new(receiver, exporter, manifest).await?;
+                let (diagnostic, report) = ElasticsearchDiagnostic::try_new(
+                    receiver,
+                    exporter,
+                    manifest,
+                    process_selection,
+                )
+                .await?;
                 Ok((Self::Elasticsearch(diagnostic), report))
             }
             Product::ECK => {
-                let (diagnostic, report) =
-                    ElasticCloudKubernetesDiagnostic::try_new(receiver, exporter, manifest).await?;
+                let (diagnostic, report) = ElasticCloudKubernetesDiagnostic::try_new(
+                    receiver,
+                    exporter,
+                    manifest,
+                    process_selection,
+                )
+                .await?;
                 Ok((Self::ElasticCloudKubernetes(diagnostic), report))
             }
             Product::KubernetesPlatform => {
-                let (diagnostic, report) =
-                    KubernetesPlatformDiagnostic::try_new(receiver, exporter, manifest).await?;
+                let (diagnostic, report) = KubernetesPlatformDiagnostic::try_new(
+                    receiver,
+                    exporter,
+                    manifest,
+                    process_selection,
+                )
+                .await?;
                 Ok((Self::KubernetesPlatform(diagnostic), report))
             }
             Product::Logstash => {
                 let (diagnostic, report) =
-                    LogstashDiagnostic::try_new(receiver, exporter, manifest).await?;
+                    LogstashDiagnostic::try_new(receiver, exporter, manifest, process_selection)
+                        .await?;
                 Ok((Self::Logstash(diagnostic), report))
             }
             Product::Kibana => Err(eyre!("Kibana processing is not yet implemented")),
@@ -468,11 +509,25 @@ trait DiagnosticProcessor {
         receiver: Arc<Receiver>,
         exporter: Arc<Exporter>,
         manifest: DiagnosticManifest,
+        process_selection: Option<ProcessSelection>,
     ) -> Result<(Box<Self>, DiagnosticReport)>;
     async fn process(self, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()>;
     #[allow(dead_code)]
     fn id(&self) -> &str;
     fn origin(&self) -> (String, String, String);
+}
+
+fn product_key(product: &Product) -> String {
+    match product {
+        Product::Elasticsearch => "elasticsearch".to_string(),
+        Product::Logstash => "logstash".to_string(),
+        Product::KubernetesPlatform => "kubernetes-platform".to_string(),
+        Product::ECK => "elastic-cloud-kubernetes".to_string(),
+        Product::ECE => "elastic-cloud-enterprise".to_string(),
+        Product::ElasticCloudHosted => "elastic-cloud-hosted".to_string(),
+        Product::Kibana => "kibana".to_string(),
+        other => other.to_string().to_lowercase(),
+    }
 }
 
 trait Metadata {

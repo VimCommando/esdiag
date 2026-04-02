@@ -124,3 +124,24 @@ async fn test_docs_routes_render_and_404() {
 
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn index_embeds_processing_option_catalog() {
+    let (mut server, client, base) = start_server().await;
+
+    let response = client
+        .get(format!("{base}/workflow"))
+        .send()
+        .await
+        .expect("workflow response");
+    assert!(response.status().is_success());
+    let body = response.text().await.expect("workflow body");
+
+    assert!(body.contains("const PROCESS_OPTIONS ="));
+    assert!(body.contains("\"elasticsearch\""));
+    assert!(body.contains("\"cluster_settings_defaults\""));
+    assert!(body.contains("\"logstash\""));
+    assert!(body.contains("\"plugins\""));
+
+    server.shutdown().await;
+}

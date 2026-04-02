@@ -31,7 +31,7 @@ impl TryFrom<PathBuf> for DirectoryReceiver {
     fn try_from(path: PathBuf) -> Result<Self> {
         match path.is_dir() {
             true => {
-                log::debug!("Directory is valid: {}", path.display());
+                tracing::debug!("Directory is valid: {}", path.display());
                 Ok(Self {
                     path: path.clone(),
                     work_dir: String::from(""),
@@ -40,7 +40,7 @@ impl TryFrom<PathBuf> for DirectoryReceiver {
                 })
             }
             false => {
-                log::debug!("Directory is invalid: {}", path.display());
+                tracing::debug!("Directory is invalid: {}", path.display());
                 Err(eyre!(
                     "Directory input must be a directory: {}",
                     path.display()
@@ -58,7 +58,7 @@ impl Receive for DirectoryReceiver {
     async fn is_connected(&self) -> bool {
         let is_dir = self.path.is_dir();
         let directory_name = self.path.to_str().unwrap_or("");
-        log::debug!("Directory {directory_name} is valid: {is_dir}");
+        tracing::debug!("Directory {directory_name} is valid: {is_dir}");
         is_dir
     }
 
@@ -76,7 +76,7 @@ impl Receive for DirectoryReceiver {
 
         for source_path in source_paths {
             let filename = self.path.join(&self.work_dir).join(source_path);
-            log::debug!("Reading file: {}", &filename.display());
+            tracing::debug!("Reading file: {}", &filename.display());
             match File::open(&filename) {
                 Ok(file) => {
                     let reader = BufReader::new(file);
@@ -107,11 +107,8 @@ impl Receive for DirectoryReceiver {
     {
         let ctx = self.source_context()?;
         let source_path = T::resolve_source_file_path(&ctx)?;
-        let filename = self
-            .path
-            .join(&self.work_dir)
-            .join(source_path);
-        log::debug!("Streaming file: {}", &filename.display());
+        let filename = self.path.join(&self.work_dir).join(source_path);
+        tracing::debug!("Streaming file: {}", &filename.display());
 
         let filename_clone = filename.clone();
         let (tx, rx) = mpsc::channel(100);
@@ -122,7 +119,7 @@ impl Receive for DirectoryReceiver {
                 let reader = BufReader::new(file);
                 let mut deserializer = serde_json::Deserializer::from_reader(reader);
                 if let Err(e) = T::deserialize_stream(&mut deserializer, tx.clone()) {
-                    log::error!("Error deserializing stream: {}", e);
+                    tracing::error!("Error deserializing stream: {}", e);
                     let _ = tx.blocking_send(Err(eyre!(e)));
                 }
             }
@@ -154,7 +151,7 @@ impl ReceiveRaw for DirectoryReceiver {
 
         for source_path in source_paths {
             let filename = self.path.join(&self.work_dir).join(source_path);
-            log::debug!("Reading file: {}", &filename.display());
+            tracing::debug!("Reading file: {}", &filename.display());
             match File::open(&filename) {
                 Ok(file) => {
                     let mut reader = BufReader::new(file);
@@ -199,7 +196,7 @@ impl DirectoryReceiver {
         T: DeserializeOwned,
     {
         let path = self.path.join(&self.work_dir).join(filename);
-        log::debug!("Reading bundle file: {}", path.display());
+        tracing::debug!("Reading bundle file: {}", path.display());
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         serde_json::from_reader(reader).map_err(Into::into)

@@ -55,10 +55,10 @@ impl Uri {
     /// - `ESDIAG_OUTPUT_USERNAME` (optional): Username for authentication.
     /// - `ESDIAG_OUTPUT_PASSWORD` (optional): Password for authentication.
     pub fn try_from_output_env() -> Result<Self> {
-        log::debug!("Creating URI from ESDIAG_OUTPUT_URL");
+        tracing::debug!("Creating URI from ESDIAG_OUTPUT_URL");
         let url = std::env::var("ESDIAG_OUTPUT_URL")
             .map_err(|_| eyre!("ESDIAG_OUTPUT_URL is not defined"))?;
-        log::debug!("output: Env {}", url);
+        tracing::debug!("output: Env {}", url);
         let (apikey, username, password) = try_get_auth_env()?;
         let host = KnownHostBuilder::new(Url::parse(&url)?)
             .apikey(apikey)
@@ -74,10 +74,10 @@ impl Uri {
     /// - `ESDIAG_OUTPUT_USERNAME` (optional): Username for authentication.
     /// - `ESDIAG_OUTPUT_PASSWORD` (optional): Password for authentication.
     pub fn try_from_kibana_env() -> Result<Self> {
-        log::debug!("Creating URI from ESDIAG_KIBANA_URL");
+        tracing::debug!("Creating URI from ESDIAG_KIBANA_URL");
         let url = std::env::var("ESDIAG_KIBANA_URL")
             .map_err(|_| eyre!("ESDIAG_KIBANA_URL is not defined"))?;
-        log::debug!("kibana: Env {}", url);
+        tracing::debug!("kibana: Env {}", url);
         let (apikey, username, password) = try_get_auth_env()?;
         let host = KnownHostBuilder::new(Url::parse(&url)?)
             .product(Product::Kibana)
@@ -138,29 +138,45 @@ impl TryFrom<&str> for Uri {
     type Error = Report;
 
     fn try_from(uri: &str) -> Result<Self> {
-        if uri == "-" {
-            log::debug!("Creating Uri::Stream");
+        if uri == "-" || uri == "stdio://stdout" {
+            tracing::debug!("Creating Uri::Stream");
             return Ok(Uri::Stream);
         }
 
         if let Ok(host) = KnownHost::from_str(uri) {
             return host.try_into();
         }
-        log::debug!("No known host for {uri}");
+        tracing::debug!("No known host for {uri}");
 
         if let Ok(url) = Url::parse(uri) {
+            if url.scheme() == "file" {
+                let path = url
+                    .to_file_path()
+                    .map_err(|_| eyre!("Invalid file URI: {uri}"))?;
+                if uri.ends_with('/') {
+                    return Ok(Uri::Directory(path));
+                }
+                if path.exists() {
+                    return if path.is_dir() {
+                        Ok(Uri::Directory(path))
+                    } else {
+                        Ok(Uri::File(path))
+                    };
+                }
+                return Ok(Uri::File(path));
+            }
             let domain = url.domain().ok_or_eyre("URL is missing a domain")?;
             match (domain, url.username(), url.password()) {
                 ("upload.elastic.co", "token", Some(_)) => {
-                    log::debug!("Creating Uri::ElasticUploader");
+                    tracing::debug!("Creating Uri::ElasticUploader");
                     return Ok(Uri::ServiceLink(url));
                 }
                 ("upload.elastic.co", _, None) => {
-                    log::debug!("Missing auth token for Elastic Uploader");
+                    tracing::debug!("Missing auth token for Elastic Uploader");
                     return Ok(Uri::ServiceLinkNoAuth(url));
                 }
                 _ => {
-                    log::debug!("Creating Uri::Url");
+                    tracing::debug!("Creating Uri::Url");
                     return Ok(Uri::Url(url));
                 }
             }
@@ -168,9 +184,9 @@ impl TryFrom<&str> for Uri {
 
         let path = Path::new(&uri);
         match path.is_dir() {
-            false => log::debug!("Not an existing directory {uri}"),
+            false => tracing::debug!("Not an existing directory {uri}"),
             true => {
-                log::debug!("Directory {uri}");
+                tracing::debug!("Directory {uri}");
                 let path_buf = PathBuf::from_str(uri)?;
                 return Ok(Uri::Directory(path_buf));
             }
@@ -179,11 +195,11 @@ impl TryFrom<&str> for Uri {
         match path.is_file() {
             false => {
                 if path.extension().is_none() {
-                    log::debug!("No extension, creating directory: {uri}");
+                    tracing::debug!("No extension, creating directory: {uri}");
                     let path_buf = PathBuf::from_str(uri)?;
                     Ok(Uri::Directory(path_buf))
                 } else {
-                    log::debug!("File did not exist: {uri}");
+                    tracing::debug!("File did not exist: {uri}");
                     Ok(Uri::File(PathBuf::from_str(uri)?))
                 }
             }
@@ -237,5 +253,33 @@ impl std::fmt::Display for Uri {
             Uri::Stream => write!(f, "-"),
             Uri::Url(url) => write!(f, "{}", url),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Uri;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_stdio_stdout_uri_as_stream() {
+        assert!(matches!(Uri::try_from("stdio://stdout"), Ok(Uri::Stream)));
+        assert!(matches!(Uri::try_from("-"), Ok(Uri::Stream)));
+    }
+
+    #[test]
+    fn parses_file_uri_directory_and_file_targets() {
+        assert!(matches!(
+            Uri::try_from("file:///tmp/output/"),
+            Ok(Uri::Directory(path)) if path == PathBuf::from("/tmp/output")
+        ));
+        assert!(matches!(
+            Uri::try_from("file:///tmp/output/report.ndjson"),
+            Ok(Uri::File(path)) if path == PathBuf::from("/tmp/output/report.ndjson")
+        ));
+        assert!(matches!(
+            Uri::try_from("file:///tmp/REPORT"),
+            Ok(Uri::File(path)) if path == PathBuf::from("/tmp/REPORT")
+        ));
     }
 }

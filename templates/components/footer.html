@@ -18,13 +18,6 @@
             >{{ version }}</a
         >
     </footer-left>
-    <footer-center id="exporter">
-        {% if can_configure_output %}
-        <a href="#" data-on:click="@get('/settings/modal')">Output: {{ exporter }}</a>
-        {% else %}
-        Output: {{ exporter }}
-        {% endif %}
-    </footer-center>
     <footer-right
         data-init="@patch('/events')"
         data-signals="{ 'stats': {{ stats }} }"

@@ -23,9 +23,10 @@ use elasticsearch::ElasticsearchExporter;
 use eyre::{Result, eyre};
 use file::FileExporter;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use stream::StreamExporter;
 use tokio::sync::{mpsc, oneshot};
+use url::Url;
 
 trait Export {
     async fn is_connected(&self) -> bool;
@@ -54,7 +55,7 @@ trait Export {
 /// - `Stream`: Exports data to standard output (stdout).
 #[derive(Clone)]
 pub enum Exporter {
-    /// Export collection artifacts to a directory or zip archive
+    /// Export collected bundles to a directory or zip archive
     Archive(ArchiveExporter),
     /// Export to an Elasticsearch cluster with the `_bulk` API
     Elasticsearch(ElasticsearchExporter),
@@ -107,8 +108,9 @@ impl Exporter {
     ///   batch is also sent.
     /// - Batch responses are collected from parallel workers and merged into the summary.
     /// - Errors from batch processing do not abort processing; they are logged
-    ///   with `log::warn!` and the loop continues.
+    ///   with `tracing::warn!` and the loop continues.
     /// - The final (possibly partially updated) `ProcessorSummary` is returned.
+    #[tracing::instrument(skip_all, fields(index = %index))]
     pub async fn document_channel<T: Serialize + Send + Sync + 'static>(
         self,
         mut rx: mpsc::Receiver<T>,
@@ -125,7 +127,7 @@ impl Exporter {
                 let batch = std::mem::replace(&mut accumulator, Vec::with_capacity(batch_size));
                 match self.tx(index.clone(), batch).await {
                     Ok(batch_rx) => batch_receivers.push(batch_rx),
-                    Err(err) => log::warn!("Failed to send document batch: {}", err),
+                    Err(err) => tracing::warn!("Failed to send document batch: {}", err),
                 }
             }
         }
@@ -134,7 +136,7 @@ impl Exporter {
         if !accumulator.is_empty() {
             match self.tx(index.clone(), accumulator).await {
                 Ok(batch_rx) => batch_receivers.push(batch_rx),
-                Err(err) => log::warn!("Failed to send final document batch: {}", err),
+                Err(err) => tracing::warn!("Failed to send final document batch: {}", err),
             }
         }
 
@@ -142,14 +144,15 @@ impl Exporter {
         for batch_rx in batch_receivers {
             match batch_rx.await {
                 Ok(batch_response) => summary.add_batch(batch_response),
-                Err(_) => log::warn!("Batch response channel closed unexpectedly"),
+                Err(_) => tracing::warn!("Batch response channel closed unexpectedly"),
             }
         }
 
-        log::debug!("document_channel {} sent: {}", index, summary.docs);
+        tracing::debug!("document_channel {} sent: {}", index, summary.docs);
         summary
     }
 
+    #[tracing::instrument(skip_all, fields(index = %index))]
     pub async fn send<T>(
         &self,
         index: String,
@@ -226,6 +229,42 @@ impl Exporter {
         self.clone()
     }
 
+    pub fn target_uri(&self) -> String {
+        match self {
+            Exporter::Archive(exporter) => {
+                path_to_file_uri(Path::new(&exporter.to_string()), false)
+            }
+            Exporter::Directory(exporter) => {
+                path_to_file_uri(Path::new(&exporter.to_string()), true)
+            }
+            Exporter::Elasticsearch(exporter) => exporter.to_string(),
+            Exporter::File(exporter) => path_to_file_uri(Path::new(&exporter.to_string()), false),
+            Exporter::Stream(_) => "stdio://stdout".to_string(),
+        }
+    }
+
+    pub fn target_label(&self) -> String {
+        match self {
+            Exporter::Archive(exporter) => format!("archive: {}", exporter),
+            Exporter::Directory(exporter) => {
+                format!("dir: {}", format_directory_label(&exporter.to_string()))
+            }
+            Exporter::Elasticsearch(exporter) => format!("elasticsearch: {}", exporter),
+            Exporter::File(exporter) => format!("file: {}", exporter),
+            Exporter::Stream(_) => "stdout: -".to_string(),
+        }
+    }
+
+    pub fn requires_secret(&self) -> bool {
+        match self {
+            Exporter::Elasticsearch(exporter) => exporter.requires_secret(),
+            Exporter::Archive(_)
+            | Exporter::Directory(_)
+            | Exporter::File(_)
+            | Exporter::Stream(_) => false,
+        }
+    }
+
     pub async fn save_report(&self, report: &DiagnosticReport) -> Result<()> {
         match self {
             Exporter::Archive(_) => Err(eyre!("save report not supported for archive exporter")),
@@ -280,6 +319,31 @@ impl std::fmt::Display for Exporter {
     }
 }
 
+fn format_directory_label(value: &str) -> String {
+    if value.ends_with('/') || value.ends_with('\\') {
+        value.to_string()
+    } else {
+        format!("{value}{}", std::path::MAIN_SEPARATOR)
+    }
+}
+
+fn path_to_file_uri(path: &Path, is_dir: bool) -> String {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    let url = if is_dir {
+        Url::from_directory_path(&absolute)
+    } else {
+        Url::from_file_path(&absolute)
+    };
+    url.map(|url| url.to_string())
+        .unwrap_or_else(|_| absolute.display().to_string())
+}
+
 impl TryFrom<KnownHost> for Exporter {
     type Error = eyre::Report;
     fn try_from(host: KnownHost) -> std::result::Result<Self, Self::Error> {
@@ -289,5 +353,43 @@ impl TryFrom<KnownHost> for Exporter {
             )?)),
             _ => Err(eyre!("Unsupported product")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Exporter, format_directory_label};
+    use crate::data::Uri;
+    use std::path::PathBuf;
+
+    #[test]
+    fn format_directory_label_preserves_existing_trailing_separator() {
+        assert_eq!(format_directory_label("/tmp/out/"), "/tmp/out/");
+        assert_eq!(format_directory_label(r"C:\out\"), r"C:\out\");
+    }
+
+    #[test]
+    fn format_directory_label_appends_platform_separator_when_missing() {
+        assert_eq!(
+            format_directory_label("/tmp/out"),
+            format!("/tmp/out{}", std::path::MAIN_SEPARATOR)
+        );
+    }
+
+    #[test]
+    fn target_uri_uses_canonical_machine_values() {
+        let directory = Exporter::try_from(Uri::Directory(PathBuf::from("/tmp/out")))
+            .expect("directory exporter");
+        assert_eq!(directory.target_uri(), "file:///tmp/out/");
+        assert_eq!(directory.target_label(), "dir: /tmp/out/");
+
+        let file = Exporter::try_from(Uri::File(PathBuf::from("/tmp/out/report.ndjson")))
+            .expect("file exporter");
+        assert_eq!(file.target_uri(), "file:///tmp/out/report.ndjson");
+        assert_eq!(file.target_label(), "file: /tmp/out/report.ndjson");
+
+        let stream = Exporter::default();
+        assert_eq!(stream.target_uri(), "stdio://stdout");
+        assert_eq!(stream.target_label(), "stdout: -");
     }
 }

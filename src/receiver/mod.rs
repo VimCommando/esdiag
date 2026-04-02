@@ -10,22 +10,20 @@ mod directory;
 mod elastic_cloud_admin;
 /// Request API calls from Elasticsearch
 mod elasticsearch;
-/// Request API calls from Logstash
-mod logstash;
 /// Request API calls from Kibana
 mod kibana;
+/// Request API calls from Logstash
+mod logstash;
 /// Get file from https://upload.elastic.co/
 mod upload_service;
 
-pub use elasticsearch::ElasticsearchReceiver;
+pub use elasticsearch::{ElasticsearchReceiver, ElasticsearchRequestError};
 pub use kibana::{KibanaReceiver, KibanaRequestError};
-pub use logstash::LogstashReceiver;
+pub use logstash::{LogstashReceiver, LogstashRequestError};
 
 use super::{
     data::{KnownHost, Product, Uri},
-    processor::{
-        DataSource, DiagnosticManifest, Manifest, SourceContext, StreamingDataSource,
-    },
+    processor::{DataSource, DiagnosticManifest, Manifest, SourceContext, StreamingDataSource},
 };
 use archive::{ArchiveBytesReceiver, ArchiveFileReceiver};
 use directory::DirectoryReceiver;
@@ -49,7 +47,9 @@ pub trait Receive {
         Err(eyre!("Streaming is not supported for this receiver"))
     }
     async fn try_get_manifest(&self) -> Result<DiagnosticManifest> {
-        Err(eyre!("Manifest synthesis is not supported for this receiver"))
+        Err(eyre!(
+            "Manifest synthesis is not supported for this receiver"
+        ))
     }
 }
 
@@ -103,12 +103,14 @@ impl Receiver {
                 "elasticsearch",
                 Some(receiver.get_version().await?.clone()),
             )),
-            Receiver::Logstash(receiver) => {
-                Ok(SourceContext::new("logstash", Some(receiver.get_version().await?.clone())))
-            }
-            Receiver::Kibana(receiver) => {
-                Ok(SourceContext::new("kibana", Some(receiver.get_version().await?.clone())))
-            }
+            Receiver::Logstash(receiver) => Ok(SourceContext::new(
+                "logstash",
+                Some(receiver.get_version().await?.clone()),
+            )),
+            Receiver::Kibana(receiver) => Ok(SourceContext::new(
+                "kibana",
+                Some(receiver.get_version().await?.clone()),
+            )),
             Receiver::ElasticCloudAdmin(receiver) => Ok(SourceContext::new(
                 "elasticsearch",
                 Some(receiver.get_version().await?.clone()),
@@ -116,6 +118,7 @@ impl Receiver {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn get<T>(&self) -> Result<T>
     where
         T: DataSource + DeserializeOwned,
@@ -131,6 +134,7 @@ impl Receiver {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn get_stream<T>(&self) -> Result<BoxStream<'static, Result<T::Item>>>
     where
         T: StreamingDataSource + DeserializeOwned,
@@ -224,9 +228,9 @@ impl Receiver {
 
     pub async fn try_get_manifest(&self) -> Result<DiagnosticManifest> {
         let manifest = match self {
-            Receiver::ArchiveBytes(_)
-            | Receiver::ArchiveFile(_)
-            | Receiver::Directory(_) => self.try_get_manifest_from_files().await,
+            Receiver::ArchiveBytes(_) | Receiver::ArchiveFile(_) | Receiver::Directory(_) => {
+                self.try_get_manifest_from_files().await
+            }
             Receiver::Elasticsearch(receiver) => receiver.try_get_manifest().await,
             Receiver::Kibana(receiver) => receiver.try_get_manifest().await,
             Receiver::Logstash(receiver) => receiver.try_get_manifest().await,
@@ -242,16 +246,16 @@ impl Receiver {
             .await
         {
             Ok(manifest) => {
-                log::debug!("Using diagnostic_manifest.json");
+                tracing::debug!("Using diagnostic_manifest.json");
                 self.set_source_product_from_manifest(&manifest.product)?;
                 return Ok(manifest);
             }
-            Err(e) => log::debug!("Error reading diagnostic_manifest.json: {e}"),
+            Err(e) => tracing::debug!("Error reading diagnostic_manifest.json: {e}"),
         }
 
         match self.read_bundle_json::<Manifest>(Manifest::FILENAME).await {
             Ok(manifest) => {
-                log::warn!("Falling back to manifest.json");
+                tracing::warn!("Falling back to manifest.json");
                 let manifest: DiagnosticManifest = manifest.into();
                 self.set_source_product_from_manifest(&manifest.product)?;
                 Ok(manifest)
@@ -271,7 +275,9 @@ impl Receiver {
             Receiver::ArchiveBytes(receiver) => receiver.read_bundle_json(filename).await,
             Receiver::ArchiveFile(receiver) => receiver.read_bundle_json(filename).await,
             Receiver::Directory(receiver) => receiver.read_bundle_json(filename).await,
-            _ => Err(eyre!("Bundle file reads are only supported for archive and directory receivers")),
+            _ => Err(eyre!(
+                "Bundle file reads are only supported for archive and directory receivers"
+            )),
         }
     }
 
@@ -308,7 +314,12 @@ impl TryFrom<Uri> for Receiver {
                 }
                 Product::Logstash => Receiver::Logstash(LogstashReceiver::try_from(host)?),
                 Product::Kibana => Receiver::Kibana(KibanaReceiver::try_from(host)?),
-                _ => return Err(eyre!("Unsupported known-host receiver product: {}", host.app())),
+                _ => {
+                    return Err(eyre!(
+                        "Unsupported known-host receiver product: {}",
+                        host.app()
+                    ));
+                }
             },
             Uri::ServiceLink(url) => {
                 Receiver::ArchiveBytes(UploadServiceDownloader::try_from(url)?.download()?)

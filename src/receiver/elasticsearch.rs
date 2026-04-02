@@ -18,6 +18,20 @@ use url::Url;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
+#[derive(Debug)]
+pub struct ElasticsearchRequestError {
+    pub status: http::StatusCode,
+    pub body: String,
+}
+
+impl std::fmt::Display for ElasticsearchRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "http {} - {}", self.status, self.body)
+    }
+}
+
+impl std::error::Error for ElasticsearchRequestError {}
+
 #[derive(Clone)]
 pub struct ElasticsearchReceiver {
     client: Elasticsearch,
@@ -26,6 +40,12 @@ pub struct ElasticsearchReceiver {
 }
 
 impl ElasticsearchReceiver {
+    fn format_error_body(body: &str) -> String {
+        serde_json::from_str::<Value>(body)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|_| body.to_string())
+    }
+
     pub fn new(url: Url) -> Result<Self> {
         let client = Elasticsearch::default();
         Ok(Self {
@@ -38,7 +58,7 @@ impl ElasticsearchReceiver {
     pub async fn get_version(&self) -> Result<&semver::Version> {
         self.version
             .get_or_try_init(|| async {
-                log::debug!("Fetching version from {}", self.url);
+                tracing::debug!("Fetching version from {}", self.url);
                 let response = self
                     .client
                     .send(
@@ -50,8 +70,16 @@ impl ElasticsearchReceiver {
                         None,
                     )
                     .await?;
-                let bytes = response.bytes().await?;
-                let cluster: Value = serde_json::from_slice(&bytes)?;
+                let status = response.status_code();
+                let body = response.text().await?;
+                if !status.is_success() {
+                    return Err(ElasticsearchRequestError {
+                        status,
+                        body: Self::format_error_body(&body),
+                    }
+                    .into());
+                }
+                let cluster: Value = serde_json::from_str(&body)?;
                 let version_str = cluster
                     .get("version")
                     .and_then(|version| version.get("number").and_then(|number| number.as_str()))
@@ -63,7 +91,7 @@ impl ElasticsearchReceiver {
     }
 
     pub async fn get_raw_by_path(&self, path: &str, extension: &str) -> Result<String> {
-        log::debug!("Getting raw API path: {}", path);
+        tracing::debug!("Getting raw API path: {}", path);
 
         let mut headers = http::headers::HeaderMap::new();
         // By default, the Elasticsearch client enforces Accept: application/json
@@ -85,8 +113,17 @@ impl ElasticsearchReceiver {
                 None,
             )
             .await?;
+        let status = response.status_code();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(ElasticsearchRequestError {
+                status,
+                body: Self::format_error_body(&body),
+            }
+            .into());
+        }
 
-        response.text().await.map_err(Into::into)
+        Ok(body)
     }
 }
 
@@ -110,7 +147,7 @@ impl Receive for ElasticsearchReceiver {
     }
 
     async fn is_connected(&self) -> bool {
-        log::debug!("Testing Elasticsearch client connection");
+        tracing::debug!("Testing Elasticsearch client connection");
         // An empty request to `/`
         let response = self
             .client
@@ -126,14 +163,14 @@ impl Receive for ElasticsearchReceiver {
 
         match response {
             Ok(response) => {
-                log::debug!(
+                tracing::debug!(
                     "Elasticsearch client connection successful: {}",
                     response.status_code()
                 );
                 true
             }
             Err(e) => {
-                log::error!("Elasticsearch client connection failed: {e}");
+                tracing::error!("Elasticsearch client connection failed: {e}");
                 false
             }
         }
@@ -149,7 +186,7 @@ impl Receive for ElasticsearchReceiver {
     {
         let ctx = SourceContext::new("elasticsearch", self.get_version().await.ok().cloned());
         let path = T::resolve_source_request_path(&ctx)?;
-        log::debug!("Getting API: {}", &path);
+        tracing::debug!("Getting API: {}", &path);
 
         // Send a simple GET request to the API path
         let response = self
@@ -167,13 +204,14 @@ impl Receive for ElasticsearchReceiver {
         match response.status_code() {
             http::StatusCode::OK => response.json::<T>().await.map_err(Into::into),
             status => {
-                let body: Value = response.json::<Value>().await?;
-                log::debug!("Failed to get API response: {}", body);
-                let reason = body
-                    .get("error")
-                    .and_then(|e| e.get("reason").and_then(|r| r.as_str()))
-                    .unwrap_or("Unknown");
-                Err(eyre!("http {} - {}", status, reason))
+                let body = response.text().await?;
+                let formatted_body = Self::format_error_body(&body);
+                tracing::debug!("Failed to get API response: {}", formatted_body);
+                Err(ElasticsearchRequestError {
+                    status,
+                    body: formatted_body,
+                }
+                .into())
             }
         }
     }
@@ -193,11 +231,11 @@ impl Receive for ElasticsearchReceiver {
 
     async fn try_get_manifest(&self) -> Result<DiagnosticManifest> {
         let collection_date = chrono::Utc::now().to_rfc3339();
-        log::info!("Creating diagnostic manifest with collection date {collection_date}");
+        tracing::info!("Creating diagnostic manifest with collection date {collection_date}");
         let cluster = match self.get::<ElasticsearchCluster>().await {
             Ok(cluster) => cluster,
             Err(err) => {
-                log::debug!("Failed to get Elasticsearch cluster info: {}", err);
+                tracing::debug!("Failed to get Elasticsearch cluster info: {}", err);
                 return Err(err);
             }
         };

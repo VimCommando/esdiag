@@ -23,16 +23,45 @@ pub struct LogstashReceiver {
     version: Arc<OnceCell<semver::Version>>,
 }
 
+#[derive(Debug)]
+pub struct LogstashRequestError {
+    pub status: reqwest::StatusCode,
+    pub body: String,
+}
+
+impl std::fmt::Display for LogstashRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "http {} - {}", self.status, self.body)
+    }
+}
+
+impl std::error::Error for LogstashRequestError {}
+
 impl LogstashReceiver {
+    fn format_error_body(body: &str) -> String {
+        serde_json::from_str::<Value>(body)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|_| body.to_string())
+    }
+
     pub async fn get_version(&self) -> Result<&semver::Version> {
         self.version
             .get_or_try_init(|| async {
-                log::debug!("Fetching Logstash version from {}", self.url);
+                tracing::debug!("Fetching Logstash version from {}", self.url);
                 let response = self
                     .client
                     .request(Method::GET, &HashMap::new(), "/", None)
                     .await?;
-                let body: Value = response.json().await?;
+                let status = response.status();
+                let body = response.text().await?;
+                if !status.is_success() {
+                    return Err(LogstashRequestError {
+                        status,
+                        body: Self::format_error_body(&body),
+                    }
+                    .into());
+                }
+                let body: Value = serde_json::from_str(&body)?;
                 let version_str = body
                     .get("version")
                     .and_then(|version| version.as_str())
@@ -44,7 +73,7 @@ impl LogstashReceiver {
     }
 
     pub async fn get_raw_by_path(&self, path: &str, extension: &str) -> Result<String> {
-        log::debug!("Getting raw Logstash API path: {}", path);
+        tracing::debug!("Getting raw Logstash API path: {}", path);
 
         let accept = if extension == ".txt" {
             "text/plain"
@@ -52,9 +81,21 @@ impl LogstashReceiver {
             "application/json"
         };
         let headers = HashMap::from([("Accept".to_string(), accept.to_string())]);
-        let response = self.client.request(Method::GET, &headers, path, None).await?;
+        let response = self
+            .client
+            .request(Method::GET, &headers, path, None)
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(LogstashRequestError {
+                status,
+                body: Self::format_error_body(&body),
+            }
+            .into());
+        }
 
-        response.text().await.map_err(Into::into)
+        Ok(body)
     }
 }
 
@@ -78,7 +119,7 @@ impl Receive for LogstashReceiver {
     }
 
     async fn is_connected(&self) -> bool {
-        log::debug!("Testing Logstash receiver connection");
+        tracing::debug!("Testing Logstash receiver connection");
         self.client.test_connection().await.is_ok()
     }
 
@@ -92,7 +133,7 @@ impl Receive for LogstashReceiver {
     {
         let ctx = SourceContext::new("logstash", self.get_version().await.ok().cloned());
         let path = T::resolve_source_request_path(&ctx)?;
-        log::debug!("Getting Logstash API: {}", &path);
+        tracing::debug!("Getting Logstash API: {}", &path);
 
         let response = self
             .client
@@ -103,8 +144,13 @@ impl Receive for LogstashReceiver {
             reqwest::StatusCode::OK => response.json::<T>().await.map_err(Into::into),
             status => {
                 let body = response.text().await.unwrap_or_default();
-                log::debug!("Failed to get Logstash API response: {}", body);
-                Err(eyre!("http {} - {}", status, body))
+                let formatted_body = Self::format_error_body(&body);
+                tracing::debug!("Failed to get Logstash API response: {}", formatted_body);
+                Err(LogstashRequestError {
+                    status,
+                    body: formatted_body,
+                }
+                .into())
             }
         }
     }
@@ -114,7 +160,9 @@ impl Receive for LogstashReceiver {
         T: super::super::processor::StreamingDataSource + DeserializeOwned,
         T::Item: DeserializeOwned + Send + 'static,
     {
-        Err(eyre!("Streaming is not yet implemented for Logstash receiver"))
+        Err(eyre!(
+            "Streaming is not yet implemented for Logstash receiver"
+        ))
     }
 
     async fn try_get_manifest(&self) -> Result<DiagnosticManifest> {
