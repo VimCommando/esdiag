@@ -684,17 +684,18 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                             identifiers,
                         )
                         .await?;
-                        Ok(CommandResult::with_summary(
-                            "collect",
-                            format_collect_summary(
-                                &collect_with_optional_upload(
-                                    collector.collect(),
-                                    upload_id.as_deref(),
-                                    upload_collected_archive,
-                                )
-                                .await?,
-                            ),
-                        ))
+                        collect_with_optional_upload(
+                            collector.collect(),
+                            upload_id.as_deref(),
+                            upload_collected_archive,
+                        )
+                        .await
+                        .map(|result| {
+                            CommandResult::with_summary(
+                                "collect",
+                                format_collect_summary(&result),
+                            )
+                        })
                     }
                     Uri::ElasticCloud(_) => {
                         Err(eyre!("Elastic Cloud API collection not yet implemented"))
@@ -1132,7 +1133,6 @@ async fn upload_collected_archive(file_path: PathBuf, upload_id: String) -> Resu
             file_path.display()
         ));
     }
-
     tracing::info!(
         "Uploading collected archive {} to {}",
         file_path.display(),
@@ -1924,7 +1924,6 @@ mod tests {
                 .contains(&format!("Collected archive not found at {}", missing_path.display()))
         );
     }
-
     #[test]
     fn upload_command_parses_file_and_upload_id() {
         let cli = Cli::parse_from(["esdiag", "upload", "diag.zip", "abc123"]);
