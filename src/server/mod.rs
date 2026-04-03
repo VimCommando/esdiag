@@ -184,7 +184,8 @@ impl Server {
             stats_updates_rx,
             runtime_mode,
             runtime_mode_policy,
-            keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
+            #[cfg(feature = "keystore")]
+            keystore_rate_limit: Arc::new(std::sync::Mutex::new(keystore::KeystoreRateLimit::default())),
         });
 
         stats::spawn_stats_publisher(state.clone(), state.event_sender());
@@ -281,6 +282,7 @@ impl Server {
                     )
                     .route("/keystore/unlock", post(keystore::unlock))
                     .route("/keystore/lock", post(keystore::lock))
+                    .route("/keystore/status", get(keystore::status))
             } else {
                 app
             };
@@ -373,9 +375,8 @@ pub struct ServerState {
     pub retained_bundles: Arc<RwLock<HashMap<String, RetainedBundle>>>,
     pub runtime_mode: RuntimeMode,
     pub runtime_mode_policy: RuntimeModePolicy,
-    // Keystore session state is intentionally single-user only. User mode keeps one
-    // local in-memory session, and service mode never enables keystore access.
-    pub keystore_state: Arc<RwLock<KeystoreSessionState>>,
+    #[cfg(feature = "keystore")]
+    pub keystore_rate_limit: Arc<std::sync::Mutex<keystore::KeystoreRateLimit>>,
     stats: Arc<RwLock<Stats>>,
     shutdown: watch::Receiver<bool>,
     event_tx: broadcast::Sender<ServerEvent>,
@@ -394,65 +395,7 @@ pub struct RetainedBundle {
     pub expires_at_epoch: i64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct KeystoreSessionState {
-    pub locked: bool,
-    pub lock_time: i64,
-    pub failed_attempts: u32,
-    pub blocked_until_epoch: Option<i64>,
-    #[serde(skip)]
-    pub unlock_file_seed_available: bool,
-    #[serde(skip)]
-    pub unlocked_password: Option<String>,
-    #[serde(skip)]
-    pub expires_at_epoch: Option<i64>,
-}
-
-impl Default for KeystoreSessionState {
-    fn default() -> Self {
-        Self {
-            locked: true,
-            lock_time: now_epoch_seconds(),
-            failed_attempts: 0,
-            blocked_until_epoch: None,
-            unlock_file_seed_available: true,
-            unlocked_password: None,
-            expires_at_epoch: None,
-        }
-    }
-}
-
-impl KeystoreSessionState {
-    fn current_backoff_seconds(&self) -> u64 {
-        if self.failed_attempts <= 3 {
-            return 0;
-        }
-        let over = self.failed_attempts - 3;
-        let minutes = (over as u64).saturating_mul(5).min(60);
-        minutes * 60
-    }
-
-    fn apply_timeout(&mut self) {
-        let now = now_epoch_seconds();
-        if let Some(blocked_until) = self.blocked_until_epoch
-            && blocked_until <= now
-        {
-            self.blocked_until_epoch = None;
-        }
-        if let Some(expires_at) = self.expires_at_epoch
-            && expires_at <= now
-            && !self.locked
-        {
-            self.locked = true;
-            self.lock_time = now;
-            self.unlocked_password = None;
-            self.expires_at_epoch = None;
-            tracing::info!("Keystore session timed out and was locked");
-        }
-    }
-}
-
-fn now_epoch_seconds() -> i64 {
+pub(crate) fn now_epoch_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0))
@@ -479,18 +422,16 @@ impl ServerState {
         )
     }
 
-    fn apply_keystore_timeout_locked(state: &mut KeystoreSessionState) -> bool {
-        let was_locked = state.locked;
-        state.apply_timeout();
-        !was_locked && state.locked
+    /// Stub for builds without the keystore feature. Returns locked state.
+    #[cfg(not(feature = "keystore"))]
+    pub async fn keystore_status(&self) -> (bool, i64) {
+        (true, 0)
     }
 
-    fn can_use_keystore_session(&self) -> bool {
-        // Keystore support is only available for the local single-user web flow.
-        // Service mode is explicitly excluded, even if a request is authenticated.
-        cfg!(feature = "keystore")
-            && self.runtime_mode_policy.allows_local_runtime_features()
-            && !self.runtime_mode_policy.requires_iap_headers()
+    /// Stub for builds without the keystore feature. Returns None.
+    #[cfg(not(feature = "keystore"))]
+    pub async fn keystore_password(&self) -> Option<String> {
+        None
     }
 
     pub async fn record_job_started(&self) {
@@ -530,241 +471,6 @@ impl ServerState {
             .unwrap_or_else(|| "Anonymous".to_string());
 
         Ok((has_header, email))
-    }
-
-    pub async fn keystore_status_for(&self, user: &str) -> (bool, i64) {
-        if !self.can_use_keystore_session() {
-            return (true, 0);
-        }
-        self.maybe_seed_keystore_session_from_unlock_for(user).await;
-        let mut state = self.keystore_state.write().await;
-        let timed_out = Self::apply_keystore_timeout_locked(&mut state);
-        let status = (state.locked, state.lock_time);
-        drop(state);
-        if timed_out {
-            let _ = user;
-            self.publish_event(signal_event(self.keystore_signal_payload().await));
-        }
-        status
-    }
-
-    pub async fn keystore_status(&self) -> (bool, i64) {
-        self.keystore_status_for("single-user").await
-    }
-
-    pub async fn is_keystore_unlocked_for(&self, user: &str) -> bool {
-        if !self.can_use_keystore_session() {
-            return false;
-        }
-        self.maybe_seed_keystore_session_from_unlock_for(user).await;
-        let mut state = self.keystore_state.write().await;
-        let timed_out = Self::apply_keystore_timeout_locked(&mut state);
-        let unlocked = !state.locked;
-        drop(state);
-        if timed_out {
-            let _ = user;
-            self.publish_event(signal_event(self.keystore_signal_payload().await));
-        }
-        unlocked
-    }
-
-    pub async fn is_keystore_unlocked(&self) -> bool {
-        self.is_keystore_unlocked_for("single-user").await
-    }
-
-    pub async fn touch_keystore_session_for(&self, user: &str) {
-        if !self.can_use_keystore_session() {
-            return;
-        }
-        let mut state = self.keystore_state.write().await;
-        let timed_out = Self::apply_keystore_timeout_locked(&mut state);
-        if !state.locked {
-            state.expires_at_epoch = Some(now_epoch_seconds() + (12 * 60 * 60));
-        }
-        drop(state);
-        if timed_out {
-            let _ = user;
-            self.publish_event(signal_event(self.keystore_signal_payload().await));
-        }
-    }
-
-    pub async fn touch_keystore_session(&self) {
-        self.touch_keystore_session_for("single-user").await
-    }
-
-    pub async fn set_keystore_unlocked_for(&self, user: &str, password: String) {
-        if !self.can_use_keystore_session() {
-            tracing::warn!(
-                "Ignoring keystore unlock because keystore is unavailable in this runtime mode"
-            );
-            return;
-        }
-        let mut state = self.keystore_state.write().await;
-        state.locked = false;
-        state.lock_time = now_epoch_seconds();
-        state.failed_attempts = 0;
-        state.blocked_until_epoch = None;
-        state.unlock_file_seed_available = false;
-        state.unlocked_password = Some(password);
-        state.expires_at_epoch = Some(now_epoch_seconds() + (12 * 60 * 60));
-        drop(state);
-        self.publish_event(signal_event(self.keystore_signal_payload().await));
-        let _ = user;
-        tracing::info!("Keystore authentication succeeded for the local user session");
-    }
-
-    pub async fn set_keystore_unlocked(&self, password: String) {
-        self.set_keystore_unlocked_for("single-user", password)
-            .await
-    }
-
-    pub async fn set_keystore_locked_for(&self, user: &str, reason: &str) {
-        if !self.can_use_keystore_session() {
-            return;
-        }
-        let mut state = self.keystore_state.write().await;
-        Self::apply_keystore_timeout_locked(&mut state);
-        state.locked = true;
-        state.lock_time = now_epoch_seconds();
-        state.unlock_file_seed_available = false;
-        state.unlocked_password = None;
-        state.expires_at_epoch = None;
-        drop(state);
-        self.publish_event(signal_event(self.keystore_signal_payload().await));
-        let _ = user;
-        tracing::info!("Keystore locked for the local user session: {reason}");
-    }
-
-    pub async fn set_keystore_locked(&self, reason: &str) {
-        self.set_keystore_locked_for("single-user", reason).await
-    }
-
-    pub async fn record_keystore_failed_attempt_for(&self, user: &str) -> Option<i64> {
-        if !self.can_use_keystore_session() {
-            return None;
-        }
-        let mut state = self.keystore_state.write().await;
-        Self::apply_keystore_timeout_locked(&mut state);
-        state.failed_attempts = state.failed_attempts.saturating_add(1);
-        let block_seconds = state.current_backoff_seconds();
-        if block_seconds > 0 {
-            state.blocked_until_epoch = Some(now_epoch_seconds() + block_seconds as i64);
-        }
-        let blocked_until = state.blocked_until_epoch;
-        drop(state);
-        let _ = user;
-        tracing::warn!("Keystore authentication failed for the local user session");
-        self.publish_event(signal_event(self.keystore_signal_payload().await));
-        blocked_until
-    }
-
-    pub async fn record_keystore_failed_attempt(&self) -> Option<i64> {
-        self.record_keystore_failed_attempt_for("single-user").await
-    }
-
-    pub async fn keystore_signal_payload_for(&self, user: &str) -> String {
-        if !self.can_use_keystore_session() {
-            return r#"{"keystore":{"locked":true,"lock_time":0}}"#.to_string();
-        }
-        let mut state = self.keystore_state.write().await;
-        Self::apply_keystore_timeout_locked(&mut state);
-        let locked = state.locked;
-        let lock_time = state.lock_time;
-        drop(state);
-        let _ = user;
-        format!(
-            r#"{{"keystore":{{"locked":{},"lock_time":{}}}}}"#,
-            locked, lock_time
-        )
-    }
-
-    pub async fn keystore_signal_payload(&self) -> String {
-        self.keystore_signal_payload_for("single-user").await
-    }
-
-    pub async fn keystore_blocked_until_for(&self, user: &str) -> Option<i64> {
-        if !self.can_use_keystore_session() {
-            return None;
-        }
-        let mut state = self.keystore_state.write().await;
-        let timed_out = Self::apply_keystore_timeout_locked(&mut state);
-        let blocked_until = state.blocked_until_epoch;
-        drop(state);
-        if timed_out {
-            let _ = user;
-            self.publish_event(signal_event(self.keystore_signal_payload().await));
-        }
-        blocked_until
-    }
-
-    pub async fn keystore_blocked_until(&self) -> Option<i64> {
-        self.keystore_blocked_until_for("single-user").await
-    }
-
-    pub async fn keystore_password_for(&self, user: &str) -> Option<String> {
-        if !self.can_use_keystore_session() {
-            return None;
-        }
-        self.maybe_seed_keystore_session_from_unlock_for(user).await;
-        let mut state = self.keystore_state.write().await;
-        let timed_out = Self::apply_keystore_timeout_locked(&mut state);
-        let password = if state.locked {
-            None
-        } else {
-            state.unlocked_password.clone()
-        };
-        drop(state);
-        if timed_out {
-            let _ = user;
-            self.publish_event(signal_event(self.keystore_signal_payload().await));
-        }
-        password
-    }
-
-    pub async fn keystore_password(&self) -> Option<String> {
-        self.keystore_password_for("single-user").await
-    }
-
-    async fn maybe_seed_keystore_session_from_unlock_for(&self, user: &str) {
-        if !self.can_use_keystore_session() {
-            return;
-        }
-        let (should_try, timed_out) = {
-            let mut state = self.keystore_state.write().await;
-            let timed_out = Self::apply_keystore_timeout_locked(&mut state);
-            if !state.locked || !state.unlock_file_seed_available {
-                (false, timed_out)
-            } else {
-                state.unlock_file_seed_available = false;
-                (true, timed_out)
-            }
-        };
-        if timed_out {
-            self.publish_event(signal_event(self.keystore_signal_payload().await));
-        }
-        if !should_try {
-            return;
-        }
-        let password = match crate::data::get_password_from_unlock_file() {
-            Ok(Some(password)) => password,
-            Ok(None) => return,
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to inspect CLI unlock lease for web session seed: {}",
-                    err
-                );
-                return;
-            }
-        };
-        if let Err(err) = crate::data::validate_existing_keystore_password(&password) {
-            tracing::warn!(
-                "Ignoring invalid CLI unlock lease for web session seed: {}",
-                err
-            );
-            return;
-        }
-        self.set_keystore_unlocked_for(user, password).await;
-        tracing::info!("Seeded web keystore session from existing CLI unlock lease");
     }
 
     pub async fn record_success(&self, _docs: u32, errors: u32) {
@@ -1080,16 +786,6 @@ impl ServerState {
         self.event_tx.subscribe()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn keystore_expires_at_epoch(&self) -> Option<i64> {
-        self.keystore_state.read().await.expires_at_epoch
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn keystore_failed_attempts(&self) -> u32 {
-        self.keystore_state.read().await.failed_attempts
-    }
-
     fn notify_stats_changed(&self) {
         let next = *self.stats_updates_tx.borrow() + 1;
         let _ = self.stats_updates_tx.send(next);
@@ -1098,15 +794,14 @@ impl ServerState {
 
 pub async fn ensure_active_output_ready(
     state: &Arc<ServerState>,
-    user: &str,
 ) -> Result<(), String> {
     #[cfg(feature = "keystore")]
     {
-        keystore::ensure_unlocked_for_active_output(state, user).await
+        keystore::ensure_unlocked_for_active_output(state).await
     }
     #[cfg(not(feature = "keystore"))]
     {
-        let _ = (state, user);
+        let _ = state;
         Ok(())
     }
 }
@@ -1164,7 +859,8 @@ pub(crate) fn test_server_state() -> Arc<ServerState> {
         retained_bundles: Arc::new(RwLock::new(HashMap::new())),
         runtime_mode,
         runtime_mode_policy: RuntimeModePolicy::new(runtime_mode),
-        keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
+        #[cfg(feature = "keystore")]
+        keystore_rate_limit: Arc::new(std::sync::Mutex::new(keystore::KeystoreRateLimit::default())),
         shutdown: watch::channel(false).1,
         event_tx: broadcast::channel(16).0,
         stats_updates_tx,
@@ -1675,7 +1371,7 @@ async fn add_client_hint_headers(mut response: Response) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiKeyFormSignals, KeystoreSessionState, RuntimeMode, RuntimeModePolicy, Server,
+        ApiKeyFormSignals, RuntimeMode, RuntimeModePolicy, Server,
         ServerEvent, ServerState, Stats, WorkflowRunSignals, event_visible_to_user,
         receiver_stream, replace_job_event, signal_event, targeted_signal_event, test_server_state,
     };
@@ -1699,7 +1395,8 @@ mod tests {
             retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             runtime_mode: mode,
             runtime_mode_policy: RuntimeModePolicy::new(mode),
-            keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
+            #[cfg(feature = "keystore")]
+            keystore_rate_limit: Arc::new(std::sync::Mutex::new(super::keystore::KeystoreRateLimit::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
             shutdown: watch::channel(false).1,
             event_tx: broadcast::channel(16).0,
@@ -1850,136 +1547,102 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn keystore_timeout_status_read_publishes_locked_signal() {
-        let state = test_server_state();
-        let mut events = state.event_sender().subscribe();
-
-        {
-            let mut keystore_state = state.keystore_state.write().await;
-            keystore_state.locked = false;
-            keystore_state.lock_time = 1;
-            keystore_state.expires_at_epoch = Some(0);
-            keystore_state.unlocked_password = Some("pw".to_string());
-        }
-
-        let (locked, lock_time) = state.keystore_status().await;
-
-        assert!(locked);
-        assert!(lock_time > 0);
-
-        let event = events.try_recv().expect("timeout should publish signal");
-        let ServerEvent::Signals(payload) = event else {
-            panic!("expected signal event");
-        };
-        assert!(payload.contains(r#""keystore":{"locked":true"#));
-    }
-
-    #[tokio::test]
     async fn service_mode_keystore_session_remains_disabled() {
         let state = test_state(RuntimeMode::Service);
 
         state
-            .set_keystore_unlocked_for("alice@example.com", "pw".to_string())
+            .set_keystore_unlocked("pw".to_string())
             .await;
 
         assert_eq!(
-            state.keystore_status_for("alice@example.com").await,
+            state.keystore_status().await,
             (true, 0)
         );
         assert_eq!(
-            state.keystore_status_for("bob@example.com").await,
+            state.keystore_status().await,
             (true, 0)
         );
-        assert_eq!(state.keystore_password_for("alice@example.com").await, None);
-        assert_eq!(state.keystore_password_for("bob@example.com").await, None);
+        assert_eq!(state.keystore_password().await, None);
+        assert_eq!(state.keystore_password().await, None);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn user_mode_keystore_session_is_shared_across_request_users() {
-        let state = test_state(RuntimeMode::User);
+        let _guard = crate::test_env_lock().lock().expect("env lock");
+        let _tmp = setup_keystore_env();
+
+        let state = Arc::new(test_state(RuntimeMode::User));
 
         state
-            .set_keystore_unlocked_for("alice@example.com", "pw".to_string())
+            .set_keystore_unlocked("pw".to_string())
             .await;
 
-        assert!(state.is_keystore_unlocked_for("alice@example.com").await);
-        assert!(state.is_keystore_unlocked_for("bob@example.com").await);
+        assert!(state.is_keystore_unlocked().await);
+        assert!(state.is_keystore_unlocked().await);
         assert_eq!(
-            state.keystore_password_for("bob@example.com").await,
+            state.keystore_password().await,
             Some("pw".to_string())
         );
 
         state
-            .set_keystore_locked_for("carol@example.com", "test")
+            .set_keystore_locked("test")
             .await;
 
-        assert!(!state.is_keystore_unlocked_for("alice@example.com").await);
-        assert!(!state.is_keystore_unlocked_for("bob@example.com").await);
+        assert!(!state.is_keystore_unlocked().await);
+        assert!(!state.is_keystore_unlocked().await);
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
-    async fn user_mode_can_seed_keystore_session_from_cli_unlock_file_once() {
+    async fn user_mode_reads_cli_unlock_file() {
         let _guard = crate::test_env_lock().lock().expect("env lock");
         let _tmp = setup_keystore_env();
         create_keystore("pw").expect("create keystore");
         write_unlock_lease("pw", Duration::from_secs(300)).expect("write unlock lease");
 
-        let state = test_state(RuntimeMode::User);
+        let state = Arc::new(test_state(RuntimeMode::User));
 
-        assert!(state.is_keystore_unlocked_for("alice@example.com").await);
+        assert!(state.is_keystore_unlocked().await);
         assert_eq!(
-            state.keystore_password_for("bob@example.com").await,
+            state.keystore_password().await,
             Some("pw".to_string())
         );
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
-    async fn explicit_web_lock_prevents_reseeding_from_unlock_file() {
+    async fn explicit_web_lock_deletes_unlock_file() {
         let _guard = crate::test_env_lock().lock().expect("env lock");
         let _tmp = setup_keystore_env();
         create_keystore("pw").expect("create keystore");
         write_unlock_lease("pw", Duration::from_secs(300)).expect("write unlock lease");
 
-        let state = test_state(RuntimeMode::User);
+        let state = Arc::new(test_state(RuntimeMode::User));
         assert!(state.is_keystore_unlocked().await);
 
         state.set_keystore_locked("manual").await;
 
         assert!(!state.is_keystore_unlocked().await);
         assert_eq!(state.keystore_password().await, None);
+        assert!(
+            !crate::data::get_unlock_path().expect("unlock path").exists(),
+            "lock should delete the unlock file"
+        );
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
-    async fn service_mode_does_not_seed_from_cli_unlock_file() {
+    async fn service_mode_does_not_read_unlock_file() {
         let _guard = crate::test_env_lock().lock().expect("env lock");
         let _tmp = setup_keystore_env();
         create_keystore("pw").expect("create keystore");
         write_unlock_lease("pw", Duration::from_secs(300)).expect("write unlock lease");
 
-        let state = test_state(RuntimeMode::Service);
+        let state = Arc::new(test_state(RuntimeMode::Service));
 
         assert!(!state.is_keystore_unlocked().await);
         assert_eq!(state.keystore_password().await, None);
-    }
-
-    #[tokio::test]
-    async fn touch_keystore_session_preserves_lock_transition_time() {
-        let state = test_state(RuntimeMode::User);
-
-        state.set_keystore_unlocked("pw".to_string()).await;
-        let first_lock_time = state.keystore_status().await.1;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        state.touch_keystore_session().await;
-
-        assert_eq!(state.keystore_status().await.1, first_lock_time);
-        assert!(
-            state.keystore_expires_at_epoch().await.is_some(),
-            "touch should still extend the session lease"
-        );
     }
 
     #[test]

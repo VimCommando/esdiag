@@ -1065,7 +1065,7 @@ mod tests {
         data::{HostRole, KnownHostBuilder, Product, Uri},
         exporter::Exporter,
         server::{
-            CollectSource, KeystoreSessionState, ProcessMode, RetainedBundle, RuntimeMode,
+            CollectSource, ProcessMode, RetainedBundle, RuntimeMode,
             RuntimeModePolicy, SendMode, ServerEvent, ServerState, Stats, WorkflowInput,
             WorkflowJob, WorkflowRunSignals,
         },
@@ -1085,7 +1085,8 @@ mod tests {
             retained_bundles: Arc::new(RwLock::new(HashMap::<String, RetainedBundle>::new())),
             runtime_mode: mode,
             runtime_mode_policy: RuntimeModePolicy::new(mode),
-            keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
+            #[cfg(feature = "keystore")]
+            keystore_rate_limit: Arc::new(std::sync::Mutex::new(crate::server::keystore::KeystoreRateLimit::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
             shutdown: watch::channel(false).1,
             event_tx: broadcast::channel::<ServerEvent>(8).0,

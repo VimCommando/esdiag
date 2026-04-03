@@ -208,7 +208,7 @@ pub async fn page(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> 
             .and_then(|password| read_secret_rows(&password))
         {
             Ok((rows, ids)) => {
-                state.touch_keystore_session_for(&user_email).await;
+                state.touch_keystore_session().await;
                 (rows, ids)
             }
             Err(err) => {
@@ -273,7 +273,7 @@ pub async fn host_action(
     let signal_state = signals.as_ref().map(|ReadSignals(signals)| signals);
     let editing_action = matches!(action.as_str(), "create" | "read" | "update");
 
-    if editing_action && !state.is_keystore_unlocked_for(&user).await {
+    if editing_action && !state.is_keystore_unlocked().await {
         tracing::warn!(
             "Rejected host action '{}' for row '{}' because keystore is locked",
             action,
@@ -404,7 +404,7 @@ pub async fn cluster_action(
     let signal_state = signals.as_ref().map(|ReadSignals(signals)| signals);
     let editing_action = matches!(action.as_str(), "create" | "read" | "update");
 
-    if editing_action && !state.is_keystore_unlocked_for(&user).await {
+    if editing_action && !state.is_keystore_unlocked().await {
         tracing::warn!(
             "Rejected cluster action '{}' for row '{}' because keystore is locked",
             action,
@@ -541,7 +541,7 @@ pub async fn secret_action(
         if id != "new" {
             return (StatusCode::BAD_REQUEST, "create expects id 'new'").into_response();
         }
-        if !state.is_keystore_unlocked_for(&user).await {
+        if !state.is_keystore_unlocked().await {
             return (
                 StatusCode::PRECONDITION_FAILED,
                 "Unlock keystore before editing secrets.",
@@ -602,7 +602,7 @@ pub async fn secret_action(
             ])
         }
         "cancel" => {
-            if !state.is_keystore_unlocked_for(&user).await {
+            if !state.is_keystore_unlocked().await {
                 let Some(secret) = secret_row_for_cancel_from_signals(signal_state, row_id) else {
                     return clear_and_remove_row("secrets", &secret_row_selector(row_id), row_id);
                 };
@@ -766,7 +766,7 @@ pub async fn delete_secret(
     Form(form): Form<SecretDeleteForm>,
 ) -> Response {
     let user = resolve_request_user(&state, &headers);
-    if !state.is_keystore_unlocked_for(&user).await {
+    if !state.is_keystore_unlocked().await {
         return (
             StatusCode::PRECONDITION_FAILED,
             "Unlock keystore before deleting secrets.",
@@ -781,7 +781,7 @@ pub async fn delete_secret(
 
     match remove_secret(form.secret_id.trim(), None, &password) {
         Ok(_) => {
-            state.touch_keystore_session_for(&user).await;
+            state.touch_keystore_session().await;
             patch_hosts_and_secrets_response(&state, &user).await
         }
         Err(err) => (StatusCode::BAD_REQUEST, to_message(err)).into_response(),
@@ -1080,7 +1080,7 @@ async fn load_table_panel_data(
     bool,
 ) {
     let (hosts, clusters) = read_host_and_cluster_rows();
-    let keystore_locked = state.keystore_status_for(user).await.0;
+    let keystore_locked = state.keystore_status().await.0;
     let (secrets, secret_ids) = if keystore_locked {
         (Vec::new(), Vec::new())
     } else {
@@ -1089,7 +1089,7 @@ async fn load_table_panel_data(
             .and_then(|password| read_secret_rows(&password))
         {
             Ok((rows, ids)) => {
-                state.touch_keystore_session_for(user).await;
+                state.touch_keystore_session().await;
                 (rows, ids)
             }
             Err(err) => {
@@ -1454,7 +1454,7 @@ async fn apply_upsert_secret(
     form: SecretUpsertForm,
     user: &str,
 ) -> Result<(), String> {
-    if !state.is_keystore_unlocked_for(user).await {
+    if !state.is_keystore_unlocked().await {
         return Err("Unlock keystore before editing secrets.".to_string());
     }
 
@@ -1489,7 +1489,7 @@ async fn apply_upsert_secret(
     }
 
     upsert_secret_auth(secret_id, auth, &password).map_err(to_message)?;
-    state.touch_keystore_session_for(user).await;
+    state.touch_keystore_session().await;
     Ok(())
 }
 
@@ -1728,7 +1728,7 @@ fn next_row_id(signals: Option<&TableUiSignals>, existing_len: usize) -> usize {
 }
 
 async fn load_secret_ids(state: &Arc<ServerState>, user: &str) -> Vec<String> {
-    if !state.is_keystore_unlocked_for(user).await {
+    if !state.is_keystore_unlocked().await {
         return Vec::new();
     }
     match current_keystore_password(state, user)
@@ -1736,7 +1736,7 @@ async fn load_secret_ids(state: &Arc<ServerState>, user: &str) -> Vec<String> {
         .and_then(|password| read_secret_rows(&password))
     {
         Ok((_, ids)) => {
-            state.touch_keystore_session_for(user).await;
+            state.touch_keystore_session().await;
             ids
         }
         Err(err) => {
@@ -1845,7 +1845,7 @@ async fn delete_secret_row(
     let Some(secret) = secret_row_by_id(secrets, row_id) else {
         return clear_and_remove_row("secrets", &secret_row_selector(row_id), row_id);
     };
-    if !state.is_keystore_unlocked_for(user).await {
+    if !state.is_keystore_unlocked().await {
         return (
             StatusCode::PRECONDITION_FAILED,
             "Unlock keystore before deleting secrets.",
@@ -1860,7 +1860,7 @@ async fn delete_secret_row(
 
     match remove_secret(secret.secret_id.trim(), None, &password) {
         Ok(_) => {
-            state.touch_keystore_session_for(user).await;
+            state.touch_keystore_session().await;
             patch_hosts_and_secrets_with_clear_response(state, Some(("secrets", row_id)), user)
                 .await
         }
@@ -1883,7 +1883,7 @@ async fn patch_host_row_saved_response(
     state: &Arc<ServerState>,
     row_id: usize,
     host_name: &str,
-    user: &str,
+    _user: &str,
 ) -> Response {
     let hosts = read_host_rows();
     let Some(host) = hosts.iter().find(|host| host.name == host_name).cloned() else {
@@ -1894,7 +1894,7 @@ async fn patch_host_row_saved_response(
         tracing::warn!("{}", message);
         return sse_response(vec![patch_host_error_event(&message)]);
     };
-    let keystore_locked = state.keystore_status_for(user).await.0;
+    let keystore_locked = state.keystore_status().await.0;
     sse_response(vec![
         clear_row_signal_patch("hosts", row_id)
             .as_datastar_event()
@@ -1939,12 +1939,12 @@ async fn infer_auth_from_secret_selection(
     fallback_auth: &str,
 ) -> Result<String, String> {
     if let Some(secret_id) = secret {
-        if !state.is_keystore_unlocked_for(user).await {
+        if !state.is_keystore_unlocked().await {
             return Err("Unlock keystore before selecting a secret.".to_string());
         }
         let password = current_keystore_password(state, user).await?;
         let resolved = resolve_secret_auth(secret_id, &password).map_err(to_message)?;
-        state.touch_keystore_session_for(user).await;
+        state.touch_keystore_session().await;
         return match resolved {
             Some(SecretAuth::ApiKey { .. }) => Ok("apikey".to_string()),
             Some(SecretAuth::Basic { .. }) => Ok("basic".to_string()),
@@ -1978,9 +1978,9 @@ fn resolve_request_user(state: &Arc<ServerState>, headers: &HeaderMap) -> String
         .unwrap_or_else(|_| "Anonymous".to_string())
 }
 
-async fn current_keystore_password(state: &Arc<ServerState>, user: &str) -> Result<String, String> {
+async fn current_keystore_password(state: &Arc<ServerState>, _user: &str) -> Result<String, String> {
     state
-        .keystore_password_for(user)
+        .keystore_password()
         .await
         .ok_or_else(|| "Keystore password is not available for the current session.".to_string())
 }

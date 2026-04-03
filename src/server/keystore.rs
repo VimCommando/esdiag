@@ -1,4 +1,7 @@
-use super::{ServerState, append_body_event, execute_script_event, html_event, signal_event};
+use super::{
+    ServerState, append_body_event, execute_script_event, html_event, now_epoch_seconds,
+    signal_event,
+};
 use crate::data::{HostRole, KnownHost, Settings, authenticate, keystore_exists};
 use crate::server::template::{
     self, KeystoreBootstrapModal, KeystoreProcessUnlockModal, KeystoreUnlockModal,
@@ -9,9 +12,192 @@ use axum::{
     http::{HeaderMap, HeaderValue, header::RETRY_AFTER},
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
+
+#[derive(Clone, Debug, Default)]
+pub struct KeystoreRateLimit {
+    pub failed_attempts: u32,
+    pub blocked_until_epoch: Option<i64>,
+    /// Tracks the last observed unlock state so we can detect transitions
+    /// (e.g. lease expiry or CLI lock) and publish SSE signals to the browser.
+    last_seen_unlocked: Option<bool>,
+}
+
+impl KeystoreRateLimit {
+    fn current_backoff_seconds(&self) -> u64 {
+        if self.failed_attempts <= 3 {
+            return 0;
+        }
+        let over = self.failed_attempts - 3;
+        let minutes = (over as u64).saturating_mul(5).min(60);
+        minutes * 60
+    }
+}
+
+impl ServerState {
+    pub(crate) fn can_use_keystore_session(&self) -> bool {
+        self.runtime_mode_policy.allows_local_runtime_features()
+            && !self.runtime_mode_policy.requires_iap_headers()
+    }
+
+    pub async fn keystore_status(&self) -> (bool, i64) {
+        if !self.can_use_keystore_session() {
+            return (true, 0);
+        }
+        let unlocked = matches!(crate::data::read_unlock_lease(), Ok(Some(_)));
+        let transitioned_to_locked = {
+            let mut rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+            let was_unlocked = rate_limit.last_seen_unlocked.unwrap_or(false);
+            rate_limit.last_seen_unlocked = Some(unlocked);
+            was_unlocked && !unlocked
+        };
+        if transitioned_to_locked {
+            tracing::info!("Keystore lease expired or was cleared externally");
+            self.publish_event(signal_event(self.keystore_signal_payload().await));
+        }
+        (!unlocked, now_epoch_seconds())
+    }
+
+    pub async fn is_keystore_unlocked(&self) -> bool {
+        if !self.can_use_keystore_session() {
+            return false;
+        }
+        matches!(crate::data::read_unlock_lease(), Ok(Some(_)))
+    }
+
+    pub async fn touch_keystore_session(&self) {
+        // No-op: file-based unlock leases are not refreshed on access.
+    }
+
+    pub async fn set_keystore_unlocked(&self, password: String) {
+        if !self.can_use_keystore_session() {
+            tracing::warn!(
+                "Ignoring keystore unlock because keystore is unavailable in this runtime mode"
+            );
+            return;
+        }
+        if let Err(err) =
+            crate::data::write_unlock_lease(&password, crate::data::default_unlock_ttl())
+        {
+            tracing::error!("Failed to write keystore unlock lease: {}", err);
+            return;
+        }
+        {
+            let mut rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+            rate_limit.failed_attempts = 0;
+            rate_limit.blocked_until_epoch = None;
+            rate_limit.last_seen_unlocked = Some(true);
+        }
+        self.publish_event(signal_event(self.keystore_signal_payload().await));
+        tracing::info!("Keystore authentication succeeded for the local user session");
+    }
+
+    pub async fn set_keystore_locked(&self, reason: &str) {
+        if !self.can_use_keystore_session() {
+            return;
+        }
+        if let Err(err) = crate::data::clear_unlock_lease() {
+            tracing::error!("Failed to clear keystore unlock lease: {}", err);
+        }
+        {
+            let mut rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+            rate_limit.last_seen_unlocked = Some(false);
+        }
+        self.publish_event(signal_event(self.keystore_signal_payload().await));
+        tracing::info!("Keystore locked for the local user session: {reason}");
+    }
+
+    pub async fn record_keystore_failed_attempt(&self) -> Option<i64> {
+        if !self.can_use_keystore_session() {
+            return None;
+        }
+        let blocked_until = {
+            let mut rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+            rate_limit.failed_attempts = rate_limit.failed_attempts.saturating_add(1);
+            let block_seconds = rate_limit.current_backoff_seconds();
+            if block_seconds > 0 {
+                rate_limit.blocked_until_epoch =
+                    Some(now_epoch_seconds() + block_seconds as i64);
+            }
+            rate_limit.blocked_until_epoch
+        };
+        tracing::warn!("Keystore authentication failed for the local user session");
+        self.publish_event(signal_event(self.keystore_signal_payload().await));
+        blocked_until
+    }
+
+    pub async fn keystore_signal_payload(&self) -> String {
+        if !self.can_use_keystore_session() {
+            return r#"{"keystore":{"locked":true,"lock_time":0}}"#.to_string();
+        }
+        let locked = !matches!(crate::data::read_unlock_lease(), Ok(Some(_)));
+        format!(
+            r#"{{"keystore":{{"locked":{},"lock_time":{}}}}}"#,
+            locked,
+            now_epoch_seconds()
+        )
+    }
+
+    pub async fn keystore_blocked_until(&self) -> Option<i64> {
+        if !self.can_use_keystore_session() {
+            return None;
+        }
+        let rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+        let blocked_until = rate_limit.blocked_until_epoch;
+        let now = now_epoch_seconds();
+        if let Some(until) = blocked_until
+            && until <= now
+        {
+            return None;
+        }
+        blocked_until
+    }
+
+    pub async fn keystore_password(&self) -> Option<String> {
+        if !self.can_use_keystore_session() {
+            return None;
+        }
+        match crate::data::get_password_from_unlock_file() {
+            Ok(Some(password)) => Some(password),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn keystore_failed_attempts(&self) -> u32 {
+        self.keystore_rate_limit
+            .lock()
+            .expect("rate limit lock")
+            .failed_attempts
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct KeystoreStatusResponse {
+    locked: bool,
+    expires_at_epoch: Option<i64>,
+}
+
+pub async fn status(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
+    if !state.can_use_keystore_session() {
+        return axum::Json(KeystoreStatusResponse {
+            locked: true,
+            expires_at_epoch: None,
+        });
+    }
+    match crate::data::read_unlock_lease() {
+        Ok(Some(lease)) => axum::Json(KeystoreStatusResponse {
+            locked: false,
+            expires_at_epoch: Some(lease.expires_at_epoch),
+        }),
+        _ => axum::Json(KeystoreStatusResponse {
+            locked: true,
+            expires_at_epoch: None,
+        }),
+    }
+}
 
 #[derive(Deserialize, Default)]
 pub(crate) struct KeystoreForm {
@@ -19,13 +205,6 @@ pub(crate) struct KeystoreForm {
     password: String,
     #[serde(default)]
     confirm: Option<String>,
-}
-
-fn resolve_request_user(state: &Arc<ServerState>, headers: &HeaderMap) -> String {
-    state
-        .resolve_user_email(headers)
-        .map(|(_, user)| user)
-        .unwrap_or_else(|_| "Anonymous".to_string())
 }
 
 pub async fn get_unlock_modal(
@@ -93,8 +272,8 @@ async fn missing_keystore_response(state: &Arc<ServerState>, headers: HeaderMap)
     axum::http::StatusCode::PRECONDITION_FAILED.into_response()
 }
 
-async fn blocked_unlock_response(state: &Arc<ServerState>, user: &str) -> Option<Response> {
-    let blocked_until = state.keystore_blocked_until_for(user).await?;
+async fn blocked_unlock_response(state: &Arc<ServerState>) -> Option<Response> {
+    let blocked_until = state.keystore_blocked_until().await?;
     let now = chrono::Utc::now().timestamp();
     if blocked_until <= now {
         return None;
@@ -132,7 +311,7 @@ pub async fn get_bootstrap_modal(
 
 pub async fn bootstrap(
     State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<KeystoreForm>,
 ) -> Response {
     if keystore_exists().unwrap_or(false) {
@@ -176,8 +355,7 @@ pub async fn bootstrap(
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    let user = resolve_request_user(&state, &headers);
-    state.set_keystore_unlocked_for(&user, password).await;
+    state.set_keystore_unlocked(password).await;
     state.publish_event(signal_event(
         r#"{"keystore":{"password":"","invalid":false,"confirm":false}}"#,
     ));
@@ -195,12 +373,11 @@ pub async fn unlock(
     headers: HeaderMap,
     Form(form): Form<KeystoreForm>,
 ) -> Response {
-    let user = resolve_request_user(&state, &headers);
     if !keystore_exists().unwrap_or(false) {
         return missing_keystore_response(&state, headers).await;
     }
 
-    if let Some(response) = blocked_unlock_response(&state, &user).await {
+    if let Some(response) = blocked_unlock_response(&state).await {
         return response;
     }
 
@@ -217,7 +394,7 @@ pub async fn unlock(
 
     match authenticate(&password) {
         Ok(_) => {
-            state.set_keystore_unlocked_for(&user, password).await;
+            state.set_keystore_unlocked(password).await;
             state.publish_event(signal_event(
                 r#"{"keystore":{"password":"","invalid":false}}"#,
             ));
@@ -233,7 +410,7 @@ pub async fn unlock(
             axum::http::StatusCode::NO_CONTENT.into_response()
         }
         Err(err) => {
-            state.record_keystore_failed_attempt_for(&user).await;
+            state.record_keystore_failed_attempt().await;
             state.publish_event(signal_event(
                 r#"{"message":"Invalid keystore password. Try again."}"#,
             ));
@@ -246,9 +423,8 @@ pub async fn unlock(
     }
 }
 
-pub async fn lock(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> impl IntoResponse {
-    let user = resolve_request_user(&state, &headers);
-    state.set_keystore_locked_for(&user, "manual").await;
+pub async fn lock(State(state): State<Arc<ServerState>>, _headers: HeaderMap) -> impl IntoResponse {
+    state.set_keystore_locked("manual").await;
     state.publish_event(execute_script_event(
         "if (window.location.pathname === '/settings') { window.location.reload(); }",
     ));
@@ -257,7 +433,6 @@ pub async fn lock(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> 
 
 pub async fn ensure_unlocked_for_active_output(
     state: &Arc<ServerState>,
-    user: &str,
 ) -> Result<(), String> {
     let exporter = state.exporter.read().await.clone();
     if !cfg!(feature = "keystore") || !state.runtime_mode_policy.allows_local_runtime_features() {
@@ -293,11 +468,11 @@ pub async fn ensure_unlocked_for_active_output(
         return Ok(());
     }
 
-    if !state.is_keystore_unlocked_for(user).await {
+    if !state.is_keystore_unlocked().await {
         return Err("Keystore is locked. Unlock it before processing secure outputs.".to_string());
     }
 
-    state.touch_keystore_session_for(user).await;
+    state.touch_keystore_session().await;
     Ok(())
 }
 
@@ -308,12 +483,12 @@ mod tests {
         KeystoreForm, bootstrap, ensure_unlocked_for_active_output, get_process_unlock_modal,
         get_unlock_modal, lock, unlock,
     };
+    use super::KeystoreRateLimit;
     use crate::{
         data::{KnownHost, Settings, authenticate},
         exporter::Exporter,
         server::{
-            KeystoreSessionState, RuntimeMode, RuntimeModePolicy, ServerEvent, ServerState, Stats,
-            test_server_state,
+            RuntimeMode, RuntimeModePolicy, ServerEvent, ServerState, Stats, test_server_state,
         },
     };
     use axum::{
@@ -363,7 +538,7 @@ mod tests {
             retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             runtime_mode,
             runtime_mode_policy: RuntimeModePolicy::new(runtime_mode),
-            keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
+            keystore_rate_limit: Arc::new(std::sync::Mutex::new(KeystoreRateLimit::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
             shutdown: watch::channel(false).1,
             event_tx: broadcast::channel(16).0,
@@ -660,6 +835,12 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(keystore_path.is_file(), "keystore should be created");
 
+        let unlock_path = crate::data::get_unlock_path().expect("unlock path");
+        assert!(
+            unlock_path.exists(),
+            "bootstrap should write unlock lease file"
+        );
+
         let migrated_hosts = KnownHost::parse_hosts_yml().expect("reload migrated hosts");
         match migrated_hosts.get("legacy-es").expect("migrated host") {
             KnownHost::ApiKey { apikey, secret, .. } => {
@@ -691,7 +872,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unlock_initializes_and_refreshes_session_lease() {
+    async fn unlock_writes_file_based_lease() {
         let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts_path, _keystore_path) = setup_env();
         authenticate("pw").expect("create keystore");
@@ -707,22 +888,16 @@ mod tests {
         )
         .await;
 
-        let first_expiry = state
-            .keystore_expires_at_epoch()
-            .await
-            .expect("expiry initialized");
-        let first_lock_time = state.keystore_status().await.1;
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let unlock_path = crate::data::get_unlock_path().expect("unlock path");
+        assert!(unlock_path.exists(), "unlock file should be written on disk");
 
-        state.touch_keystore_session().await;
-
-        let refreshed_expiry = state
-            .keystore_expires_at_epoch()
-            .await
-            .expect("expiry refreshed");
-        let refreshed_lock_time = state.keystore_status().await.1;
-        assert!(refreshed_expiry >= first_expiry);
-        assert_eq!(refreshed_lock_time, first_lock_time);
+        let lease =
+            crate::data::read_unlock_lease().expect("read lease").expect("lease should exist");
+        let now = chrono::Utc::now().timestamp();
+        assert!(
+            lease.expires_at_epoch > now,
+            "lease should expire in the future"
+        );
     }
 
     #[tokio::test]
@@ -763,7 +938,7 @@ mod tests {
         *state.exporter.write().await =
             crate::exporter::Exporter::try_from(noauth_host).expect("noauth exporter");
         assert!(
-            ensure_unlocked_for_active_output(&state, "Anonymous")
+            ensure_unlocked_for_active_output(&state)
                 .await
                 .is_ok(),
             "NoAuth output should bypass keystore preflight"
@@ -780,20 +955,16 @@ mod tests {
         })
         .expect("secure exporter");
         assert!(
-            ensure_unlocked_for_active_output(&state, "Anonymous")
+            ensure_unlocked_for_active_output(&state)
                 .await
                 .is_err(),
             "secure output should require unlock"
         );
 
         state.set_keystore_unlocked("pw".to_string()).await;
-        let first_lock_time = state.keystore_status().await.1;
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        ensure_unlocked_for_active_output(&state, "Anonymous")
+        ensure_unlocked_for_active_output(&state)
             .await
             .expect("secure output should pass once unlocked");
-        let refreshed_lock_time = state.keystore_status().await.1;
-        assert_eq!(refreshed_lock_time, first_lock_time);
     }
 
     #[tokio::test]
@@ -809,7 +980,7 @@ mod tests {
         .expect("noauth exporter");
 
         assert!(
-            ensure_unlocked_for_active_output(&state, "Anonymous")
+            ensure_unlocked_for_active_output(&state)
                 .await
                 .is_ok(),
             "service mode should allow non-secure outputs without keystore access"
@@ -839,7 +1010,7 @@ mod tests {
         })
         .expect("secure exporter");
 
-        let result = ensure_unlocked_for_active_output(&state, "Anonymous").await;
+        let result = ensure_unlocked_for_active_output(&state).await;
 
         assert!(
             result.is_ok(),
@@ -879,7 +1050,7 @@ mod tests {
             .expect("backoff should remain capped");
         let now = chrono::Utc::now().timestamp();
         assert!((capped - now) >= 3599 && (capped - now) <= 3600);
-        assert!(state.keystore_failed_attempts().await >= 12);
+        assert!(state.keystore_failed_attempts() >= 12);
     }
 
     #[tokio::test]

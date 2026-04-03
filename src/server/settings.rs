@@ -74,14 +74,14 @@ pub async fn update_settings(
     headers: HeaderMap,
     datastar::axum::ReadSignals(signals): datastar::axum::ReadSignals<super::SettingsUpdateSignals>,
 ) -> Response {
-    let request_user = match state.resolve_user_email(&headers) {
-        Ok((_, user)) => user,
+    match state.resolve_user_email(&headers) {
+        Ok(_) => {}
         Err(err) if state.runtime_mode_policy.requires_iap_headers() => {
             tracing::warn!("Settings update denied: {}", err);
             return StatusCode::UNAUTHORIZED.into_response();
         }
-        Err(_) => "Anonymous".to_string(),
-    };
+        Err(_) => {}
+    }
 
     if !state.runtime_mode_policy.allows_local_runtime_features() {
         let form = signals.settings;
@@ -141,7 +141,7 @@ pub async fn update_settings(
 
     // 3. Validate and update the active Exporter in ServerState (user mode only)
     if state.runtime_mode_policy.allows_exporter_updates() {
-        let keystore_password = state.keystore_password_for(&request_user).await;
+        let keystore_password = state.keystore_password().await;
 
         let next_exporter = if !target_changed {
             Ok(current_exporter)

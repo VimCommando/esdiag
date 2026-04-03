@@ -97,7 +97,7 @@ pub(super) async fn run_api_key_form(
     tx: mpsc::Sender<ServerEvent>,
 ) {
     let download_token = signals.archive.download_token.clone();
-    if let Err(err) = super::ensure_active_output_ready(&state, &request_user).await {
+    if let Err(err) = super::ensure_active_output_ready(&state).await {
         state
             .reject_retained_bundle(
                 &download_token,
@@ -159,7 +159,7 @@ pub(super) async fn run_api_key_form(
         },
     };
     let job_id = new_job_id();
-    let keystore_password = state.keystore_password_for(&request_user).await;
+    let keystore_password = state.keystore_password().await;
     if let Some(password) = keystore_password {
         with_scoped_keystore_password(password, async move {
             workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;

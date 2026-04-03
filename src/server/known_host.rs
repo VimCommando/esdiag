@@ -88,7 +88,7 @@ pub(super) async fn run_known_host_form(
     };
 
     let job_id = new_job_id();
-    let keystore_password = state.keystore_password_for(&request_user).await;
+    let keystore_password = state.keystore_password().await;
     if host.requires_keystore_secret() && keystore_password.is_none() {
         state
             .reject_retained_bundle(

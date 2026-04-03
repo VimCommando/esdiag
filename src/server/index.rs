@@ -116,7 +116,7 @@ pub async fn handler(
         false
     };
     let (keystore_locked, keystore_lock_time) = if can_use_keystore {
-        state.keystore_status_for(&user_email).await
+        state.keystore_status().await
     } else {
         (true, 0)
     };
@@ -190,7 +190,7 @@ pub async fn workflow_page(
     let theme_dark = get_theme_dark(&headers);
     let kibana_url = { state.kibana_url.read().await.clone() };
     let (keystore_locked, keystore_lock_time) = if can_use_keystore {
-        state.keystore_status_for(&user_email).await
+        state.keystore_status().await
     } else {
         (true, 0)
     };
@@ -296,7 +296,7 @@ async fn build_jobs_page(
     let theme_dark = get_theme_dark(&headers);
     let kibana_url = { state.kibana_url.read().await.clone() };
     let (keystore_locked, keystore_lock_time) = if can_use_keystore {
-        state.keystore_status_for(&user_email).await
+        state.keystore_status().await
     } else {
         (true, 0)
     };

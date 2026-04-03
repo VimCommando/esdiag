@@ -159,7 +159,7 @@ pub async fn handler(
                     .unwrap_or('_')
                     .to_ascii_uppercase();
                 let (keystore_locked, keystore_lock_time) =
-                    state.keystore_status_for(&user_email).await;
+                    state.keystore_status().await;
                 let can_use_keystore = cfg!(feature = "keystore")
                     && state.runtime_mode_policy.allows_local_runtime_features();
 

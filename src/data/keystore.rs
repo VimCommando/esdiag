@@ -150,9 +150,9 @@ pub struct UnlockStatus {
 }
 
 #[derive(Clone, Debug)]
-struct UnlockLease {
-    expires_at_epoch: i64,
-    password: String,
+pub struct UnlockLease {
+    pub expires_at_epoch: i64,
+    pub(crate) password: String,
 }
 
 fn current_epoch_seconds() -> i64 {
@@ -416,7 +416,7 @@ fn remove_unlock_file_best_effort(path: &Path, reason: &str) {
     }
 }
 
-fn read_unlock_lease() -> Result<Option<UnlockLease>> {
+pub fn read_unlock_lease() -> Result<Option<UnlockLease>> {
     let path = get_unlock_path()?;
     if !path.is_file() {
         return Ok(None);
