@@ -108,12 +108,12 @@
         aria-label="Saved jobs"
     >
         <div hidden data-effect="if (!$_job_name_dirty) { $job_name = $_suggested_job_name || ''; }"></div>
-            <h2>Saved Jobs</h2>
+            <h3>Saved Jobs</h3>
         <div
             id="saved-jobs-list"
             data-init="@get('/jobs/saved', {filterSignals: {include: /^loaded_job_name$/}})"
         ></div>
-        <footer class="jobs-nav-actions">
+        <row>
             <button
                 type="button"
                 data-on:click="window.location.href = '/jobs'"
@@ -121,13 +121,15 @@
             >
                 New
             </button>
-        </footer>
-        {% if !saved_message.is_empty() %}
-        <p class="saved-job-message">{{ saved_message }}</p>
-        {% endif %}
+            <button type="button" disabled>Run</button>
+            {% if !saved_message.is_empty() %}
+            <p class="saved-job-message">{{ saved_message }}</p>
+            {% endif %}
+        </row>
     </nav>
     {% endif %}
     <main class="jobs-main">
+        <h1 data-text="$job_name"></h1>
         <steps aria-label="Diagnostic job steps">
             <ol>
                 <li>
@@ -759,18 +761,18 @@
             </ol>
         </steps>
 
-        <footer class="jobs-actions">
-            <jobs-save-controls>
-                <input
-                    type="text"
-                    id="job-name"
-                    class="form-input"
-                    data-bind:job_name
-                    data-on:input="$_job_name_dirty = true"
-                    placeholder="Job name"
-                    data-attr:disabled="$loading || $processing || $workflow.collect.source !== 'known-host'"
-                />
-            </jobs-save-controls>
+        <jobs-save-controls>
+            <input
+                type="text"
+                id="job-name"
+                class="form-input"
+                data-bind:job_name
+                data-on:input="$_job_name_dirty = true"
+                placeholder="Job name"
+                data-attr:disabled="$loading || $processing || $workflow.collect.source !== 'known-host'"
+            />
+        </jobs-save-controls>
+        <row>
             <button
                 type="button"
                 data-on:click="@post('/jobs/saved', {filterSignals: {include: /^(job_name|metadata|workflow)(\.|$)/}})"
@@ -859,47 +861,46 @@
             >
                 Run
             </button>
-        </footer>
-
-        <section class="workflow-results" aria-live="polite">
-            <div id="current-status" data-show="$loading && $_job_id === '' " class="status-box loading" style="display: none">
-                <div class="spinner"></div>
-                <span id="status-message" data-text="$message">Uploading...</span>
-            </div>
-            <div id="job-feed"></div>
-            {% if let Some(key_id) = key_id %}
-            <div
-                id="job-{{ key_id }}"
-                data-init="$loading = true; $workflow.collect.mode='collect'; $workflow.collect.source='api-key'; $message = 'Processing api key {{ key_id }}'; @post('/api_key/{{ key_id }}', {filterSignals: {exclude: /.*/}})"
-                data-signals:_job_id="true"
-                class="status-box history-item status-processing"
-            >
-                <div class="spinner"></div>
-                Processing api key for {{ key_id }}
-            </div>
-            {% else if let Some(link_id) = link_id %}
-            <div
-                id="job-{{ link_id }}"
-                data-init="$loading = true; $workflow.collect.mode='upload'; $workflow.collect.source='service-link'; $message = 'Forwarding service link {{ link_id }}'; @post('/service_link/{{ link_id }}', {filterSignals: {exclude: /.*/}})"
-                data-signals:_job_id="true"
-                class="status-box history-item status-processing"
-            >
-                <div class="spinner"></div>
-                Loading service link {{ link_id }}
-            </div>
-            {% else if let Some(upload_id) = upload_id %}
-            <div
-                id="job-{{ upload_id }}"
-                data-init="$loading = true; $workflow.collect.mode='upload'; $workflow.collect.source='upload-file'; $file_upload.job_id={{ upload_id|json }}; $message = 'Processing file upload {{ upload_id }}'; @post('/upload/process', {filterSignals: {include: /^(metadata|archive|workflow|file_upload)(\.|$)/}})"
-                data-signals:_job_id="true"
-                class="status-box history-item status-processing"
-            >
-                <div class="spinner"></div>
-                Loading file upload {{ upload_id }}
-            </div>
-            {% endif %}
-        </section>
+        </row>
     </main>
+    <section class="workflow-results" aria-live="polite">
+        <div id="current-status" data-show="$loading && $_job_id === '' " class="status-box loading" style="display: none">
+            <div class="spinner"></div>
+            <span id="status-message" data-text="$message">Uploading...</span>
+        </div>
+        <div id="job-feed"></div>
+        {% if let Some(key_id) = key_id %}
+        <div
+            id="job-{{ key_id }}"
+            data-init="$loading = true; $workflow.collect.mode='collect'; $workflow.collect.source='api-key'; $message = 'Processing api key {{ key_id }}'; @post('/api_key/{{ key_id }}', {filterSignals: {exclude: /.*/}})"
+            data-signals:_job_id="true"
+            class="status-box history-item status-processing"
+        >
+            <div class="spinner"></div>
+            Processing api key for {{ key_id }}
+        </div>
+        {% else if let Some(link_id) = link_id %}
+        <div
+            id="job-{{ link_id }}"
+            data-init="$loading = true; $workflow.collect.mode='upload'; $workflow.collect.source='service-link'; $message = 'Forwarding service link {{ link_id }}'; @post('/service_link/{{ link_id }}', {filterSignals: {exclude: /.*/}})"
+            data-signals:_job_id="true"
+            class="status-box history-item status-processing"
+        >
+            <div class="spinner"></div>
+            Loading service link {{ link_id }}
+        </div>
+        {% else if let Some(upload_id) = upload_id %}
+        <div
+            id="job-{{ upload_id }}"
+            data-init="$loading = true; $workflow.collect.mode='upload'; $workflow.collect.source='upload-file'; $file_upload.job_id={{ upload_id|json }}; $message = 'Processing file upload {{ upload_id }}'; @post('/upload/process', {filterSignals: {include: /^(metadata|archive|workflow|file_upload)(\.|$)/}})"
+            data-signals:_job_id="true"
+            class="status-box history-item status-processing"
+        >
+            <div class="spinner"></div>
+            Loading file upload {{ upload_id }}
+        </div>
+        {% endif %}
+    </section>
     </content-layout>
     <modal
         data-show="$show_delete_job_modal"

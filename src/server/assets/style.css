@@ -63,6 +63,10 @@ body {
     min-height: 100svh;
 }
 
+form {
+    max-width: 400px;
+}
+
 header {
     position: sticky;
     top: 0;
@@ -1193,7 +1197,8 @@ content.jobs-content {
 }
 
 content-layout.jobs-layout {
-    gap: var(--size-xl);
+    gap: var(--size-l);
+    grid-template-columns: minmax(240px, 320px) minmax(240px, 448px) auto;
 }
 
 .jobs-main {
@@ -1202,9 +1207,13 @@ content-layout.jobs-layout {
     min-width: 0;
 }
 
+.jobs-main h1 {
+    margin-top: 0;
+}
+
 .jobs-main > steps {
     flex: 1;
-    min-width: 0;
+    min-width: 20%;
 }
 
 .jobs-nav {
@@ -1212,20 +1221,15 @@ content-layout.jobs-layout {
     flex-direction: column;
     gap: var(--size-s);
     position: sticky;
-    top: calc(var(--size-header) + var(--size));
-    width: 240px;
     max-height: calc(
         100svh - var(--size-header) - var(--size-footer) - var(--size-xl)
     );
     flex-shrink: 0;
     overflow: auto;
-    padding-right: var(--size-l);
-    border-right: 1px solid var(--border-color);
 }
 
-.jobs-nav > header h2 {
+.jobs-nav > h3 {
     margin: 0;
-    font-size: var(--font-size-m);
 }
 
 .saved-jobs-items {
@@ -1316,13 +1320,7 @@ content-layout.jobs-layout {
     }
 }
 
-.jobs-nav-actions {
-    display: flex;
-    gap: var(--size-xs);
-}
-
-.jobs-nav-actions > button {
-    width: 100%;
+.jobs-nav button {
     border: 1px solid var(--border-color-light);
     border-radius: var(--border-radius-small);
     background: var(--background-color);
@@ -1332,17 +1330,18 @@ content-layout.jobs-layout {
     line-height: var(--font-size-l);
     padding: var(--size-xs) var(--size);
     cursor: pointer;
+    width: fit-content;
     transition:
         background-color 120ms ease,
         border-color 120ms ease,
         color 120ms ease;
 }
 
-.jobs-nav-actions > button:hover {
+.jobs-nav button:hover {
     background: var(--color-overlay);
 }
 
-.jobs-nav-actions > button:disabled {
+.jobs-nav button:disabled {
     border-color: var(--border-color);
     background: var(--form-control-disabled-color);
     color: var(--text-subdued-color);
@@ -1383,7 +1382,6 @@ steps li::before {
     content: counter(steps);
     counter-increment: steps;
     position: absolute;
-    top: 0;
     left: 0;
     display: grid;
     place-items: center;
@@ -1395,14 +1393,15 @@ steps li::before {
     font-size: var(--font-size-s);
     font-weight: var(--font-weight-semibold);
     line-height: 1;
+    z-index: 1;
 }
 
 steps li:not(:last-child)::after {
     content: "";
     position: absolute;
-    top: var(--size-xl);
+    top: var(--size-m);
+    bottom: calc(var(--size-m) * -1);
     left: calc(var(--size-xl) / 2);
-    bottom: -0.25em;
     width: 2px;
     transform: translateX(-50%);
     background: var(--border-color);
@@ -1452,7 +1451,7 @@ content.jobs-content steps .dropzone {
 }
 
 jobs-save-controls {
-    flex: 0 1 18rem;
+    flex: 0;
     min-width: min(100%, 14rem);
 }
 
@@ -3187,6 +3186,7 @@ panel.no-padding {
     padding: 0;
 }
 
+button,
 .button {
     margin-top: var(--size);
     padding: var(--size) var(--size-m);
@@ -3197,10 +3197,12 @@ panel.no-padding {
     cursor: pointer;
 }
 
+button,
 .button:hover {
     background-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
 }
 
+button,
 .button:disabled {
     background-color: color-mix(in srgb, var(--border-color) 45%, transparent);
     color: var(--text-subdued-color);
@@ -3212,9 +3214,8 @@ panel.no-padding {
 }
 
 .workflow-results {
-    display: block;
-    width: 100%;
-    margin-top: var(--size-xl);
+    display: flex;
+    flex-direction: column;
 }
 
 content:is(.workflow-content, .jobs-content) .status-box {
