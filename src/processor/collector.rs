@@ -90,8 +90,52 @@ impl Collector {
     }
 }
 
+pub fn default_collect_archive_name(product: &Product, timestamp: &str) -> String {
+    match product {
+        Product::Elasticsearch => format!("api-diagnostics-{timestamp}"),
+        Product::Kibana => format!("kibana-api-diagnostics-{timestamp}"),
+        Product::Logstash => format!("logstash-api-diagnostics-{timestamp}"),
+        Product::Agent => format!("agent-api-diagnostics-{timestamp}"),
+        Product::ECE => format!("ece-api-diagnostics-{timestamp}"),
+        Product::ECK => format!("eck-api-diagnostics-{timestamp}"),
+        Product::ElasticCloudHosted => {
+            format!("elastic-cloud-hosted-api-diagnostics-{timestamp}")
+        }
+        Product::KubernetesPlatform => {
+            format!("kubernetes-platform-api-diagnostics-{timestamp}")
+        }
+        Product::Unknown => format!("unknown-api-diagnostics-{timestamp}"),
+    }
+}
+
 pub struct CollectionResult {
     pub path: String,
     pub success: usize,
     pub total: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_collect_archive_name;
+    use crate::data::Product;
+
+    #[test]
+    fn default_archive_name_uses_elasticsearch_basename_without_prefix() {
+        assert_eq!(
+            default_collect_archive_name(&Product::Elasticsearch, "20260406-203000"),
+            "api-diagnostics-20260406-203000"
+        );
+    }
+
+    #[test]
+    fn default_archive_name_prefixes_non_elasticsearch_products() {
+        assert_eq!(
+            default_collect_archive_name(&Product::Logstash, "20260406-203000"),
+            "logstash-api-diagnostics-20260406-203000"
+        );
+        assert_eq!(
+            default_collect_archive_name(&Product::Kibana, "20260406-203000"),
+            "kibana-api-diagnostics-20260406-203000"
+        );
+    }
 }

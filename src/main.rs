@@ -14,13 +14,16 @@ use esdiag::{
     data::{
         HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, Product, SecretAuth, Settings,
         Uri, add_secret, clear_unlock_lease, create_keystore, default_unlock_ttl,
-        get_password_for_secret_commands, get_unlock_status, keystore_exists, parse_unlock_ttl,
-        remove_secret, resolve_secret_auth, rotate_keystore_password, update_secret,
+        get_keystore_path, get_password_for_secret_commands, get_unlock_status, keystore_exists,
+        parse_unlock_ttl, remove_secret, resolve_secret_auth, rotate_keystore_password, update_secret,
         validate_existing_keystore_password, write_unlock_lease,
     },
     env::LOG_LEVEL,
     exporter::Exporter,
-    processor::{CollectionResult, Collector, DiagnosticReport, Identifiers, Processor},
+    processor::{
+        CollectionResult, Collector, DiagnosticReport, Identifiers, Processor,
+        default_collect_archive_name,
+    },
     receiver::Receiver,
     uploader,
 };
@@ -669,8 +672,9 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         };
                         let exporter = Exporter::for_collect_archive(output_dir)?;
 
+                        let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
                         let filename =
-                            format!("esdiag-{}.zip", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+                            format!("{}.zip", default_collect_archive_name(&product, &timestamp));
                         let identifiers =
                             Identifiers::new(account, case, Some(filename), opportunity, user);
 
@@ -849,6 +853,7 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 }
                 KeystoreCommands::Status => {
                     let status = get_unlock_status()?;
+                    let keystore_path = get_keystore_path()?;
                     tracing::info!(
                         "Keystore: {} ({})",
                         if status.keystore_exists {
@@ -856,21 +861,9 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         } else {
                             "absent"
                         },
-                        status.unlock_path.display()
+                        keystore_path.display()
                     );
-                    if status.unlock_active {
-                        if let Some(expires_at_epoch) = status.expires_at_epoch {
-                            tracing::info!(
-                                "CLI unlock: active until {} ({})",
-                                format_epoch(expires_at_epoch),
-                                format_remaining_duration(expires_at_epoch)
-                            );
-                        } else {
-                            tracing::info!("CLI unlock: active");
-                        }
-                    } else {
-                        tracing::info!("CLI unlock: inactive");
-                    }
+                    tracing::info!("{}", format_keystore_lock_status(&status));
                     Ok(CommandResult::named("keystore"))
                 }
                 KeystoreCommands::Password => {
@@ -1454,6 +1447,29 @@ fn format_remaining_duration_from(now_epoch: i64, expires_at_epoch: i64) -> Stri
         format!("{minutes}m remaining")
     }
 }
+
+fn format_keystore_lock_status(status: &esdiag::data::UnlockStatus) -> String {
+    format_keystore_lock_status_at(chrono::Utc::now().timestamp(), status)
+}
+
+fn format_keystore_lock_status_at(
+    now_epoch: i64,
+    status: &esdiag::data::UnlockStatus,
+) -> String {
+    if status.unlock_active {
+        if let Some(expires_at_epoch) = status.expires_at_epoch {
+            return format!(
+                "Keystore: unlocked until {} ({})",
+                format_epoch(expires_at_epoch),
+                format_remaining_duration_from(now_epoch, expires_at_epoch)
+            );
+        }
+        return "Keystore: unlocked".to_string();
+    }
+
+    "Keystore: locked".to_string()
+}
+
 fn ensure_host_role(host: &KnownHost, role: HostRole, context: &str) -> Result<()> {
     if host.has_role(role.clone()) {
         Ok(())
@@ -1572,21 +1588,22 @@ fn resolve_serve_exporter(output: Option<String>, runtime_mode: RuntimeMode) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, Commands, KeystoreCommands, append_kibana_space, format_remaining_duration_from,
-        format_collect_summary, host_connection_uses_receiver, is_agent_mode,
-        resolve_host_secret_auth,
-        resolve_process_kibana_base_url, resolve_secret_input_with_prompt,
-        resolve_tracing_filter, should_error_for_missing_subcommand, write_completion_summary,
-        collect_with_optional_upload, upload_collected_archive,
+        Cli, Commands, KeystoreCommands, append_kibana_space, collect_with_optional_upload,
+        format_collect_summary, format_keystore_lock_status, format_keystore_lock_status_at,
+        format_process_summary, format_remaining_duration_from, host_connection_uses_receiver,
+        is_agent_mode, resolve_host_secret_auth, resolve_process_kibana_base_url,
+        resolve_secret_input_with_prompt, resolve_tracing_filter,
+        should_error_for_missing_subcommand, upload_collected_archive, write_completion_summary,
     };
     #[cfg(feature = "server")]
     use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
     use clap::Parser;
     use esdiag::data::{
-        ElasticCloud, HostRole, KnownHost, KnownHostBuilder, Product, SecretAuth, Uri,
+        ElasticCloud, HostRole, KnownHost, KnownHostBuilder, Product, SecretAuth, UnlockStatus, Uri,
         upsert_secret_auth,
     };
-    use esdiag::processor::CollectionResult;
+    use esdiag::processor::{CollectionResult, DiagnosticManifest};
+    use esdiag::processor::diagnostic::DiagnosticReportBuilder;
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
     use std::{
@@ -1758,6 +1775,33 @@ mod tests {
         assert_eq!(
             format_remaining_duration_from(1_700_000_000, 1_700_003_660),
             "1h 1m remaining"
+        );
+    }
+
+    #[test]
+    fn keystore_status_reports_locked_state() {
+        let status = UnlockStatus {
+            keystore_exists: true,
+            unlock_active: false,
+            expires_at_epoch: None,
+            unlock_path: std::path::PathBuf::from("/tmp/keystore.unlock"),
+        };
+
+        assert_eq!(format_keystore_lock_status(&status), "Keystore: locked");
+    }
+
+    #[test]
+    fn keystore_status_reports_unlock_expiry() {
+        let status = UnlockStatus {
+            keystore_exists: true,
+            unlock_active: true,
+            expires_at_epoch: Some(1_700_003_660),
+            unlock_path: std::path::PathBuf::from("/tmp/keystore.unlock"),
+        };
+
+        assert_eq!(
+            format_keystore_lock_status_at(1_700_000_000, &status),
+            "Keystore: unlocked until 2023-11-14T23:14:20+00:00 (1h 1m remaining)"
         );
     }
 
@@ -2091,6 +2135,36 @@ mod tests {
             summary,
             "Collected 21 of 21 files into target/esdiag-20260403-220233.zip"
         );
+    }
+
+    #[test]
+    fn process_summary_includes_kibana_link_for_stderr_output() {
+        let manifest = DiagnosticManifest::new(
+            "2024-01-01T00:00:00Z".to_string(),
+            Some("esdiag-test".to_string()),
+            None,
+            None,
+            Some("minimal".to_string()),
+            Product::Elasticsearch,
+            Some("elasticsearch_diagnostic".to_string()),
+            Some("esdiag".to_string()),
+            Some("8.15.0".to_string()),
+        );
+        let mut report = DiagnosticReportBuilder::try_from(manifest)
+            .expect("report builder")
+            .receiver("Elasticsearch http://localhost:9200".to_string())
+            .product(Product::Elasticsearch)
+            .build()
+            .expect("report");
+        report.add_kibana_link("https://kb.example/app/dashboards#/view/report".to_string());
+        let summary = format_process_summary(&report, 1_234);
+
+        let mut buffer = Vec::new();
+        write_completion_summary(&mut buffer, &summary).expect("write summary");
+
+        let stderr = String::from_utf8(buffer).expect("utf8");
+        assert!(stderr.contains("process complete in 1.234 seconds"));
+        assert!(stderr.contains("Kibana Link: https://kb.example/app/dashboards#/view/report"));
     }
 
     #[test]
