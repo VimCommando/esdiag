@@ -94,24 +94,24 @@ async fn test_docs_routes_render_and_404() {
     let (mut server, client, base) = start_server().await;
 
     let docs_index = client
-        .get(format!("{base}/docs"))
+        .get(format!("{base}/docs/documentation"))
         .send()
         .await
         .expect("docs index response");
     assert!(docs_index.status().is_success());
     let docs_index_body = docs_index.text().await.expect("docs index body");
     assert!(docs_index_body.contains("ESDiag Documentation"));
-    assert!(docs_index_body.contains("href=\"#example/subtopic\""));
+    assert!(docs_index_body.contains("href=\"#bin/esdiag-control\""));
 
     let subtopic = client
-        .get(format!("{base}/docs/example/subtopic"))
+        .get(format!("{base}/docs/bin/esdiag-control"))
         .send()
         .await
         .expect("subtopic response");
     assert!(subtopic.status().is_success());
     let subtopic_body = subtopic.text().await.expect("subtopic body");
-    assert!(subtopic_body.contains("Subtopic Example"));
-    assert!(subtopic_body.contains("Hello, offline docs!"));
+    assert!(subtopic_body.contains("Elastic Stack Diagnostics Control"));
+    assert!(subtopic_body.contains("script helps build, configure and deploys Elastic Stack Diagnostics"));
 
     let missing = client
         .get(format!("{base}/docs/no/such/page"))
