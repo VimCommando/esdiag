@@ -67,8 +67,18 @@ Shared host auth/update options:
 Usage: esdiag process [OPTIONS] <INPUT> [OUTPUT]
 ```
 
-- `<INPUT>`: archive, directory, known host, or Elastic uploader URL.
-- `[OUTPUT]`: known host, file, `-` for stdout, or environment fallback.
+Input resolution (in order):
+1. `.zip` archive path
+2. Unpacked diagnostic directory path
+3. Known host name from `~/.esdiag/hosts.yml`
+4. Elastic Upload URL (`https://token:...@upload.elastic.co/d/...`)
+
+Output resolution (in order):
+1. `-` → write to stdout
+2. Matches a saved host name → send to that host
+3. Any other string → filesystem target (file or directory)
+4. Omitted → fall back to `ESDIAG_OUTPUT_*` env vars
+- Do not pass raw `http(s)` URLs as output; save them as hosts first.
 
 Report options:
 - `-a, --account <ACCOUNT>`

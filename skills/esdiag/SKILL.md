@@ -1,6 +1,6 @@
 ---
 name: esdiag
-description: Operate Elastic Stack Diagnostics (`esdiag`) end-to-end for host configuration, secret management, asset setup, diagnostic collection, processing, saved-job management, and upload-service workflows. Use when a user asks to run or troubleshoot `esdiag` commands (`host`, `keystore`, `setup`, `collect`, `process`, `serve`, `job`), wire output targets via known hosts or `ESDIAG_OUTPUT_*` environment variables, process support-diagnostics archives/directories/upload links, manage saved jobs, or expose the local web/API service.
+description: Collect or process Elasticsearch, Kibana, and Logstash diagnostics with `esdiag`. Use for collecting live API diagnostics from a cluster, processing support bundle archives or Elastic upload links, sending results to an output cluster, managing saved hosts and encrypted credentials, running saved diagnostic jobs, or hosting the web user interface.
 ---
 
 # ESDiag
@@ -20,12 +20,24 @@ Use `--sources <path/to/sources.yml>` when diagnostics API selection must follow
 - If the task is "save, list, run, or delete a reusable diagnostic job", run `esdiag job`.
 - If the task is "accept browser uploads or API submissions", run `esdiag serve`.
 
+## Pre-flight: Keystore Check
+
+Before running any `esdiag` command for the first time in a session, run:
+
+```
+esdiag keystore status
+```
+
+- `Keystore: unlocked until <date> (duration)` — proceed normally.
+- `Keystore: locked` — stop and tell the user to unlock it via the web UI or with `esdiag keystore unlock` before continuing.
+
 ## Standard Flow
 
 1. Configure output host or output environment variables.
 2. Run `esdiag setup` against the Elasticsearch output target.
 3. Ingest diagnostics via `esdiag process` or `esdiag serve`.
 4. Confirm completion output and share destination details (host/file/stdout).
+5. If `esdiag process` outputs a `Kibana Link: <url>` line, present it to the user as a clickable markdown link.
 
 ## Step 1: Configure Hosts and Auth
 
@@ -88,12 +100,13 @@ Use `--sources <path/to/sources.yml>` when diagnostics API selection must follow
   - `--opportunity`
   - `--user`
 - Use `--sources` to override endpoint source definitions when testing new API mappings or reproducing source-selection behavior.
+- After a successful `esdiag process`, if the output contains a `Kibana Link: <url>` line, present that URL to the user as a clickable markdown link. Do not manually look up Kibana hosts.
 
 ## Step 4: Collect Then Process (Optional)
 
 - Use `esdiag collect [OPTIONS] <HOST> <OUTPUT>` when the user needs fresh API diagnostics.
 - Ensure `<OUTPUT>` already exists; command creates a diagnostic subdirectory within it.
-- Use `--type` to control collection level (`minimal`, `light`, `standard`, `support`).
+- Use `--type` to control collection level, in ascending breadth: `minimal` (cluster + nodes only) → `light` (light-tagged APIs) → `standard` (fixed ~20 API set) → `support` (every available API in the sources definition).
 - Use `--include` and `--exclude` to explicitly control which APIs are collected.
 - Use metadata options (`--account`, `--case`, `--opportunity`, `--user`) when collected artifacts should carry report context.
 - Use `--sources` when the collection endpoints should come from a non-default `sources.yml`.
@@ -131,4 +144,5 @@ Saved jobs persist named diagnostic configurations to `~/.esdiag/jobs.yml` so th
 
 ## References
 
-- Use `references/cli.md` for command syntax and option details.
+- Use `references/cli.md` for command syntax, option details, and output resolution rules.
+- Use `references/env-vars.md` for all `ESDIAG_*` environment variables and their purpose.
