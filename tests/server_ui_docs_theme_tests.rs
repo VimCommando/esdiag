@@ -111,7 +111,7 @@ async fn test_docs_routes_render_and_404() {
     assert!(subtopic.status().is_success());
     let subtopic_body = subtopic.text().await.expect("subtopic body");
     assert!(subtopic_body.contains("Elastic Stack Diagnostics Control"));
-    assert!(subtopic_body.contains("script helps build, configure and deploys Elastic Stack Diagnostics"));
+    assert!(subtopic_body.contains("esdiag-control buildx --push"));
 
     let missing = client
         .get(format!("{base}/docs/no/such/page"))
