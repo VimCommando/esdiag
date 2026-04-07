@@ -373,11 +373,12 @@ impl Processor<Processing> {
 
 fn build_kibana_link(kibana_url: &str, diagnostic_id: &str, collection_date: u64) -> String {
     let url_safe_id = urlencoding::encode(diagnostic_id);
-    let days_since_collection = (std::time::SystemTime::now()
+    let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis() as u64
-        - collection_date)
+        .as_millis() as u64;
+    let days_since_collection = now_ms
+        .saturating_sub(collection_date)
         / (1000 * 60 * 60 * 24);
     let time_filter = match days_since_collection {
         x if x < 90 => "from:now-90d,to:now".to_string(),
@@ -556,6 +557,7 @@ pub fn new_job_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::build_kibana_link;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn build_kibana_link_embeds_diagnostic_id_and_dashboard_path() {
@@ -564,5 +566,17 @@ mod tests {
         assert!(link.starts_with("https://kb.example:5601/app/dashboards#/view/"));
         assert!(link.contains("diagnostic.id:'diag-123'"));
         assert!(link.contains("time:("));
+    }
+
+    #[test]
+    fn build_kibana_link_clamps_future_collection_dates() {
+        let future_collection_date = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_millis() as u64
+            + 86_400_000;
+        let link = build_kibana_link("https://kb.example:5601", "diag-123", future_collection_date);
+
+        assert!(link.contains("from:now-90d,to:now"));
     }
 }

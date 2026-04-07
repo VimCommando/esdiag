@@ -138,9 +138,9 @@ Use `esdiag host add <NAME> <APP> <URL>` to create a new saved host. The command
 
 Shared add/update options:
 
-- `--apikey <APIKEY>` stores explicit API key auth in the host
-- `--user <USERNAME> --password <PASSWORD>` stores explicit basic auth
-- `--secret <SECRET_ID>` stores only the keystore reference in the host and resolves credentials from `secrets.yml`
+- `--secret <SECRET_ID>` stores the saved host's keystore reference and resolves credentials from `secrets.yml`
+- `--apikey <APIKEY>` supplies API key credentials for validation and for keystore-backed updates when used with `--secret`
+- `--user <USERNAME> --password <PASSWORD>` supplies basic auth credentials for validation and for keystore-backed updates when used with `--secret`
 - `--roles collect,send,view` assigns workflow roles
 - `--accept-invalid-certs true|false` controls certificate validation behavior
 
@@ -155,7 +155,7 @@ Update behavior:
 - unknown host names fail with an explicit error
 - `host update` with no mutation flags is rejected; use `host auth` for validate-only checks
 
-If a secret-backed host is updated with explicit `--apikey` or `--user`/`--password`, the saved secret reference is replaced by the new explicit auth source.
+Authenticated saved hosts remain secret-backed. Use `--secret <SECRET_ID>` when adding or updating persisted auth, and use `--nosave` for transient validation that should not be written to `hosts.yml`.
 
 For certificate updates:
 

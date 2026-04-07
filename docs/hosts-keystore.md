@@ -93,8 +93,8 @@ If you do not use keystore secrets, keep legacy auth fields in `hosts.yml`.
 
 - `esdiag host add|update ... --secret <secret_id>` stores a secret reference instead of plaintext credentials
 - `esdiag host add|update ... --roles collect,send,view` assigns workflow roles to a host
-- `esdiag host add|update ... --user <name> --password <value>` stores legacy basic auth fields (alias: `--username`)
-- `esdiag host add|update ... --apikey <value>` stores a legacy API key field
+- Legacy plaintext basic auth fields in `hosts.yml` use `username`/`password` (CLI alias: `--user`/`--username` with `--password`) and remain read-compatible for migration
+- Legacy plaintext API key auth in `hosts.yml` uses `apikey` and remains read-compatible for migration
 - `esdiag keystore add/update/remove <secret_id> --user/--password/--apikey` manages encrypted secret entries
 - `esdiag keystore unlock [--ttl <duration>]` creates a local unlock lease for future CLI runs
 - `esdiag keystore status` reports whether the local unlock lease is active

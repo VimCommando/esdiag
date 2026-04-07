@@ -149,7 +149,7 @@ pub struct UnlockStatus {
     pub unlock_path: PathBuf,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UnlockLease {
     pub expires_at_epoch: i64,
     pub(crate) password: String,
