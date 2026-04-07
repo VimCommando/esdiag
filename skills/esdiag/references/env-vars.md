@@ -8,7 +8,7 @@ Use these variables when configuring `esdiag` without saved hosts, or to supply 
 |---|---|---|
 | `ESDIAG_HOME` | `~/.esdiag` | Base directory for all esdiag config and data files |
 | `ESDIAG_HOSTS` | `$ESDIAG_HOME/hosts.yml` | Override path to the saved-hosts file |
-| `ESDIAG_KEYSTORE` | `$ESDIAG_HOME/keystore` | Override path to the encrypted keystore file |
+| `ESDIAG_KEYSTORE` | `$ESDIAG_HOME/secrets.yml` | Override path to the encrypted keystore file |
 
 ## Output Target (`process`, `setup`, `serve`)
 

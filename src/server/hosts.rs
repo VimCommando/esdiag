@@ -1259,7 +1259,7 @@ async fn apply_upsert_host(
             builder = builder.secret(Some(secret_id));
             builder.build().map_err(to_message)?
         }
-        _ => return Err("Auth type must be one of: none, apikey, basic.".to_string()),
+        _ => return Err("Auth type must be one of: none, apikey, basic, secret.".to_string()),
     };
 
     let mut hosts: BTreeMap<String, KnownHost> =
@@ -1327,7 +1327,7 @@ async fn apply_upsert_cluster(
                 builder = builder.secret(Some(secret_id));
                 builder.build().map_err(to_message)?
             }
-            _ => return Err("Auth type must be one of: none, apikey, basic.".to_string()),
+            _ => return Err("Auth type must be one of: none, apikey, basic, secret.".to_string()),
         }
     };
     let kibana_host = {

@@ -1221,6 +1221,7 @@ content-layout.jobs-layout {
     flex-direction: column;
     gap: var(--size-s);
     position: sticky;
+    top: calc(var(--size-header) + var(--size));
     width: 240px;
     max-height: calc(
         100svh - var(--size-header) - var(--size-footer) - var(--size-xl)
@@ -3197,12 +3198,12 @@ button,
     cursor: pointer;
 }
 
-button,
+button:hover,
 .button:hover {
     background-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
 }
 
-button,
+button:disabled,
 .button:disabled {
     background-color: color-mix(in srgb, var(--border-color) 45%, transparent);
     color: var(--text-subdued-color);
