@@ -55,6 +55,20 @@ fn default_collect_roles() -> Vec<HostRole> {
     vec![HostRole::Collect]
 }
 
+fn product_cli_name(product: &Product) -> &'static str {
+    match product {
+        Product::Agent => "agent",
+        Product::ECE => "ece",
+        Product::ECK => "eck",
+        Product::ElasticCloudHosted => "elastic-cloud-hosted",
+        Product::Elasticsearch => "elasticsearch",
+        Product::Kibana => "kibana",
+        Product::KubernetesPlatform => "kubernetes-platform",
+        Product::Logstash => "logstash",
+        Product::Unknown => "unknown",
+    }
+}
+
 fn roles_is_default_collect(roles: &[HostRole]) -> bool {
     roles.len() == 1 && roles[0] == HostRole::Collect
 }
@@ -275,6 +289,13 @@ impl KnownHostCliUpdate {
             && self.secret.is_none()
             && self.username.is_none()
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownHostSummary {
+    pub app: String,
+    pub name: String,
+    pub secret: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1002,6 +1023,18 @@ impl KnownHost {
         let mut names: Vec<String> = hosts.keys().cloned().collect();
         names.sort();
         Some(names)
+    }
+
+    pub fn list_saved_summaries() -> Result<Vec<KnownHostSummary>> {
+        let hosts = Self::parse_hosts_yml()?;
+        Ok(hosts
+            .into_iter()
+            .map(|(name, host)| KnownHostSummary {
+                app: product_cli_name(host.app()).to_string(),
+                name,
+                secret: host.secret_reference().map(str::to_string),
+            })
+            .collect())
     }
 
     pub fn from_url(url: &Url) -> Self {
@@ -1933,5 +1966,53 @@ mod tests {
 
         let err = KnownHost::remove_saved("prod-es").expect_err("missing host should error");
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn list_saved_summaries_returns_sorted_rows() {
+        let _guard = env_lock().lock().expect("env lock");
+        let (_tmp, _hosts, _keystore) = setup_env();
+
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "z-prod".to_string(),
+            KnownHost::new_no_auth(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9201").expect("url"),
+                vec![HostRole::Collect],
+                None,
+                false,
+            ),
+        );
+        hosts.insert(
+            "a-prod".to_string(),
+            KnownHost::new_legacy_apikey(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Collect],
+                None,
+                false,
+                Some("prod-secret".to_string()),
+                None,
+            ),
+        );
+        write_hosts(hosts);
+
+        let rows = KnownHost::list_saved_summaries().expect("summary rows");
+        assert_eq!(
+            rows,
+            vec![
+                KnownHostSummary {
+                    app: "elasticsearch".to_string(),
+                    name: "a-prod".to_string(),
+                    secret: Some("prod-secret".to_string()),
+                },
+                KnownHostSummary {
+                    app: "elasticsearch".to_string(),
+                    name: "z-prod".to_string(),
+                    secret: None,
+                },
+            ]
+        );
     }
 }

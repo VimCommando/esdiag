@@ -43,16 +43,23 @@ Usage: esdiag collect [OPTIONS] <HOST> <OUTPUT>
 ## host
 
 ```text
-Usage: esdiag host [OPTIONS] <NAME> [APP] [URL]
+Usage: esdiag host <COMMAND>
 ```
 
-Key options:
-- `--accept-invalid-certs`
+Commands:
+- `add <NAME> <APP> <URL>`
+- `update <NAME>`
+- `remove <NAME>`
+- `list`
+- `auth <NAME>`
+
+Shared host auth/update options:
+- `--accept-invalid-certs <true|false>`
 - `-a, --apikey <APIKEY>`
 - `-u, --username <USERNAME>`
 - `-p, --password <PASSWORD>`
-- `-n, --nosave`
-- `--sources <SOURCES>`
+- `--secret <SECRET>`
+- `--roles <ROLES>`
 
 ## process
 

@@ -1,8 +1,4 @@
-## Purpose
-
-Define the expected CLI behavior for creating, validating, incrementally updating, and deleting saved host records managed by `esdiag host`.
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: Explicit Host Lifecycle Subcommands
 The system SHALL expose explicit saved-host lifecycle subcommands under `esdiag host`: `add <name>`, `update <name>`, `remove <name>`, `list`, and `auth <name>`. The system SHALL guide users toward those verbs instead of relying on the previous overlapping positional mutation flow.
@@ -35,6 +31,36 @@ The system SHALL make `esdiag host add <name>` create-only. `add` MUST require a
 - **WHEN** the user runs `esdiag host add prod-es --secret prod-es-apikey`
 - **THEN** the command fails with an explicit error indicating that `app` and `url` are required
 - **AND** the system does not create or save a partial host record
+
+### Requirement: Saved Host Listing
+The system SHALL provide `esdiag host list` to print a compact table of saved hosts with columns `name`, `app`, and `secret`. The `secret` column SHALL show the saved secret identifier when present and SHALL otherwise be empty. When no hosts are saved, the command SHALL print `No saved hosts`.
+
+#### Scenario: List prints compact host table
+- **GIVEN** saved hosts exist in persisted host storage
+- **WHEN** the user runs `esdiag host list`
+- **THEN** the command prints a compact table with headers `name`, `app`, and `secret`
+- **AND** each saved host appears on its own row
+
+#### Scenario: List reports empty host storage
+- **GIVEN** no saved hosts exist
+- **WHEN** the user runs `esdiag host list`
+- **THEN** the command prints `No saved hosts`
+
+### Requirement: Saved Host Authentication Check
+The system SHALL provide `esdiag host auth <name>` to test authentication against an existing saved host. `auth` MUST fail when the host does not exist and MUST not modify persisted host storage.
+
+#### Scenario: Auth succeeds for a saved host
+- **GIVEN** a saved host named `prod-es` exists with valid authentication
+- **WHEN** the user runs `esdiag host auth prod-es`
+- **THEN** the system tests the saved host connection using its persisted authentication configuration
+- **AND** the command succeeds without changing the saved host record
+
+#### Scenario: Auth rejects missing host
+- **GIVEN** no saved host named `prod-es` exists
+- **WHEN** the user runs `esdiag host auth prod-es`
+- **THEN** the command fails with an explicit error indicating that `prod-es` was not found
+
+## MODIFIED Requirements
 
 ### Requirement: Incremental Saved Host Updates
 The system SHALL treat `esdiag host update <name>` as an update-only operation for a saved host named `<name>` when the invocation provides one or more mutable override flags. The update flow SHALL reuse the saved host's persisted `app` and `url`, apply the provided overrides, validate the merged host record, and save it only after the host connection test succeeds.
@@ -91,34 +117,6 @@ The system SHALL reject `esdiag host update <name>` invocations for unknown host
 - **WHEN** the user runs `esdiag host update prod-es --secret prod-es-rotated`
 - **THEN** the command fails with an explicit error indicating that `prod-es` does not exist
 - **AND** the system does not create or save a partial host record
-
-### Requirement: Saved Host Listing
-The system SHALL provide `esdiag host list` to print a compact table of saved hosts with columns `name`, `app`, and `secret`. The `secret` column SHALL show the saved secret identifier when present and SHALL otherwise be empty. When no hosts are saved, the command SHALL print `No saved hosts`.
-
-#### Scenario: List prints compact host table
-- **GIVEN** saved hosts exist in persisted host storage
-- **WHEN** the user runs `esdiag host list`
-- **THEN** the command prints a compact table with headers `name`, `app`, and `secret`
-- **AND** each saved host appears on its own row
-
-#### Scenario: List reports empty host storage
-- **GIVEN** no saved hosts exist
-- **WHEN** the user runs `esdiag host list`
-- **THEN** the command prints `No saved hosts`
-
-### Requirement: Saved Host Authentication Check
-The system SHALL provide `esdiag host auth <name>` to test authentication against an existing saved host. `auth` MUST fail when the host does not exist and MUST not modify persisted host storage.
-
-#### Scenario: Auth succeeds for a saved host
-- **GIVEN** a saved host named `prod-es` exists with valid authentication
-- **WHEN** the user runs `esdiag host auth prod-es`
-- **THEN** the system tests the saved host connection using its persisted authentication configuration
-- **AND** the command succeeds without changing the saved host record
-
-#### Scenario: Auth rejects missing host
-- **GIVEN** no saved host named `prod-es` exists
-- **WHEN** the user runs `esdiag host auth prod-es`
-- **THEN** the command fails with an explicit error indicating that `prod-es` was not found
 
 ### Requirement: Saved Host Deletion From CLI
 The system SHALL support deleting an existing saved host record with `esdiag host remove <name>`. The remove command SHALL remove the named host from persisted host storage and SHALL fail with an explicit error when the host does not exist.

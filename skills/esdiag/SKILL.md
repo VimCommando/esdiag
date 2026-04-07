@@ -29,18 +29,19 @@ Use `--sources <path/to/sources.yml>` when diagnostics API selection must follow
 
 ## Step 1: Configure Hosts and Auth
 
-- Use `esdiag host [OPTIONS] <NAME> [APP] [URL]` to test and save host configuration to `~/.esdiag/hosts.yml`.
-- When `APP` and `URL` are supplied, `esdiag host` creates or replaces the saved host definition.
-- When `APP` and `URL` are omitted and `<NAME>` already exists, `esdiag host` re-validates the saved host and applies any supplied mutable overrides before saving.
+- Use `esdiag host add <NAME> <APP> <URL>` to create and save a new host definition in `~/.esdiag/hosts.yml`.
+- Use `esdiag host update <NAME>` with mutable flags to modify an existing saved host in place.
+- Use `esdiag host remove <NAME>` to delete an existing saved host from `hosts.yml`.
+- Use `esdiag host list` to print a compact inventory of saved hosts (`name`, `app`, `secret`).
+- Use `esdiag host auth <NAME>` to test a saved host's persisted authentication and connection settings without modifying it.
 - Use `--apikey` for API key auth or `--user`/`--password` for basic auth.
 - `--user` is the primary basic-auth flag (with `--username` available as an alias).
 - Use `--secret <secret_id>` to reference credentials stored in the encrypted keystore.
-- Use `--secret`, `--apikey`, `--user`/`--password`, and `--roles` to update an existing saved host in place without restating `APP` and `URL`.
+- Use `--secret`, `--apikey`, `--user`/`--password`, and `--roles` with `host add` or `host update` to set authentication and workflow roles.
 - Use `--roles collect,send,view` to assign host workflow roles.
-- Use `--accept-invalid-certs true` to enable invalid-certificate acceptance for a saved host, and `--accept-invalid-certs false` to remove it. If the flag is omitted during an update, the saved certificate setting is preserved.
-- Saved-host updates always re-test the live connection before persistence.
-- Use `--delete` to remove an existing saved host from `hosts.yml`.
-- Use `--nosave` for connectivity tests that should not persist.
+- Use `--accept-invalid-certs true` to enable invalid-certificate acceptance for a saved host, and `--accept-invalid-certs false` to remove it. If the flag is omitted during `host update`, the saved certificate setting is preserved.
+- `host add` fails if the host already exists; `host update`, `host remove`, and `host auth` fail if the host does not exist.
+- `host update` always re-tests the live connection before persistence.
 - Use environment variables (optionally by sourcing a `.env` file in the shell) when the user does not want a saved host.
 
 ## Step 1b: Manage Encrypted Secrets (Optional)
@@ -123,8 +124,8 @@ Saved jobs persist named diagnostic configurations to `~/.esdiag/jobs.yml` so th
 
 - If command behavior looks inconsistent with docs, trust live help output first.
 - If auth fails, re-check saved host/app/url/auth mode and whether cert validation is required.
-- If a saved-host update fails, remember that `esdiag host <NAME>` now re-validates the merged host definition live before saving it.
-- If a host should be removed entirely, prefer `esdiag host <NAME> --delete` instead of hand-editing `hosts.yml`.
+- If a saved-host update fails, remember that `esdiag host update <NAME>` re-validates the merged host definition live before saving it.
+- If a host should be removed entirely, prefer `esdiag host remove <NAME>` instead of hand-editing `hosts.yml`.
 - If output is not where expected, verify `[OUTPUT]` parsing and known-host name collisions with filenames.
 - If setup or ingest fails after version changes, rerun `esdiag setup` before retrying `process`.
 

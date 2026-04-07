@@ -50,7 +50,7 @@ fn agent_flag_emits_stderr_summary_without_info_logs() {
 
     assert!(stdout.is_empty(), "stdout should remain empty, got:\n{stdout}");
     assert!(
-        stderr.contains("keystore complete"),
+        stderr.contains("Keystore: locked"),
         "stderr should contain final summary, got:\n{stderr}"
     );
     assert!(
@@ -70,7 +70,7 @@ fn claudecode_auto_enables_agent_mode() {
 
     assert!(stdout.is_empty(), "stdout should remain empty, got:\n{stdout}");
     assert!(
-        stderr.contains("keystore complete"),
+        stderr.contains("Keystore: locked"),
         "stderr should contain final summary, got:\n{stderr}"
     );
     assert!(
@@ -90,7 +90,7 @@ fn debug_overrides_agent_warn_level() {
 
     assert!(stdout.is_empty(), "stdout should remain empty, got:\n{stdout}");
     assert!(
-        stderr.contains("keystore complete"),
+        stderr.contains("Keystore: locked"),
         "stderr should contain final summary, got:\n{stderr}"
     );
 }
@@ -106,7 +106,7 @@ fn final_summary_is_printed_without_agent_when_logs_are_warn() {
 
     assert!(stdout.is_empty(), "stdout should remain empty, got:\n{stdout}");
     assert!(
-        stderr.contains("keystore complete"),
+        stderr.contains("Keystore: locked"),
         "stderr should contain final summary, got:\n{stderr}"
     );
     assert!(

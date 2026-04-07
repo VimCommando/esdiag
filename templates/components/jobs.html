@@ -108,24 +108,21 @@
         aria-label="Saved jobs"
     >
         <div hidden data-effect="if (!$_job_name_dirty) { $job_name = $_suggested_job_name || ''; }"></div>
-            <h3>Saved Jobs</h3>
+        <h3>Saved Jobs</h3>
         <div
             id="saved-jobs-list"
             data-init="@get('/jobs/saved', {filterSignals: {include: /^loaded_job_name$/}})"
         ></div>
-        <row>
-            <button
-                type="button"
-                data-on:click="window.location.href = '/jobs'"
-                {% if saved_job_name.is_none() %}disabled{% endif %}
-            >
-                New
-            </button>
-            <button type="button" disabled>Run</button>
-            {% if !saved_message.is_empty() %}
-            <p class="saved-job-message">{{ saved_message }}</p>
-            {% endif %}
-        </row>
+        <button
+            type="button"
+            data-on:click="window.location.href = '/jobs'"
+            {% if saved_job_name.is_none() %}disabled{% endif %}
+        >
+            New
+        </button>
+        {% if !saved_message.is_empty() %}
+        <p class="saved-job-message">{{ saved_message }}</p>
+        {% endif %}
     </nav>
     {% endif %}
     <main class="jobs-main">

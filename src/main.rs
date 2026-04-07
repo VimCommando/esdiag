@@ -4,7 +4,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use clap::{Parser, Subcommand, builder::BoolishValueParser, builder::styling};
+use clap::{Args, Parser, Subcommand, builder::BoolishValueParser, builder::styling};
 #[cfg(feature = "server")]
 use esdiag::server::{RuntimeMode, Server};
 #[cfg(feature = "setup")]
@@ -106,7 +106,12 @@ enum Commands {
         #[arg(help = "Diagnostic report opportunity", long, short)]
         opportunity: Option<String>,
         /// Diagnostic report user
-        #[arg(help = "Diagnostic report user", long = "user", short, value_name = "USER")]
+        #[arg(
+            help = "Diagnostic report user",
+            long = "user",
+            short,
+            value_name = "USER"
+        )]
         user: Option<String>,
         /// Elastic Upload Service upload id or URL for immediate upload after collection
         #[arg(
@@ -141,69 +146,10 @@ enum Commands {
         )]
         kibana: Option<String>,
     },
-    /// Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
+    /// Manage saved host connections in `~/.esdiag/hosts.yml`
     Host {
-        /// A name to identify this host
-        #[arg(help = "A name to identify this host")]
-        name: String,
-        /// Application of this host (elasticsearch, kibana, logstash, etc.)
-        #[arg(
-            help = "Application of this host (elasticsearch, kibana, logstash, etc.)",
-            conflicts_with = "delete"
-        )]
-        app: Option<Product>,
-        /// A host URL to connect to
-        #[arg(help = "A host URL to connect to", conflicts_with = "delete")]
-        url: Option<Url>,
-        /// Accept invalid certificates
-        #[arg(help = "Accept invalid certificates", long, value_parser = BoolishValueParser::new(), conflicts_with = "delete")]
-        accept_invalid_certs: Option<bool>,
-        /// Delete the saved host configuration
-        #[arg(help = "Delete the saved host configuration", long, conflicts_with_all = &["app", "url", "accept_invalid_certs", "apikey", "username", "password", "secret", "roles", "nosave"])]
-        delete: bool,
-        /// ApiKey for authentication
-        #[arg(help = "ApiKey, passed as http header", long, short = 'k', conflicts_with_all = &["username", "password", "delete"])]
-        apikey: Option<String>,
-        /// Username for authentication
-        #[arg(
-            help = "Username for authentication",
-            long = "user",
-            visible_alias = "username",
-            short,
-            conflicts_with = "delete"
-        )]
-        username: Option<String>,
-        /// Password for authentication
-        #[arg(
-            help = "Password for authentication",
-            long,
-            short,
-            conflicts_with = "delete"
-        )]
-        password: Option<String>,
-        /// Secret identifier in the encrypted keystore
-        #[arg(
-            help = "Secret identifier in the encrypted keystore",
-            long,
-            conflicts_with_all = &["apikey", "username", "password", "delete"]
-        )]
-        secret: Option<String>,
-        /// Comma-separated host roles (collect,send,view)
-        #[arg(
-            help = "Comma-separated host roles",
-            long,
-            value_delimiter = ',',
-            conflicts_with = "delete"
-        )]
-        roles: Option<Vec<HostRole>>,
-        /// Save the host configuration
-        #[arg(
-            help = "Don't save the host configuration on successful connection",
-            long,
-            short,
-            conflicts_with = "delete"
-        )]
-        nosave: bool,
+        #[command(subcommand)]
+        command: HostCommands,
     },
     /// Manage encrypted secrets in the local keystore
     #[command(alias = "secret")]
@@ -293,6 +239,98 @@ enum JobCommands {
         /// Name of the saved job to delete
         name: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum HostCommands {
+    /// Add a saved host
+    Add {
+        /// A name to identify this host
+        #[arg(help = "A name to identify this host")]
+        name: String,
+        /// Application of this host (elasticsearch, kibana, logstash, etc.)
+        #[arg(help = "Application of this host (elasticsearch, kibana, logstash, etc.)")]
+        app: Product,
+        /// A host URL to connect to
+        #[arg(help = "A host URL to connect to")]
+        url: Url,
+        #[command(flatten)]
+        args: HostMutationArgs,
+    },
+    /// Update an existing saved host
+    Update {
+        /// Name of the saved host to update
+        name: String,
+        #[command(flatten)]
+        args: HostMutationArgs,
+    },
+    /// Remove an existing saved host
+    Remove {
+        /// Name of the saved host to remove
+        name: String,
+    },
+    /// List all saved hosts
+    List,
+    /// Test authentication for a saved host
+    Auth {
+        /// Name of the saved host to test
+        name: String,
+    },
+    #[command(external_subcommand)]
+    Legacy(Vec<String>),
+}
+
+#[derive(Debug, Args, Clone)]
+struct HostMutationArgs {
+    /// Accept invalid certificates
+    #[arg(
+        help = "Accept invalid certificates",
+        long,
+        value_parser = BoolishValueParser::new()
+    )]
+    accept_invalid_certs: Option<bool>,
+    /// ApiKey for authentication
+    #[arg(
+        help = "ApiKey, passed as http header",
+        long,
+        short = 'k',
+        conflicts_with_all = &["username", "password"]
+    )]
+    apikey: Option<String>,
+    /// Username for authentication
+    #[arg(
+        help = "Username for authentication",
+        long = "user",
+        visible_alias = "username",
+        short
+    )]
+    username: Option<String>,
+    /// Password for authentication
+    #[arg(help = "Password for authentication", long, short)]
+    password: Option<String>,
+    /// Secret identifier in the encrypted keystore
+    #[arg(
+        help = "Secret identifier in the encrypted keystore",
+        long,
+        conflicts_with_all = &["apikey", "username", "password"]
+    )]
+    secret: Option<String>,
+    /// Comma-separated host roles (collect,send,view)
+    #[arg(help = "Comma-separated host roles", long, value_delimiter = ',')]
+    roles: Option<Vec<HostRole>>,
+}
+
+impl From<HostMutationArgs> for KnownHostCliUpdate {
+    fn from(value: HostMutationArgs) -> Self {
+        Self {
+            accept_invalid_certs: value.accept_invalid_certs,
+            apikey: value.apikey,
+            password: value.password,
+            roles: value.roles,
+            secret: value.secret,
+            username: value.username,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -430,7 +468,9 @@ async fn async_main() -> Result<()> {
             if let Some(summary) = result.summary() {
                 emit_completion_summary(&summary)?;
             }
-            tracing::debug!("{} complete", result.name);
+            if result.emit_summary && result.summary.is_none() {
+                tracing::debug!("{} complete", result.name);
+            }
             Ok(())
         }
         Err(e) => {
@@ -469,6 +509,14 @@ impl CommandResult {
             name,
             summary: None,
             emit_summary: true,
+        }
+    }
+
+    fn without_summary(name: &'static str) -> Self {
+        Self {
+            name,
+            summary: None,
+            emit_summary: false,
         }
     }
 
@@ -707,81 +755,65 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     _ => Err(eyre!("Collect requires a known host")),
                 }
             }
-            Commands::Host {
-                name,
-                app,
-                url,
-                accept_invalid_certs,
-                delete,
-                apikey,
-                username,
-                password,
-                secret,
-                roles,
-                nosave,
-            } => {
-                tracing::info!("Configuring host {name}");
-                let update = build_host_cli_update(
-                    accept_invalid_certs,
-                    apikey,
-                    username,
-                    password,
-                    secret,
-                    roles,
-                );
-                let mode = resolve_host_command_mode(delete, &app, &url, &update)?;
-
-                if mode == HostCommandMode::Delete {
+            Commands::Host { command } => match command {
+                HostCommands::Add {
+                    name,
+                    app,
+                    url,
+                    args,
+                } => {
+                    tracing::info!("Adding host {name}");
+                    if KnownHost::get_known(&name).is_some() {
+                        return Err(eyre!("Host '{name}' already exists"));
+                    }
+                    let update = build_host_cli_update(args);
+                    let secret_auth = resolve_host_secret_auth(update.secret.as_deref())?;
+                    let host = build_host_from_definition(app, url, &update, secret_auth)?;
+                    let summary = save_validated_host(&name, host, "added").await?;
+                    Ok(CommandResult::with_summary("host add", summary))
+                }
+                HostCommands::Update { name, args } => {
+                    tracing::info!("Updating host {name}");
+                    let update = build_host_cli_update(args);
+                    if update.is_empty() {
+                        return Err(eyre!(
+                            "No host update fields were provided. Use `esdiag host auth {name}` to test the saved host without modifying it."
+                        ));
+                    }
+                    let existing = KnownHost::get_known(&name)
+                        .ok_or_else(|| eyre!("Host '{name}' not found"))?;
+                    let secret_auth = if update.secret.is_some() {
+                        resolve_host_secret_auth(update.secret.as_deref())?
+                    } else {
+                        None
+                    };
+                    let host = existing.merge_cli_update(&update, secret_auth)?;
+                    let summary = save_validated_host(&name, host, "updated").await?;
+                    Ok(CommandResult::with_summary("host update", summary))
+                }
+                HostCommands::Remove { name } => {
+                    tracing::info!("Removing host {name}");
                     let hostfile = delete_host_from_cli(&name)?;
                     tracing::info!("Host {name} successfully deleted from {hostfile}");
-                    return Ok(CommandResult::named("host"));
+                    Ok(CommandResult::with_summary(
+                        "host remove",
+                        format!("Host '{name}' removed from {hostfile}"),
+                    ))
                 }
-
-                let host = match mode {
-                    HostCommandMode::CreateOrReplace => {
-                        let secret_auth = resolve_host_secret_auth(update.secret.as_deref())?;
-                        build_host_from_definition(
-                            app.expect("app required for create-or-replace"),
-                            url.expect("url required for create-or-replace"),
-                            &update,
-                            secret_auth,
-                        )?
-                    }
-                    HostCommandMode::IncrementalUpdate => {
-                        let existing = KnownHost::get_known(&name).ok_or_else(|| {
-                            eyre!(
-                                "Host {name} not found, must include `url` and `app` to setup a new host."
-                            )
-                        })?;
-                        let secret_auth = if update.secret.is_some() {
-                            resolve_host_secret_auth(update.secret.as_deref())?
-                        } else {
-                            None
-                        };
-                        existing.merge_cli_update(&update, secret_auth)?
-                    }
-                    HostCommandMode::ValidateOnly => KnownHost::get_known(&name).ok_or_else(|| {
-                        eyre!(
-                            "Host {name} not found, must include `url` and `app` to setup a new host."
-                        )
-                    })?,
-                    HostCommandMode::Delete => unreachable!("delete handled earlier"),
-                };
-
-                let uri = Uri::try_from(host.clone())?;
-
-                let valid_connection = validate_host_connection(&name, uri).await?;
-
-                if valid_connection {
-                    if !nosave {
-                        let hostfile = host.save(&name)?;
-                        tracing::info!("Host {name} successfully saved to {hostfile}");
-                    }
-                    Ok(CommandResult::named("host"))
-                } else {
-                    Err(eyre!("Host connection failed"))
+                HostCommands::List => {
+                    render_host_list()?;
+                    Ok(CommandResult::without_summary("host list"))
                 }
-            }
+                HostCommands::Auth { name } => {
+                    tracing::info!("Testing saved host {name}");
+                    let host = KnownHost::get_known(&name)
+                        .ok_or_else(|| eyre!("Host '{name}' not found"))?;
+                    let uri = Uri::try_from(host)?;
+                    let summary = validate_host_connection(&name, uri).await?;
+                    Ok(CommandResult::with_summary("host auth", summary))
+                }
+                HostCommands::Legacy(args) => Err(legacy_host_command_error(&args)),
+            },
             Commands::Keystore { command } => match command {
                 KeystoreCommands::Add {
                     secret_id,
@@ -1242,57 +1274,8 @@ fn expected_secret_auth(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HostCommandMode {
-    CreateOrReplace,
-    Delete,
-    IncrementalUpdate,
-    ValidateOnly,
-}
-
-fn build_host_cli_update(
-    accept_invalid_certs: Option<bool>,
-    apikey: Option<String>,
-    username: Option<String>,
-    password: Option<String>,
-    secret: Option<String>,
-    roles: Option<Vec<HostRole>>,
-) -> KnownHostCliUpdate {
-    KnownHostCliUpdate {
-        accept_invalid_certs,
-        apikey,
-        password,
-        roles,
-        secret,
-        username,
-    }
-}
-
-fn resolve_host_command_mode(
-    delete: bool,
-    app: &Option<Product>,
-    url: &Option<Url>,
-    update: &KnownHostCliUpdate,
-) -> Result<HostCommandMode> {
-    if app.is_some() ^ url.is_some() {
-        return Err(eyre!(
-            "Host definition requires both `app` and `url` when creating or replacing a host."
-        ));
-    }
-
-    if delete {
-        return Ok(HostCommandMode::Delete);
-    }
-
-    if app.is_some() && url.is_some() {
-        return Ok(HostCommandMode::CreateOrReplace);
-    }
-
-    if update.is_empty() {
-        Ok(HostCommandMode::ValidateOnly)
-    } else {
-        Ok(HostCommandMode::IncrementalUpdate)
-    }
+fn build_host_cli_update(args: HostMutationArgs) -> KnownHostCliUpdate {
+    args.into()
 }
 
 fn build_host_from_definition(
@@ -1315,6 +1298,51 @@ fn build_host_from_definition(
         Some(secret_auth) => builder.build_with_secret_auth(secret_auth),
         None => builder.build(),
     }
+}
+
+async fn save_validated_host(name: &str, host: KnownHost, action: &str) -> Result<String> {
+    let uri = Uri::try_from(host.clone())?;
+    let validation_summary = validate_host_connection(name, uri).await?;
+    let hostfile = host.save(name)?;
+    tracing::info!("Host {name} successfully saved to {hostfile}");
+    Ok(format!(
+        "{validation_summary}\nHost '{name}' {action} in {hostfile}"
+    ))
+}
+
+fn render_host_list() -> Result<()> {
+    let rows = KnownHost::list_saved_summaries()?;
+    if rows.is_empty() {
+        println!("No saved hosts");
+        return Ok(());
+    }
+
+    #[allow(clippy::literal_string_with_formatting_args)]
+    let header = format!("{:<24} {:<16} {}", "name", "app", "secret");
+    println!("{header}");
+    println!("{}", "-".repeat(56));
+
+    for row in rows {
+        println!(
+            "{:<24} {:<16} {}",
+            row.name,
+            row.app,
+            row.secret.unwrap_or_default()
+        );
+    }
+
+    Ok(())
+}
+
+fn legacy_host_command_error(args: &[String]) -> eyre::Report {
+    let attempted = if args.is_empty() {
+        "esdiag host".to_string()
+    } else {
+        format!("esdiag host {}", args.join(" "))
+    };
+    eyre!(
+        "Legacy positional host syntax is no longer supported. Use `esdiag host add <name> <app> <url>` to create a host, `esdiag host update <name>` to modify one, `esdiag host remove <name>` to delete one, `esdiag host list` to inspect saved hosts, or `esdiag host auth <name>` to test a saved host. Received: `{attempted}`"
+    )
 }
 
 fn cleanup_settings_after_host_delete(name: &str) -> Result<()> {
@@ -1566,28 +1594,30 @@ fn host_connection_uses_receiver(uri: &Uri) -> bool {
     )
 }
 
-async fn validate_host_connection(name: &str, uri: Uri) -> Result<bool> {
+async fn validate_host_connection(name: &str, uri: Uri) -> Result<String> {
     if host_connection_uses_receiver(&uri) {
         let receiver = Receiver::try_from(uri)?;
         if receiver.is_connected().await {
-            tracing::info!("Host {name}: connected to Elastic Cloud Admin proxy");
-            return Ok(true);
+            let summary = format!("Host {name}: connected to Elastic Cloud Admin proxy");
+            tracing::info!("{summary}");
+            return Ok(summary);
         }
 
         tracing::error!("Host connection: FAILED ❌ Elastic Cloud Admin proxy connection failed");
         tracing::warn!("Check your URL, certificates, and secret credentials!");
-        return Ok(false);
+        return Err(eyre!("Host connection failed"));
     }
 
     match Client::try_from(uri)?.test_connection().await {
         Ok(message) => {
-            tracing::info!("Host {name}: {}", &message);
-            Ok(true)
+            let summary = format!("Host {name}: {message}");
+            tracing::info!("{summary}");
+            Ok(summary)
         }
         Err(message) => {
             tracing::error!("Host connection: FAILED ❌ {}", &message);
             tracing::warn!("Check your URL and certificates!");
-            Ok(false)
+            Err(eyre!("Host connection failed"))
         }
     }
 }
@@ -1646,16 +1676,15 @@ fn resolve_serve_exporter(output: Option<String>, runtime_mode: RuntimeMode) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CommandResult, Commands, KeystoreCommands, append_kibana_space,
-        colorize_keystore_lock_status,
-        collect_with_optional_upload,
-        format_collect_summary, format_keystore_lock_status, format_keystore_lock_status_at,
+        Cli, CommandResult, Commands, HostCommands, KeystoreCommands, append_kibana_space,
+        colorize_keystore_lock_status, collect_with_optional_upload, format_collect_summary,
+        format_keystore_lock_status, format_keystore_lock_status_at,
         format_keystore_migrate_summary, format_keystore_password_summary,
-        format_keystore_secret_summary,
-        format_process_summary, format_remaining_duration_from, host_connection_uses_receiver,
-        is_agent_mode, resolve_host_secret_auth, resolve_process_kibana_base_url,
-        resolve_secret_input_with_prompt, resolve_tracing_filter,
-        should_error_for_missing_subcommand, upload_collected_archive, write_completion_summary,
+        format_keystore_secret_summary, format_process_summary, format_remaining_duration_from,
+        host_connection_uses_receiver, is_agent_mode, resolve_host_secret_auth,
+        resolve_process_kibana_base_url, resolve_secret_input_with_prompt,
+        resolve_tracing_filter, should_error_for_missing_subcommand, upload_collected_archive,
+        write_completion_summary,
     };
     #[cfg(feature = "server")]
     use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
@@ -1721,10 +1750,11 @@ mod tests {
     }
 
     #[test]
-    fn host_roles_cli_parses_comma_delimited_values() {
+    fn host_add_parses_comma_delimited_role_values() {
         let cli = Cli::parse_from([
             "esdiag",
             "host",
+            "add",
             "prod-es",
             "elasticsearch",
             "http://localhost:9200",
@@ -1732,28 +1762,30 @@ mod tests {
             "collect,send",
         ]);
         match cli.command.expect("command") {
-            Commands::Host { roles, .. } => {
-                assert_eq!(roles, Some(vec![HostRole::Collect, HostRole::Send]));
+            Commands::Host {
+                command: HostCommands::Add { args, .. },
+            } => {
+                assert_eq!(args.roles, Some(vec![HostRole::Collect, HostRole::Send]));
             }
             _ => panic!("expected host command"),
         }
     }
 
     #[test]
-    fn host_accept_invalid_certs_cli_parses_explicit_bool_values() {
+    fn host_update_accept_invalid_certs_cli_parses_explicit_bool_values() {
         let cli_true = Cli::parse_from([
             "esdiag",
             "host",
+            "update",
             "prod-es",
             "--accept-invalid-certs",
             "true",
         ]);
         match cli_true.command.expect("command") {
             Commands::Host {
-                accept_invalid_certs,
-                ..
+                command: HostCommands::Update { args, .. },
             } => {
-                assert_eq!(accept_invalid_certs, Some(true));
+                assert_eq!(args.accept_invalid_certs, Some(true));
             }
             _ => panic!("expected host command"),
         }
@@ -1761,27 +1793,39 @@ mod tests {
         let cli_false = Cli::parse_from([
             "esdiag",
             "host",
+            "update",
             "prod-es",
             "--accept-invalid-certs",
             "false",
         ]);
         match cli_false.command.expect("command") {
             Commands::Host {
-                accept_invalid_certs,
-                ..
+                command: HostCommands::Update { args, .. },
             } => {
-                assert_eq!(accept_invalid_certs, Some(false));
+                assert_eq!(args.accept_invalid_certs, Some(false));
             }
             _ => panic!("expected host command"),
         }
     }
 
     #[test]
-    fn host_delete_conflicts_with_update_fields() {
-        let result = Cli::try_parse_from([
-            "esdiag", "host", "prod-es", "--delete", "--secret", "rotated",
-        ]);
-        assert!(result.is_err(), "delete should conflict with update fields");
+    fn host_legacy_positional_syntax_is_captured_as_legacy_subcommand() {
+        let cli = Cli::parse_from(["esdiag", "host", "prod-es", "--secret", "rotated"]);
+        match cli.command.expect("command") {
+            Commands::Host {
+                command: HostCommands::Legacy(args),
+            } => {
+                assert_eq!(
+                    args,
+                    vec![
+                        "prod-es".to_string(),
+                        "--secret".to_string(),
+                        "rotated".to_string()
+                    ]
+                );
+            }
+            _ => panic!("expected legacy host command"),
+        }
     }
 
     #[test]
@@ -1920,9 +1964,7 @@ mod tests {
         ]);
         match cli.command.expect("command") {
             Commands::Collect {
-                upload_id,
-                user,
-                ..
+                upload_id, user, ..
             } => {
                 assert_eq!(user, Some("elastic".to_string()));
                 assert_eq!(upload_id, Some("abc123".to_string()));
@@ -2049,10 +2091,10 @@ mod tests {
             .await
             .expect_err("missing archive should fail");
 
-        assert!(
-            err.to_string()
-                .contains(&format!("Collected archive not found at {}", missing_path.display()))
-        );
+        assert!(err.to_string().contains(&format!(
+            "Collected archive not found at {}",
+            missing_path.display()
+        )));
     }
     #[test]
     fn upload_command_parses_file_and_upload_id() {

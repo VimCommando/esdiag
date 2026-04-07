@@ -257,6 +257,7 @@ mod tests {
     };
     use reqwest::header::ACCEPT;
     use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
 
     async fn status_handler(State(status): State<StatusCode>) -> (StatusCode, &'static str) {
@@ -280,6 +281,14 @@ mod tests {
 
     async fn stop_status_server(server: JoinHandle<()>) {
         server.abort();
+        let _ = server.await;
+    }
+
+    async fn stop_status_server_with_shutdown(
+        server: JoinHandle<()>,
+        shutdown_tx: oneshot::Sender<()>,
+    ) {
+        let _ = shutdown_tx.send(());
         let _ = server.await;
     }
 
@@ -366,7 +375,7 @@ mod tests {
             Some("text/plain")
         );
 
-        stop_status_server(server, shutdown_tx).await;
+        stop_status_server_with_shutdown(server, shutdown_tx).await;
     }
 
     #[tokio::test]
@@ -410,6 +419,6 @@ mod tests {
         assert_eq!(request_error.status, StatusCode::NOT_FOUND);
         assert_eq!(request_error.body, r#"{"error":"missing"}"#);
 
-        stop_status_server(server, shutdown_tx).await;
+        stop_status_server_with_shutdown(server, shutdown_tx).await;
     }
 }

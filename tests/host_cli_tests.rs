@@ -80,6 +80,24 @@ fn assert_failure_contains(output: &Output, expected: &str, context: &str) {
     );
 }
 
+fn assert_stdout_contains(output: &Output, expected: &str, context: &str) {
+    assert_success(output, context);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(expected),
+        "{context} stdout missing expected text `{expected}`\nstdout:\n{stdout}"
+    );
+}
+
+fn assert_stderr_contains(output: &Output, expected: &str, context: &str) {
+    assert_success(output, context);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(expected),
+        "{context} stderr missing expected text `{expected}`\nstderr:\n{stderr}"
+    );
+}
+
 fn read_hosts(home: &TempDir) -> BTreeMap<String, KnownHost> {
     let path = home.path().join(".esdiag").join("hosts.yml");
     if !path.exists() {
@@ -170,6 +188,7 @@ async fn host_update_preserves_omitted_fields_and_applies_cert_overrides() {
     let create = run_esdiag_async(
         vec![
             "host".to_string(),
+            "add".to_string(),
             "prod-es".to_string(),
             "elasticsearch".to_string(),
             url.clone(),
@@ -187,6 +206,7 @@ async fn host_update_preserves_omitted_fields_and_applies_cert_overrides() {
     let update_roles = run_esdiag_async(
         vec![
             "host".to_string(),
+            "update".to_string(),
             "prod-es".to_string(),
             "--roles".to_string(),
             "collect,send".to_string(),
@@ -210,6 +230,7 @@ async fn host_update_preserves_omitted_fields_and_applies_cert_overrides() {
     let disable_certs = run_esdiag_async(
         vec![
             "host".to_string(),
+            "update".to_string(),
             "prod-es".to_string(),
             "--accept-invalid-certs".to_string(),
             "false".to_string(),
@@ -232,6 +253,7 @@ async fn host_update_preserves_omitted_fields_and_applies_cert_overrides() {
     let enable_certs = run_esdiag_async(
         vec![
             "host".to_string(),
+            "update".to_string(),
             "prod-es".to_string(),
             "--accept-invalid-certs".to_string(),
             "true".to_string(),
@@ -263,6 +285,7 @@ async fn host_update_applies_cert_overrides_for_noauth_hosts() {
     let create = run_esdiag_async(
         vec![
             "host".to_string(),
+            "add".to_string(),
             "plain-es".to_string(),
             "elasticsearch".to_string(),
             url,
@@ -278,6 +301,7 @@ async fn host_update_applies_cert_overrides_for_noauth_hosts() {
     let disable_certs = run_esdiag_async(
         vec![
             "host".to_string(),
+            "update".to_string(),
             "plain-es".to_string(),
             "--accept-invalid-certs".to_string(),
             "false".to_string(),
@@ -300,6 +324,7 @@ async fn host_update_applies_cert_overrides_for_noauth_hosts() {
     let enable_certs = run_esdiag_async(
         vec![
             "host".to_string(),
+            "update".to_string(),
             "plain-es".to_string(),
             "--accept-invalid-certs".to_string(),
             "true".to_string(),
@@ -360,6 +385,7 @@ async fn host_update_supports_secret_rotation_and_rejects_persisted_apikey_overr
     let create = run_esdiag_async(
         vec![
             "host".to_string(),
+            "add".to_string(),
             "prod-es".to_string(),
             "elasticsearch".to_string(),
             url.clone(),
@@ -375,6 +401,7 @@ async fn host_update_supports_secret_rotation_and_rejects_persisted_apikey_overr
     let rotate_secret = run_esdiag_async(
         vec![
             "host".to_string(),
+            "update".to_string(),
             "prod-es".to_string(),
             "--secret".to_string(),
             "new-secret".to_string(),
@@ -396,6 +423,7 @@ async fn host_update_supports_secret_rotation_and_rejects_persisted_apikey_overr
     let override_apikey = run_esdiag_async(
         vec![
             "host".to_string(),
+            "update".to_string(),
             "prod-es".to_string(),
             "--apikey".to_string(),
             "override-key".to_string(),
@@ -419,7 +447,7 @@ async fn host_update_supports_secret_rotation_and_rejects_persisted_apikey_overr
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn host_delete_removes_saved_host_and_updates_settings() {
+async fn host_remove_deletes_saved_host_and_updates_settings() {
     let (url, shutdown_tx) = start_mock_elasticsearch().await;
     let home = setup_home();
     let home_path = home.path().to_path_buf();
@@ -427,6 +455,7 @@ async fn host_delete_removes_saved_host_and_updates_settings() {
     let create_prod = run_esdiag_async(
         vec![
             "host".to_string(),
+            "add".to_string(),
             "prod-es".to_string(),
             "elasticsearch".to_string(),
             url.clone(),
@@ -440,6 +469,7 @@ async fn host_delete_removes_saved_host_and_updates_settings() {
     let create_other = run_esdiag_async(
         vec![
             "host".to_string(),
+            "add".to_string(),
             "other-es".to_string(),
             "elasticsearch".to_string(),
             url,
@@ -461,8 +491,8 @@ async fn host_delete_removes_saved_host_and_updates_settings() {
     let delete = run_esdiag_async(
         vec![
             "host".to_string(),
+            "remove".to_string(),
             "prod-es".to_string(),
-            "--delete".to_string(),
         ],
         home_path,
         vec![],
@@ -481,24 +511,32 @@ async fn host_delete_removes_saved_host_and_updates_settings() {
 }
 
 #[test]
-fn host_delete_conflicts_and_missing_host_updates_fail() {
+fn host_add_guardrails_and_missing_host_updates_fail() {
     let home = setup_home();
 
-    let delete_conflict = run_esdiag(
-        &["host", "prod-es", "--delete", "--secret", "rotated"],
+    let incomplete_add = run_esdiag(
+        &["host", "add", "prod-es", "--secret", "rotated"],
         &home,
         &[],
     );
-    assert_failure_contains(&delete_conflict, "--delete", "delete conflict");
+    assert_failure_contains(
+        &incomplete_add,
+        "required arguments were not provided",
+        "incomplete add",
+    );
 
-    let missing_update = run_esdiag(&["host", "missing-es", "--secret", "rotated"], &home, &[]);
+    let missing_update = run_esdiag(
+        &["host", "update", "missing-es", "--secret", "rotated"],
+        &home,
+        &[],
+    );
     assert_failure_contains(
         &missing_update,
-        "Host missing-es not found",
+        "Host 'missing-es' not found",
         "missing host update",
     );
 
-    let missing_delete = run_esdiag(&["host", "missing-es", "--delete"], &home, &[]);
+    let missing_delete = run_esdiag(&["host", "remove", "missing-es"], &home, &[]);
     assert_failure_contains(
         &missing_delete,
         "Host 'missing-es' not found",
@@ -515,6 +553,7 @@ async fn host_update_rejects_partial_basic_auth_without_secret() {
     let create = run_esdiag_async(
         vec![
             "host".to_string(),
+            "add".to_string(),
             "plain-es".to_string(),
             "elasticsearch".to_string(),
             url,
@@ -528,6 +567,7 @@ async fn host_update_rejects_partial_basic_auth_without_secret() {
     let update = run_esdiag_async(
         vec![
             "host".to_string(),
+            "update".to_string(),
             "plain-es".to_string(),
             "--user".to_string(),
             "elastic".to_string(),
@@ -578,6 +618,7 @@ async fn host_update_rejects_partial_basic_auth_for_existing_basic_host() {
     let update = run_esdiag_async(
         vec![
             "host".to_string(),
+            "update".to_string(),
             "basic-es".to_string(),
             "--user".to_string(),
             "new-user".to_string(),
@@ -605,7 +646,7 @@ async fn host_update_rejects_partial_basic_auth_for_existing_basic_host() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn host_delete_succeeds_even_if_settings_cleanup_fails() {
+async fn host_remove_succeeds_even_if_settings_cleanup_fails() {
     let (url, shutdown_tx) = start_mock_elasticsearch().await;
     let home = setup_home();
     let home_path = home.path().to_path_buf();
@@ -613,6 +654,7 @@ async fn host_delete_succeeds_even_if_settings_cleanup_fails() {
     let create = run_esdiag_async(
         vec![
             "host".to_string(),
+            "add".to_string(),
             "prod-es".to_string(),
             "elasticsearch".to_string(),
             url,
@@ -639,8 +681,8 @@ async fn host_delete_succeeds_even_if_settings_cleanup_fails() {
     let delete = run_esdiag_async(
         vec![
             "host".to_string(),
+            "remove".to_string(),
             "prod-es".to_string(),
-            "--delete".to_string(),
         ],
         home_path,
         vec![],
@@ -655,6 +697,254 @@ async fn host_delete_succeeds_even_if_settings_cleanup_fails() {
 
     let hosts = read_hosts(&home);
     assert!(!hosts.contains_key("prod-es"));
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_add_rejects_duplicate_names() {
+    let (url, shutdown_tx) = start_mock_elasticsearch().await;
+    let home = setup_home();
+    let home_path = home.path().to_path_buf();
+
+    let create = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "add".to_string(),
+            "prod-es".to_string(),
+            "elasticsearch".to_string(),
+            url.clone(),
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_success(&create, "initial add");
+
+    let duplicate = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "add".to_string(),
+            "prod-es".to_string(),
+            "elasticsearch".to_string(),
+            url,
+        ],
+        home_path,
+        vec![],
+    )
+    .await;
+    assert_failure_contains(&duplicate, "already exists", "duplicate add");
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_list_prints_empty_state_and_saved_rows() {
+    let (url, shutdown_tx) = start_mock_elasticsearch().await;
+    let home = setup_home();
+    let home_path = home.path().to_path_buf();
+
+    let empty_list = run_esdiag(&["host", "list"], &home, &[]);
+    assert_stdout_contains(&empty_list, "No saved hosts", "empty host list");
+    let empty_stderr = String::from_utf8_lossy(&empty_list.stderr);
+    assert!(
+        !empty_stderr.contains("host list complete"),
+        "host list should not emit completion summary:\n{empty_stderr}"
+    );
+
+    let create = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "add".to_string(),
+            "prod-es".to_string(),
+            "elasticsearch".to_string(),
+            url,
+        ],
+        home_path,
+        vec![],
+    )
+    .await;
+    assert_success(&create, "add host for list");
+
+    let populated_list = run_esdiag(&["host", "list"], &home, &[]);
+    assert_success(&populated_list, "populated host list");
+    let stdout = String::from_utf8_lossy(&populated_list.stdout);
+    let stderr = String::from_utf8_lossy(&populated_list.stderr);
+    assert!(
+        stdout.contains("name"),
+        "expected header in list output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("app"),
+        "expected header in list output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("secret"),
+        "expected header in list output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("prod-es"),
+        "expected saved host row in list output:\n{stdout}"
+    );
+    assert!(
+        !stderr.contains("host list complete"),
+        "host list should not emit completion summary:\n{stderr}"
+    );
+
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_auth_tests_saved_host_without_mutating_it() {
+    let (url, shutdown_tx) = start_mock_elasticsearch().await;
+    let home = setup_home();
+    let home_path = home.path().to_path_buf();
+
+    let create = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "add".to_string(),
+            "prod-es".to_string(),
+            "elasticsearch".to_string(),
+            url,
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_success(&create, "add host for auth");
+    let hosts_path = home.path().join(".esdiag").join("hosts.yml");
+    let before = std::fs::read_to_string(&hosts_path).expect("read hosts before auth");
+
+    let auth = run_esdiag_async(
+        vec![
+            "host".to_string(),
+            "auth".to_string(),
+            "prod-es".to_string(),
+        ],
+        home_path,
+        vec![],
+    )
+    .await;
+    assert_success(&auth, "auth host");
+    let auth_stderr = String::from_utf8_lossy(&auth.stderr);
+    assert!(
+        auth_stderr.contains("Host prod-es: 200 OK"),
+        "auth should emit a meaningful connection summary:\n{auth_stderr}"
+    );
+    assert!(
+        !auth_stderr.contains("host auth complete"),
+        "auth should not fall back to a generic completion summary:\n{auth_stderr}"
+    );
+
+    let after = std::fs::read_to_string(&hosts_path).expect("read hosts after auth");
+    assert_eq!(before, after, "auth should not mutate saved hosts");
+
+    let _ = shutdown_tx.send(());
+}
+
+#[test]
+fn host_auth_missing_host_and_legacy_syntax_fail() {
+    let home = setup_home();
+
+    let missing_auth = run_esdiag(&["host", "auth", "missing-es"], &home, &[]);
+    assert_failure_contains(
+        &missing_auth,
+        "Host 'missing-es' not found",
+        "missing auth host",
+    );
+
+    let legacy = run_esdiag(&["host", "prod-es", "--secret", "rotated"], &home, &[]);
+    assert_failure_contains(
+        &legacy,
+        "Legacy positional host syntax is no longer supported",
+        "legacy host syntax",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_subcommands_emit_meaningful_agent_summaries() {
+    let (url, shutdown_tx) = start_mock_elasticsearch().await;
+    let home = setup_home();
+    let home_path = home.path().to_path_buf();
+
+    let add = run_esdiag_async(
+        vec![
+            "--agent".to_string(),
+            "host".to_string(),
+            "add".to_string(),
+            "prod-es".to_string(),
+            "elasticsearch".to_string(),
+            url.clone(),
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_stderr_contains(&add, "Host prod-es: 200 OK", "agent host add");
+    assert_stderr_contains(&add, "Host 'prod-es' added in", "agent host add");
+    assert!(
+        !String::from_utf8_lossy(&add.stderr).contains("host add complete"),
+        "agent host add should not emit a generic completion summary:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let update = run_esdiag_async(
+        vec![
+            "--agent".to_string(),
+            "host".to_string(),
+            "update".to_string(),
+            "prod-es".to_string(),
+            "--accept-invalid-certs".to_string(),
+            "false".to_string(),
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_stderr_contains(&update, "Host prod-es: 200 OK", "agent host update");
+    assert_stderr_contains(&update, "Host 'prod-es' updated in", "agent host update");
+    assert!(
+        !String::from_utf8_lossy(&update.stderr).contains("host update complete"),
+        "agent host update should not emit a generic completion summary:\n{}",
+        String::from_utf8_lossy(&update.stderr)
+    );
+
+    let auth = run_esdiag_async(
+        vec![
+            "--agent".to_string(),
+            "host".to_string(),
+            "auth".to_string(),
+            "prod-es".to_string(),
+        ],
+        home_path.clone(),
+        vec![],
+    )
+    .await;
+    assert_stderr_contains(&auth, "Host prod-es: 200 OK", "agent host auth");
+    assert!(
+        !String::from_utf8_lossy(&auth.stderr).contains("host auth complete"),
+        "agent host auth should not emit a generic completion summary:\n{}",
+        String::from_utf8_lossy(&auth.stderr)
+    );
+
+    let remove = run_esdiag_async(
+        vec![
+            "--agent".to_string(),
+            "host".to_string(),
+            "remove".to_string(),
+            "prod-es".to_string(),
+        ],
+        home_path,
+        vec![],
+    )
+    .await;
+    assert_stderr_contains(&remove, "Host 'prod-es' removed from", "agent host remove");
+    assert!(
+        !String::from_utf8_lossy(&remove.stderr).contains("host remove complete"),
+        "agent host remove should not emit a generic completion summary:\n{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
 
     let _ = shutdown_tx.send(());
 }

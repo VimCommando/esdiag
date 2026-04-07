@@ -27,7 +27,7 @@ fn test_collect_minimal() {
     let out_dir = dir.path().to_str().unwrap();
 
     // This test expects a known host named "elasticsearch-local" to be configured in ~/.esdiag/hosts.yml
-    // You can create this with: `esdiag host elasticsearch-local http://localhost:9200`
+    // You can create this with: `esdiag host add elasticsearch-local elasticsearch http://localhost:9200`
     let status = Command::new(env!("CARGO_BIN_EXE_esdiag"))
         .args([
             "collect",
@@ -95,7 +95,7 @@ fn test_collect_light() {
     let out_dir = dir.path().to_str().unwrap();
 
     // This test expects a known host named "elasticsearch-local" to be configured in ~/.esdiag/hosts.yml
-    // You can create this with: `esdiag host elasticsearch-local http://localhost:9200`
+    // You can create this with: `esdiag host add elasticsearch-local elasticsearch http://localhost:9200`
     let status = Command::new(env!("CARGO_BIN_EXE_esdiag"))
         .args([
             "collect",
@@ -129,7 +129,7 @@ fn test_collect_support_all_endpoints() {
     let out_dir = dir.path().to_str().unwrap();
 
     // This test expects a known host named "elasticsearch-local" to be configured in ~/.esdiag/hosts.yml
-    // You can create this with: `esdiag host elasticsearch-local http://localhost:9200`
+    // You can create this with: `esdiag host add elasticsearch-local elasticsearch http://localhost:9200`
     let status = Command::new(env!("CARGO_BIN_EXE_esdiag"))
         .args([
             "collect",
@@ -454,6 +454,7 @@ fn test_collect_no_auth_with_ephemeral_container() {
     let host = run_esdiag(
         &[
             "host",
+            "add",
             host_name,
             "elasticsearch",
             &host_url,
@@ -522,6 +523,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
     let host_plain = run_esdiag(
         &[
             "host",
+            "add",
             basic_plain_name,
             "elasticsearch",
             &host_url,
@@ -557,6 +559,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
     let host_basic_keystore = run_esdiag(
         &[
             "host",
+            "add",
             "it-basic-keystore",
             "elasticsearch",
             &host_url,
@@ -581,6 +584,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
     let host_apikey_plain = run_esdiag(
         &[
             "host",
+            "add",
             apikey_plain_name,
             "elasticsearch",
             &host_url,
@@ -606,6 +610,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
     let host_apikey_keystore = run_esdiag(
         &[
             "host",
+            "add",
             "it-apikey-keystore",
             "elasticsearch",
             &host_url,
@@ -848,6 +853,7 @@ async fn test_collect_kibana_mock_workflow() {
 
     let host_args = vec![
         "host".to_string(),
+        "add".to_string(),
         "mock-kibana".to_string(),
         "kibana".to_string(),
         host_url.clone(),
@@ -980,6 +986,7 @@ fn test_collect_kibana_localhost_no_auth() {
     let host_output = run_esdiag(
         &[
             "host",
+            "add",
             "localhost-kibana",
             "kibana",
             "http://localhost:5601",

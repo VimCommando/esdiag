@@ -1221,6 +1221,7 @@ content-layout.jobs-layout {
     flex-direction: column;
     gap: var(--size-s);
     position: sticky;
+    width: 240px;
     max-height: calc(
         100svh - var(--size-header) - var(--size-footer) - var(--size-xl)
     );
@@ -1320,7 +1321,7 @@ content-layout.jobs-layout {
     }
 }
 
-.jobs-nav button {
+.jobs-nav > button {
     border: 1px solid var(--border-color-light);
     border-radius: var(--border-radius-small);
     background: var(--background-color);
@@ -1337,11 +1338,11 @@ content-layout.jobs-layout {
         color 120ms ease;
 }
 
-.jobs-nav button:hover {
+.jobs-nav > button:hover {
     background: var(--color-overlay);
 }
 
-.jobs-nav button:disabled {
+.jobs-nav > button:disabled {
     border-color: var(--border-color);
     background: var(--form-control-disabled-color);
     color: var(--text-subdued-color);

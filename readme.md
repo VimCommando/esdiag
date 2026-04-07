@@ -175,41 +175,32 @@ The `esdiag host` command allows you to configure and test authentication inform
 Alternatively you can use a `.env` file and set `ESDIAG_OUTPUT_*` values; see `example.env`.
 
 ```
-Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
+Manage saved host connections in `~/.esdiag/hosts.yml`
 
-Usage: esdiag host [OPTIONS] <NAME> [APP] [URL]
+Usage: esdiag host <COMMAND>
 
-Arguments:
-  <NAME>  A name to identify this host
-  [APP]   Application of this host (elasticsearch, kibana, logstash, etc.)
-  [URL]   A host URL to connect to
-
-Options:
-      --accept-invalid-certs <ACCEPT_INVALID_CERTS>  Accept invalid certificates
-      --delete                                     Delete the saved host configuration
-  -a, --apikey <APIKEY>                            ApiKey, passed as http header
-  -u, --user <USERNAME>                            Username for authentication (alias: --username)
-  -p, --password <PASSWORD>                        Password for authentication
-      --secret <SECRET>                            Secret identifier in the encrypted keystore
-      --roles <ROLES>                              Comma-separated host roles (collect,send,view)
-  -n, --nosave                                     Don't save the host configuration on successful connection
-  -h, --help                                       Print help
+Commands:
+  add <NAME> <APP> <URL>   Add a saved host
+  update <NAME>            Update an existing saved host
+  remove <NAME>            Remove an existing saved host
+  list                     List all saved hosts
+  auth <NAME>              Test authentication for a saved host
 ```
 
 Examples:
 
 ```sh
 # Host backed by a keystore secret reference
-esdiag host prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
+esdiag host add prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
 
 # Host with explicit roles for workflow filtering
-esdiag host prod-es elasticsearch http://localhost:9200 --roles collect,send
+esdiag host add prod-es elasticsearch http://localhost:9200 --roles collect,send
 
 # Update only the saved certificate setting in place
-esdiag host prod-es --accept-invalid-certs false
+esdiag host update prod-es --accept-invalid-certs false
 
 # Delete a saved host
-esdiag host prod-es --delete
+esdiag host remove prod-es
 ```
 
 #### Keystore
