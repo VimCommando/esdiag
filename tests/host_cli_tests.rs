@@ -1,5 +1,5 @@
 use axum::{Json, Router, routing::get};
-use esdiag::data::{HostRole, KnownHost, Product, Settings};
+use esdiag::data::{HostRole, KnownHost, Settings};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -598,21 +598,20 @@ async fn host_update_rejects_partial_basic_auth_for_existing_basic_host() {
     let (url, shutdown_tx) = start_mock_elasticsearch().await;
     let home = setup_home();
     let home_path = home.path().to_path_buf();
-    let mut hosts = BTreeMap::new();
-    hosts.insert(
-        "basic-es".to_string(),
-        KnownHost::new_legacy_basic(
-            Product::Elasticsearch,
-            url::Url::parse(&url).expect("url"),
-            vec![HostRole::Collect],
-            None,
-            false,
-            None,
-            Some(("elastic".to_string(), "old-pass".to_string())),
-        ),
-    );
     let hosts_path = home.path().join(".esdiag").join("hosts.yml");
-    let content = serde_yaml::to_string(&hosts).expect("serialize hosts");
+    let content = format!(
+        concat!(
+            "basic-es:\n",
+            "  auth: Basic\n",
+            "  app: Elasticsearch\n",
+            "  username: elastic\n",
+            "  password: old-pass\n",
+            "  roles:\n",
+            "    - collect\n",
+            "  url: {url}\n",
+        ),
+        url = url
+    );
     std::fs::write(&hosts_path, content).expect("write hosts");
 
     let update = run_esdiag_async(

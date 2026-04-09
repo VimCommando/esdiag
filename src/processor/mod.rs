@@ -372,7 +372,8 @@ impl Processor<Processing> {
 }
 
 fn append_kibana_space(kibana_url: String) -> String {
-    match crate::env::get_string("ESDIAG_KIBANA_SPACE").ok() {
+    let kibana_url = kibana_url.trim_end_matches('/').to_string();
+    match crate::env::get_kibana_space() {
         Some(space) => format!("{kibana_url}/s/{space}"),
         None => kibana_url,
     }
@@ -569,7 +570,7 @@ pub fn new_job_id() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_kibana_link, kibana_base_url_from_env};
+    use super::{append_kibana_space, build_kibana_link, kibana_base_url_from_env};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn env_lock() -> &'static std::sync::Mutex<()> {
@@ -612,6 +613,41 @@ mod tests {
 
         unsafe {
             std::env::remove_var("ESDIAG_KIBANA_URL");
+            std::env::remove_var("ESDIAG_KIBANA_SPACE");
+        }
+    }
+
+    #[test]
+    fn kibana_base_url_from_env_defaults_to_esdiag_space() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
+            std::env::remove_var("ESDIAG_KIBANA_SPACE");
+        }
+
+        assert_eq!(
+            kibana_base_url_from_env().as_deref(),
+            Some("https://env-kb.example:5601/s/esdiag")
+        );
+
+        unsafe {
+            std::env::remove_var("ESDIAG_KIBANA_URL");
+        }
+    }
+
+    #[test]
+    fn append_kibana_space_skips_suffix_when_space_is_explicitly_empty() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_KIBANA_SPACE", "");
+        }
+
+        assert_eq!(
+            append_kibana_space("https://kb.example:5601/".to_string()),
+            "https://kb.example:5601"
+        );
+
+        unsafe {
             std::env::remove_var("ESDIAG_KIBANA_SPACE");
         }
     }

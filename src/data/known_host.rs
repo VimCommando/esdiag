@@ -7,15 +7,19 @@ use crate::data::{
     Auth, Product, SecretAuth, get_keystore_password, resolve_secret_auth as resolve_secret_by_id,
 };
 use eyre::{Result, eyre};
+#[cfg(test)]
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_yaml;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     collections::BTreeMap,
     env,
     fmt::{Display, Formatter},
-    fs::File,
-    io::{BufReader, BufWriter},
-    path::PathBuf,
+    fs::{self, File, OpenOptions},
+    io::{BufReader, BufWriter, Write},
+    path::{Path, PathBuf},
     str::FromStr,
 };
 use url::Url;
@@ -236,7 +240,6 @@ impl KnownHostBuilder {
             legacy_apikey: self.apikey,
             legacy_username: self.username,
             legacy_password: self.password,
-            preserve_legacy_serialization: false,
         })
     }
 
@@ -265,7 +268,6 @@ impl KnownHostBuilder {
             legacy_apikey: None,
             legacy_username: None,
             legacy_password: None,
-            preserve_legacy_serialization: false,
         })
     }
 }
@@ -310,7 +312,6 @@ pub struct KnownHost {
     pub legacy_apikey: Option<String>,
     pub legacy_username: Option<String>,
     pub legacy_password: Option<String>,
-    preserve_legacy_serialization: bool,
 }
 
 #[derive(Serialize)]
@@ -332,6 +333,7 @@ struct FlatKnownHostRef<'a> {
     url: &'a Url,
 }
 
+#[cfg(test)]
 #[derive(Serialize)]
 #[serde(tag = "auth")]
 enum LegacyKnownHostRef<'a> {
@@ -464,7 +466,6 @@ struct KnownHostParts {
     legacy_apikey: Option<String>,
     legacy_username: Option<String>,
     legacy_password: Option<String>,
-    preserve_legacy_serialization: bool,
 }
 
 impl Serialize for KnownHost {
@@ -472,33 +473,6 @@ impl Serialize for KnownHost {
     where
         S: Serializer,
     {
-        if self.should_serialize_as_legacy() {
-            if self.legacy_apikey.is_some() {
-                return LegacyKnownHostRef::ApiKey {
-                    accept_invalid_certs: self.accept_invalid_certs,
-                    apikey: &self.legacy_apikey,
-                    app: &self.app,
-                    cloud_id: &self.cloud_id,
-                    roles: &self.roles,
-                    secret: &self.secret,
-                    viewer: &self.viewer,
-                    url: &self.url,
-                }
-                .serialize(serializer);
-            }
-            return LegacyKnownHostRef::Basic {
-                accept_invalid_certs: self.accept_invalid_certs,
-                app: &self.app,
-                password: &self.legacy_password,
-                roles: &self.roles,
-                secret: &self.secret,
-                viewer: &self.viewer,
-                url: &self.url,
-                username: &self.legacy_username,
-            }
-            .serialize(serializer);
-        }
-
         FlatKnownHostRef {
             accept_invalid_certs: self.accept_invalid_certs,
             app: &self.app,
@@ -539,7 +513,6 @@ impl KnownHost {
             legacy_apikey,
             legacy_username,
             legacy_password,
-            preserve_legacy_serialization,
         } = parts;
         match (&legacy_apikey, &legacy_username, &legacy_password) {
             (Some(_), None, None) => {}
@@ -567,7 +540,6 @@ impl KnownHost {
             legacy_apikey,
             legacy_username,
             legacy_password,
-            preserve_legacy_serialization,
         })
     }
 
@@ -583,7 +555,6 @@ impl KnownHost {
             legacy_apikey: wire.apikey,
             legacy_username: wire.username,
             legacy_password: wire.password,
-            preserve_legacy_serialization: wire.secret.is_none(),
         })
     }
 
@@ -609,7 +580,6 @@ impl KnownHost {
                 legacy_apikey: apikey,
                 legacy_username: None,
                 legacy_password: None,
-                preserve_legacy_serialization: secret.is_none(),
             }),
             LegacyKnownHostWire::Basic {
                 accept_invalid_certs,
@@ -631,7 +601,6 @@ impl KnownHost {
                 legacy_apikey: None,
                 legacy_username: username,
                 legacy_password: password,
-                preserve_legacy_serialization: secret.is_none(),
             }),
             LegacyKnownHostWire::NoAuth {
                 accept_invalid_certs,
@@ -650,15 +619,8 @@ impl KnownHost {
                 legacy_apikey: None,
                 legacy_username: None,
                 legacy_password: None,
-                preserve_legacy_serialization: false,
             }),
         }
-    }
-
-    fn should_serialize_as_legacy(&self) -> bool {
-        self.preserve_legacy_serialization
-            && self.secret.is_none()
-            && self.has_legacy_plaintext_auth()
     }
 
     fn has_legacy_plaintext_auth(&self) -> bool {
@@ -703,7 +665,6 @@ impl KnownHost {
             legacy_apikey: None,
             legacy_username: None,
             legacy_password: None,
-            preserve_legacy_serialization: false,
         })
         .expect("valid no-auth host")
     }
@@ -728,7 +689,6 @@ impl KnownHost {
             legacy_apikey: apikey,
             legacy_username: None,
             legacy_password: None,
-            preserve_legacy_serialization: secret.is_none(),
         })
         .expect("valid legacy api key host")
     }
@@ -756,7 +716,6 @@ impl KnownHost {
             legacy_apikey: None,
             legacy_username,
             legacy_password,
-            preserve_legacy_serialization: secret.is_none(),
         })
         .expect("valid legacy basic host")
     }
@@ -824,7 +783,6 @@ impl KnownHost {
                 "Host '{name}' requires a secret reference before it can be saved. Use `--secret <id>` to persist auth, or `--nosave` for transient validation."
             ));
         }
-        self.preserve_legacy_serialization = false;
         hosts.insert(name.to_owned(), self);
         KnownHost::write_hosts_yml(&hosts)
     }
@@ -860,7 +818,6 @@ impl KnownHost {
                 legacy_apikey: None,
                 legacy_username: None,
                 legacy_password: None,
-                preserve_legacy_serialization: false,
             });
         }
 
@@ -876,7 +833,6 @@ impl KnownHost {
                 legacy_apikey: Some(apikey.clone()),
                 legacy_username: None,
                 legacy_password: None,
-                preserve_legacy_serialization: false,
             });
         }
 
@@ -899,7 +855,6 @@ impl KnownHost {
                 legacy_apikey: None,
                 legacy_username: username,
                 legacy_password: password,
-                preserve_legacy_serialization: false,
             });
         }
 
@@ -944,7 +899,6 @@ impl KnownHost {
     pub fn set_secret_reference(&mut self, secret_id: String) {
         self.secret = Some(secret_id);
         self.clear_legacy_plaintext_auth();
-        self.preserve_legacy_serialization = false;
     }
 
     pub fn migrate_hosts_to_keystore(keystore_password: &str) -> Result<(usize, usize)> {
@@ -982,6 +936,9 @@ impl KnownHost {
         }
 
         if !pending.is_empty() {
+            if let Some(backup_path) = Self::backup_hosts_yml()? {
+                tracing::info!("Backed up hosts.yml to '{}'.", backup_path.display());
+            }
             tracing::info!(
                 "Writing {} migrated secret(s) to keystore in a single batch.",
                 pending.len()
@@ -1049,7 +1006,6 @@ impl KnownHost {
             legacy_apikey: None,
             legacy_username: None,
             legacy_password: None,
-            preserve_legacy_serialization: false,
         }
     }
 
@@ -1072,6 +1028,34 @@ impl KnownHost {
                 home_dir.join(".esdiag").join("hosts.yml")
             }
         }
+    }
+
+    fn backup_path(path: &Path) -> Result<PathBuf> {
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| eyre!("Path '{}' has no file name", path.display()))?
+            .to_string_lossy();
+        Ok(path.with_file_name(format!("{file_name}.bak")))
+    }
+
+    fn backup_hosts_yml() -> Result<Option<PathBuf>> {
+        let path = Self::get_hosts_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+
+        let backup_path = Self::backup_path(&path)?;
+        let mut source = File::open(&path)?;
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut backup = options.open(&backup_path)?;
+        std::io::copy(&mut source, &mut backup)?;
+        backup.flush()?;
+        #[cfg(unix)]
+        fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600))?;
+        Ok(Some(backup_path))
     }
 
     /// Loads hosts from the ~/.esdiag/hosts.yml (defalt) file
@@ -1102,6 +1086,13 @@ impl KnownHost {
         let mut hosts = hosts.clone();
         for (name, host) in hosts.iter_mut() {
             host.normalize_and_validate_roles(name)?;
+            if host.secret.is_some() {
+                host.clear_legacy_plaintext_auth();
+            } else if host.has_legacy_plaintext_auth() {
+                return Err(eyre!(
+                    "Host '{name}' still contains plaintext credentials. Run `esdiag keystore migrate` first."
+                ));
+            }
         }
         validate_viewer_links(&hosts)?;
         tracing::debug!(
@@ -1184,6 +1175,73 @@ impl Display for KnownHost {
             _ => write!(fmt, "KnownHost NoAuth: {} {}", self.app, self.url),
         }
     }
+}
+
+#[cfg(test)]
+struct TestKnownHostRef<'a>(&'a KnownHost);
+
+#[cfg(test)]
+impl Serialize for TestKnownHostRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let host = self.0;
+        if host.secret.is_none() && host.has_legacy_plaintext_auth() {
+            if host.legacy_apikey.is_some() {
+                return LegacyKnownHostRef::ApiKey {
+                    accept_invalid_certs: host.accept_invalid_certs,
+                    apikey: &host.legacy_apikey,
+                    app: &host.app,
+                    cloud_id: &host.cloud_id,
+                    roles: &host.roles,
+                    secret: &host.secret,
+                    viewer: &host.viewer,
+                    url: &host.url,
+                }
+                .serialize(serializer);
+            }
+            return LegacyKnownHostRef::Basic {
+                accept_invalid_certs: host.accept_invalid_certs,
+                app: &host.app,
+                password: &host.legacy_password,
+                roles: &host.roles,
+                secret: &host.secret,
+                viewer: &host.viewer,
+                url: &host.url,
+                username: &host.legacy_username,
+            }
+            .serialize(serializer);
+        }
+
+        host.serialize(serializer)
+    }
+}
+
+#[cfg(test)]
+struct TestKnownHostsRef<'a>(&'a BTreeMap<String, KnownHost>);
+
+#[cfg(test)]
+impl Serialize for TestKnownHostsRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (name, host) in self.0 {
+            map.serialize_entry(name, &TestKnownHostRef(host))?;
+        }
+        map.end()
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn write_hosts_yml_for_tests(hosts: &BTreeMap<String, KnownHost>) -> Result<String> {
+    let path = KnownHost::get_hosts_path();
+    let file = File::create(&path)?;
+    let writer = BufWriter::new(file);
+    serde_yaml::to_writer(writer, &TestKnownHostsRef(hosts))?;
+    Ok(format!("{}", path.display()))
 }
 
 fn validate_viewer_links(hosts: &BTreeMap<String, KnownHost>) -> Result<()> {
@@ -1287,7 +1345,7 @@ mod tests {
     }
 
     fn write_hosts(hosts: BTreeMap<String, KnownHost>) {
-        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
+        write_hosts_yml_for_tests(&hosts).expect("write hosts");
     }
 
     #[test]
@@ -1703,6 +1761,8 @@ mod tests {
 
         let migrated_hosts = KnownHost::parse_hosts_yml().expect("re-read migrated hosts");
         let raw_hosts = std::fs::read_to_string(&hosts_path).expect("read hosts file");
+        let backup_path = hosts_path.with_file_name("hosts.yml.bak");
+        let raw_backup_hosts = std::fs::read_to_string(&backup_path).expect("read hosts backup");
 
         let migrated_es = migrated_hosts.get("es-prod").expect("migrated es host");
         assert!(
@@ -1723,6 +1783,19 @@ mod tests {
         assert!(!raw_hosts.contains("apikey: apikey-1"));
         assert!(!raw_hosts.contains("username: elastic"));
         assert!(!raw_hosts.contains("password: pass-1"));
+        assert!(raw_backup_hosts.contains("apikey: apikey-1"));
+        assert!(raw_backup_hosts.contains("username: elastic"));
+        assert!(raw_backup_hosts.contains("password: pass-1"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&backup_path)
+                .expect("backup metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "backup file should be owner-readable only");
+        }
 
         let es_secret = get_secret("es-prod", "pw")
             .expect("get secret")
@@ -1886,6 +1959,28 @@ mod tests {
             raw_hosts.contains("accept_invalid_certs: true"),
             "true accept_invalid_certs should remain in hosts.yml"
         );
+    }
+
+    #[test]
+    fn write_hosts_yml_rejects_plaintext_legacy_hosts() {
+        let _guard = env_lock().lock().expect("env lock");
+        let (_tmp, _hosts_path, _keystore) = setup_env();
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "legacy-es".to_string(),
+            KnownHost::new_legacy_apikey(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Collect],
+                None,
+                false,
+                None,
+                Some("legacy-key".to_string()),
+            ),
+        );
+
+        let err = KnownHost::write_hosts_yml(&hosts).expect_err("legacy plaintext should be rejected");
+        assert!(err.to_string().contains("Run `esdiag keystore migrate` first."));
     }
 
     #[test]

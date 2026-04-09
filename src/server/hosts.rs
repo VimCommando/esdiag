@@ -32,9 +32,6 @@ pub struct HostUpsertForm {
     pub roles: String,
     pub viewer: Option<String>,
     pub secret: Option<String>,
-    pub apikey: Option<String>,
-    pub username: Option<String>,
-    pub password: Option<String>,
     pub accept_invalid_certs: Option<String>,
 }
 
@@ -56,12 +53,6 @@ pub struct HostRecordPayload {
     pub viewer: Option<String>,
     #[serde(default)]
     pub secret: Option<String>,
-    #[serde(default)]
-    pub apikey: Option<String>,
-    #[serde(default)]
-    pub username: Option<String>,
-    #[serde(default)]
-    pub password: Option<String>,
     #[serde(default)]
     pub accept_invalid_certs: bool,
 }
@@ -135,12 +126,6 @@ struct HostDraftSignal {
     viewer: Option<String>,
     #[serde(default)]
     secret: Option<String>,
-    #[serde(default)]
-    apikey: Option<String>,
-    #[serde(default)]
-    username: Option<String>,
-    #[serde(default)]
-    password: Option<String>,
     #[serde(default)]
     accept_invalid_certs: bool,
 }
@@ -697,9 +682,6 @@ pub async fn create_host(
         roles: payload.roles,
         viewer: payload.viewer,
         secret: payload.secret,
-        apikey: payload.apikey,
-        username: payload.username,
-        password: payload.password,
         accept_invalid_certs: payload.accept_invalid_certs.then_some("true".to_string()),
     };
     match apply_upsert_host(&state, form, "Anonymous").await {
@@ -721,9 +703,6 @@ pub async fn update_host(
         roles: payload.roles,
         viewer: payload.viewer,
         secret: payload.secret,
-        apikey: payload.apikey,
-        username: payload.username,
-        password: payload.password,
         accept_invalid_certs: payload.accept_invalid_certs.then_some("true".to_string()),
     };
     match apply_upsert_host(&state, form, "Anonymous").await {
@@ -835,9 +814,6 @@ fn host_row_from_known_host(name: String, host: KnownHost) -> template::HostsTab
         accept_invalid_certs: host.accept_invalid_certs(),
         cloud_id: String::new(),
         secret: String::new(),
-        apikey: String::new(),
-        username: String::new(),
-        password: String::new(),
     };
     row.auth = host_auth_value(&host).to_string();
     row.cloud_id = host
@@ -846,9 +822,6 @@ fn host_row_from_known_host(name: String, host: KnownHost) -> template::HostsTab
         .map(std::string::ToString::to_string)
         .unwrap_or_default();
     row.secret = host.secret.clone().unwrap_or_default();
-    row.apikey = host.legacy_apikey.clone().unwrap_or_default();
-    row.username = host.legacy_username.clone().unwrap_or_default();
-    row.password = host.legacy_password.clone().unwrap_or_default();
     row
 }
 
@@ -906,9 +879,7 @@ fn host_secret_value(host: &KnownHost) -> String {
 }
 
 fn host_has_plaintext_auth(host: &KnownHost) -> bool {
-    host.legacy_apikey.is_some()
-        || host.legacy_username.is_some()
-        || host.legacy_password.is_some()
+    host.legacy_apikey.is_some() || host.legacy_username.is_some() || host.legacy_password.is_some()
 }
 
 fn read_secret_rows(
@@ -1474,9 +1445,6 @@ fn blank_host_row() -> template::HostsTableRow {
         accept_invalid_certs: false,
         cloud_id: String::new(),
         secret: String::new(),
-        apikey: String::new(),
-        username: String::new(),
-        password: String::new(),
     }
 }
 
@@ -1537,9 +1505,6 @@ fn host_draft(host: &template::HostsTableRow, original_name: Option<&str>) -> Ho
         roles: host.roles.clone(),
         viewer: Some(host.viewer.clone()),
         secret: Some(host.secret.clone()),
-        apikey: None,
-        username: None,
-        password: None,
         accept_invalid_certs: host.accept_invalid_certs,
     }
 }
@@ -1587,9 +1552,6 @@ fn host_draft_from_signals(
         roles: draft.roles,
         viewer: draft.viewer,
         secret: draft.secret,
-        apikey: draft.apikey,
-        username: draft.username,
-        password: draft.password,
         accept_invalid_certs: draft.accept_invalid_certs.then_some("true".to_string()),
     })
 }
@@ -1915,7 +1877,10 @@ fn resolve_request_user(state: &Arc<ServerState>, headers: &HeaderMap) -> String
         .unwrap_or_else(|_| "Anonymous".to_string())
 }
 
-async fn current_keystore_password(state: &Arc<ServerState>, _user: &str) -> Result<String, String> {
+async fn current_keystore_password(
+    state: &Arc<ServerState>,
+    _user: &str,
+) -> Result<String, String> {
     state
         .keystore_password()
         .await
@@ -1927,14 +1892,14 @@ async fn current_keystore_password(state: &Arc<ServerState>, _user: &str) -> Res
 mod tests {
     use super::{
         ClusterUpsertForm, HostUpsertForm, SecretsUiSignals, TableRowSignals, TableUiSignals,
-        apply_upsert_cluster, apply_upsert_host, host_draft, read_host_and_cluster_rows,
-        read_secret_rows, render_secret_row, secret_action,
+        apply_upsert_cluster, apply_upsert_host, read_host_and_cluster_rows, read_secret_rows,
+        render_secret_row, secret_action,
     };
     use crate::{
         data::{
             HostRole, KnownHost, Product, SecretAuth, Settings, authenticate, upsert_secret_auth,
         },
-        server::{template, test_server_state},
+        server::test_server_state,
     };
     use axum::{
         body::to_bytes,
@@ -2002,9 +1967,6 @@ mod tests {
                 roles: "send".to_string(),
                 viewer: None,
                 secret: None,
-                apikey: None,
-                username: None,
-                password: None,
                 accept_invalid_certs: None,
             },
             "Anonymous",
@@ -2014,31 +1976,6 @@ mod tests {
 
         let saved = Settings::load().expect("reload settings");
         assert_eq!(saved.active_target.as_deref(), Some("new-host"));
-    }
-
-    #[test]
-    fn host_draft_omits_persisted_plaintext_credentials() {
-        let draft = host_draft(
-            &template::HostsTableRow {
-                name: "legacy-host".to_string(),
-                auth: "basic".to_string(),
-                app: "Elasticsearch".to_string(),
-                url: "https://legacy.example:9200/".to_string(),
-                roles: "collect".to_string(),
-                viewer: String::new(),
-                accept_invalid_certs: false,
-                cloud_id: String::new(),
-                secret: String::new(),
-                apikey: "legacy-api-key".to_string(),
-                username: "legacy-user".to_string(),
-                password: "legacy-password".to_string(),
-            },
-            Some("legacy-host"),
-        );
-
-        assert_eq!(draft.apikey, None);
-        assert_eq!(draft.username, None);
-        assert_eq!(draft.password, None);
     }
 
     #[tokio::test]
@@ -2071,9 +2008,6 @@ mod tests {
                 roles: "collect".to_string(),
                 viewer: None,
                 secret: Some("api-secret".to_string()),
-                apikey: None,
-                username: None,
-                password: None,
                 accept_invalid_certs: None,
             },
             "Anonymous",

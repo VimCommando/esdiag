@@ -566,7 +566,8 @@ fn emit_completion_summary(summary: &str) -> Result<()> {
 }
 
 fn append_kibana_space(kibana_url: String) -> String {
-    match esdiag::env::get_string("ESDIAG_KIBANA_SPACE").ok() {
+    let kibana_url = kibana_url.trim_end_matches('/').to_string();
+    match esdiag::env::get_kibana_space() {
         Some(space) => format!("{kibana_url}/s/{space}"),
         None => kibana_url,
     }
@@ -1092,7 +1093,7 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         let kibana_url = settings.kibana_url.unwrap_or_else(|| {
                             let url = esdiag::env::get_string("ESDIAG_KIBANA_URL")
                                 .unwrap_or_else(|_| "http://localhost:5601".to_string());
-                            match esdiag::env::get_string("ESDIAG_KIBANA_SPACE").ok() {
+                            match esdiag::env::get_kibana_space() {
                                 Some(space) => format!("{url}/s/{space}"),
                                 None => url,
                             }
@@ -2182,7 +2183,7 @@ mod tests {
         let output_uri = Uri::try_from("send-host").expect("known host uri");
         let resolved = resolve_process_kibana_base_url(true, &output_uri);
 
-        assert_eq!(resolved.as_deref(), Some("https://kb.example:5601/"));
+        assert_eq!(resolved.as_deref(), Some("https://kb.example:5601/s/esdiag"));
 
         unsafe {
             std::env::remove_var("ESDIAG_KIBANA_URL");
@@ -2232,6 +2233,36 @@ mod tests {
         assert_eq!(
             append_kibana_space("https://kb.example:5601".to_string()),
             "https://kb.example:5601/s/ops"
+        );
+
+        unsafe {
+            std::env::remove_var("ESDIAG_KIBANA_SPACE");
+        }
+    }
+
+    #[test]
+    fn append_kibana_space_defaults_to_esdiag_space() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::remove_var("ESDIAG_KIBANA_SPACE");
+        }
+
+        assert_eq!(
+            append_kibana_space("https://kb.example:5601".to_string()),
+            "https://kb.example:5601/s/esdiag"
+        );
+    }
+
+    #[test]
+    fn append_kibana_space_skips_suffix_when_space_is_explicitly_empty() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_KIBANA_SPACE", "");
+        }
+
+        assert_eq!(
+            append_kibana_space("https://kb.example:5601".to_string()),
+            "https://kb.example:5601"
         );
 
         unsafe {

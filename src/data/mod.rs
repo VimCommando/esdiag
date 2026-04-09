@@ -30,6 +30,8 @@ pub use keystore::{
     write_unlock_lease,
 };
 pub use known_host::{ElasticCloud, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate};
+#[cfg(test)]
+pub(crate) use known_host::write_hosts_yml_for_tests;
 pub use product::Product;
 pub use saved_jobs::{
     SavedJob, SavedJobs, load_saved_jobs, load_saved_jobs_async, save_saved_jobs,

@@ -538,7 +538,7 @@ mod tests {
     }
 
     fn write_hosts(hosts: BTreeMap<String, KnownHost>) {
-        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
+        crate::data::write_hosts_yml_for_tests(&hosts).expect("write hosts");
     }
 
     fn test_service_state() -> Arc<ServerState> {

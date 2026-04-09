@@ -7,6 +7,7 @@ pub const ESDIAG_ES_WORKERS: usize = 4;
 pub static ESDIAG_HOME: &str = ".esdiag";
 pub static LOG_LEVEL: &str = "info";
 pub static ESDIAG_KIBANA_URL: &str = "http://localhost:5601";
+pub static ESDIAG_KIBANA_DEFAULT_SPACE: &str = "esdiag";
 pub static ESDIAG_KEYSTORE_PASSWORD: &str = "ESDIAG_KEYSTORE_PASSWORD";
 
 fn default_int(name: &str) -> Option<usize> {
@@ -44,4 +45,18 @@ pub fn get_string(name: &str) -> std::io::Result<String> {
     env.or(default.map(|s| s.to_string())).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::NotFound, format!("{} not found", name))
     })
+}
+
+pub fn get_kibana_space() -> Option<String> {
+    match std::env::var("ESDIAG_KIBANA_SPACE") {
+        Ok(space) => {
+            let trimmed = space.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Err(_) => Some(ESDIAG_KIBANA_DEFAULT_SPACE.to_string()),
+    }
 }

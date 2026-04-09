@@ -225,9 +225,6 @@ pub struct HostsTableRow {
     pub accept_invalid_certs: bool,
     pub cloud_id: String,
     pub secret: String,
-    pub apikey: String,
-    pub username: String,
-    pub password: String,
 }
 
 #[derive(Clone, Serialize)]
