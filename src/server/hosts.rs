@@ -188,7 +188,7 @@ pub async fn page(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> 
     let (secrets, secret_ids) = if keystore_locked {
         (Vec::new(), Vec::new())
     } else {
-        match current_keystore_password(&state, &user_email)
+        match current_keystore_password(&state)
             .await
             .and_then(|password| read_secret_rows(&password))
         {
@@ -250,11 +250,9 @@ pub async fn page(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> 
 
 pub async fn host_action(
     State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
     Path((action, id)): Path<(String, String)>,
     signals: Option<ReadSignals<HostsUiSignals>>,
 ) -> Response {
-    let user = resolve_request_user(&state, &headers);
     let signal_state = signals.as_ref().map(|ReadSignals(signals)| signals);
     let editing_action = matches!(action.as_str(), "create" | "read" | "update");
 
@@ -278,7 +276,7 @@ pub async fn host_action(
         }
 
         let hosts = read_host_rows();
-        let secret_ids = load_secret_ids(&state, &user).await;
+        let secret_ids = load_secret_ids(&state).await;
         let row_id = next_row_id(signal_state.map(|s| &s.hosts), hosts.len());
         let row = blank_host_row();
 
@@ -314,7 +312,7 @@ pub async fn host_action(
                 tracing::warn!("Host read for row {} failed: row not found", row_id);
                 return (StatusCode::NOT_FOUND, "host row not found").into_response();
             };
-            let secret_ids = load_secret_ids(&state, &user).await;
+            let secret_ids = load_secret_ids(&state).await;
             sse_response(vec![
                 row_signal_patch("hosts", row_id, &host_draft(&host, Some(&host.name)))
                     .as_datastar_event()
@@ -335,7 +333,7 @@ pub async fn host_action(
                 );
                 return clear_and_remove_row("hosts", &host_row_selector(row_id), row_id);
             };
-            let secret_ids = load_secret_ids(&state, &user).await;
+            let secret_ids = load_secret_ids(&state).await;
             sse_response(vec![
                 clear_row_signal_patch("hosts", row_id)
                     .as_datastar_event()
@@ -355,8 +353,8 @@ pub async fn host_action(
                 return sse_response(vec![patch_host_error_event(&message)]);
             };
             let host_name = draft.name.clone();
-            match apply_upsert_host(&state, draft, &user).await {
-                Ok(_) => patch_host_row_saved_response(&state, row_id, &host_name, &user).await,
+            match apply_upsert_host(&state, draft).await {
+                Ok(_) => patch_host_row_saved_response(&state, row_id, &host_name).await,
                 Err(err) => {
                     tracing::warn!("Host update for row {} failed: {}", row_id, err);
                     sse_response(vec![patch_host_error_event(&err)])
@@ -381,11 +379,9 @@ pub async fn host_action(
 
 pub async fn cluster_action(
     State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
     Path((action, id)): Path<(String, String)>,
     signals: Option<ReadSignals<ClustersUiSignals>>,
 ) -> Response {
-    let user = resolve_request_user(&state, &headers);
     let signal_state = signals.as_ref().map(|ReadSignals(signals)| signals);
     let editing_action = matches!(action.as_str(), "create" | "read" | "update");
 
@@ -409,7 +405,7 @@ pub async fn cluster_action(
         }
 
         let clusters = read_host_and_cluster_rows().1;
-        let secret_ids = load_secret_ids(&state, &user).await;
+        let secret_ids = load_secret_ids(&state).await;
         let row_id = next_row_id(signal_state.map(|s| &s.clusters), clusters.len());
         let row = blank_cluster_row();
 
@@ -445,7 +441,7 @@ pub async fn cluster_action(
                 tracing::warn!("Cluster read for row {} failed: row not found", row_id);
                 return (StatusCode::NOT_FOUND, "cluster row not found").into_response();
             };
-            let secret_ids = load_secret_ids(&state, &user).await;
+            let secret_ids = load_secret_ids(&state).await;
             sse_response(vec![
                 row_signal_patch(
                     "clusters",
@@ -470,7 +466,7 @@ pub async fn cluster_action(
                 );
                 return clear_and_remove_row("clusters", &cluster_row_selector(row_id), row_id);
             };
-            let secret_ids = load_secret_ids(&state, &user).await;
+            let secret_ids = load_secret_ids(&state).await;
             sse_response(vec![
                 clear_row_signal_patch("clusters", row_id)
                     .as_datastar_event()
@@ -489,14 +485,10 @@ pub async fn cluster_action(
                 tracing::warn!("Cluster update for row {} failed: {}", row_id, message);
                 return sse_response(vec![patch_cluster_error_event(&message)]);
             };
-            match apply_upsert_cluster(&state, draft, &user).await {
+            match apply_upsert_cluster(&state, draft).await {
                 Ok(_) => {
-                    patch_hosts_and_secrets_with_clear_response(
-                        &state,
-                        Some(("clusters", row_id)),
-                        &user,
-                    )
-                    .await
+                    patch_hosts_and_secrets_with_clear_response(&state, Some(("clusters", row_id)))
+                        .await
                 }
                 Err(err) => {
                     tracing::warn!("Cluster update for row {} failed: {}", row_id, err);
@@ -504,7 +496,7 @@ pub async fn cluster_action(
                 }
             }
         }
-        "delete" => delete_cluster_row(&state, &clusters, row_id, &user).await,
+        "delete" => delete_cluster_row(&state, &clusters, row_id).await,
         _ => (
             StatusCode::BAD_REQUEST,
             "unsupported action; supported: create, read, cancel, update, delete",
@@ -515,11 +507,9 @@ pub async fn cluster_action(
 
 pub async fn secret_action(
     State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
     Path((action, id)): Path<(String, String)>,
     signals: Option<ReadSignals<SecretsUiSignals>>,
 ) -> Response {
-    let user = resolve_request_user(&state, &headers);
     let signal_state = signals.as_ref().map(|ReadSignals(signals)| signals);
 
     if action == "create" {
@@ -534,7 +524,7 @@ pub async fn secret_action(
                 .into_response();
         }
 
-        let secrets = current_keystore_password(&state, &user)
+        let secrets = current_keystore_password(&state)
             .await
             .and_then(|password| read_secret_rows(&password))
             .map(|(rows, _)| rows)
@@ -561,7 +551,7 @@ pub async fn secret_action(
 
     match action.as_str() {
         "read" => {
-            let (secrets, _) = match current_keystore_password(&state, &user)
+            let (secrets, _) = match current_keystore_password(&state)
                 .await
                 .and_then(|password| read_secret_rows(&password))
             {
@@ -603,7 +593,7 @@ pub async fn secret_action(
                 ]);
             }
 
-            let (secrets, _) = match current_keystore_password(&state, &user)
+            let (secrets, _) = match current_keystore_password(&state)
                 .await
                 .and_then(|password| read_secret_rows(&password))
             {
@@ -629,27 +619,23 @@ pub async fn secret_action(
                 return (StatusCode::BAD_REQUEST, "missing secret row draft signals")
                     .into_response();
             };
-            match apply_upsert_secret(&state, draft, &user).await {
+            match apply_upsert_secret(&state, draft).await {
                 Ok(_) => {
-                    patch_hosts_and_secrets_with_clear_response(
-                        &state,
-                        Some(("secrets", row_id)),
-                        &user,
-                    )
-                    .await
+                    patch_hosts_and_secrets_with_clear_response(&state, Some(("secrets", row_id)))
+                        .await
                 }
                 Err(err) => (StatusCode::BAD_REQUEST, err).into_response(),
             }
         }
         "delete" => {
-            let (secrets, _) = match current_keystore_password(&state, &user)
+            let (secrets, _) = match current_keystore_password(&state)
                 .await
                 .and_then(|password| read_secret_rows(&password))
             {
                 Ok(result) => result,
                 Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
             };
-            delete_secret_row(&state, &secrets, row_id, &user).await
+            delete_secret_row(&state, &secrets, row_id).await
         }
         _ => (
             StatusCode::BAD_REQUEST,
@@ -663,7 +649,7 @@ pub async fn upsert_host(
     State(state): State<Arc<ServerState>>,
     Form(form): Form<HostUpsertForm>,
 ) -> Response {
-    match apply_upsert_host(&state, form, "Anonymous").await {
+    match apply_upsert_host(&state, form).await {
         Ok(_) => patch_hosts_panel_response(&state).await,
         Err(err) => (StatusCode::BAD_REQUEST, err).into_response(),
     }
@@ -684,7 +670,7 @@ pub async fn create_host(
         secret: payload.secret,
         accept_invalid_certs: payload.accept_invalid_certs.then_some("true".to_string()),
     };
-    match apply_upsert_host(&state, form, "Anonymous").await {
+    match apply_upsert_host(&state, form).await {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(err) => (StatusCode::BAD_REQUEST, err).into_response(),
     }
@@ -705,7 +691,7 @@ pub async fn update_host(
         secret: payload.secret,
         accept_invalid_certs: payload.accept_invalid_certs.then_some("true".to_string()),
     };
-    match apply_upsert_host(&state, form, "Anonymous").await {
+    match apply_upsert_host(&state, form).await {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(err) => (StatusCode::BAD_REQUEST, err).into_response(),
     }
@@ -729,22 +715,18 @@ pub async fn delete_host(
 
 pub async fn upsert_secret(
     State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
     Form(form): Form<SecretUpsertForm>,
 ) -> Response {
-    let user = resolve_request_user(&state, &headers);
-    match apply_upsert_secret(&state, form, &user).await {
-        Ok(_) => patch_hosts_and_secrets_response(&state, &user).await,
+    match apply_upsert_secret(&state, form).await {
+        Ok(_) => patch_hosts_and_secrets_response(&state).await,
         Err(err) => (StatusCode::BAD_REQUEST, err).into_response(),
     }
 }
 
 pub async fn delete_secret(
     State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
     Form(form): Form<SecretDeleteForm>,
 ) -> Response {
-    let user = resolve_request_user(&state, &headers);
     if !state.is_keystore_unlocked().await {
         return (
             StatusCode::PRECONDITION_FAILED,
@@ -753,7 +735,7 @@ pub async fn delete_secret(
             .into_response();
     }
 
-    let password = match current_keystore_password(&state, &user).await {
+    let password = match current_keystore_password(&state).await {
         Ok(password) => password,
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
@@ -761,7 +743,7 @@ pub async fn delete_secret(
     match remove_secret(form.secret_id.trim(), None, &password) {
         Ok(_) => {
             state.touch_keystore_session().await;
-            patch_hosts_and_secrets_response(&state, &user).await
+            patch_hosts_and_secrets_response(&state).await
         }
         Err(err) => (StatusCode::BAD_REQUEST, to_message(err)).into_response(),
     }
@@ -1022,7 +1004,6 @@ fn render_secret_row(
 
 async fn load_table_panel_data(
     state: &Arc<ServerState>,
-    user: &str,
 ) -> (
     Vec<template::HostsTableRow>,
     Vec<template::DiagnosticClusterTableRow>,
@@ -1035,7 +1016,7 @@ async fn load_table_panel_data(
     let (secrets, secret_ids) = if keystore_locked {
         (Vec::new(), Vec::new())
     } else {
-        match current_keystore_password(state, user)
+        match current_keystore_password(state)
             .await
             .and_then(|password| read_secret_rows(&password))
         {
@@ -1132,16 +1113,15 @@ fn sse_response(events: Vec<String>) -> Response {
 
 async fn patch_hosts_panel_response(state: &Arc<ServerState>) -> Response {
     let (hosts, _clusters, _secrets, secret_ids, keystore_locked) =
-        load_table_panel_data(state, "Anonymous").await;
+        load_table_panel_data(state).await;
     match render_hosts_panel(&hosts, &secret_ids, keystore_locked) {
         Ok(html) => sse_response(vec![patch_panel_event("#hosts-table-panel", html)]),
         Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
     }
 }
 
-async fn patch_hosts_and_secrets_response(state: &Arc<ServerState>, user: &str) -> Response {
-    let (hosts, clusters, secrets, secret_ids, keystore_locked) =
-        load_table_panel_data(state, user).await;
+async fn patch_hosts_and_secrets_response(state: &Arc<ServerState>) -> Response {
+    let (hosts, clusters, secrets, secret_ids, keystore_locked) = load_table_panel_data(state).await;
     let hosts_html = match render_hosts_panel(&hosts, &secret_ids, keystore_locked) {
         Ok(html) => html,
         Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
@@ -1165,10 +1145,8 @@ async fn patch_hosts_and_secrets_response(state: &Arc<ServerState>, user: &str) 
 async fn patch_hosts_and_secrets_with_clear_response(
     state: &Arc<ServerState>,
     clear: Option<(&str, usize)>,
-    user: &str,
 ) -> Response {
-    let (hosts, clusters, secrets, secret_ids, keystore_locked) =
-        load_table_panel_data(state, user).await;
+    let (hosts, clusters, secrets, secret_ids, keystore_locked) = load_table_panel_data(state).await;
     let hosts_html = match render_hosts_panel(&hosts, &secret_ids, keystore_locked) {
         Ok(html) => html,
         Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
@@ -1198,7 +1176,6 @@ async fn patch_hosts_and_secrets_with_clear_response(
 async fn apply_upsert_host(
     state: &Arc<ServerState>,
     form: HostUpsertForm,
-    user: &str,
 ) -> Result<(), String> {
     let name = form.name.trim();
     if name.is_empty() {
@@ -1211,7 +1188,7 @@ async fn apply_upsert_host(
     let viewer = to_opt(form.viewer);
     let secret = to_opt(form.secret);
     let accept_invalid_certs = form.accept_invalid_certs.is_some();
-    let auth = infer_auth_from_secret_selection(state, user, &secret, form.auth.trim()).await?;
+    let auth = infer_auth_from_secret_selection(state, &secret, form.auth.trim()).await?;
 
     let mut builder = KnownHostBuilder::new(url)
         .product(app)
@@ -1264,7 +1241,6 @@ async fn apply_upsert_host(
 async fn apply_upsert_cluster(
     state: &Arc<ServerState>,
     form: ClusterUpsertForm,
-    user: &str,
 ) -> Result<(), String> {
     let name = form.name.trim();
     if name.is_empty() {
@@ -1277,7 +1253,7 @@ async fn apply_upsert_cluster(
         Url::parse(form.kibana_url.trim()).map_err(|err| format!("Invalid Kibana URL: {err}"))?;
     let secret = to_opt(form.secret);
     let accept_invalid_certs = form.accept_invalid_certs.is_some();
-    let auth = infer_auth_from_secret_selection(state, user, &secret, form.auth.trim()).await?;
+    let auth = infer_auth_from_secret_selection(state, &secret, form.auth.trim()).await?;
 
     let kibana_name = format!("{name}-kb");
     let elasticsearch_host = {
@@ -1360,7 +1336,6 @@ async fn apply_upsert_cluster(
 async fn apply_upsert_secret(
     state: &Arc<ServerState>,
     form: SecretUpsertForm,
-    user: &str,
 ) -> Result<(), String> {
     if !state.is_keystore_unlocked().await {
         return Err("Unlock keystore before editing secrets.".to_string());
@@ -1370,7 +1345,7 @@ async fn apply_upsert_secret(
     if secret_id.is_empty() {
         return Err("secret_id is required.".to_string());
     }
-    let password = current_keystore_password(state, user).await?;
+    let password = current_keystore_password(state).await?;
 
     let auth = match form.auth_type.trim().to_ascii_lowercase().as_str() {
         "apikey" => {
@@ -1626,11 +1601,11 @@ fn next_row_id(signals: Option<&TableUiSignals>, existing_len: usize) -> usize {
     existing_len.max(signal_max) + 1
 }
 
-async fn load_secret_ids(state: &Arc<ServerState>, user: &str) -> Vec<String> {
+async fn load_secret_ids(state: &Arc<ServerState>) -> Vec<String> {
     if !state.is_keystore_unlocked().await {
         return Vec::new();
     }
-    match current_keystore_password(state, user)
+    match current_keystore_password(state)
         .await
         .and_then(|password| read_secret_rows(&password))
     {
@@ -1684,7 +1659,6 @@ async fn delete_cluster_row(
     state: &Arc<ServerState>,
     clusters: &[template::DiagnosticClusterTableRow],
     row_id: usize,
-    user: &str,
 ) -> Response {
     let Some(cluster) = cluster_row_by_id(clusters, row_id) else {
         tracing::warn!(
@@ -1719,7 +1693,7 @@ async fn delete_cluster_row(
                     tracing::warn!("Cluster delete for row {} failed: {}", row_id, message);
                     return sse_response(vec![patch_cluster_error_event(&message)]);
                 }
-                patch_hosts_and_secrets_with_clear_response(state, Some(("clusters", row_id)), user)
+                patch_hosts_and_secrets_with_clear_response(state, Some(("clusters", row_id)))
                     .await
             }
             Err(err) => {
@@ -1739,7 +1713,6 @@ async fn delete_secret_row(
     state: &Arc<ServerState>,
     secrets: &[template::SecretTableRow],
     row_id: usize,
-    user: &str,
 ) -> Response {
     let Some(secret) = secret_row_by_id(secrets, row_id) else {
         return clear_and_remove_row("secrets", &secret_row_selector(row_id), row_id);
@@ -1752,7 +1725,7 @@ async fn delete_secret_row(
             .into_response();
     }
 
-    let password = match current_keystore_password(state, user).await {
+    let password = match current_keystore_password(state).await {
         Ok(password) => password,
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
@@ -1760,7 +1733,7 @@ async fn delete_secret_row(
     match remove_secret(secret.secret_id.trim(), None, &password) {
         Ok(_) => {
             state.touch_keystore_session().await;
-            patch_hosts_and_secrets_with_clear_response(state, Some(("secrets", row_id)), user)
+            patch_hosts_and_secrets_with_clear_response(state, Some(("secrets", row_id)))
                 .await
         }
         Err(err) => (StatusCode::BAD_REQUEST, to_message(err)).into_response(),
@@ -1782,7 +1755,6 @@ async fn patch_host_row_saved_response(
     state: &Arc<ServerState>,
     row_id: usize,
     host_name: &str,
-    _user: &str,
 ) -> Response {
     let hosts = read_host_rows();
     let Some(host) = hosts.iter().find(|host| host.name == host_name).cloned() else {
@@ -1833,7 +1805,6 @@ fn parse_product(value: &str) -> Result<Product, String> {
 
 async fn infer_auth_from_secret_selection(
     state: &Arc<ServerState>,
-    user: &str,
     secret: &Option<String>,
     fallback_auth: &str,
 ) -> Result<String, String> {
@@ -1841,7 +1812,7 @@ async fn infer_auth_from_secret_selection(
         if !state.is_keystore_unlocked().await {
             return Err("Unlock keystore before selecting a secret.".to_string());
         }
-        let password = current_keystore_password(state, user).await?;
+        let password = current_keystore_password(state).await?;
         let resolved = resolve_secret_auth(secret_id, &password).map_err(to_message)?;
         state.touch_keystore_session().await;
         return match resolved {
@@ -1870,16 +1841,8 @@ fn to_message(err: impl std::fmt::Display) -> String {
     err.to_string()
 }
 
-fn resolve_request_user(state: &Arc<ServerState>, headers: &HeaderMap) -> String {
-    state
-        .resolve_user_email(headers)
-        .map(|(_, user)| user)
-        .unwrap_or_else(|_| "Anonymous".to_string())
-}
-
 async fn current_keystore_password(
     state: &Arc<ServerState>,
-    _user: &str,
 ) -> Result<String, String> {
     state
         .keystore_password()
@@ -1904,7 +1867,7 @@ mod tests {
     use axum::{
         body::to_bytes,
         extract::Path,
-        http::{HeaderMap, StatusCode},
+        http::StatusCode,
     };
     use datastar::axum::ReadSignals;
     use serde_json::json;
@@ -1969,7 +1932,6 @@ mod tests {
                 secret: None,
                 accept_invalid_certs: None,
             },
-            "Anonymous",
         )
         .await
         .expect("rename host");
@@ -2010,7 +1972,6 @@ mod tests {
                 secret: Some("api-secret".to_string()),
                 accept_invalid_certs: None,
             },
-            "Anonymous",
         )
         .await
         .expect("save host");
@@ -2065,7 +2026,6 @@ mod tests {
 
         let response = secret_action(
             axum::extract::State(state),
-            HeaderMap::new(),
             Path(("cancel".to_string(), "1".to_string())),
             Some(ReadSignals(signals)),
         )
@@ -2182,7 +2142,6 @@ mod tests {
                 elasticsearch_url: "http://new-es:9200".to_string(),
                 kibana_url: "http://new-kb:5601".to_string(),
             },
-            "Anonymous",
         )
         .await
         .expect("rename cluster");
