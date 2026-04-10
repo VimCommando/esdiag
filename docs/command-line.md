@@ -155,7 +155,7 @@ Update behavior:
 - unknown host names fail with an explicit error
 - `host update` with no mutation flags is rejected; use `host auth` for validate-only checks
 
-Authenticated saved hosts remain secret-backed. Use `--secret <SECRET_ID>` when adding or updating persisted auth, and use `--nosave` for transient validation that should not be written to `hosts.yml`.
+Authenticated saved hosts remain secret-backed. Use `--secret <SECRET_ID>` when adding or updating persisted auth. For transient validation that should not be written to `hosts.yml`, use `esdiag host auth <NAME>`.
 
 For certificate updates:
 

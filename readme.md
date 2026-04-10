@@ -392,7 +392,7 @@ curl -F "file=@/path/to/diagnostic.zip" http://localhost:2501/upload
 
 #### Collect
 
-The `esdiag collect` command pulls the minimum required diagnostics from an Elasticsearch host and saves them to a directory. These are JSON-only, not pretty-printed, and do not include human-readable metrics. This bunlde captures only what is needed to then import with `esdiag`.
+The `esdiag collect` command pulls the minimum required diagnostics from a supported Elastic Stack host and saves them to a directory. These are JSON-only, not pretty-printed, and do not include human-readable metrics. This bundle captures only what is needed to then import with `esdiag`.
 
 Authentication must be set up in advance with the `esdiag host` command or `hosts.yml` file. Direct access to the cluster is required, this cannot be done through any Elastic Cloud API.
 

@@ -13,9 +13,6 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-#[cfg(feature = "keystore")]
-use crate::data::with_scoped_keystore_password;
-
 pub async fn get_modal(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
     let can_update_exporter = state.runtime_mode_policy.allows_exporter_updates();
     let allows_local_runtime_features = state.runtime_mode_policy.allows_local_runtime_features();
@@ -162,13 +159,21 @@ pub async fn update_settings(
                 .await;
             }
 
-            if let Some(password) = keystore_password {
-                with_scoped_keystore_password(password, async move {
+            #[cfg(feature = "keystore")]
+            {
+                if let Some(password) = keystore_password {
+                    crate::data::with_scoped_keystore_password(password, async move {
+                        Exporter::try_from(host)
+                            .map_err(|e| format!("Failed to construct exporter: {}", e))
+                    })
+                    .await
+                } else {
                     Exporter::try_from(host)
                         .map_err(|e| format!("Failed to construct exporter: {}", e))
-                })
-                .await
-            } else {
+                }
+            }
+            #[cfg(not(feature = "keystore"))]
+            {
                 Exporter::try_from(host).map_err(|e| format!("Failed to construct exporter: {}", e))
             }
         } else if target == current_exporter.target_uri() {
