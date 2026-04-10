@@ -48,9 +48,12 @@ fn agent_flag_emits_stderr_summary_without_info_logs() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stdout.is_empty(), "stdout should remain empty, got:\n{stdout}");
     assert!(
-        stderr.contains("keystore complete"),
+        stdout.is_empty(),
+        "stdout should remain empty, got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("Keystore: locked"),
         "stderr should contain final summary, got:\n{stderr}"
     );
     assert!(
@@ -68,9 +71,12 @@ fn claudecode_auto_enables_agent_mode() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stdout.is_empty(), "stdout should remain empty, got:\n{stdout}");
     assert!(
-        stderr.contains("keystore complete"),
+        stdout.is_empty(),
+        "stdout should remain empty, got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("Keystore: locked"),
         "stderr should contain final summary, got:\n{stderr}"
     );
     assert!(
@@ -88,9 +94,12 @@ fn debug_overrides_agent_warn_level() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stdout.is_empty(), "stdout should remain empty, got:\n{stdout}");
     assert!(
-        stderr.contains("keystore complete"),
+        stdout.is_empty(),
+        "stdout should remain empty, got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("Keystore: locked"),
         "stderr should contain final summary, got:\n{stderr}"
     );
 }
@@ -104,9 +113,12 @@ fn final_summary_is_printed_without_agent_when_logs_are_warn() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stdout.is_empty(), "stdout should remain empty, got:\n{stdout}");
     assert!(
-        stderr.contains("keystore complete"),
+        stdout.is_empty(),
+        "stdout should remain empty, got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("Keystore: locked"),
         "stderr should contain final summary, got:\n{stderr}"
     );
     assert!(

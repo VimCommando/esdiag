@@ -126,7 +126,7 @@ impl ElasticsearchCollector {
                 Err(e) => {
                     if !should_retry_elasticsearch_error(&e) {
                         tracing::warn!(
-                            "Skipping non-retriable failure for {}: {}",
+                            "Skipping non-retriable authentication failure for {}: {}",
                             api.as_str(),
                             e
                         );
@@ -308,10 +308,10 @@ impl ElasticsearchCollector {
 
 fn should_retry_elasticsearch_error(error: &eyre::Report) -> bool {
     if let Some(request_error) = error.downcast_ref::<ElasticsearchRequestError>() {
-        return request_error.status.as_u16() == 429 || request_error.status.is_server_error();
+        return request_error.status.as_u16() != 401 && request_error.status.as_u16() != 403;
     }
     if let Some(request_error) = error.downcast_ref::<ElasticCloudAdminRequestError>() {
-        return request_error.status.as_u16() == 429 || request_error.status.is_server_error();
+        return request_error.status.as_u16() != 401 && request_error.status.as_u16() != 403;
     }
     true
 }
@@ -322,7 +322,7 @@ mod tests {
     use elasticsearch::http::StatusCode;
 
     #[test]
-    fn retry_policy_skips_non_retriable_client_errors() {
+    fn retry_policy_skips_authentication_errors() {
         let unauthorized = eyre::Report::from(ElasticsearchRequestError {
             status: StatusCode::UNAUTHORIZED,
             body: "unauthorized".to_string(),
@@ -331,31 +331,38 @@ mod tests {
             status: StatusCode::FORBIDDEN,
             body: "forbidden".to_string(),
         });
-        let not_found = eyre::Report::from(ElasticsearchRequestError {
-            status: StatusCode::NOT_FOUND,
-            body: "missing".to_string(),
+        let cloud_admin_unauthorized = eyre::Report::from(ElasticCloudAdminRequestError {
+            status: StatusCode::UNAUTHORIZED,
+            body: "unauthorized".to_string(),
+        });
+        let cloud_admin_forbidden = eyre::Report::from(ElasticCloudAdminRequestError {
+            status: StatusCode::FORBIDDEN,
+            body: "forbidden".to_string(),
         });
 
         assert!(!should_retry_elasticsearch_error(&unauthorized));
         assert!(!should_retry_elasticsearch_error(&forbidden));
-        assert!(!should_retry_elasticsearch_error(&not_found));
-
-        let cloud_admin_not_found = eyre::Report::from(ElasticCloudAdminRequestError {
-            status: StatusCode::NOT_FOUND,
-            body: "missing".to_string(),
-        });
-        assert!(!should_retry_elasticsearch_error(&cloud_admin_not_found));
+        assert!(!should_retry_elasticsearch_error(&cloud_admin_unauthorized));
+        assert!(!should_retry_elasticsearch_error(&cloud_admin_forbidden));
     }
 
     #[test]
-    fn retry_policy_retries_rate_limits_server_errors_and_transport_failures() {
+    fn retry_policy_retries_non_auth_failures() {
         let rate_limited = eyre::Report::from(ElasticsearchRequestError {
             status: StatusCode::TOO_MANY_REQUESTS,
             body: "slow down".to_string(),
         });
+        let not_found = eyre::Report::from(ElasticsearchRequestError {
+            status: StatusCode::NOT_FOUND,
+            body: "missing".to_string(),
+        });
         let server_error = eyre::Report::from(ElasticsearchRequestError {
             status: StatusCode::BAD_GATEWAY,
             body: "gateway".to_string(),
+        });
+        let cloud_admin_not_found = eyre::Report::from(ElasticCloudAdminRequestError {
+            status: StatusCode::NOT_FOUND,
+            body: "missing".to_string(),
         });
         let cloud_admin_server_error = eyre::Report::from(ElasticCloudAdminRequestError {
             status: StatusCode::BAD_GATEWAY,
@@ -364,7 +371,9 @@ mod tests {
         let transport = eyre::eyre!("connection reset");
 
         assert!(should_retry_elasticsearch_error(&rate_limited));
+        assert!(should_retry_elasticsearch_error(&not_found));
         assert!(should_retry_elasticsearch_error(&server_error));
+        assert!(should_retry_elasticsearch_error(&cloud_admin_not_found));
         assert!(should_retry_elasticsearch_error(&cloud_admin_server_error));
         assert!(should_retry_elasticsearch_error(&transport));
     }

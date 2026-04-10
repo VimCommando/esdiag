@@ -1138,14 +1138,22 @@ impl Display for KnownHost {
                     .as_ref()
                     .map(std::string::ToString::to_string)
                     .unwrap_or_else(|| "None".to_string());
-                write!(fmt, "KnownHost ApiKey: {} {} {}", self.app, self.url, cloud_id)
+                write!(
+                    fmt,
+                    "KnownHost ApiKey: {} {} {}",
+                    self.app, self.url, cloud_id
+                )
             }
             "basic" => {
                 let username = self
                     .legacy_username
                     .clone()
                     .unwrap_or_else(|| "<secret-auth>".to_string());
-                write!(fmt, "KnownHost Basic: {} {}@ {}", self.app, username, self.url)
+                write!(
+                    fmt,
+                    "KnownHost Basic: {} {}@ {}",
+                    self.app, username, self.url
+                )
             }
             "secret" => write!(fmt, "KnownHost Secret: {} {}", self.app, self.url),
             _ => write!(fmt, "KnownHost NoAuth: {} {}", self.app, self.url),
@@ -1610,7 +1618,10 @@ mod tests {
                 None,
                 false,
                 None,
-                Some(("legacy-only-user".to_string(), "legacy-only-pass".to_string())),
+                Some((
+                    "legacy-only-user".to_string(),
+                    "legacy-only-pass".to_string(),
+                )),
             ),
         );
         write_hosts(hosts);
@@ -1776,7 +1787,10 @@ mod tests {
             .expect("merge should succeed");
 
         assert_eq!(merged.legacy_apikey.as_deref(), Some("new-key"));
-        assert!(merged.secret.is_none(), "secret reference should be cleared");
+        assert!(
+            merged.secret.is_none(),
+            "secret reference should be cleared"
+        );
     }
 
     #[test]

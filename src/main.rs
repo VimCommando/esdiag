@@ -15,8 +15,8 @@ use esdiag::{
         HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, Product, SecretAuth, Settings,
         Uri, add_secret, clear_unlock_lease, create_keystore, default_unlock_ttl,
         get_keystore_path, get_password_for_secret_commands, get_unlock_status, keystore_exists,
-        parse_unlock_ttl, remove_secret, resolve_secret_auth, rotate_keystore_password, update_secret,
-        validate_existing_keystore_password, write_unlock_lease,
+        parse_unlock_ttl, remove_secret, resolve_secret_auth, rotate_keystore_password,
+        update_secret, validate_existing_keystore_password, write_unlock_lease,
     },
     env::LOG_LEVEL,
     exporter::Exporter,
@@ -106,7 +106,12 @@ enum Commands {
         #[arg(help = "Diagnostic report opportunity", long, short)]
         opportunity: Option<String>,
         /// Diagnostic report user
-        #[arg(help = "Diagnostic report user", long = "user", short, value_name = "USER")]
+        #[arg(
+            help = "Diagnostic report user",
+            long = "user",
+            short,
+            value_name = "USER"
+        )]
         user: Option<String>,
         /// Elastic Upload Service upload id or URL for immediate upload after collection
         #[arg(
@@ -622,7 +627,8 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 let exporter = resolve_serve_exporter(output, runtime_mode)?;
 
                 let kibana_url = kibana.unwrap_or_else(|| {
-                    kibana_base_url_from_env().unwrap_or_else(|| "http://localhost:5601".to_string())
+                    kibana_base_url_from_env()
+                        .unwrap_or_else(|| "http://localhost:5601".to_string())
                 });
 
                 let (mut server, _bound_addr) =
@@ -695,10 +701,7 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         )
                         .await
                         .map(|result| {
-                            CommandResult::with_summary(
-                                "collect",
-                                format_collect_summary(&result),
-                            )
+                            CommandResult::with_summary("collect", format_collect_summary(&result))
                         })
                     }
                     Uri::ElasticCloud(_) => {
@@ -851,9 +854,14 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         tracing::info!("Keystore unlocked via {}", unlock_path.display());
                     }
                     let lock_status = format_keystore_lock_status(&status);
-                    let rendered_lock_status =
-                        colorize_keystore_lock_status(&lock_status, std::io::stderr().is_terminal());
-                    Ok(CommandResult::with_summary("keystore", rendered_lock_status))
+                    let rendered_lock_status = colorize_keystore_lock_status(
+                        &lock_status,
+                        std::io::stderr().is_terminal(),
+                    );
+                    Ok(CommandResult::with_summary(
+                        "keystore",
+                        rendered_lock_status,
+                    ))
                 }
                 KeystoreCommands::Lock => {
                     let lock_status = format_keystore_lock_status(&esdiag::data::UnlockStatus {
@@ -862,21 +870,28 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         expires_at_epoch: None,
                         unlock_path: esdiag::data::get_unlock_path()?,
                     });
-                    let rendered_lock_status =
-                        colorize_keystore_lock_status(&lock_status, std::io::stderr().is_terminal());
+                    let rendered_lock_status = colorize_keystore_lock_status(
+                        &lock_status,
+                        std::io::stderr().is_terminal(),
+                    );
                     if clear_unlock_lease()? {
                         tracing::info!("Keystore unlock lease removed");
                     } else {
                         tracing::info!("Keystore unlock lease was already absent");
                     }
-                    Ok(CommandResult::with_summary("keystore", rendered_lock_status))
+                    Ok(CommandResult::with_summary(
+                        "keystore",
+                        rendered_lock_status,
+                    ))
                 }
                 KeystoreCommands::Status => {
                     let status = get_unlock_status()?;
                     let keystore_path = get_keystore_path()?;
                     let lock_status = format_keystore_lock_status(&status);
-                    let rendered_lock_status =
-                        colorize_keystore_lock_status(&lock_status, std::io::stderr().is_terminal());
+                    let rendered_lock_status = colorize_keystore_lock_status(
+                        &lock_status,
+                        std::io::stderr().is_terminal(),
+                    );
                     tracing::info!(
                         "Keystore: {} ({})",
                         if status.keystore_exists {
@@ -943,7 +958,8 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     let product = detect_sources_product_for_process(&input_uri, &receiver).await?;
                     esdiag::processor::init_sources(sources_product_key(&product)?, sources)?;
                 }
-                let kibana_base_url = resolve_process_kibana_base_url(has_explicit_output, &output_uri);
+                let kibana_base_url =
+                    resolve_process_kibana_base_url(has_explicit_output, &output_uri);
                 let receiver = Arc::new(receiver);
                 let exporter = Arc::new(Exporter::try_from(output_uri)?);
 
@@ -959,8 +975,10 @@ async fn run(cli: Cli) -> Result<CommandResult> {
 
                 match processor.process_with_kibana_base(kibana_base_url).await {
                     Ok(processor) => {
-                        let summary =
-                            format_process_summary(&processor.state.report, processor.state.runtime);
+                        let summary = format_process_summary(
+                            &processor.state.report,
+                            processor.state.runtime,
+                        );
                         Ok(CommandResult::with_summary("process", summary))
                     }
                     Err(processor) => {
@@ -1484,10 +1502,7 @@ fn format_keystore_lock_status(status: &esdiag::data::UnlockStatus) -> String {
     format_keystore_lock_status_at(chrono::Utc::now().timestamp(), status)
 }
 
-fn format_keystore_lock_status_at(
-    now_epoch: i64,
-    status: &esdiag::data::UnlockStatus,
-) -> String {
+fn format_keystore_lock_status_at(now_epoch: i64, status: &esdiag::data::UnlockStatus) -> String {
     if status.unlock_active {
         if let Some(expires_at_epoch) = status.expires_at_epoch {
             return format!(
@@ -1525,7 +1540,9 @@ fn format_keystore_password_summary(path: &str) -> String {
 }
 
 fn format_keystore_migrate_summary(migrated: usize, unchanged: usize) -> String {
-    format!("Keystore migration complete: migrated {migrated} host(s), unchanged {unchanged} host(s).")
+    format!(
+        "Keystore migration complete: migrated {migrated} host(s), unchanged {unchanged} host(s)."
+    )
 }
 
 fn ensure_host_role(host: &KnownHost, role: HostRole, context: &str) -> Result<()> {
@@ -1647,14 +1664,12 @@ fn resolve_serve_exporter(output: Option<String>, runtime_mode: RuntimeMode) -> 
 mod tests {
     use super::{
         Cli, CommandResult, Commands, KeystoreCommands, append_kibana_space,
-        colorize_keystore_lock_status,
-        collect_with_optional_upload,
-        format_collect_summary, format_keystore_lock_status, format_keystore_lock_status_at,
+        collect_with_optional_upload, colorize_keystore_lock_status, format_collect_summary,
+        format_keystore_lock_status, format_keystore_lock_status_at,
         format_keystore_migrate_summary, format_keystore_password_summary,
-        format_keystore_secret_summary,
-        format_process_summary, format_remaining_duration_from, host_connection_uses_receiver,
-        is_agent_mode, resolve_host_secret_auth, resolve_process_kibana_base_url,
-        resolve_secret_input_with_prompt, resolve_tracing_filter,
+        format_keystore_secret_summary, format_process_summary, format_remaining_duration_from,
+        host_connection_uses_receiver, is_agent_mode, resolve_host_secret_auth,
+        resolve_process_kibana_base_url, resolve_secret_input_with_prompt, resolve_tracing_filter,
         should_error_for_missing_subcommand, upload_collected_archive, write_completion_summary,
     };
     #[cfg(feature = "server")]
@@ -1664,8 +1679,8 @@ mod tests {
         HostRole, KnownHost, KnownHostBuilder, Product, SecretAuth, UnlockStatus, Uri,
         upsert_secret_auth,
     };
-    use esdiag::processor::{CollectionResult, DiagnosticManifest};
     use esdiag::processor::diagnostic::DiagnosticReportBuilder;
+    use esdiag::processor::{CollectionResult, DiagnosticManifest};
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
     use std::{
@@ -1920,9 +1935,7 @@ mod tests {
         ]);
         match cli.command.expect("command") {
             Commands::Collect {
-                upload_id,
-                user,
-                ..
+                upload_id, user, ..
             } => {
                 assert_eq!(user, Some("elastic".to_string()));
                 assert_eq!(upload_id, Some("abc123".to_string()));
@@ -2049,10 +2062,10 @@ mod tests {
             .await
             .expect_err("missing archive should fail");
 
-        assert!(
-            err.to_string()
-                .contains(&format!("Collected archive not found at {}", missing_path.display()))
-        );
+        assert!(err.to_string().contains(&format!(
+            "Collected archive not found at {}",
+            missing_path.display()
+        )));
     }
     #[test]
     fn upload_command_parses_file_and_upload_id() {
@@ -2158,7 +2171,10 @@ mod tests {
 
         let resolved = resolve_process_kibana_base_url(false, &Uri::Stream);
 
-        assert_eq!(resolved.as_deref(), Some("https://env-kb.example:5601/s/ops"));
+        assert_eq!(
+            resolved.as_deref(),
+            Some("https://env-kb.example:5601/s/ops")
+        );
 
         unsafe {
             std::env::remove_var("ESDIAG_KIBANA_URL");

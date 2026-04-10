@@ -17,8 +17,8 @@ mod logstash;
 /// Get file from https://upload.elastic.co/
 mod upload_service;
 
-pub use elasticsearch::{ElasticsearchReceiver, ElasticsearchRequestError};
 pub use elastic_cloud_admin::{ElasticCloudAdminReceiver, ElasticCloudAdminRequestError};
+pub use elasticsearch::{ElasticsearchReceiver, ElasticsearchRequestError};
 pub use kibana::{KibanaReceiver, KibanaRequestError};
 pub use logstash::{LogstashReceiver, LogstashRequestError};
 

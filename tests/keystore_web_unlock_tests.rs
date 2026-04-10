@@ -2,7 +2,9 @@
 #![allow(clippy::await_holding_lock)]
 
 use esdiag::{
-    data::{authenticate, get_unlock_path, get_unlock_status, read_unlock_lease, write_unlock_lease},
+    data::{
+        authenticate, get_unlock_path, get_unlock_status, read_unlock_lease, write_unlock_lease,
+    },
     exporter::Exporter,
     server::{RuntimeMode, Server},
 };
@@ -91,7 +93,10 @@ async fn web_unlock_writes_unlock_file() {
     assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
 
     let unlock_path = get_unlock_path().expect("unlock path");
-    assert!(unlock_path.exists(), "unlock file should exist after web unlock");
+    assert!(
+        unlock_path.exists(),
+        "unlock file should exist after web unlock"
+    );
 
     let status: StatusResponse = client
         .get(format!("{base}/keystore/status"))
@@ -102,7 +107,10 @@ async fn web_unlock_writes_unlock_file() {
         .await
         .expect("status json");
     assert!(!status.locked, "status endpoint should report unlocked");
-    assert!(status.expires_at_epoch.is_some(), "status should include expiry");
+    assert!(
+        status.expires_at_epoch.is_some(),
+        "status should include expiry"
+    );
 
     // Verify CLI sees the same state
     let cli_status = get_unlock_status().expect("cli unlock status");
@@ -140,7 +148,10 @@ async fn web_lock_deletes_unlock_file() {
         .expect("lock request");
     assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
 
-    assert!(!unlock_path.exists(), "unlock file should be deleted after web lock");
+    assert!(
+        !unlock_path.exists(),
+        "unlock file should be deleted after web lock"
+    );
 
     let status: StatusResponse = client
         .get(format!("{base}/keystore/status"))
@@ -243,12 +254,20 @@ async fn web_unlock_status_verified_by_cli() {
     // Verify via library helper
     let status = get_unlock_status().expect("cli unlock status");
     assert!(status.unlock_active, "CLI should report unlock active");
-    assert!(status.expires_at_epoch.is_some(), "CLI should report expiry");
+    assert!(
+        status.expires_at_epoch.is_some(),
+        "CLI should report expiry"
+    );
 
     // Verify via file
-    let lease = read_unlock_lease().expect("read lease").expect("lease should exist");
+    let lease = read_unlock_lease()
+        .expect("read lease")
+        .expect("lease should exist");
     let now = chrono::Utc::now().timestamp();
-    assert!(lease.expires_at_epoch > now, "lease should expire in the future");
+    assert!(
+        lease.expires_at_epoch > now,
+        "lease should expire in the future"
+    );
 
     let _ = tmp;
     server.shutdown().await;

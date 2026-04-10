@@ -1065,9 +1065,8 @@ mod tests {
         data::{HostRole, KnownHostBuilder, Product, Uri},
         exporter::Exporter,
         server::{
-            CollectSource, ProcessMode, RetainedBundle, RuntimeMode,
-            RuntimeModePolicy, SendMode, ServerEvent, ServerState, Stats, WorkflowInput,
-            WorkflowJob, WorkflowRunSignals,
+            CollectSource, ProcessMode, RetainedBundle, RuntimeMode, RuntimeModePolicy, SendMode,
+            ServerEvent, ServerState, Stats, WorkflowInput, WorkflowJob, WorkflowRunSignals,
         },
     };
     use axum::{Router, http::StatusCode, routing::get};
@@ -1086,7 +1085,9 @@ mod tests {
             runtime_mode: mode,
             runtime_mode_policy: RuntimeModePolicy::new(mode),
             #[cfg(feature = "keystore")]
-            keystore_rate_limit: Arc::new(std::sync::Mutex::new(crate::server::keystore::KeystoreRateLimit::default())),
+            keystore_rate_limit: Arc::new(std::sync::Mutex::new(
+                crate::server::keystore::KeystoreRateLimit::default(),
+            )),
             stats: Arc::new(RwLock::new(Stats::default())),
             shutdown: watch::channel(false).1,
             event_tx: broadcast::channel::<ServerEvent>(8).0,

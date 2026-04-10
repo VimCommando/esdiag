@@ -546,7 +546,10 @@ async fn host_update_rejects_partial_basic_auth_without_secret() {
     assert!(
         hosts
             .get("plain-es")
-            .is_some_and(|host| host.secret.is_none() && host.legacy_apikey.is_none() && host.legacy_username.is_none() && host.legacy_password.is_none()),
+            .is_some_and(|host| host.secret.is_none()
+                && host.legacy_apikey.is_none()
+                && host.legacy_username.is_none()
+                && host.legacy_password.is_none()),
         "failed update should leave the saved host unchanged"
     );
 

@@ -906,9 +906,7 @@ fn host_secret_value(host: &KnownHost) -> String {
 }
 
 fn host_has_plaintext_auth(host: &KnownHost) -> bool {
-    host.legacy_apikey.is_some()
-        || host.legacy_username.is_some()
-        || host.legacy_password.is_some()
+    host.legacy_apikey.is_some() || host.legacy_username.is_some() || host.legacy_password.is_some()
 }
 
 fn read_secret_rows(
@@ -1918,7 +1916,10 @@ fn resolve_request_user(state: &Arc<ServerState>, headers: &HeaderMap) -> String
         .unwrap_or_else(|_| "Anonymous".to_string())
 }
 
-async fn current_keystore_password(state: &Arc<ServerState>, _user: &str) -> Result<String, String> {
+async fn current_keystore_password(
+    state: &Arc<ServerState>,
+    _user: &str,
+) -> Result<String, String> {
     state
         .keystore_password()
         .await

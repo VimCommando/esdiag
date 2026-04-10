@@ -118,8 +118,7 @@ impl ServerState {
             rate_limit.failed_attempts = rate_limit.failed_attempts.saturating_add(1);
             let block_seconds = rate_limit.current_backoff_seconds();
             if block_seconds > 0 {
-                rate_limit.blocked_until_epoch =
-                    Some(now_epoch_seconds() + block_seconds as i64);
+                rate_limit.blocked_until_epoch = Some(now_epoch_seconds() + block_seconds as i64);
             }
             rate_limit.blocked_until_epoch
         };
@@ -431,9 +430,7 @@ pub async fn lock(State(state): State<Arc<ServerState>>, _headers: HeaderMap) ->
     axum::http::StatusCode::NO_CONTENT
 }
 
-pub async fn ensure_unlocked_for_active_output(
-    state: &Arc<ServerState>,
-) -> Result<(), String> {
+pub async fn ensure_unlocked_for_active_output(state: &Arc<ServerState>) -> Result<(), String> {
     let exporter = state.exporter.read().await.clone();
     if !cfg!(feature = "keystore") || !state.runtime_mode_policy.allows_local_runtime_features() {
         // When the keystore is unavailable, the active exporter can still be valid if its
@@ -479,11 +476,11 @@ pub async fn ensure_unlocked_for_active_output(
 #[cfg(test)]
 #[allow(clippy::await_holding_lock)]
 mod tests {
+    use super::KeystoreRateLimit;
     use super::{
         KeystoreForm, bootstrap, ensure_unlocked_for_active_output, get_process_unlock_modal,
         get_unlock_modal, lock, unlock,
     };
-    use super::KeystoreRateLimit;
     use crate::{
         data::{KnownHost, Settings, authenticate},
         exporter::Exporter,
@@ -885,10 +882,14 @@ mod tests {
         .await;
 
         let unlock_path = crate::data::get_unlock_path().expect("unlock path");
-        assert!(unlock_path.exists(), "unlock file should be written on disk");
+        assert!(
+            unlock_path.exists(),
+            "unlock file should be written on disk"
+        );
 
-        let lease =
-            crate::data::read_unlock_lease().expect("read lease").expect("lease should exist");
+        let lease = crate::data::read_unlock_lease()
+            .expect("read lease")
+            .expect("lease should exist");
         let now = chrono::Utc::now().timestamp();
         assert!(
             lease.expires_at_epoch > now,
@@ -933,26 +934,23 @@ mod tests {
         *state.exporter.write().await =
             crate::exporter::Exporter::try_from(noauth_host).expect("noauth exporter");
         assert!(
-            ensure_unlocked_for_active_output(&state)
-                .await
-                .is_ok(),
+            ensure_unlocked_for_active_output(&state).await.is_ok(),
             "NoAuth output should bypass keystore preflight"
         );
 
         settings.active_target = Some("secure".to_string());
         settings.save().expect("save secure settings");
-        *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::new_no_auth(
-            crate::data::Product::Elasticsearch,
-            Url::parse("https://secure.example.com:9200").expect("secure url"),
-            vec![crate::data::HostRole::Send],
-            None,
-            false,
-        ))
-        .expect("secure exporter");
+        *state.exporter.write().await =
+            crate::exporter::Exporter::try_from(KnownHost::new_no_auth(
+                crate::data::Product::Elasticsearch,
+                Url::parse("https://secure.example.com:9200").expect("secure url"),
+                vec![crate::data::HostRole::Send],
+                None,
+                false,
+            ))
+            .expect("secure exporter");
         assert!(
-            ensure_unlocked_for_active_output(&state)
-                .await
-                .is_err(),
+            ensure_unlocked_for_active_output(&state).await.is_err(),
             "secure output should require unlock"
         );
 
@@ -965,19 +963,18 @@ mod tests {
     #[tokio::test]
     async fn service_mode_non_secure_output_bypasses_keystore_preflight() {
         let state = test_service_state();
-        *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::new_no_auth(
-            crate::data::Product::Elasticsearch,
-            Url::parse("http://localhost:9200").expect("url"),
-            vec![crate::data::HostRole::Send],
-            None,
-            false,
-        ))
-        .expect("noauth exporter");
+        *state.exporter.write().await =
+            crate::exporter::Exporter::try_from(KnownHost::new_no_auth(
+                crate::data::Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![crate::data::HostRole::Send],
+                None,
+                false,
+            ))
+            .expect("noauth exporter");
 
         assert!(
-            ensure_unlocked_for_active_output(&state)
-                .await
-                .is_ok(),
+            ensure_unlocked_for_active_output(&state).await.is_ok(),
             "service mode should allow non-secure outputs without keystore access"
         );
     }
@@ -1003,7 +1000,7 @@ mod tests {
                 None,
                 Some("secret".to_string()),
             ))
-        .expect("secure exporter");
+            .expect("secure exporter");
 
         let result = ensure_unlocked_for_active_output(&state).await;
 

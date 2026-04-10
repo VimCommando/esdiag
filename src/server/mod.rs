@@ -185,7 +185,9 @@ impl Server {
             runtime_mode,
             runtime_mode_policy,
             #[cfg(feature = "keystore")]
-            keystore_rate_limit: Arc::new(std::sync::Mutex::new(keystore::KeystoreRateLimit::default())),
+            keystore_rate_limit: Arc::new(std::sync::Mutex::new(
+                keystore::KeystoreRateLimit::default(),
+            )),
         });
 
         stats::spawn_stats_publisher(state.clone(), state.event_sender());
@@ -792,9 +794,7 @@ impl ServerState {
     }
 }
 
-pub async fn ensure_active_output_ready(
-    state: &Arc<ServerState>,
-) -> Result<(), String> {
+pub async fn ensure_active_output_ready(state: &Arc<ServerState>) -> Result<(), String> {
     #[cfg(feature = "keystore")]
     {
         keystore::ensure_unlocked_for_active_output(state).await
@@ -860,7 +860,9 @@ pub(crate) fn test_server_state() -> Arc<ServerState> {
         runtime_mode,
         runtime_mode_policy: RuntimeModePolicy::new(runtime_mode),
         #[cfg(feature = "keystore")]
-        keystore_rate_limit: Arc::new(std::sync::Mutex::new(keystore::KeystoreRateLimit::default())),
+        keystore_rate_limit: Arc::new(
+            std::sync::Mutex::new(keystore::KeystoreRateLimit::default()),
+        ),
         shutdown: watch::channel(false).1,
         event_tx: broadcast::channel(16).0,
         stats_updates_tx,
@@ -1371,9 +1373,9 @@ async fn add_client_hint_headers(mut response: Response) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiKeyFormSignals, RuntimeMode, RuntimeModePolicy, Server,
-        ServerEvent, ServerState, Stats, WorkflowRunSignals, event_visible_to_user,
-        receiver_stream, replace_job_event, signal_event, targeted_signal_event, test_server_state,
+        ApiKeyFormSignals, RuntimeMode, RuntimeModePolicy, Server, ServerEvent, ServerState, Stats,
+        WorkflowRunSignals, event_visible_to_user, receiver_stream, replace_job_event,
+        signal_event, targeted_signal_event, test_server_state,
     };
     use crate::data::{create_keystore, write_unlock_lease};
     use crate::exporter::Exporter;
@@ -1396,7 +1398,9 @@ mod tests {
             runtime_mode: mode,
             runtime_mode_policy: RuntimeModePolicy::new(mode),
             #[cfg(feature = "keystore")]
-            keystore_rate_limit: Arc::new(std::sync::Mutex::new(super::keystore::KeystoreRateLimit::default())),
+            keystore_rate_limit: Arc::new(std::sync::Mutex::new(
+                super::keystore::KeystoreRateLimit::default(),
+            )),
             stats: Arc::new(RwLock::new(Stats::default())),
             shutdown: watch::channel(false).1,
             event_tx: broadcast::channel(16).0,
@@ -1550,18 +1554,10 @@ mod tests {
     async fn service_mode_keystore_session_remains_disabled() {
         let state = test_state(RuntimeMode::Service);
 
-        state
-            .set_keystore_unlocked("pw".to_string())
-            .await;
+        state.set_keystore_unlocked("pw".to_string()).await;
 
-        assert_eq!(
-            state.keystore_status().await,
-            (true, 0)
-        );
-        assert_eq!(
-            state.keystore_status().await,
-            (true, 0)
-        );
+        assert_eq!(state.keystore_status().await, (true, 0));
+        assert_eq!(state.keystore_status().await, (true, 0));
         assert_eq!(state.keystore_password().await, None);
         assert_eq!(state.keystore_password().await, None);
     }
@@ -1574,20 +1570,13 @@ mod tests {
 
         let state = Arc::new(test_state(RuntimeMode::User));
 
-        state
-            .set_keystore_unlocked("pw".to_string())
-            .await;
+        state.set_keystore_unlocked("pw".to_string()).await;
 
         assert!(state.is_keystore_unlocked().await);
         assert!(state.is_keystore_unlocked().await);
-        assert_eq!(
-            state.keystore_password().await,
-            Some("pw".to_string())
-        );
+        assert_eq!(state.keystore_password().await, Some("pw".to_string()));
 
-        state
-            .set_keystore_locked("test")
-            .await;
+        state.set_keystore_locked("test").await;
 
         assert!(!state.is_keystore_unlocked().await);
         assert!(!state.is_keystore_unlocked().await);
@@ -1604,10 +1593,7 @@ mod tests {
         let state = Arc::new(test_state(RuntimeMode::User));
 
         assert!(state.is_keystore_unlocked().await);
-        assert_eq!(
-            state.keystore_password().await,
-            Some("pw".to_string())
-        );
+        assert_eq!(state.keystore_password().await, Some("pw".to_string()));
     }
 
     #[allow(clippy::await_holding_lock)]
@@ -1626,7 +1612,9 @@ mod tests {
         assert!(!state.is_keystore_unlocked().await);
         assert_eq!(state.keystore_password().await, None);
         assert!(
-            !crate::data::get_unlock_path().expect("unlock path").exists(),
+            !crate::data::get_unlock_path()
+                .expect("unlock path")
+                .exists(),
             "lock should delete the unlock file"
         );
     }
