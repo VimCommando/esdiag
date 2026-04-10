@@ -9,7 +9,7 @@ use crate::{
     processor::{
         DataSource, DiagnosticManifest, SourceContext,
         api::{ApiResolver, ApiWeight, DiagnosticType, LogstashApi},
-        collector::{CollectOptions, CollectionResult},
+        collector::{CollectOptions, CollectionResult, default_collect_archive_name},
     },
     receiver::{LogstashRequestError, Receiver},
 };
@@ -39,7 +39,7 @@ impl LogstashCollector {
             .and_then(|name| std::path::Path::new(name).file_stem())
             .map(|stem| stem.to_string_lossy().to_string())
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| format!("api-diagnostics-{}", timestamp));
+            .unwrap_or_else(|| default_collect_archive_name(&options.product, &timestamp));
         Ok(Self {
             receiver,
             exporter: exporter.with_archive_name(&collection_name)?,

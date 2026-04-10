@@ -6,10 +6,7 @@ use super::{
     KnownHostFormSignals, ServerEvent, ServerState, job_feed_event, receiver_stream, signal_event,
     template, workflow,
 };
-use crate::{
-    data::{KnownHost, with_scoped_keystore_password},
-    processor::new_job_id,
-};
+use crate::{data::KnownHost, processor::new_job_id};
 use axum::{
     extract::State,
     http::HeaderMap,
@@ -19,7 +16,21 @@ use datastar::axum::ReadSignals;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 
+#[cfg(feature = "keystore")]
+use crate::data::with_scoped_keystore_password;
+
 const DOWNLOAD_REJECTION_TTL: Duration = Duration::from_secs(300);
+
+fn saved_host_secret_error_message() -> &'static str {
+    #[cfg(feature = "keystore")]
+    {
+        "Unlock the keystore before collecting from saved hosts that use stored secrets."
+    }
+    #[cfg(not(feature = "keystore"))]
+    {
+        "Keystore support is unavailable in this build, so saved hosts that use stored secrets cannot be collected."
+    }
+}
 
 pub async fn form(
     State(state): State<Arc<ServerState>>,
@@ -88,13 +99,17 @@ pub(super) async fn run_known_host_form(
     };
 
     let job_id = new_job_id();
-    let keystore_password = state.keystore_password_for(&request_user).await;
+    #[cfg(feature = "keystore")]
+    let keystore_password = state.keystore_password().await;
+    #[cfg(not(feature = "keystore"))]
+    let keystore_password: Option<String> = None;
     if host.requires_keystore_secret() && keystore_password.is_none() {
+        let error_message = saved_host_secret_error_message();
         state
             .reject_retained_bundle(
                 &download_token,
                 &request_user,
-                "Unlock the keystore before collecting from saved hosts that use stored secrets.",
+                error_message,
                 DOWNLOAD_REJECTION_TTL,
             )
             .await;
@@ -103,7 +118,7 @@ pub(super) async fn run_known_host_form(
             &tx,
             job_feed_event(template::JobFailed {
                 job_id,
-                error: "Unlock the keystore before collecting from saved hosts that use stored secrets.",
+                error: error_message,
                 source: &signals.workflow.collect.known_host,
             }),
         )
@@ -121,12 +136,20 @@ pub(super) async fn run_known_host_form(
         },
     };
 
-    if let Some(password) = keystore_password {
-        with_scoped_keystore_password(password, async move {
+    #[cfg(feature = "keystore")]
+    {
+        if let Some(password) = keystore_password {
+            with_scoped_keystore_password(password, async move {
+                workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false)
+                    .await;
+            })
+            .await;
+        } else {
             workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
-        })
-        .await;
-    } else {
+        }
+    }
+    #[cfg(not(feature = "keystore"))]
+    {
         workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
     }
 }

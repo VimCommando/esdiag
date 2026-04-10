@@ -108,83 +108,74 @@ Raw `http://` or `https://` strings are not treated as direct output targets unl
 
 ## `host`
 
-Use `esdiag host` to create, validate, update, or delete saved host definitions in `hosts.yml`.
+Use `esdiag host` to manage saved host definitions in `hosts.yml` with explicit lifecycle subcommands.
 
 Current help:
 
 ```text
-Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
+Manage saved host connections in `~/.esdiag/hosts.yml`
 
-Usage: esdiag host [OPTIONS] <NAME> [APP] [URL]
+Usage: esdiag host <COMMAND>
 
-Arguments:
-  <NAME>  A name to identify this host
-  [APP]   Application of this host (elasticsearch, kibana, logstash, etc.)
-  [URL]   A host URL to connect to
+Commands:
+  add     Add a saved host
+  update  Update an existing saved host
+  remove  Remove an existing saved host
+  list    List all saved hosts
+  auth    Test authentication for a saved host
+  help    Print this message or the help of the given subcommand(s)
 
 Options:
-      --accept-invalid-certs <ACCEPT_INVALID_CERTS>
-          Accept invalid certificates [possible values: true, false]
       --debug
           Enable debug logging
-      --delete
-          Delete the saved host configuration
-  -a, --apikey <APIKEY>
-          ApiKey, passed as http header
-  -u, --user <USERNAME>
-          Username for authentication [aliases: --username]
-  -p, --password <PASSWORD>
-          Password for authentication
-      --secret <SECRET>
-          Secret identifier in the encrypted keystore
-      --roles <ROLES>
-          Comma-separated host roles
-  -n, --nosave
-          Don't save the host configuration on successful connection
   -h, --help
           Print help
 ```
 
-### Host modes
+### `host add`
 
-`esdiag host` has four practical modes:
+Use `esdiag host add <NAME> <APP> <URL>` to create a new saved host. The command connection-tests the full definition before saving it and fails if the host already exists.
 
-1. Create or replace:
-   Supply `NAME`, `APP`, and `URL` to build a host definition from scratch.
-2. Validate only:
-   Supply only `NAME` for an existing host to re-test the saved definition without changing it.
-3. Incremental update:
-   Supply only `NAME` plus mutable flags such as `--secret`, `--apikey`, `--roles`, or `--accept-invalid-certs`.
-4. Delete:
-   Supply `NAME --delete` to remove a saved host.
+Shared add/update options:
 
-### Authentication options
+- `--secret <SECRET_ID>` stores the saved host's keystore reference and resolves credentials from `secrets.yml`
+- `--apikey <APIKEY>` supplies API key credentials for validation and for keystore-backed updates when used with `--secret`
+- `--user <USERNAME> --password <PASSWORD>` supplies basic auth credentials for validation and for keystore-backed updates when used with `--secret`
+- `--roles collect,send,view` assigns workflow roles
+- `--accept-invalid-certs true|false` controls certificate validation behavior
 
-- `--apikey <APIKEY>` stores explicit API key auth in the host
-- `--user <USERNAME> --password <PASSWORD>` stores explicit basic auth
-- `--secret <SECRET_ID>` stores only the keystore reference in the host and resolves credentials from `secrets.yml`
+### `host update`
 
-If a secret-backed host is updated with explicit `--apikey` or `--user`/`--password`, the saved secret reference is replaced by the new explicit auth source.
+Use `esdiag host update <NAME>` with one or more mutable flags to modify an existing saved host in place.
 
-### Certificate validation
+Update behavior:
 
-`--accept-invalid-certs` now takes an explicit boolean value:
+- omitted fields are preserved
+- the merged saved host is always connection-tested before it is written back
+- unknown host names fail with an explicit error
+- `host update` with no mutation flags is rejected; use `host auth` for validate-only checks
+
+Authenticated saved hosts remain secret-backed. Use `--secret <SECRET_ID>` when adding or updating persisted auth. For transient validation that should not be written to `hosts.yml`, use `esdiag host auth <NAME>`.
+
+For certificate updates:
 
 - `--accept-invalid-certs true`: enable invalid-certificate acceptance
 - `--accept-invalid-certs false`: disable it
+- omit the flag during `host update` to preserve the saved value
 
-For incremental updates:
+### `host remove`
 
-- if the flag is omitted, the saved value is preserved
-- if provided, the saved value is updated
+Use `esdiag host remove <NAME>` to delete a saved host. Removing an unknown host returns an explicit error, and removing the active saved target also updates local saved settings.
+
+### `host list`
+
+Use `esdiag host list` to print a compact saved-host table with columns `name`, `app`, and `secret`. When no hosts are saved, the command prints `No saved hosts`.
+
+### `host auth`
+
+Use `esdiag host auth <NAME>` to test a saved host's persisted authentication and connection settings without modifying the host record.
 
 ### Roles
-
-Use `--roles` with comma-separated values:
-
-- `collect`
-- `send`
-- `view`
 
 Role validation rules enforced by the saved host model:
 
@@ -193,51 +184,42 @@ Role validation rules enforced by the saved host model:
 - `view` is valid only for Kibana hosts
 - omitted roles default to `collect`
 
-### Update behavior
+### Migration from legacy syntax
 
-For saved-host updates:
+The old positional host mutation form has been removed. Replace it as follows:
 
-- omitted fields are preserved
-- the merged saved host is always connection-tested before it is written back
-- unknown host names fail unless `APP` and `URL` are supplied to create a new record
-
-### Delete behavior
-
-Use:
-
-```sh
-esdiag host <name> --delete
-```
-
-Delete notes:
-
-- `--delete` is mutually exclusive with create/update flags
-- deleting an unknown host returns an explicit error
-- deleting a host also updates local saved settings when that host was the active saved target
+- `esdiag host <name> <app> <url>` -> `esdiag host add <name> <app> <url>`
+- `esdiag host <name> --secret ...` -> `esdiag host update <name> --secret ...`
+- `esdiag host <name> --accept-invalid-certs false` -> `esdiag host update <name> --accept-invalid-certs false`
+- `esdiag host <name> --delete` -> `esdiag host remove <name>`
+- `esdiag host <name>` -> `esdiag host auth <name>`
 
 ### Examples
 
 ```sh
 # Create a saved Elasticsearch host
-esdiag host prod-es elasticsearch http://localhost:9200
+esdiag host add prod-es elasticsearch http://localhost:9200
 
 # Create a host backed by a keystore secret
-esdiag host prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
+esdiag host add prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
 
 # Create a host with explicit workflow roles
-esdiag host prod-es elasticsearch http://localhost:9200 --roles collect,send
-
-# Re-validate an existing saved host without changing it
-esdiag host prod-es
+esdiag host add prod-es elasticsearch http://localhost:9200 --roles collect,send
 
 # Rotate a saved host to a new secret reference
-esdiag host prod-es --secret prod-es-rotated
+esdiag host update prod-es --secret prod-es-rotated
 
 # Change the saved certificate policy in place
-esdiag host prod-es --accept-invalid-certs false
+esdiag host update prod-es --accept-invalid-certs false
+
+# List saved hosts
+esdiag host list
+
+# Test a saved host without modifying it
+esdiag host auth prod-es
 
 # Delete a saved host
-esdiag host prod-es --delete
+esdiag host remove prod-es
 ```
 
 ## `keystore`
@@ -478,6 +460,7 @@ Options:
   -c, --case <CASE>                Diagnostic report case number
   -o, --opportunity <OPPORTUNITY>  Diagnostic report opportunity
   -u, --user <USER>                Diagnostic report user
+      --upload <UPLOAD_ID>         Elastic Upload Service upload id or URL for immediate upload after collection
   -h, --help                       Print help
 ```
 
@@ -487,6 +470,7 @@ Options:
 - the host must carry the `collect` role
 - `<OUTPUT>` must already exist
 - `esdiag` creates a diagnostic directory or archive structure within that output directory
+- `--upload` uploads the exact collected archive after a successful collect run; the archive still remains on disk locally
 
 ### Collection level
 
@@ -510,6 +494,12 @@ Options:
 - `--opportunity`
 - `--user`
 
+### Upload handoff
+
+- `--upload` accepts an Elastic Upload Service upload id or URL
+- upload starts only after collection succeeds
+- upload uses the runtime-resolved archive path, so you do not need to know the generated filename ahead of time
+
 ### Examples
 
 ```sh
@@ -518,6 +508,9 @@ esdiag collect prod-es ~/diag-output
 
 # Collect a minimal diagnostic with an explicit API subset
 esdiag collect prod-es ~/diag-output --type minimal --include nodes,cluster_health
+
+# Collect and immediately upload the resulting archive
+esdiag collect prod-es ~/diag-output --upload abc123
 ```
 
 ## `serve`
@@ -636,8 +629,8 @@ esdiag serve --help
 
 ## Troubleshooting
 
-- If a saved-host update fails, remember that `esdiag host <NAME>` re-validates the merged host live before saving it.
-- If a saved host should be removed entirely, use `esdiag host <NAME> --delete`.
+- If a saved-host update fails, remember that `esdiag host update <NAME>` re-validates the merged host live before saving it.
+- If a saved host should be removed entirely, use `esdiag host remove <NAME>`.
 - If output lands in the wrong place, verify whether your output argument matched a saved host name before being treated as a file path.
 - If keystore-backed auth fails, check `ESDIAG_KEYSTORE_PASSWORD` and confirm the referenced secret id exists.
 - If setup or ingestion behavior changes after a version upgrade, re-run `esdiag setup`.

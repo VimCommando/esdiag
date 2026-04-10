@@ -6,10 +6,7 @@ use super::{
     ApiKeyFormSignals, ServerEvent, ServerState, WorkflowRunSignals, job_feed_event,
     receiver_stream, signal_event, template, template_event, workflow,
 };
-use crate::{
-    data::{KnownHostBuilder, with_scoped_keystore_password},
-    processor::new_job_id,
-};
+use crate::{data::KnownHostBuilder, processor::new_job_id};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -18,6 +15,9 @@ use axum::{
 use datastar::axum::ReadSignals;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
+
+#[cfg(feature = "keystore")]
+use crate::data::with_scoped_keystore_password;
 
 const DOWNLOAD_REJECTION_TTL: Duration = Duration::from_secs(300);
 
@@ -97,7 +97,7 @@ pub(super) async fn run_api_key_form(
     tx: mpsc::Sender<ServerEvent>,
 ) {
     let download_token = signals.archive.download_token.clone();
-    if let Err(err) = super::ensure_active_output_ready(&state, &request_user).await {
+    if let Err(err) = super::ensure_active_output_ready(&state).await {
         state
             .reject_retained_bundle(
                 &download_token,
@@ -159,13 +159,21 @@ pub(super) async fn run_api_key_form(
         },
     };
     let job_id = new_job_id();
-    let keystore_password = state.keystore_password_for(&request_user).await;
-    if let Some(password) = keystore_password {
-        with_scoped_keystore_password(password, async move {
+    #[cfg(feature = "keystore")]
+    {
+        let keystore_password = state.keystore_password().await;
+        if let Some(password) = keystore_password {
+            with_scoped_keystore_password(password, async move {
+                workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false)
+                    .await;
+            })
+            .await;
+        } else {
             workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
-        })
-        .await;
-    } else {
+        }
+    }
+    #[cfg(not(feature = "keystore"))]
+    {
         workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
     }
 }
@@ -248,16 +256,15 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "secure-es".to_string(),
-            KnownHost::ApiKey {
-                accept_invalid_certs: false,
-                apikey: None,
-                app: Product::Elasticsearch,
-                cloud_id: None,
-                roles: vec![HostRole::Send],
-                secret: Some("secure-es".to_string()),
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_legacy_apikey(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Send],
+                None,
+                false,
+                Some("secure-es".to_string()),
+                None,
+            ),
         );
         KnownHost::write_hosts_yml(&hosts).expect("write hosts");
         Settings {
@@ -268,13 +275,13 @@ mod tests {
         .expect("save settings");
 
         let state = test_server_state();
-        *state.exporter.write().await = Exporter::try_from(KnownHost::NoAuth {
-            accept_invalid_certs: false,
-            app: Product::Elasticsearch,
-            roles: vec![HostRole::Send],
-            viewer: None,
-            url: Url::parse("http://localhost:9200").expect("secure output uri"),
-        })
+        *state.exporter.write().await = Exporter::try_from(KnownHost::new_no_auth(
+            Product::Elasticsearch,
+            Url::parse("http://localhost:9200").expect("secure output uri"),
+            vec![HostRole::Send],
+            None,
+            false,
+        ))
         .expect("matching exporter");
         let mut signals = ApiKeyFormSignals::default();
         signals.archive.download_token = "token-1".to_string();

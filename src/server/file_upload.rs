@@ -204,7 +204,7 @@ pub(super) async fn run_upload_job(
     request_user: String,
     tx: mpsc::Sender<ServerEvent>,
 ) {
-    if let Err(err) = super::ensure_active_output_ready(&state, &request_user).await {
+    if let Err(err) = super::ensure_active_output_ready(&state).await {
         send_event(
             &tx,
             replace_job_event(

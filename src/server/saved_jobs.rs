@@ -128,7 +128,7 @@ pub async fn save_job(signals: ReadSignals<SaveJobSignals>) -> Response {
     let name_for_save = name.clone();
     let names = match with_saved_jobs_async(move |jobs| {
         jobs.insert(name_for_save, saved_job);
-        save_saved_jobs(&jobs)?;
+        save_saved_jobs(jobs)?;
         Ok::<Vec<String>, eyre::Report>(jobs.keys().cloned().collect())
     })
     .await
@@ -194,7 +194,7 @@ pub async fn delete_saved_job(
         if jobs.shift_remove(&name_for_delete).is_none() {
             return Ok::<Option<Vec<String>>, eyre::Report>(None);
         }
-        save_saved_jobs(&jobs)?;
+        save_saved_jobs(jobs)?;
         Ok(Some(jobs.keys().cloned().collect()))
     })
     .await
@@ -257,13 +257,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "elasticsearch-local".to_string(),
-            KnownHost::NoAuth {
-                accept_invalid_certs: false,
-                app: Product::Elasticsearch,
-                roles: vec![HostRole::Collect],
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_no_auth(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Collect],
+                None,
+                false,
+            ),
         );
         KnownHost::write_hosts_yml(&hosts).expect("write hosts");
 
@@ -283,13 +283,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "send-only".to_string(),
-            KnownHost::NoAuth {
-                accept_invalid_certs: false,
-                app: Product::Elasticsearch,
-                roles: vec![HostRole::Send],
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_no_auth(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Send],
+                None,
+                false,
+            ),
         );
         KnownHost::write_hosts_yml(&hosts).expect("write hosts");
 

@@ -22,12 +22,13 @@ struct ExtractedDiag {
 }
 
 #[test]
+#[ignore = "requires configured elasticsearch-local host and a running Elasticsearch instance"]
 fn test_collect_minimal() {
     let dir = tempdir().unwrap();
     let out_dir = dir.path().to_str().unwrap();
 
     // This test expects a known host named "elasticsearch-local" to be configured in ~/.esdiag/hosts.yml
-    // You can create this with: `esdiag host elasticsearch-local http://localhost:9200`
+    // You can create this with: `esdiag host add elasticsearch-local elasticsearch http://localhost:9200`
     let status = Command::new(env!("CARGO_BIN_EXE_esdiag"))
         .args([
             "collect",
@@ -90,12 +91,13 @@ fn find_diag_dir(path: &Path) -> Option<std::path::PathBuf> {
 }
 
 #[test]
+#[ignore = "requires configured elasticsearch-local host and a running Elasticsearch instance"]
 fn test_collect_light() {
     let dir = tempdir().unwrap();
     let out_dir = dir.path().to_str().unwrap();
 
     // This test expects a known host named "elasticsearch-local" to be configured in ~/.esdiag/hosts.yml
-    // You can create this with: `esdiag host elasticsearch-local http://localhost:9200`
+    // You can create this with: `esdiag host add elasticsearch-local elasticsearch http://localhost:9200`
     let status = Command::new(env!("CARGO_BIN_EXE_esdiag"))
         .args([
             "collect",
@@ -124,12 +126,13 @@ fn test_collect_light() {
 }
 
 #[test]
+#[ignore = "requires configured elasticsearch-local host and a running Elasticsearch instance"]
 fn test_collect_support_all_endpoints() {
     let dir = tempdir().unwrap();
     let out_dir = dir.path().to_str().unwrap();
 
     // This test expects a known host named "elasticsearch-local" to be configured in ~/.esdiag/hosts.yml
-    // You can create this with: `esdiag host elasticsearch-local http://localhost:9200`
+    // You can create this with: `esdiag host add elasticsearch-local elasticsearch http://localhost:9200`
     let status = Command::new(env!("CARGO_BIN_EXE_esdiag"))
         .args([
             "collect",
@@ -154,6 +157,7 @@ fn test_collect_support_all_endpoints() {
 }
 
 #[test]
+#[ignore = "requires configured elasticsearch-local host and a running Elasticsearch instance"]
 fn test_collect_zip_writes_archive() {
     let dir = tempdir().unwrap();
     let out_dir = dir.path().to_str().unwrap();
@@ -179,6 +183,7 @@ fn test_collect_zip_writes_archive() {
 }
 
 #[test]
+#[ignore = "requires configured elasticsearch-local host and a running Elasticsearch instance"]
 fn test_process_command_returns_status() {
     let status = Command::new(env!("CARGO_BIN_EXE_esdiag"))
         .args(["process", "elasticsearch-local", "-"])
@@ -194,8 +199,8 @@ fn find_diag_zip(path: &Path) -> Option<std::path::PathBuf> {
         let entry = entry.unwrap();
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
-        let valid_prefix =
-            file_name.starts_with("api-diagnostics-") || file_name.starts_with("esdiag-");
+        let valid_prefix = file_name.starts_with("api-diagnostics-")
+            || file_name.contains("-api-diagnostics-");
         if entry.file_type().unwrap().is_file() && valid_prefix && file_name.ends_with(".zip") {
             return Some(entry.path());
         }
@@ -227,6 +232,7 @@ fn file_set(root: &Path) -> BTreeSet<String> {
 }
 
 #[test]
+#[ignore = "requires configured elasticsearch-local host and a running Elasticsearch instance"]
 fn test_collect_zip_matches_directory_file_set_light_and_support() {
     for variant in ["light", "support"] {
         let dir = tempdir().unwrap();
@@ -286,6 +292,7 @@ fn test_collect_zip_matches_directory_file_set_light_and_support() {
 }
 
 #[test]
+#[ignore = "requires configured elasticsearch-local host and a running Elasticsearch instance"]
 fn test_collect_support_zip_repeated_has_no_duplicate_entry_errors() {
     let dir = tempdir().unwrap();
     let out_dir = dir.path().to_str().unwrap();
@@ -312,6 +319,7 @@ fn test_collect_support_zip_repeated_has_no_duplicate_entry_errors() {
 }
 
 #[test]
+#[ignore = "requires configured elasticsearch-local host and a running Elasticsearch instance"]
 fn test_collect_zip_accepts_output_directory_with_dot() {
     let dir = tempdir().unwrap();
     let dotted_out = dir.path().join("out.v1");
@@ -333,6 +341,7 @@ fn test_collect_zip_accepts_output_directory_with_dot() {
 }
 
 #[test]
+#[ignore = "requires configured elasticsearch-local host and a running Elasticsearch instance"]
 fn test_process_zip_accepts_output_directory_with_dot() {
     let dir = tempdir().unwrap();
     let dotted_out = dir.path().join("out.v1.ndjson");
@@ -454,6 +463,7 @@ fn test_collect_no_auth_with_ephemeral_container() {
     let host = run_esdiag(
         &[
             "host",
+            "add",
             host_name,
             "elasticsearch",
             &host_url,
@@ -522,6 +532,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
     let host_plain = run_esdiag(
         &[
             "host",
+            "add",
             basic_plain_name,
             "elasticsearch",
             &host_url,
@@ -557,6 +568,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
     let host_basic_keystore = run_esdiag(
         &[
             "host",
+            "add",
             "it-basic-keystore",
             "elasticsearch",
             &host_url,
@@ -581,6 +593,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
     let host_apikey_plain = run_esdiag(
         &[
             "host",
+            "add",
             apikey_plain_name,
             "elasticsearch",
             &host_url,
@@ -606,6 +619,7 @@ fn test_collect_with_plaintext_and_keystore_auth_modes() {
     let host_apikey_keystore = run_esdiag(
         &[
             "host",
+            "add",
             "it-apikey-keystore",
             "elasticsearch",
             &host_url,
@@ -848,6 +862,7 @@ async fn test_collect_kibana_mock_workflow() {
 
     let host_args = vec![
         "host".to_string(),
+        "add".to_string(),
         "mock-kibana".to_string(),
         "kibana".to_string(),
         host_url.clone(),
@@ -980,6 +995,7 @@ fn test_collect_kibana_localhost_no_auth() {
     let host_output = run_esdiag(
         &[
             "host",
+            "add",
             "localhost-kibana",
             "kibana",
             "http://localhost:5601",

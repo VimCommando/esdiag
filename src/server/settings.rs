@@ -1,7 +1,7 @@
 #[cfg(feature = "keystore")]
 use super::keystore;
 use super::{ServerState, append_body_event, execute_script_event, html_event, signal_event};
-use crate::data::{HostRole, KnownHost, Settings, Uri, with_scoped_keystore_password};
+use crate::data::{HostRole, KnownHost, Settings, Uri};
 use crate::exporter::Exporter;
 use crate::server::template::{self, SettingsModal};
 use askama::Template;
@@ -74,14 +74,14 @@ pub async fn update_settings(
     headers: HeaderMap,
     datastar::axum::ReadSignals(signals): datastar::axum::ReadSignals<super::SettingsUpdateSignals>,
 ) -> Response {
-    let request_user = match state.resolve_user_email(&headers) {
-        Ok((_, user)) => user,
+    match state.resolve_user_email(&headers) {
+        Ok(_) => {}
         Err(err) if state.runtime_mode_policy.requires_iap_headers() => {
             tracing::warn!("Settings update denied: {}", err);
             return StatusCode::UNAUTHORIZED.into_response();
         }
-        Err(_) => "Anonymous".to_string(),
-    };
+        Err(_) => {}
+    }
 
     if !state.runtime_mode_policy.allows_local_runtime_features() {
         let form = signals.settings;
@@ -141,7 +141,10 @@ pub async fn update_settings(
 
     // 3. Validate and update the active Exporter in ServerState (user mode only)
     if state.runtime_mode_policy.allows_exporter_updates() {
-        let keystore_password = state.keystore_password_for(&request_user).await;
+        #[cfg(feature = "keystore")]
+        let keystore_password = state.keystore_password().await;
+        #[cfg(not(feature = "keystore"))]
+        let keystore_password: Option<String> = None;
 
         let next_exporter = if !target_changed {
             Ok(current_exporter)
@@ -156,13 +159,21 @@ pub async fn update_settings(
                 .await;
             }
 
-            if let Some(password) = keystore_password {
-                with_scoped_keystore_password(password, async move {
+            #[cfg(feature = "keystore")]
+            {
+                if let Some(password) = keystore_password {
+                    crate::data::with_scoped_keystore_password(password, async move {
+                        Exporter::try_from(host)
+                            .map_err(|e| format!("Failed to construct exporter: {}", e))
+                    })
+                    .await
+                } else {
                     Exporter::try_from(host)
                         .map_err(|e| format!("Failed to construct exporter: {}", e))
-                })
-                .await
-            } else {
+                }
+            }
+            #[cfg(not(feature = "keystore"))]
+            {
                 Exporter::try_from(host).map_err(|e| format!("Failed to construct exporter: {}", e))
             }
         } else if target == current_exporter.target_uri() {
@@ -243,7 +254,8 @@ async fn secure_host_unlock_required_response(
     err_msg: String,
 ) -> Response {
     #[cfg(feature = "keystore")]
-    let _ = keystore::get_unlock_modal(State(state.clone()), headers).await;
+    let _ = headers;
+    let _ = keystore::get_unlock_modal(State(state.clone())).await;
     #[cfg(not(feature = "keystore"))]
     let _ = headers;
     settings_error_response(state, prior_active_target, err_msg).await
@@ -371,7 +383,7 @@ mod tests {
     }
 
     fn write_hosts(hosts: BTreeMap<String, KnownHost>) {
-        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
+        crate::data::write_hosts_yml_for_tests(&hosts).expect("write hosts");
     }
 
     #[tokio::test]
@@ -383,16 +395,15 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "secure-es".to_string(),
-            KnownHost::ApiKey {
-                accept_invalid_certs: false,
-                apikey: None,
-                app: Product::Elasticsearch,
-                cloud_id: None,
-                roles: vec![HostRole::Send],
-                secret: Some("secure-es".to_string()),
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_legacy_apikey(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Send],
+                None,
+                false,
+                Some("secure-es".to_string()),
+                None,
+            ),
         );
         write_hosts(hosts);
 
@@ -457,13 +468,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "saved-host".to_string(),
-            KnownHost::NoAuth {
-                accept_invalid_certs: false,
-                app: Product::Elasticsearch,
-                roles: vec![HostRole::Send],
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_no_auth(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Send],
+                None,
+                false,
+            ),
         );
         write_hosts(hosts);
         Settings::default().save().expect("save settings");
@@ -493,13 +504,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "collector-only".to_string(),
-            KnownHost::NoAuth {
-                accept_invalid_certs: false,
-                app: Product::Elasticsearch,
-                roles: vec![HostRole::Collect],
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_no_auth(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Collect],
+                None,
+                false,
+            ),
         );
         write_hosts(hosts);
 
@@ -661,16 +672,15 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "secure-es".to_string(),
-            KnownHost::ApiKey {
-                accept_invalid_certs: false,
-                apikey: None,
-                app: Product::Elasticsearch,
-                cloud_id: None,
-                roles: vec![HostRole::Send],
-                secret: Some("secure-es".to_string()),
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_legacy_apikey(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Send],
+                None,
+                false,
+                Some("secure-es".to_string()),
+                None,
+            ),
         );
         write_hosts(hosts);
 

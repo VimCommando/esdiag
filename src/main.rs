@@ -4,7 +4,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use clap::{Parser, Subcommand, builder::BoolishValueParser, builder::styling};
+use clap::{Args, Parser, Subcommand, builder::BoolishValueParser, builder::styling};
 #[cfg(feature = "server")]
 use esdiag::server::{RuntimeMode, Server};
 #[cfg(feature = "setup")]
@@ -14,19 +14,24 @@ use esdiag::{
     data::{
         HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, Product, SecretAuth, Settings,
         Uri, add_secret, clear_unlock_lease, create_keystore, default_unlock_ttl,
-        get_password_for_secret_commands, get_unlock_status, keystore_exists, parse_unlock_ttl,
-        remove_secret, resolve_secret_auth, rotate_keystore_password, update_secret,
+        get_keystore_path, get_password_for_secret_commands, get_unlock_status, keystore_exists,
+        parse_unlock_ttl, remove_secret, resolve_secret_auth, rotate_keystore_password, update_secret,
         validate_existing_keystore_password, write_unlock_lease,
     },
     env::LOG_LEVEL,
     exporter::Exporter,
-    processor::{Collector, Identifiers, Processor},
+    processor::{
+        CollectionResult, Collector, DiagnosticReport, Identifiers, Processor,
+        default_collect_archive_name,
+    },
     receiver::Receiver,
     uploader,
 };
 use eyre::{Result, eyre};
 use std::{
+    future::Future,
     io::{IsTerminal, Write},
+    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
@@ -48,6 +53,9 @@ struct Cli {
     /// Enable debug logging
     #[arg(global = true, long)]
     debug: bool,
+    /// Enable agent-oriented low-noise CLI behavior
+    #[arg(global = true, long, short = 'a')]
+    agent: bool,
     /// Commands
     #[command(subcommand)]
     command: Option<Commands>,
@@ -89,7 +97,7 @@ enum Commands {
         #[arg(long)]
         sources: Option<String>,
         /// Diagnostic report account name
-        #[arg(help = "Diagnostic report account name", long, short)]
+        #[arg(help = "Diagnostic report account name", long)]
         account: Option<String>,
         /// Case number added to diagnostic report
         #[arg(help = "Diagnostic report case number", long, short)]
@@ -98,8 +106,19 @@ enum Commands {
         #[arg(help = "Diagnostic report opportunity", long, short)]
         opportunity: Option<String>,
         /// Diagnostic report user
-        #[arg(help = "Diagnostic report user", long, short)]
+        #[arg(
+            help = "Diagnostic report user",
+            long = "user",
+            short,
+            value_name = "USER"
+        )]
         user: Option<String>,
+        /// Elastic Upload Service upload id or URL for immediate upload after collection
+        #[arg(
+            help = "Elastic Upload Service upload id or URL for immediate upload after collection",
+            long = "upload"
+        )]
+        upload_id: Option<String>,
     },
     /// Start a web server to receive diagnostic bundle uploads
     #[cfg(feature = "server")]
@@ -127,69 +146,10 @@ enum Commands {
         )]
         kibana: Option<String>,
     },
-    /// Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
+    /// Manage saved host connections in `~/.esdiag/hosts.yml`
     Host {
-        /// A name to identify this host
-        #[arg(help = "A name to identify this host")]
-        name: String,
-        /// Application of this host (elasticsearch, kibana, logstash, etc.)
-        #[arg(
-            help = "Application of this host (elasticsearch, kibana, logstash, etc.)",
-            conflicts_with = "delete"
-        )]
-        app: Option<Product>,
-        /// A host URL to connect to
-        #[arg(help = "A host URL to connect to", conflicts_with = "delete")]
-        url: Option<Url>,
-        /// Accept invalid certificates
-        #[arg(help = "Accept invalid certificates", long, value_parser = BoolishValueParser::new(), conflicts_with = "delete")]
-        accept_invalid_certs: Option<bool>,
-        /// Delete the saved host configuration
-        #[arg(help = "Delete the saved host configuration", long, conflicts_with_all = &["app", "url", "accept_invalid_certs", "apikey", "username", "password", "secret", "roles", "nosave"])]
-        delete: bool,
-        /// ApiKey for authentication
-        #[arg(help = "ApiKey, passed as http header", long, short, conflicts_with_all = &["username", "password", "delete"])]
-        apikey: Option<String>,
-        /// Username for authentication
-        #[arg(
-            help = "Username for authentication",
-            long = "user",
-            visible_alias = "username",
-            short,
-            conflicts_with = "delete"
-        )]
-        username: Option<String>,
-        /// Password for authentication
-        #[arg(
-            help = "Password for authentication",
-            long,
-            short,
-            conflicts_with = "delete"
-        )]
-        password: Option<String>,
-        /// Secret identifier in the encrypted keystore
-        #[arg(
-            help = "Secret identifier in the encrypted keystore",
-            long,
-            conflicts_with_all = &["apikey", "username", "password", "delete"]
-        )]
-        secret: Option<String>,
-        /// Comma-separated host roles (collect,send,view)
-        #[arg(
-            help = "Comma-separated host roles",
-            long,
-            value_delimiter = ',',
-            conflicts_with = "delete"
-        )]
-        roles: Option<Vec<HostRole>>,
-        /// Save the host configuration
-        #[arg(
-            help = "Don't save the host configuration on successful connection",
-            long,
-            short,
-            conflicts_with = "delete"
-        )]
-        nosave: bool,
+        #[command(subcommand)]
+        command: HostCommands,
     },
     /// Manage encrypted secrets in the local keystore
     #[command(alias = "secret")]
@@ -212,7 +172,7 @@ enum Commands {
         output: Option<String>,
 
         /// Diagnostic report account name
-        #[arg(help = "Diagnostic report account name", long, short)]
+        #[arg(help = "Diagnostic report account name", long)]
         account: Option<String>,
 
         /// Case number added to diagnostic report
@@ -282,6 +242,98 @@ enum JobCommands {
 }
 
 #[derive(Debug, Subcommand)]
+enum HostCommands {
+    /// Add a saved host
+    Add {
+        /// A name to identify this host
+        #[arg(help = "A name to identify this host")]
+        name: String,
+        /// Application of this host (elasticsearch, kibana, logstash, etc.)
+        #[arg(help = "Application of this host (elasticsearch, kibana, logstash, etc.)")]
+        app: Product,
+        /// A host URL to connect to
+        #[arg(help = "A host URL to connect to")]
+        url: Url,
+        #[command(flatten)]
+        args: HostMutationArgs,
+    },
+    /// Update an existing saved host
+    Update {
+        /// Name of the saved host to update
+        name: String,
+        #[command(flatten)]
+        args: HostMutationArgs,
+    },
+    /// Remove an existing saved host
+    Remove {
+        /// Name of the saved host to remove
+        name: String,
+    },
+    /// List all saved hosts
+    List,
+    /// Test authentication for a saved host
+    Auth {
+        /// Name of the saved host to test
+        name: String,
+    },
+    #[command(external_subcommand)]
+    Legacy(Vec<String>),
+}
+
+#[derive(Debug, Args, Clone)]
+struct HostMutationArgs {
+    /// Accept invalid certificates
+    #[arg(
+        help = "Accept invalid certificates",
+        long,
+        value_parser = BoolishValueParser::new()
+    )]
+    accept_invalid_certs: Option<bool>,
+    /// ApiKey for authentication
+    #[arg(
+        help = "ApiKey, passed as http header",
+        long,
+        short = 'k',
+        conflicts_with_all = &["username", "password"]
+    )]
+    apikey: Option<String>,
+    /// Username for authentication
+    #[arg(
+        help = "Username for authentication",
+        long = "user",
+        visible_alias = "username",
+        short
+    )]
+    username: Option<String>,
+    /// Password for authentication
+    #[arg(help = "Password for authentication", long, short)]
+    password: Option<String>,
+    /// Secret identifier in the encrypted keystore
+    #[arg(
+        help = "Secret identifier in the encrypted keystore",
+        long,
+        conflicts_with_all = &["apikey", "username", "password"]
+    )]
+    secret: Option<String>,
+    /// Comma-separated host roles (collect,send,view)
+    #[arg(help = "Comma-separated host roles", long, value_delimiter = ',')]
+    roles: Option<Vec<HostRole>>,
+}
+
+impl From<HostMutationArgs> for KnownHostCliUpdate {
+    fn from(value: HostMutationArgs) -> Self {
+        Self {
+            accept_invalid_certs: value.accept_invalid_certs,
+            apikey: value.apikey,
+            password: value.password,
+            roles: value.roles,
+            secret: value.secret,
+            username: value.username,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
 enum KeystoreCommands {
     /// Add a secret to the encrypted keystore
     Add {
@@ -308,7 +360,7 @@ enum KeystoreCommands {
         #[arg(
             help = "ApiKey, passed as http header (prompts when omitted in interactive shells)",
             long,
-            short,
+            short = 'k',
             num_args = 0..=1,
             default_missing_value = "",
             conflicts_with_all = &["username", "password"]
@@ -340,7 +392,7 @@ enum KeystoreCommands {
         #[arg(
             help = "ApiKey, passed as http header (prompts when omitted in interactive shells)",
             long,
-            short,
+            short = 'k',
             num_args = 0..=1,
             default_missing_value = "",
             conflicts_with_all = &["username", "password"]
@@ -366,7 +418,7 @@ enum KeystoreCommands {
         #[arg(
             help = "ApiKey, passed as http header",
             long,
-            short,
+            short = 'k',
             conflicts_with_all = &["username", "password"]
         )]
         apikey: Option<String>,
@@ -398,15 +450,9 @@ fn main() -> Result<()> {
 }
 
 async fn async_main() -> Result<()> {
-    // Parse CLI early to check for debug flag
+    // Parse CLI early to configure execution mode and logging.
     let cli = Cli::parse();
-
-    // Initialize tracing subscriber with debug override if flag is set
-    let filter = if cli.debug {
-        EnvFilter::new("debug")
-    } else {
-        EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new(LOG_LEVEL))
-    };
+    let filter = resolve_tracing_filter(&cli);
     init_tracing(filter);
 
     std::panic::set_hook(Box::new(|panic| {
@@ -418,8 +464,13 @@ async fn async_main() -> Result<()> {
     clear_last_run_files()?;
 
     match run(cli).await {
-        Ok(cmd) => {
-            tracing::debug!("{cmd} complete");
+        Ok(result) => {
+            if let Some(summary) = result.summary() {
+                emit_completion_summary(&summary)?;
+            }
+            if result.emit_summary && result.summary.is_none() {
+                tracing::debug!("{} complete", result.name);
+            }
             Ok(())
         }
         Err(e) => {
@@ -436,14 +487,106 @@ fn init_tracing(filter: EnvFilter) {
         eprintln!("tracing log bridge already initialized: {err}");
     }
 
-    let subscriber = fmt().with_env_filter(filter).finish();
+    let subscriber = fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .finish();
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
         eprintln!("tracing subscriber already initialized: {err}");
     }
 }
 
+#[derive(Debug)]
+struct CommandResult {
+    name: &'static str,
+    summary: Option<String>,
+    emit_summary: bool,
+}
+
+impl CommandResult {
+    fn named(name: &'static str) -> Self {
+        Self {
+            name,
+            summary: None,
+            emit_summary: true,
+        }
+    }
+
+    fn without_summary(name: &'static str) -> Self {
+        Self {
+            name,
+            summary: None,
+            emit_summary: false,
+        }
+    }
+
+    fn with_summary(name: &'static str, summary: String) -> Self {
+        Self {
+            name,
+            summary: Some(summary),
+            emit_summary: true,
+        }
+    }
+
+    fn summary(&self) -> Option<String> {
+        if !self.emit_summary {
+            return None;
+        }
+        Some(
+            self.summary
+                .clone()
+                .unwrap_or_else(|| format!("{} complete", self.name)),
+        )
+    }
+}
+
+fn is_agent_mode(cli: &Cli) -> bool {
+    cli.agent || std::env::var_os("CLAUDECODE").is_some()
+}
+
+fn resolve_tracing_filter(cli: &Cli) -> EnvFilter {
+    if cli.debug {
+        EnvFilter::new("debug")
+    } else if is_agent_mode(cli) {
+        EnvFilter::new("warn")
+    } else {
+        EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new(LOG_LEVEL))
+    }
+}
+
+fn write_completion_summary<W: Write>(writer: &mut W, summary: &str) -> std::io::Result<()> {
+    writeln!(writer, "{summary}")
+}
+
+fn emit_completion_summary(summary: &str) -> Result<()> {
+    let mut stderr = std::io::stderr();
+    write_completion_summary(&mut stderr, summary)?;
+    stderr.flush()?;
+    Ok(())
+}
+
+fn format_process_summary(report: &DiagnosticReport, runtime_ms: u128) -> String {
+    let mut summary = format!(
+        "process complete in {:.3} seconds: {} documents for {}",
+        runtime_ms as f64 / 1000.0,
+        report.diagnostic.docs.created,
+        report.diagnostic.metadata.id
+    );
+    if let Some(kibana_link) = report.diagnostic.kibana_link.as_deref() {
+        summary.push_str(&format!("\nKibana Link: {kibana_link}"));
+    }
+    summary
+}
+
+fn format_collect_summary(result: &CollectionResult) -> String {
+    format!(
+        "Collected {} of {} files into {}",
+        result.success, result.total, result.path
+    )
+}
+
 #[tracing::instrument(skip_all)]
-async fn run(cli: Cli) -> Result<&'static str> {
+async fn run(cli: Cli) -> Result<CommandResult> {
     // If there are CLI arguments but no subcommand, avoid starting the desktop/Tauri
     // entrypoint. The desktop UI should only start when launched absolutely without arguments.
     if should_error_for_missing_subcommand(std::env::args_os().len(), cli.command.is_none()) {
@@ -469,12 +612,9 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 let exporter = resolve_serve_exporter(output, runtime_mode)?;
 
                 let kibana_url = kibana.unwrap_or_else(|| {
-                    let url = esdiag::env::get_string("ESDIAG_KIBANA_URL")
-                        .unwrap_or_else(|_| "http://localhost:5601".to_string());
-                    match esdiag::env::get_string("ESDIAG_KIBANA_SPACE").ok() {
-                        Some(space) => format!("{url}/s/{space}"),
-                        None => url,
-                    }
+                    esdiag::env::get_string("ESDIAG_KIBANA_URL")
+                        .map(|url| esdiag::env::append_kibana_space(&url))
+                        .unwrap_or_else(|_| "http://localhost:5601".to_string())
                 });
 
                 let (mut server, _bound_addr) =
@@ -483,7 +623,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 wait_for_shutdown_signal().await?;
 
                 server.shutdown().await;
-                Ok("serve")
+                Ok(CommandResult::named("serve"))
             }
             Commands::Collect {
                 host,
@@ -496,6 +636,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 case,
                 opportunity,
                 user,
+                upload_id,
             } => {
                 let known_host = Uri::try_from(host)?;
                 let output = Uri::try_from(output)?;
@@ -523,8 +664,9 @@ async fn run(cli: Cli) -> Result<&'static str> {
                         };
                         let exporter = Exporter::for_collect_archive(output_dir)?;
 
+                        let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
                         let filename =
-                            format!("esdiag-{}.zip", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+                            format!("{}.zip", default_collect_archive_name(&product, &timestamp));
                         let identifiers =
                             Identifiers::new(account, case, Some(filename), opportunity, user);
 
@@ -538,8 +680,18 @@ async fn run(cli: Cli) -> Result<&'static str> {
                             identifiers,
                         )
                         .await?;
-                        collector.collect().await?;
-                        Ok("collect")
+                        collect_with_optional_upload(
+                            collector.collect(),
+                            upload_id.as_deref(),
+                            upload_collected_archive,
+                        )
+                        .await
+                        .map(|result| {
+                            CommandResult::with_summary(
+                                "collect",
+                                format_collect_summary(&result),
+                            )
+                        })
                     }
                     Uri::ElasticCloud(_) => {
                         Err(eyre!("Elastic Cloud API collection not yet implemented"))
@@ -547,81 +699,65 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     _ => Err(eyre!("Collect requires a known host")),
                 }
             }
-            Commands::Host {
-                name,
-                app,
-                url,
-                accept_invalid_certs,
-                delete,
-                apikey,
-                username,
-                password,
-                secret,
-                roles,
-                nosave,
-            } => {
-                tracing::info!("Configuring host {name}");
-                let update = build_host_cli_update(
-                    accept_invalid_certs,
-                    apikey,
-                    username,
-                    password,
-                    secret,
-                    roles,
-                );
-                let mode = resolve_host_command_mode(delete, &app, &url, &update)?;
-
-                if mode == HostCommandMode::Delete {
+            Commands::Host { command } => match command {
+                HostCommands::Add {
+                    name,
+                    app,
+                    url,
+                    args,
+                } => {
+                    tracing::info!("Adding host {name}");
+                    if KnownHost::get_known(&name).is_some() {
+                        return Err(eyre!("Host '{name}' already exists"));
+                    }
+                    let update = build_host_cli_update(args);
+                    let secret_auth = resolve_host_secret_auth(update.secret.as_deref())?;
+                    let host = build_host_from_definition(app, url, &update, secret_auth)?;
+                    let summary = save_validated_host(&name, host, "added").await?;
+                    Ok(CommandResult::with_summary("host add", summary))
+                }
+                HostCommands::Update { name, args } => {
+                    tracing::info!("Updating host {name}");
+                    let update = build_host_cli_update(args);
+                    if update.is_empty() {
+                        return Err(eyre!(
+                            "No host update fields were provided. Use `esdiag host auth {name}` to test the saved host without modifying it."
+                        ));
+                    }
+                    let existing = KnownHost::get_known(&name)
+                        .ok_or_else(|| eyre!("Host '{name}' not found"))?;
+                    let secret_auth = if update.secret.is_some() {
+                        resolve_host_secret_auth(update.secret.as_deref())?
+                    } else {
+                        None
+                    };
+                    let host = existing.merge_cli_update(&update, secret_auth)?;
+                    let summary = save_validated_host(&name, host, "updated").await?;
+                    Ok(CommandResult::with_summary("host update", summary))
+                }
+                HostCommands::Remove { name } => {
+                    tracing::info!("Removing host {name}");
                     let hostfile = delete_host_from_cli(&name)?;
                     tracing::info!("Host {name} successfully deleted from {hostfile}");
-                    return Ok("host");
+                    Ok(CommandResult::with_summary(
+                        "host remove",
+                        format!("Host '{name}' removed from {hostfile}"),
+                    ))
                 }
-
-                let host = match mode {
-                    HostCommandMode::CreateOrReplace => {
-                        let secret_auth = resolve_host_secret_auth(update.secret.as_deref())?;
-                        build_host_from_definition(
-                            app.expect("app required for create-or-replace"),
-                            url.expect("url required for create-or-replace"),
-                            &update,
-                            secret_auth,
-                        )?
-                    }
-                    HostCommandMode::IncrementalUpdate => {
-                        let existing = KnownHost::get_known(&name).ok_or_else(|| {
-                            eyre!(
-                                "Host {name} not found, must include `url` and `app` to setup a new host."
-                            )
-                        })?;
-                        let secret_auth = if update.secret.is_some() {
-                            resolve_host_secret_auth(update.secret.as_deref())?
-                        } else {
-                            None
-                        };
-                        existing.merge_cli_update(&update, secret_auth)?
-                    }
-                    HostCommandMode::ValidateOnly => KnownHost::get_known(&name).ok_or_else(|| {
-                        eyre!(
-                            "Host {name} not found, must include `url` and `app` to setup a new host."
-                        )
-                    })?,
-                    HostCommandMode::Delete => unreachable!("delete handled earlier"),
-                };
-
-                let uri = Uri::try_from(host.clone())?;
-
-                let valid_connection = validate_host_connection(&name, uri).await?;
-
-                if valid_connection {
-                    if !nosave {
-                        let hostfile = host.save(&name)?;
-                        tracing::info!("Host {name} successfully saved to {hostfile}");
-                    }
-                    Ok("host")
-                } else {
-                    Err(eyre!("Host connection failed"))
+                HostCommands::List => {
+                    render_host_list()?;
+                    Ok(CommandResult::without_summary("host list"))
                 }
-            }
+                HostCommands::Auth { name } => {
+                    tracing::info!("Testing saved host {name}");
+                    let host = KnownHost::get_known(&name)
+                        .ok_or_else(|| eyre!("Host '{name}' not found"))?;
+                    let uri = Uri::try_from(host)?;
+                    let summary = validate_host_connection(&name, uri).await?;
+                    Ok(CommandResult::with_summary("host auth", summary))
+                }
+                HostCommands::Legacy(args) => Err(legacy_host_command_error(&args)),
+            },
             Commands::Keystore { command } => match command {
                 KeystoreCommands::Add {
                     secret_id,
@@ -635,7 +771,10 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     let path =
                         add_secret(&secret_id, username, password, apikey, &keystore_password)?;
                     tracing::info!("Secret '{secret_id}' saved to {path}");
-                    Ok("keystore")
+                    Ok(CommandResult::with_summary(
+                        "keystore",
+                        format_keystore_secret_summary("saved", &secret_id, &path),
+                    ))
                 }
                 KeystoreCommands::Update {
                     secret_id,
@@ -649,7 +788,10 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     let path =
                         update_secret(&secret_id, username, password, apikey, &keystore_password)?;
                     tracing::info!("Secret '{secret_id}' updated in {path}");
-                    Ok("keystore")
+                    Ok(CommandResult::with_summary(
+                        "keystore",
+                        format_keystore_secret_summary("updated", &secret_id, &path),
+                    ))
                 }
                 KeystoreCommands::Remove {
                     secret_id,
@@ -661,7 +803,10 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     let expected = expected_secret_auth(username, password, apikey)?;
                     let path = remove_secret(&secret_id, expected, &keystore_password)?;
                     tracing::info!("Secret '{secret_id}' deleted from {path}");
-                    Ok("keystore")
+                    Ok(CommandResult::with_summary(
+                        "keystore",
+                        format_keystore_secret_summary("deleted", &secret_id, &path),
+                    ))
                 }
                 KeystoreCommands::Unlock { ttl } => {
                     let ttl = ttl
@@ -681,18 +826,33 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     } else {
                         tracing::info!("Keystore unlocked via {}", unlock_path.display());
                     }
-                    Ok("keystore")
+                    let lock_status = format_keystore_lock_status(&status);
+                    let rendered_lock_status =
+                        colorize_keystore_lock_status(&lock_status, std::io::stderr().is_terminal());
+                    Ok(CommandResult::with_summary("keystore", rendered_lock_status))
                 }
                 KeystoreCommands::Lock => {
+                    let lock_status = format_keystore_lock_status(&esdiag::data::UnlockStatus {
+                        keystore_exists: keystore_exists()?,
+                        unlock_active: false,
+                        expires_at_epoch: None,
+                        unlock_path: esdiag::data::get_unlock_path()?,
+                    });
+                    let rendered_lock_status =
+                        colorize_keystore_lock_status(&lock_status, std::io::stderr().is_terminal());
                     if clear_unlock_lease()? {
                         tracing::info!("Keystore unlock lease removed");
                     } else {
                         tracing::info!("Keystore unlock lease was already absent");
                     }
-                    Ok("keystore")
+                    Ok(CommandResult::with_summary("keystore", rendered_lock_status))
                 }
                 KeystoreCommands::Status => {
                     let status = get_unlock_status()?;
+                    let keystore_path = get_keystore_path()?;
+                    let lock_status = format_keystore_lock_status(&status);
+                    let rendered_lock_status =
+                        colorize_keystore_lock_status(&lock_status, std::io::stderr().is_terminal());
                     tracing::info!(
                         "Keystore: {} ({})",
                         if status.keystore_exists {
@@ -700,22 +860,13 @@ async fn run(cli: Cli) -> Result<&'static str> {
                         } else {
                             "absent"
                         },
-                        status.unlock_path.display()
+                        keystore_path.display()
                     );
-                    if status.unlock_active {
-                        if let Some(expires_at_epoch) = status.expires_at_epoch {
-                            tracing::info!(
-                                "CLI unlock: active until {} ({})",
-                                format_epoch(expires_at_epoch),
-                                format_remaining_duration(expires_at_epoch)
-                            );
-                        } else {
-                            tracing::info!("CLI unlock: active");
-                        }
-                    } else {
-                        tracing::info!("CLI unlock: inactive");
-                    }
-                    Ok("keystore")
+                    tracing::info!("{rendered_lock_status}");
+                    Ok(CommandResult::with_summary(
+                        "keystore",
+                        rendered_lock_status,
+                    ))
                 }
                 KeystoreCommands::Password => {
                     if !keystore_exists()? {
@@ -726,7 +877,10 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     let new_password = prompt_new_keystore_password()?;
                     let path = rotate_keystore_password(&current_password, &new_password)?;
                     tracing::info!("Keystore password updated for {path}");
-                    Ok("keystore")
+                    Ok(CommandResult::with_summary(
+                        "keystore",
+                        format_keystore_password_summary(&path),
+                    ))
                 }
                 KeystoreCommands::Migrate => {
                     let keystore_password = get_password_for_secret_commands()?;
@@ -735,7 +889,10 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     tracing::info!(
                         "Keystore migration complete: migrated {migrated} host(s), unchanged {unchanged} host(s)."
                     );
-                    Ok("keystore")
+                    Ok(CommandResult::with_summary(
+                        "keystore",
+                        format_keystore_migrate_summary(migrated, unchanged),
+                    ))
                 }
             },
             Commands::Process {
@@ -777,11 +934,9 @@ async fn run(cli: Cli) -> Result<&'static str> {
 
                 match processor.process().await {
                     Ok(processor) => {
-                        tracing::info!(
-                            "Process complete in {:.3} seconds",
-                            processor.state.runtime as f64 / 1000.0
-                        );
-                        Ok("process")
+                        let summary =
+                            format_process_summary(&processor.state.report, processor.state.runtime);
+                        Ok(CommandResult::with_summary("process", summary))
                     }
                     Err(processor) => {
                         tracing::info!(
@@ -805,7 +960,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 );
                 let response = uploader::upload_file(&file_path, &upload_id, &api_url).await?;
                 tracing::info!("Upload complete for slug {}", response.slug);
-                Ok("upload")
+                Ok(CommandResult::named("upload"))
             }
             #[cfg(feature = "setup")]
             Commands::Setup { host } => {
@@ -814,7 +969,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     let client = Client::try_from(uri)?;
                     tracing::info!("Setting up assets in {client}");
                     setup::assets(&client).await?;
-                    Ok("setup")
+                    Ok(CommandResult::named("setup"))
                 } else {
                     tracing::debug!("Setting up assets with environment variables");
                     let es_uri = Uri::try_from_output_env()?;
@@ -825,22 +980,22 @@ async fn run(cli: Cli) -> Result<&'static str> {
                     let kb_client = Client::try_from(kb_uri)?;
                     tracing::info!("Setting up Kibana assets in {kb_client}");
                     setup::assets(&kb_client).await?;
-                    Ok("setup")
+                    Ok(CommandResult::named("setup"))
                 }
             }
             #[cfg(feature = "keystore")]
             Commands::Job { command } => match command {
                 JobCommands::List => {
                     esdiag::job::handle_job_list()?;
-                    Ok("job list")
+                    Ok(CommandResult::named("job list"))
                 }
                 JobCommands::Run { name } => {
                     esdiag::job::handle_job_run(&name).await?;
-                    Ok("job run")
+                    Ok(CommandResult::named("job run"))
                 }
                 JobCommands::Delete { name } => {
                     esdiag::job::handle_job_delete(&name)?;
-                    Ok("job delete")
+                    Ok(CommandResult::named("job delete"))
                 }
             },
         }
@@ -880,10 +1035,7 @@ async fn run(cli: Cli) -> Result<&'static str> {
                         let kibana_url = settings.kibana_url.unwrap_or_else(|| {
                             let url = esdiag::env::get_string("ESDIAG_KIBANA_URL")
                                 .unwrap_or_else(|_| "http://localhost:5601".to_string());
-                            match esdiag::env::get_string("ESDIAG_KIBANA_SPACE").ok() {
-                                Some(space) => format!("{url}/s/{space}"),
-                                None => url,
-                            }
+                            esdiag::env::append_kibana_space(&url)
                         });
 
                         let (mut server, bound_addr) = match Server::start(
@@ -936,7 +1088,11 @@ async fn run(cli: Cli) -> Result<&'static str> {
                 .run(tauri::generate_context!())
                 .expect("error while running tauri application");
 
-            Ok("tauri")
+            Ok(CommandResult {
+                name: "tauri",
+                summary: None,
+                emit_summary: false,
+            })
         }
         #[cfg(not(all(feature = "server", feature = "desktop")))]
         {
@@ -948,6 +1104,47 @@ async fn run(cli: Cli) -> Result<&'static str> {
             ))
         }
     }
+}
+
+async fn collect_with_optional_upload<CollectFut, UploadFn, UploadFut>(
+    collect_future: CollectFut,
+    upload_id: Option<&str>,
+    mut upload_fn: UploadFn,
+) -> Result<CollectionResult>
+where
+    CollectFut: Future<Output = Result<CollectionResult>>,
+    UploadFn: FnMut(PathBuf, String) -> UploadFut,
+    UploadFut: Future<Output = Result<()>>,
+{
+    let result = collect_future.await?;
+    if let Some(upload_id) = upload_id {
+        upload_fn(PathBuf::from(&result.path), upload_id.to_string()).await?;
+    }
+    Ok(result)
+}
+
+async fn upload_collected_archive(file_path: PathBuf, upload_id: String) -> Result<()> {
+    if !file_path.exists() {
+        return Err(eyre!(
+            "Collected archive not found at {}",
+            file_path.display()
+        ));
+    }
+    tracing::info!(
+        "Uploading collected archive {} to {}",
+        file_path.display(),
+        upload_id
+    );
+    let response = uploader::upload_file(&file_path, &upload_id, uploader::DEFAULT_UPLOAD_API_URL)
+        .await
+        .inspect_err(|_| {
+            tracing::warn!(
+                "Upload failed; collected archive remains available at {}",
+                file_path.display()
+            );
+        })?;
+    tracing::info!("Upload complete for slug {}", response.slug);
+    Ok(())
 }
 
 fn sources_product_key(product: &Product) -> Result<&'static str> {
@@ -1017,57 +1214,8 @@ fn expected_secret_auth(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HostCommandMode {
-    CreateOrReplace,
-    Delete,
-    IncrementalUpdate,
-    ValidateOnly,
-}
-
-fn build_host_cli_update(
-    accept_invalid_certs: Option<bool>,
-    apikey: Option<String>,
-    username: Option<String>,
-    password: Option<String>,
-    secret: Option<String>,
-    roles: Option<Vec<HostRole>>,
-) -> KnownHostCliUpdate {
-    KnownHostCliUpdate {
-        accept_invalid_certs,
-        apikey,
-        password,
-        roles,
-        secret,
-        username,
-    }
-}
-
-fn resolve_host_command_mode(
-    delete: bool,
-    app: &Option<Product>,
-    url: &Option<Url>,
-    update: &KnownHostCliUpdate,
-) -> Result<HostCommandMode> {
-    if app.is_some() ^ url.is_some() {
-        return Err(eyre!(
-            "Host definition requires both `app` and `url` when creating or replacing a host."
-        ));
-    }
-
-    if delete {
-        return Ok(HostCommandMode::Delete);
-    }
-
-    if app.is_some() && url.is_some() {
-        return Ok(HostCommandMode::CreateOrReplace);
-    }
-
-    if update.is_empty() {
-        Ok(HostCommandMode::ValidateOnly)
-    } else {
-        Ok(HostCommandMode::IncrementalUpdate)
-    }
+fn build_host_cli_update(args: HostMutationArgs) -> KnownHostCliUpdate {
+    args.into()
 }
 
 fn build_host_from_definition(
@@ -1090,6 +1238,51 @@ fn build_host_from_definition(
         Some(secret_auth) => builder.build_with_secret_auth(secret_auth),
         None => builder.build(),
     }
+}
+
+async fn save_validated_host(name: &str, host: KnownHost, action: &str) -> Result<String> {
+    let uri = Uri::try_from(host.clone())?;
+    let validation_summary = validate_host_connection(name, uri).await?;
+    let hostfile = host.save(name)?;
+    tracing::info!("Host {name} successfully saved to {hostfile}");
+    Ok(format!(
+        "{validation_summary}\nHost '{name}' {action} in {hostfile}"
+    ))
+}
+
+fn render_host_list() -> Result<()> {
+    let rows = KnownHost::list_saved_summaries()?;
+    if rows.is_empty() {
+        println!("No saved hosts");
+        return Ok(());
+    }
+
+    #[allow(clippy::literal_string_with_formatting_args)]
+    let header = format!("{:<24} {:<16} {}", "name", "app", "secret");
+    println!("{header}");
+    println!("{}", "-".repeat(56));
+
+    for row in rows {
+        println!(
+            "{:<24} {:<16} {}",
+            row.name,
+            row.app,
+            row.secret.unwrap_or_default()
+        );
+    }
+
+    Ok(())
+}
+
+fn legacy_host_command_error(args: &[String]) -> eyre::Report {
+    let attempted = if args.is_empty() {
+        "esdiag host".to_string()
+    } else {
+        format!("esdiag host {}", args.join(" "))
+    };
+    eyre!(
+        "Legacy positional host syntax is no longer supported. Use `esdiag host add <name> <app> <url>` to create a host, `esdiag host update <name>` to modify one, `esdiag host remove <name>` to delete one, `esdiag host list` to inspect saved hosts, or `esdiag host auth <name>` to test a saved host. Received: `{attempted}`"
+    )
 }
 
 fn cleanup_settings_after_host_delete(name: &str) -> Result<()> {
@@ -1254,6 +1447,55 @@ fn format_remaining_duration_from(now_epoch: i64, expires_at_epoch: i64) -> Stri
         format!("{minutes}m remaining")
     }
 }
+
+fn format_keystore_lock_status(status: &esdiag::data::UnlockStatus) -> String {
+    format_keystore_lock_status_at(chrono::Utc::now().timestamp(), status)
+}
+
+fn format_keystore_lock_status_at(
+    now_epoch: i64,
+    status: &esdiag::data::UnlockStatus,
+) -> String {
+    if status.unlock_active {
+        if let Some(expires_at_epoch) = status.expires_at_epoch {
+            return format!(
+                "Keystore: unlocked until {} ({})",
+                format_epoch(expires_at_epoch),
+                format_remaining_duration_from(now_epoch, expires_at_epoch)
+            );
+        }
+        return "Keystore: unlocked".to_string();
+    }
+
+    "Keystore: locked".to_string()
+}
+
+fn colorize_keystore_lock_status(status: &str, colorize: bool) -> String {
+    if !colorize {
+        return status.to_string();
+    }
+
+    if status.contains("Keystore: unlocked") {
+        return status.replacen("unlocked", "\x1b[32munlocked\x1b[0m", 1);
+    }
+    if status.contains("Keystore: locked") {
+        return status.replacen("locked", "\x1b[31mlocked\x1b[0m", 1);
+    }
+    status.to_string()
+}
+
+fn format_keystore_secret_summary(action: &str, secret_id: &str, path: &str) -> String {
+    format!("Secret '{secret_id}' {action} in {path}")
+}
+
+fn format_keystore_password_summary(path: &str) -> String {
+    format!("Keystore password updated for {path}")
+}
+
+fn format_keystore_migrate_summary(migrated: usize, unchanged: usize) -> String {
+    format!("Keystore migration complete: migrated {migrated} host(s), unchanged {unchanged} host(s).")
+}
+
 fn ensure_host_role(host: &KnownHost, role: HostRole, context: &str) -> Result<()> {
     if host.has_role(role.clone()) {
         Ok(())
@@ -1292,28 +1534,30 @@ fn host_connection_uses_receiver(uri: &Uri) -> bool {
     )
 }
 
-async fn validate_host_connection(name: &str, uri: Uri) -> Result<bool> {
+async fn validate_host_connection(name: &str, uri: Uri) -> Result<String> {
     if host_connection_uses_receiver(&uri) {
         let receiver = Receiver::try_from(uri)?;
         if receiver.is_connected().await {
-            tracing::info!("Host {name}: connected to Elastic Cloud Admin proxy");
-            return Ok(true);
+            let summary = format!("Host {name}: connected to Elastic Cloud Admin proxy");
+            tracing::info!("{summary}");
+            return Ok(summary);
         }
 
         tracing::error!("Host connection: FAILED ❌ Elastic Cloud Admin proxy connection failed");
         tracing::warn!("Check your URL, certificates, and secret credentials!");
-        return Ok(false);
+        return Err(eyre!("Host connection failed"));
     }
 
     match Client::try_from(uri)?.test_connection().await {
         Ok(message) => {
-            tracing::info!("Host {name}: {}", &message);
-            Ok(true)
+            let summary = format!("Host {name}: {message}");
+            tracing::info!("{summary}");
+            Ok(summary)
         }
         Err(message) => {
             tracing::error!("Host connection: FAILED ❌ {}", &message);
             tracing::warn!("Check your URL and certificates!");
-            Ok(false)
+            Err(eyre!("Host connection failed"))
         }
     }
 }
@@ -1372,19 +1616,29 @@ fn resolve_serve_exporter(output: Option<String>, runtime_mode: RuntimeMode) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, Commands, KeystoreCommands, format_remaining_duration_from,
-        host_connection_uses_receiver, resolve_host_secret_auth, resolve_secret_input_with_prompt,
-        should_error_for_missing_subcommand,
+        Cli, CommandResult, Commands, HostCommands, KeystoreCommands,
+        colorize_keystore_lock_status, collect_with_optional_upload, format_collect_summary,
+        format_keystore_lock_status, format_keystore_lock_status_at,
+        format_keystore_migrate_summary, format_keystore_password_summary,
+        format_keystore_secret_summary, format_process_summary, format_remaining_duration_from,
+        host_connection_uses_receiver, is_agent_mode, resolve_host_secret_auth,
+        resolve_secret_input_with_prompt, resolve_tracing_filter,
+        should_error_for_missing_subcommand, upload_collected_archive, write_completion_summary,
     };
     #[cfg(feature = "server")]
     use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
     use clap::Parser;
-    use esdiag::data::{
-        ElasticCloud, HostRole, KnownHost, Product, SecretAuth, Uri, upsert_secret_auth,
-    };
+    use esdiag::data::{HostRole, KnownHost, Product, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
+    use esdiag::processor::{CollectionResult, DiagnosticManifest};
+    use esdiag::processor::diagnostic::DiagnosticReportBuilder;
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
-    use std::sync::{Mutex, OnceLock};
+    use std::{
+        sync::{
+            Mutex, OnceLock,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
     use tempfile::TempDir;
     use url::Url;
 
@@ -1422,10 +1676,20 @@ mod tests {
     }
 
     #[test]
-    fn host_roles_cli_parses_comma_delimited_values() {
+    fn agent_flag_parses_long_and_short_forms() {
+        let cli = Cli::parse_from(["esdiag", "--agent", "keystore", "status"]);
+        assert!(cli.agent, "long --agent should enable agent mode");
+
+        let cli = Cli::parse_from(["esdiag", "-a", "keystore", "status"]);
+        assert!(cli.agent, "short -a should enable agent mode");
+    }
+
+    #[test]
+    fn host_add_parses_comma_delimited_role_values() {
         let cli = Cli::parse_from([
             "esdiag",
             "host",
+            "add",
             "prod-es",
             "elasticsearch",
             "http://localhost:9200",
@@ -1433,28 +1697,30 @@ mod tests {
             "collect,send",
         ]);
         match cli.command.expect("command") {
-            Commands::Host { roles, .. } => {
-                assert_eq!(roles, Some(vec![HostRole::Collect, HostRole::Send]));
+            Commands::Host {
+                command: HostCommands::Add { args, .. },
+            } => {
+                assert_eq!(args.roles, Some(vec![HostRole::Collect, HostRole::Send]));
             }
             _ => panic!("expected host command"),
         }
     }
 
     #[test]
-    fn host_accept_invalid_certs_cli_parses_explicit_bool_values() {
+    fn host_update_accept_invalid_certs_cli_parses_explicit_bool_values() {
         let cli_true = Cli::parse_from([
             "esdiag",
             "host",
+            "update",
             "prod-es",
             "--accept-invalid-certs",
             "true",
         ]);
         match cli_true.command.expect("command") {
             Commands::Host {
-                accept_invalid_certs,
-                ..
+                command: HostCommands::Update { args, .. },
             } => {
-                assert_eq!(accept_invalid_certs, Some(true));
+                assert_eq!(args.accept_invalid_certs, Some(true));
             }
             _ => panic!("expected host command"),
         }
@@ -1462,27 +1728,39 @@ mod tests {
         let cli_false = Cli::parse_from([
             "esdiag",
             "host",
+            "update",
             "prod-es",
             "--accept-invalid-certs",
             "false",
         ]);
         match cli_false.command.expect("command") {
             Commands::Host {
-                accept_invalid_certs,
-                ..
+                command: HostCommands::Update { args, .. },
             } => {
-                assert_eq!(accept_invalid_certs, Some(false));
+                assert_eq!(args.accept_invalid_certs, Some(false));
             }
             _ => panic!("expected host command"),
         }
     }
 
     #[test]
-    fn host_delete_conflicts_with_update_fields() {
-        let result = Cli::try_parse_from([
-            "esdiag", "host", "prod-es", "--delete", "--secret", "rotated",
-        ]);
-        assert!(result.is_err(), "delete should conflict with update fields");
+    fn host_legacy_positional_syntax_is_captured_as_legacy_subcommand() {
+        let cli = Cli::parse_from(["esdiag", "host", "prod-es", "--secret", "rotated"]);
+        match cli.command.expect("command") {
+            Commands::Host {
+                command: HostCommands::Legacy(args),
+            } => {
+                assert_eq!(
+                    args,
+                    vec![
+                        "prod-es".to_string(),
+                        "--secret".to_string(),
+                        "rotated".to_string()
+                    ]
+                );
+            }
+            _ => panic!("expected legacy host command"),
+        }
     }
 
     #[test]
@@ -1542,6 +1820,218 @@ mod tests {
     }
 
     #[test]
+    fn keystore_status_reports_locked_state() {
+        let status = UnlockStatus {
+            keystore_exists: true,
+            unlock_active: false,
+            expires_at_epoch: None,
+            unlock_path: std::path::PathBuf::from("/tmp/keystore.unlock"),
+        };
+
+        assert_eq!(format_keystore_lock_status(&status), "Keystore: locked");
+    }
+
+    #[test]
+    fn keystore_status_reports_unlock_expiry() {
+        let status = UnlockStatus {
+            keystore_exists: true,
+            unlock_active: true,
+            expires_at_epoch: Some(1_700_003_660),
+            unlock_path: std::path::PathBuf::from("/tmp/keystore.unlock"),
+        };
+
+        assert_eq!(
+            format_keystore_lock_status_at(1_700_000_000, &status),
+            "Keystore: unlocked until 2023-11-14T23:14:20+00:00 (1h 1m remaining)"
+        );
+    }
+
+    #[test]
+    fn keystore_status_colorizes_locked_state_when_enabled() {
+        assert_eq!(
+            colorize_keystore_lock_status("Keystore: locked", true),
+            "Keystore: \u{1b}[31mlocked\u{1b}[0m"
+        );
+    }
+
+    #[test]
+    fn keystore_status_colorizes_unlocked_state_when_enabled() {
+        assert_eq!(
+            colorize_keystore_lock_status("Keystore: unlocked until later", true),
+            "Keystore: \u{1b}[32munlocked\u{1b}[0m until later"
+        );
+    }
+
+    #[test]
+    fn keystore_status_leaves_plain_text_when_color_disabled() {
+        assert_eq!(
+            colorize_keystore_lock_status("Keystore: locked", false),
+            "Keystore: locked"
+        );
+    }
+
+    #[test]
+    fn collect_command_parses_upload_id() {
+        let cli = Cli::parse_from([
+            "esdiag", "collect", "prod-es", "diag-dir", "--upload", "abc123",
+        ]);
+        match cli.command.expect("command") {
+            Commands::Collect {
+                host,
+                output,
+                upload_id,
+                user,
+                ..
+            } => {
+                assert_eq!(host, "prod-es");
+                assert_eq!(output, "diag-dir");
+                assert_eq!(upload_id, Some("abc123".to_string()));
+                assert_eq!(user, None);
+            }
+            _ => panic!("expected collect command"),
+        }
+    }
+
+    #[test]
+    fn collect_command_keeps_user_short_option() {
+        let cli = Cli::parse_from([
+            "esdiag", "collect", "prod-es", "diag-dir", "-u", "elastic", "--upload", "abc123",
+        ]);
+        match cli.command.expect("command") {
+            Commands::Collect {
+                upload_id, user, ..
+            } => {
+                assert_eq!(user, Some("elastic".to_string()));
+                assert_eq!(upload_id, Some("abc123".to_string()));
+            }
+            _ => panic!("expected collect command"),
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_with_optional_upload_uses_resolved_runtime_archive_path() {
+        let upload_calls = AtomicUsize::new(0);
+        let result = collect_with_optional_upload(
+            std::future::ready(Ok(CollectionResult {
+                path: "/tmp/runtime-generated-esdiag.zip".to_string(),
+                success: 1,
+                total: 1,
+            })),
+            Some("https://upload.elastic.co/g/abc123"),
+            |path, upload_id| {
+                upload_calls.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(
+                    path,
+                    std::path::PathBuf::from("/tmp/runtime-generated-esdiag.zip")
+                );
+                assert_eq!(upload_id, "https://upload.elastic.co/g/abc123".to_string());
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
+        .expect("collect with upload succeeds");
+
+        assert_eq!(result.path, "/tmp/runtime-generated-esdiag.zip");
+        assert_eq!(upload_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn collect_with_optional_upload_skips_upload_when_collect_fails() {
+        let upload_calls = AtomicUsize::new(0);
+        let result = collect_with_optional_upload(
+            std::future::ready(Err(eyre::eyre!("collect failed"))),
+            Some("abc123"),
+            |_path, _upload_id| {
+                upload_calls.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Ok(()))
+            },
+        )
+        .await;
+
+        let err = match result {
+            Ok(_) => panic!("collect failure should be returned"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("collect failed"));
+        assert_eq!(upload_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn collect_with_optional_upload_skips_upload_when_no_upload_id_is_provided() {
+        let upload_calls = AtomicUsize::new(0);
+        let result = collect_with_optional_upload(
+            std::future::ready(Ok(CollectionResult {
+                path: "/tmp/collect-only-esdiag.zip".to_string(),
+                success: 1,
+                total: 1,
+            })),
+            None,
+            |_path, _upload_id| {
+                upload_calls.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
+        .expect("collect without upload id succeeds");
+
+        assert_eq!(result.path, "/tmp/collect-only-esdiag.zip");
+        assert_eq!(upload_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn collect_with_optional_upload_returns_upload_error_and_keeps_archive() {
+        let file = tempfile::Builder::new()
+            .prefix("diag-")
+            .suffix(".zip")
+            .tempfile()
+            .expect("temp file");
+        let path = file.path().to_path_buf();
+        let upload_calls = AtomicUsize::new(0);
+
+        let result = collect_with_optional_upload(
+            std::future::ready(Ok(CollectionResult {
+                path: path.display().to_string(),
+                success: 1,
+                total: 1,
+            })),
+            Some("abc123"),
+            |upload_path, upload_id| {
+                upload_calls.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(upload_path, path);
+                assert_eq!(upload_id, "abc123".to_string());
+                assert!(upload_path.exists(), "collected archive should still exist");
+                std::future::ready(Err(eyre::eyre!("upload failed")))
+            },
+        )
+        .await;
+
+        let err = match result {
+            Ok(_) => panic!("upload failure should be returned"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("upload failed"));
+        assert_eq!(upload_calls.load(Ordering::SeqCst), 1);
+        assert!(
+            path.exists(),
+            "upload failure should preserve collected archive"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_collected_archive_returns_clear_error_when_file_is_missing() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let missing_path = temp_dir.path().join("missing-diag.zip");
+
+        let err = upload_collected_archive(missing_path.clone(), "abc123".to_string())
+            .await
+            .expect_err("missing archive should fail");
+
+        assert!(err.to_string().contains(&format!(
+            "Collected archive not found at {}",
+            missing_path.display()
+        )));
+    }
+    #[test]
     fn upload_command_parses_file_and_upload_id() {
         let cli = Cli::parse_from(["esdiag", "upload", "diag.zip", "abc123"]);
         match cli.command.expect("command") {
@@ -1559,33 +2049,189 @@ mod tests {
     }
 
     #[test]
+    fn agent_mode_auto_enables_from_claudecode_env() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("CLAUDECODE", "1");
+        }
+
+        let cli = Cli::parse_from(["esdiag", "keystore", "status"]);
+        assert!(is_agent_mode(&cli));
+
+        unsafe {
+            std::env::remove_var("CLAUDECODE");
+        }
+    }
+
+    #[test]
+    fn debug_overrides_agent_warn_filter() {
+        let cli = Cli {
+            debug: true,
+            agent: true,
+            command: None,
+        };
+
+        assert_eq!(resolve_tracing_filter(&cli).to_string(), "debug");
+    }
+
+    #[test]
+    fn agent_mode_uses_warn_filter_without_debug() {
+        let cli = Cli {
+            debug: false,
+            agent: true,
+            command: None,
+        };
+
+        assert_eq!(resolve_tracing_filter(&cli).to_string(), "warn");
+    }
+
+    #[test]
+    fn write_completion_summary_writes_to_provided_writer() {
+        let mut buffer = Vec::new();
+
+        write_completion_summary(&mut buffer, "process complete").expect("write summary");
+
+        assert_eq!(
+            String::from_utf8(buffer).expect("utf8"),
+            "process complete\n"
+        );
+    }
+
+    #[test]
+    fn keystore_status_uses_lock_status_as_stderr_summary() {
+        let result = CommandResult::with_summary("keystore", "Keystore: locked".to_string());
+
+        assert_eq!(result.summary().as_deref(), Some("Keystore: locked"));
+    }
+
+    #[test]
+    fn keystore_lock_uses_locked_stderr_summary() {
+        let result = CommandResult::with_summary(
+            "keystore",
+            colorize_keystore_lock_status("Keystore: locked", false),
+        );
+
+        assert_eq!(result.summary().as_deref(), Some("Keystore: locked"));
+    }
+
+    #[test]
+    fn keystore_unlock_uses_unlocked_stderr_summary() {
+        let result = CommandResult::with_summary(
+            "keystore",
+            colorize_keystore_lock_status("Keystore: unlocked until later", false),
+        );
+
+        assert_eq!(
+            result.summary().as_deref(),
+            Some("Keystore: unlocked until later")
+        );
+    }
+
+    #[test]
+    fn keystore_secret_summary_is_useful() {
+        assert_eq!(
+            format_keystore_secret_summary("saved", "prod-es", "/tmp/secrets.yml"),
+            "Secret 'prod-es' saved in /tmp/secrets.yml"
+        );
+    }
+
+    #[test]
+    fn keystore_password_summary_is_useful() {
+        assert_eq!(
+            format_keystore_password_summary("/tmp/secrets.yml"),
+            "Keystore password updated for /tmp/secrets.yml"
+        );
+    }
+
+    #[test]
+    fn keystore_migrate_summary_is_useful() {
+        assert_eq!(
+            format_keystore_migrate_summary(2, 3),
+            "Keystore migration complete: migrated 2 host(s), unchanged 3 host(s)."
+        );
+    }
+
+    #[test]
+    fn keystore_subcommands_do_not_fall_back_to_generic_summary() {
+        let result = CommandResult::with_summary(
+            "keystore",
+            format_keystore_secret_summary("saved", "prod-es", "/tmp/secrets.yml"),
+        );
+
+        assert_ne!(result.summary().as_deref(), Some("keystore complete"));
+    }
+
+    #[test]
+    fn collect_summary_uses_collected_counts_and_path() {
+        let summary = format_collect_summary(&CollectionResult {
+            path: "target/esdiag-20260403-220233.zip".to_string(),
+            success: 21,
+            total: 21,
+        });
+
+        assert_eq!(
+            summary,
+            "Collected 21 of 21 files into target/esdiag-20260403-220233.zip"
+        );
+    }
+
+    #[test]
+    fn process_summary_includes_kibana_link_for_stderr_output() {
+        let manifest = DiagnosticManifest::new(
+            "2024-01-01T00:00:00Z".to_string(),
+            Some("esdiag-test".to_string()),
+            None,
+            None,
+            Some("minimal".to_string()),
+            Product::Elasticsearch,
+            Some("elasticsearch_diagnostic".to_string()),
+            Some("esdiag".to_string()),
+            Some("8.15.0".to_string()),
+        );
+        let mut report = DiagnosticReportBuilder::try_from(manifest)
+            .expect("report builder")
+            .receiver("Elasticsearch http://localhost:9200".to_string())
+            .product(Product::Elasticsearch)
+            .build()
+            .expect("report");
+        report.add_kibana_link("https://kb.example/app/dashboards#/view/report".to_string());
+        let summary = format_process_summary(&report, 1_234);
+
+        let mut buffer = Vec::new();
+        write_completion_summary(&mut buffer, &summary).expect("write summary");
+
+        let stderr = String::from_utf8(buffer).expect("utf8");
+        assert!(stderr.contains("process complete in 1.234 seconds"));
+        assert!(stderr.contains("Kibana Link: https://kb.example/app/dashboards#/view/report"));
+    }
+
+    #[test]
     fn elastic_cloud_admin_hosts_validate_via_receiver() {
-        let uri = Uri::ElasticCloudAdmin(KnownHost::ApiKey {
-            accept_invalid_certs: false,
-            apikey: None,
-            app: Product::Elasticsearch,
-            cloud_id: Some(ElasticCloud::ElasticCloudAdmin),
-            roles: vec![HostRole::Collect],
-            secret: Some("ada-admin".to_string()),
-            viewer: None,
-            url: Url::parse(
+        let uri = Uri::ElasticCloudAdmin(KnownHost::new_legacy_apikey(
+            Product::Elasticsearch,
+            Url::parse(
                 "https://admin.found.no/api/v1/deployments/test/elasticsearch/main-elasticsearch/proxy",
             )
             .expect("valid url"),
-        });
+            vec![HostRole::Collect],
+            None,
+            false,
+            Some("ada-admin".to_string()),
+            None,
+        ));
 
         assert!(host_connection_uses_receiver(&uri));
     }
 
     #[test]
     fn standard_known_hosts_validate_via_client() {
-        let uri = Uri::KnownHost(KnownHost::NoAuth {
-            accept_invalid_certs: false,
-            app: Product::Elasticsearch,
-            roles: vec![HostRole::Collect],
-            viewer: None,
-            url: Url::parse("http://localhost:9200").expect("valid url"),
-        });
+        let uri = Uri::KnownHost(KnownHost::new_no_auth(
+            Product::Elasticsearch,
+            Url::parse("http://localhost:9200").expect("valid url"),
+            vec![HostRole::Collect],
+            None,
+            false,
+        ));
 
         assert!(!host_connection_uses_receiver(&uri));
     }

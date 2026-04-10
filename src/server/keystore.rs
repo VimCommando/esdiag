@@ -1,4 +1,7 @@
-use super::{ServerState, append_body_event, execute_script_event, html_event, signal_event};
+use super::{
+    ServerState, append_body_event, execute_script_event, html_event, now_epoch_seconds,
+    signal_event,
+};
 use crate::data::{HostRole, KnownHost, Settings, authenticate, keystore_exists};
 use crate::server::template::{
     self, KeystoreBootstrapModal, KeystoreProcessUnlockModal, KeystoreUnlockModal,
@@ -6,12 +9,237 @@ use crate::server::template::{
 use askama::Template;
 use axum::{
     extract::{Form, State},
-    http::{HeaderMap, HeaderValue, header::RETRY_AFTER},
+    http::{HeaderValue, header::RETRY_AFTER},
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
+
+#[derive(Clone, Debug, Default)]
+pub struct KeystoreRateLimit {
+    pub failed_attempts: u32,
+    pub blocked_until_epoch: Option<i64>,
+    last_lock_transition_epoch: Option<i64>,
+    /// Tracks the last observed unlock state so we can detect transitions
+    /// (e.g. lease expiry or CLI lock) and publish SSE signals to the browser.
+    last_seen_unlocked: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct KeystorePageState {
+    pub can_use_keystore: bool,
+    pub locked: bool,
+    pub lock_time: i64,
+    pub show_bootstrap: bool,
+}
+
+impl KeystoreRateLimit {
+    fn current_backoff_seconds(&self) -> u64 {
+        if self.failed_attempts <= 3 {
+            return 0;
+        }
+        let over = self.failed_attempts - 3;
+        let minutes = (over as u64).saturating_mul(5).min(60);
+        minutes * 60
+    }
+}
+
+impl ServerState {
+    pub(crate) async fn keystore_page_state(&self) -> KeystorePageState {
+        #[cfg(feature = "keystore")]
+        {
+            if !self.can_use_keystore_session() {
+                return KeystorePageState::default();
+            }
+
+            let (locked, lock_time) = self.keystore_status().await;
+            KeystorePageState {
+                can_use_keystore: true,
+                locked,
+                lock_time,
+                show_bootstrap: !keystore_exists().unwrap_or(false),
+            }
+        }
+        #[cfg(not(feature = "keystore"))]
+        {
+            KeystorePageState::default()
+        }
+    }
+
+    fn observe_keystore_lock_state(&self) -> (bool, i64, bool) {
+        let unlocked = matches!(crate::data::read_unlock_lease(), Ok(Some(_)));
+        let now = now_epoch_seconds();
+        let mut rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+        let previous = rate_limit.last_seen_unlocked;
+        let transitioned_to_locked = previous == Some(true) && !unlocked;
+        if previous != Some(unlocked) {
+            rate_limit.last_seen_unlocked = Some(unlocked);
+            rate_limit.last_lock_transition_epoch = Some(now);
+        }
+        let lock_time = *rate_limit.last_lock_transition_epoch.get_or_insert(now);
+        (!unlocked, lock_time, transitioned_to_locked)
+    }
+
+    fn render_keystore_signal_payload(locked: bool, lock_time: i64) -> String {
+        format!(r#"{{"keystore":{{"locked":{},"lock_time":{}}}}}"#, locked, lock_time)
+    }
+
+    pub(crate) fn can_use_keystore_session(&self) -> bool {
+        self.runtime_mode_policy.allows_local_runtime_features()
+            && !self.runtime_mode_policy.requires_iap_headers()
+    }
+
+    pub async fn keystore_status(&self) -> (bool, i64) {
+        if !self.can_use_keystore_session() {
+            return (true, 0);
+        }
+        let (locked, lock_time, transitioned_to_locked) = self.observe_keystore_lock_state();
+        if transitioned_to_locked {
+            tracing::info!("Keystore lease expired or was cleared externally");
+            self.publish_event(signal_event(Self::render_keystore_signal_payload(
+                locked, lock_time,
+            )));
+        }
+        (locked, lock_time)
+    }
+
+    pub async fn is_keystore_unlocked(&self) -> bool {
+        if !self.can_use_keystore_session() {
+            return false;
+        }
+        matches!(crate::data::read_unlock_lease(), Ok(Some(_)))
+    }
+
+    pub async fn touch_keystore_session(&self) {
+        // No-op: file-based unlock leases are not refreshed on access.
+    }
+
+    pub async fn set_keystore_unlocked(&self, password: String) {
+        if !self.can_use_keystore_session() {
+            tracing::warn!(
+                "Ignoring keystore unlock because keystore is unavailable in this runtime mode"
+            );
+            return;
+        }
+        if let Err(err) =
+            crate::data::write_unlock_lease(&password, crate::data::default_unlock_ttl())
+        {
+            tracing::error!("Failed to write keystore unlock lease: {}", err);
+            return;
+        }
+        {
+            let mut rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+            rate_limit.failed_attempts = 0;
+            rate_limit.blocked_until_epoch = None;
+            rate_limit.last_seen_unlocked = Some(true);
+            rate_limit.last_lock_transition_epoch = Some(now_epoch_seconds());
+        }
+        self.publish_event(signal_event(self.keystore_signal_payload().await));
+        tracing::info!("Keystore authentication succeeded for the local user session");
+    }
+
+    pub async fn set_keystore_locked(&self, reason: &str) {
+        if !self.can_use_keystore_session() {
+            return;
+        }
+        if let Err(err) = crate::data::clear_unlock_lease() {
+            tracing::error!("Failed to clear keystore unlock lease: {}", err);
+        }
+        {
+            let mut rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+            rate_limit.last_seen_unlocked = Some(false);
+            rate_limit.last_lock_transition_epoch = Some(now_epoch_seconds());
+        }
+        self.publish_event(signal_event(self.keystore_signal_payload().await));
+        tracing::info!("Keystore locked for the local user session: {reason}");
+    }
+
+    pub async fn record_keystore_failed_attempt(&self) -> Option<i64> {
+        if !self.can_use_keystore_session() {
+            return None;
+        }
+        let blocked_until = {
+            let mut rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+            rate_limit.failed_attempts = rate_limit.failed_attempts.saturating_add(1);
+            let block_seconds = rate_limit.current_backoff_seconds();
+            if block_seconds > 0 {
+                rate_limit.blocked_until_epoch =
+                    Some(now_epoch_seconds() + block_seconds as i64);
+            }
+            rate_limit.blocked_until_epoch
+        };
+        tracing::warn!("Keystore authentication failed for the local user session");
+        self.publish_event(signal_event(self.keystore_signal_payload().await));
+        blocked_until
+    }
+
+    pub async fn keystore_signal_payload(&self) -> String {
+        if !self.can_use_keystore_session() {
+            return r#"{"keystore":{"locked":true,"lock_time":0}}"#.to_string();
+        }
+        let (locked, lock_time, _) = self.observe_keystore_lock_state();
+        Self::render_keystore_signal_payload(locked, lock_time)
+    }
+
+    pub async fn keystore_blocked_until(&self) -> Option<i64> {
+        if !self.can_use_keystore_session() {
+            return None;
+        }
+        let rate_limit = self.keystore_rate_limit.lock().expect("rate limit lock");
+        let blocked_until = rate_limit.blocked_until_epoch;
+        let now = now_epoch_seconds();
+        if let Some(until) = blocked_until
+            && until <= now
+        {
+            return None;
+        }
+        blocked_until
+    }
+
+    pub async fn keystore_password(&self) -> Option<String> {
+        if !self.can_use_keystore_session() {
+            return None;
+        }
+        match crate::data::get_password_from_unlock_file() {
+            Ok(Some(password)) => Some(password),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn keystore_failed_attempts(&self) -> u32 {
+        self.keystore_rate_limit
+            .lock()
+            .expect("rate limit lock")
+            .failed_attempts
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct KeystoreStatusResponse {
+    locked: bool,
+    expires_at_epoch: Option<i64>,
+}
+
+pub async fn status(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
+    if !state.can_use_keystore_session() {
+        return axum::Json(KeystoreStatusResponse {
+            locked: true,
+            expires_at_epoch: None,
+        });
+    }
+    match crate::data::read_unlock_lease() {
+        Ok(Some(lease)) => axum::Json(KeystoreStatusResponse {
+            locked: false,
+            expires_at_epoch: Some(lease.expires_at_epoch),
+        }),
+        _ => axum::Json(KeystoreStatusResponse {
+            locked: true,
+            expires_at_epoch: None,
+        }),
+    }
+}
 
 #[derive(Deserialize, Default)]
 pub(crate) struct KeystoreForm {
@@ -21,19 +249,9 @@ pub(crate) struct KeystoreForm {
     confirm: Option<String>,
 }
 
-fn resolve_request_user(state: &Arc<ServerState>, headers: &HeaderMap) -> String {
-    state
-        .resolve_user_email(headers)
-        .map(|(_, user)| user)
-        .unwrap_or_else(|_| "Anonymous".to_string())
-}
-
-pub async fn get_unlock_modal(
-    State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn get_unlock_modal(State(state): State<Arc<ServerState>>) -> Response {
     if !keystore_exists().unwrap_or(false) {
-        return get_bootstrap_modal(State(state), headers).await;
+        return get_bootstrap_modal(State(state)).await;
     }
     let modal = KeystoreUnlockModal {};
     match modal.render() {
@@ -43,12 +261,9 @@ pub async fn get_unlock_modal(
     axum::http::StatusCode::NO_CONTENT.into_response()
 }
 
-pub async fn get_process_unlock_modal(
-    State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn get_process_unlock_modal(State(state): State<Arc<ServerState>>) -> Response {
     if !keystore_exists().unwrap_or(false) {
-        return get_bootstrap_modal(State(state), headers).await;
+        return get_bootstrap_modal(State(state)).await;
     }
 
     let modal = KeystoreProcessUnlockModal {};
@@ -84,17 +299,17 @@ fn missing_keystore_unlock_message() -> &'static str {
     }
 }
 
-async fn missing_keystore_response(state: &Arc<ServerState>, headers: HeaderMap) -> Response {
+async fn missing_keystore_response(state: &Arc<ServerState>) -> Response {
     state.publish_event(signal_event(format!(
         r#"{{"message":"{}"}}"#,
         missing_keystore_unlock_message()
     )));
-    let _ = get_bootstrap_modal(State(state.clone()), headers).await;
+    get_bootstrap_modal(State(state.clone())).await;
     axum::http::StatusCode::PRECONDITION_FAILED.into_response()
 }
 
-async fn blocked_unlock_response(state: &Arc<ServerState>, user: &str) -> Option<Response> {
-    let blocked_until = state.keystore_blocked_until_for(user).await?;
+async fn blocked_unlock_response(state: &Arc<ServerState>) -> Option<Response> {
+    let blocked_until = state.keystore_blocked_until().await?;
     let now = chrono::Utc::now().timestamp();
     if blocked_until <= now {
         return None;
@@ -112,10 +327,7 @@ async fn blocked_unlock_response(state: &Arc<ServerState>, user: &str) -> Option
     Some(response)
 }
 
-pub async fn get_bootstrap_modal(
-    State(state): State<Arc<ServerState>>,
-    _headers: HeaderMap,
-) -> Response {
+pub async fn get_bootstrap_modal(State(state): State<Arc<ServerState>>) -> Response {
     if keystore_exists().unwrap_or(false) {
         return axum::http::StatusCode::NO_CONTENT.into_response();
     }
@@ -132,7 +344,6 @@ pub async fn get_bootstrap_modal(
 
 pub async fn bootstrap(
     State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
     Form(form): Form<KeystoreForm>,
 ) -> Response {
     if keystore_exists().unwrap_or(false) {
@@ -176,8 +387,7 @@ pub async fn bootstrap(
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    let user = resolve_request_user(&state, &headers);
-    state.set_keystore_unlocked_for(&user, password).await;
+    state.set_keystore_unlocked(password).await;
     state.publish_event(signal_event(
         r#"{"keystore":{"password":"","invalid":false,"confirm":false}}"#,
     ));
@@ -192,15 +402,13 @@ pub async fn bootstrap(
 
 pub async fn unlock(
     State(state): State<Arc<ServerState>>,
-    headers: HeaderMap,
     Form(form): Form<KeystoreForm>,
 ) -> Response {
-    let user = resolve_request_user(&state, &headers);
     if !keystore_exists().unwrap_or(false) {
-        return missing_keystore_response(&state, headers).await;
+        return missing_keystore_response(&state).await;
     }
 
-    if let Some(response) = blocked_unlock_response(&state, &user).await {
+    if let Some(response) = blocked_unlock_response(&state).await {
         return response;
     }
 
@@ -217,7 +425,7 @@ pub async fn unlock(
 
     match authenticate(&password) {
         Ok(_) => {
-            state.set_keystore_unlocked_for(&user, password).await;
+            state.set_keystore_unlocked(password).await;
             state.publish_event(signal_event(
                 r#"{"keystore":{"password":"","invalid":false}}"#,
             ));
@@ -233,7 +441,7 @@ pub async fn unlock(
             axum::http::StatusCode::NO_CONTENT.into_response()
         }
         Err(err) => {
-            state.record_keystore_failed_attempt_for(&user).await;
+            state.record_keystore_failed_attempt().await;
             state.publish_event(signal_event(
                 r#"{"message":"Invalid keystore password. Try again."}"#,
             ));
@@ -246,9 +454,8 @@ pub async fn unlock(
     }
 }
 
-pub async fn lock(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> impl IntoResponse {
-    let user = resolve_request_user(&state, &headers);
-    state.set_keystore_locked_for(&user, "manual").await;
+pub async fn lock(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
+    state.set_keystore_locked("manual").await;
     state.publish_event(execute_script_event(
         "if (window.location.pathname === '/settings') { window.location.reload(); }",
     ));
@@ -257,17 +464,15 @@ pub async fn lock(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> 
 
 pub async fn ensure_unlocked_for_active_output(
     state: &Arc<ServerState>,
-    user: &str,
 ) -> Result<(), String> {
-    let exporter = state.exporter.read().await.clone();
     if !cfg!(feature = "keystore") || !state.runtime_mode_policy.allows_local_runtime_features() {
         // When the keystore is unavailable, the active exporter can still be valid if its
         // credentials were provided directly by the runtime environment instead of local
         // keystore-backed settings. In that mode there is nothing to unlock here.
-        let _ = exporter;
         return Ok(());
     }
 
+    let exporter = state.exporter.read().await.clone();
     let hosts_by_name = KnownHost::parse_hosts_yml().unwrap_or_default();
     let send_hosts: Vec<String> = hosts_by_name
         .iter()
@@ -293,11 +498,11 @@ pub async fn ensure_unlocked_for_active_output(
         return Ok(());
     }
 
-    if !state.is_keystore_unlocked_for(user).await {
+    if !state.is_keystore_unlocked().await {
         return Err("Keystore is locked. Unlock it before processing secure outputs.".to_string());
     }
 
-    state.touch_keystore_session_for(user).await;
+    state.touch_keystore_session().await;
     Ok(())
 }
 
@@ -308,17 +513,17 @@ mod tests {
         KeystoreForm, bootstrap, ensure_unlocked_for_active_output, get_process_unlock_modal,
         get_unlock_modal, lock, unlock,
     };
+    use super::KeystoreRateLimit;
     use crate::{
         data::{KnownHost, Settings, authenticate},
         exporter::Exporter,
         server::{
-            KeystoreSessionState, RuntimeMode, RuntimeModePolicy, ServerEvent, ServerState, Stats,
-            test_server_state,
+            RuntimeMode, RuntimeModePolicy, ServerEvent, ServerState, Stats, test_server_state,
         },
     };
     use axum::{
         extract::{Form, State},
-        http::{HeaderMap, StatusCode},
+        http::StatusCode,
         response::IntoResponse,
     };
     use std::{
@@ -350,7 +555,7 @@ mod tests {
     }
 
     fn write_hosts(hosts: BTreeMap<String, KnownHost>) {
-        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
+        crate::data::write_hosts_yml_for_tests(&hosts).expect("write hosts");
     }
 
     fn test_service_state() -> Arc<ServerState> {
@@ -363,7 +568,7 @@ mod tests {
             retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             runtime_mode,
             runtime_mode_policy: RuntimeModePolicy::new(runtime_mode),
-            keystore_state: Arc::new(RwLock::new(KeystoreSessionState::default())),
+            keystore_rate_limit: Arc::new(std::sync::Mutex::new(KeystoreRateLimit::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
             shutdown: watch::channel(false).1,
             event_tx: broadcast::channel(16).0,
@@ -384,7 +589,6 @@ mod tests {
 
         let response = unlock(
             State(state.clone()),
-            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -407,7 +611,6 @@ mod tests {
 
         let response = unlock(
             State(state.clone()),
-            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -430,7 +633,6 @@ mod tests {
         let state = test_server_state();
         let response = unlock(
             State(state.clone()),
-            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "wrong".to_string(),
                 confirm: None,
@@ -454,7 +656,6 @@ mod tests {
         let state = test_server_state();
         let response = unlock(
             State(state),
-            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -474,16 +675,15 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "legacy".to_string(),
-            KnownHost::ApiKey {
-                accept_invalid_certs: false,
-                apikey: Some("plaintext-api-key".to_string()),
-                app: crate::data::Product::Elasticsearch,
-                cloud_id: None,
-                roles: vec![crate::data::HostRole::Send],
-                secret: None,
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_legacy_apikey(
+                crate::data::Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![crate::data::HostRole::Send],
+                None,
+                false,
+                None,
+                Some("plaintext-api-key".to_string()),
+            ),
         );
         write_hosts(hosts);
 
@@ -491,7 +691,6 @@ mod tests {
         let mut events = state.subscribe_events();
         let response = unlock(
             State(state),
-            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -527,7 +726,7 @@ mod tests {
 
         let state = test_server_state();
         let mut events = state.subscribe_events();
-        let response = get_unlock_modal(State(state), HeaderMap::new()).await;
+        let response = get_unlock_modal(State(state)).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
         let event = events.recv().await.expect("bootstrap modal event");
@@ -548,7 +747,7 @@ mod tests {
 
         let state = test_server_state();
         let mut events = state.subscribe_events();
-        let response = get_process_unlock_modal(State(state), HeaderMap::new()).await;
+        let response = get_process_unlock_modal(State(state)).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
         let event = events.recv().await.expect("bootstrap modal event");
@@ -570,7 +769,7 @@ mod tests {
 
         let state = test_server_state();
         let mut events = state.subscribe_events();
-        let response = get_unlock_modal(State(state), HeaderMap::new()).await;
+        let response = get_unlock_modal(State(state)).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(
             hosts_path.is_file(),
@@ -597,22 +796,21 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "legacy".to_string(),
-            KnownHost::ApiKey {
-                accept_invalid_certs: false,
-                apikey: Some("plaintext-api-key".to_string()),
-                app: crate::data::Product::Elasticsearch,
-                cloud_id: None,
-                roles: vec![crate::data::HostRole::Send],
-                secret: None,
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_legacy_apikey(
+                crate::data::Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![crate::data::HostRole::Send],
+                None,
+                false,
+                None,
+                Some("plaintext-api-key".to_string()),
+            ),
         );
         write_hosts(hosts);
 
         let state = test_server_state();
         let mut events = state.subscribe_events();
-        let response = get_unlock_modal(State(state), HeaderMap::new()).await;
+        let response = get_unlock_modal(State(state)).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
         let event = events.recv().await.expect("bootstrap modal event");
@@ -634,23 +832,21 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "legacy-es".to_string(),
-            KnownHost::ApiKey {
-                accept_invalid_certs: false,
-                apikey: Some("plaintext-api-key".to_string()),
-                app: crate::data::Product::Elasticsearch,
-                cloud_id: None,
-                roles: vec![crate::data::HostRole::Send],
-                secret: None,
-                viewer: None,
-                url: Url::parse("http://localhost:9200").expect("url"),
-            },
+            KnownHost::new_legacy_apikey(
+                crate::data::Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![crate::data::HostRole::Send],
+                None,
+                false,
+                None,
+                Some("plaintext-api-key".to_string()),
+            ),
         );
         write_hosts(hosts);
 
         let state = test_server_state();
         let response = bootstrap(
             State(state),
-            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "secretpw".to_string(),
                 confirm: Some("on".to_string()),
@@ -660,14 +856,19 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(keystore_path.is_file(), "keystore should be created");
 
+        let unlock_path = crate::data::get_unlock_path().expect("unlock path");
+        assert!(
+            unlock_path.exists(),
+            "bootstrap should write unlock lease file"
+        );
+
         let migrated_hosts = KnownHost::parse_hosts_yml().expect("reload migrated hosts");
-        match migrated_hosts.get("legacy-es").expect("migrated host") {
-            KnownHost::ApiKey { apikey, secret, .. } => {
-                assert!(apikey.is_none(), "plaintext apikey should be scrubbed");
-                assert_eq!(secret.as_deref(), Some("legacy-es"));
-            }
-            _ => panic!("expected migrated api key host"),
-        }
+        let migrated = migrated_hosts.get("legacy-es").expect("migrated host");
+        assert!(
+            migrated.legacy_apikey.is_none(),
+            "plaintext apikey should be scrubbed"
+        );
+        assert_eq!(migrated.secret.as_deref(), Some("legacy-es"));
     }
 
     #[tokio::test]
@@ -677,13 +878,13 @@ mod tests {
         let state = test_server_state();
         state.set_keystore_unlocked("pw".to_string()).await;
 
-        let response = lock(State(state.clone()), HeaderMap::new())
+        let response = lock(State(state.clone()))
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(state.keystore_status().await.0, "lock should relock state");
 
-        let response = lock(State(state.clone()), HeaderMap::new())
+        let response = lock(State(state.clone()))
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
@@ -691,7 +892,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unlock_initializes_and_refreshes_session_lease() {
+    async fn keystore_lock_time_stays_stable_without_state_transition() {
+        let _guard = env_lock().lock().expect("env lock");
+        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let state = test_server_state();
+
+        let first_status = state.keystore_status().await;
+        let first_signal = state.keystore_signal_payload().await;
+
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        let second_status = state.keystore_status().await;
+        let second_signal = state.keystore_signal_payload().await;
+
+        assert_eq!(first_status, second_status);
+        assert_eq!(first_signal, second_signal);
+    }
+
+    #[tokio::test]
+    async fn unlock_writes_file_based_lease() {
         let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts_path, _keystore_path) = setup_env();
         authenticate("pw").expect("create keystore");
@@ -699,7 +918,6 @@ mod tests {
         let state = test_server_state();
         unlock(
             State(state.clone()),
-            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -707,22 +925,16 @@ mod tests {
         )
         .await;
 
-        let first_expiry = state
-            .keystore_expires_at_epoch()
-            .await
-            .expect("expiry initialized");
-        let first_lock_time = state.keystore_status().await.1;
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let unlock_path = crate::data::get_unlock_path().expect("unlock path");
+        assert!(unlock_path.exists(), "unlock file should be written on disk");
 
-        state.touch_keystore_session().await;
-
-        let refreshed_expiry = state
-            .keystore_expires_at_epoch()
-            .await
-            .expect("expiry refreshed");
-        let refreshed_lock_time = state.keystore_status().await.1;
-        assert!(refreshed_expiry >= first_expiry);
-        assert_eq!(refreshed_lock_time, first_lock_time);
+        let lease =
+            crate::data::read_unlock_lease().expect("read lease").expect("lease should exist");
+        let now = chrono::Utc::now().timestamp();
+        assert!(
+            lease.expires_at_epoch > now,
+            "lease should expire in the future"
+        );
     }
 
     #[tokio::test]
@@ -730,23 +942,22 @@ mod tests {
         let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts_path, _keystore_path) = setup_env();
 
-        let noauth_host = KnownHost::NoAuth {
-            accept_invalid_certs: false,
-            app: crate::data::Product::Elasticsearch,
-            roles: vec![crate::data::HostRole::Send],
-            viewer: None,
-            url: Url::parse("http://localhost:9200").expect("url"),
-        };
-        let secure_host = KnownHost::Basic {
-            accept_invalid_certs: false,
-            app: crate::data::Product::Elasticsearch,
-            password: None,
-            roles: vec![crate::data::HostRole::Send],
-            secret: Some("secure".to_string()),
-            viewer: None,
-            url: Url::parse("https://secure.example.com:9200").expect("url"),
-            username: None,
-        };
+        let noauth_host = KnownHost::new_no_auth(
+            crate::data::Product::Elasticsearch,
+            Url::parse("http://localhost:9200").expect("url"),
+            vec![crate::data::HostRole::Send],
+            None,
+            false,
+        );
+        let secure_host = KnownHost::new_legacy_basic(
+            crate::data::Product::Elasticsearch,
+            Url::parse("https://secure.example.com:9200").expect("url"),
+            vec![crate::data::HostRole::Send],
+            None,
+            false,
+            Some("secure".to_string()),
+            None,
+        );
 
         let mut hosts = BTreeMap::new();
         hosts.insert("noauth".to_string(), noauth_host.clone());
@@ -763,7 +974,7 @@ mod tests {
         *state.exporter.write().await =
             crate::exporter::Exporter::try_from(noauth_host).expect("noauth exporter");
         assert!(
-            ensure_unlocked_for_active_output(&state, "Anonymous")
+            ensure_unlocked_for_active_output(&state)
                 .await
                 .is_ok(),
             "NoAuth output should bypass keystore preflight"
@@ -771,45 +982,41 @@ mod tests {
 
         settings.active_target = Some("secure".to_string());
         settings.save().expect("save secure settings");
-        *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::NoAuth {
-            accept_invalid_certs: false,
-            app: crate::data::Product::Elasticsearch,
-            roles: vec![crate::data::HostRole::Send],
-            viewer: None,
-            url: Url::parse("https://secure.example.com:9200").expect("secure url"),
-        })
+        *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::new_no_auth(
+            crate::data::Product::Elasticsearch,
+            Url::parse("https://secure.example.com:9200").expect("secure url"),
+            vec![crate::data::HostRole::Send],
+            None,
+            false,
+        ))
         .expect("secure exporter");
         assert!(
-            ensure_unlocked_for_active_output(&state, "Anonymous")
+            ensure_unlocked_for_active_output(&state)
                 .await
                 .is_err(),
             "secure output should require unlock"
         );
 
         state.set_keystore_unlocked("pw".to_string()).await;
-        let first_lock_time = state.keystore_status().await.1;
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        ensure_unlocked_for_active_output(&state, "Anonymous")
+        ensure_unlocked_for_active_output(&state)
             .await
             .expect("secure output should pass once unlocked");
-        let refreshed_lock_time = state.keystore_status().await.1;
-        assert_eq!(refreshed_lock_time, first_lock_time);
     }
 
     #[tokio::test]
     async fn service_mode_non_secure_output_bypasses_keystore_preflight() {
         let state = test_service_state();
-        *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::NoAuth {
-            accept_invalid_certs: false,
-            app: crate::data::Product::Elasticsearch,
-            roles: vec![crate::data::HostRole::Send],
-            viewer: None,
-            url: Url::parse("http://localhost:9200").expect("url"),
-        })
+        *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::new_no_auth(
+            crate::data::Product::Elasticsearch,
+            Url::parse("http://localhost:9200").expect("url"),
+            vec![crate::data::HostRole::Send],
+            None,
+            false,
+        ))
         .expect("noauth exporter");
 
         assert!(
-            ensure_unlocked_for_active_output(&state, "Anonymous")
+            ensure_unlocked_for_active_output(&state)
                 .await
                 .is_ok(),
             "service mode should allow non-secure outputs without keystore access"
@@ -827,19 +1034,19 @@ mod tests {
         }
 
         let state = test_service_state();
-        *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::ApiKey {
-            accept_invalid_certs: false,
-            apikey: Some("secret".to_string()),
-            app: crate::data::Product::Elasticsearch,
-            cloud_id: None,
-            roles: vec![crate::data::HostRole::Send],
-            secret: None,
-            viewer: None,
-            url: Url::parse("https://secure.example.com:9200").expect("url"),
-        })
+        *state.exporter.write().await =
+            crate::exporter::Exporter::try_from(KnownHost::new_legacy_apikey(
+                crate::data::Product::Elasticsearch,
+                Url::parse("https://secure.example.com:9200").expect("url"),
+                vec![crate::data::HostRole::Send],
+                None,
+                false,
+                None,
+                Some("secret".to_string()),
+            ))
         .expect("secure exporter");
 
-        let result = ensure_unlocked_for_active_output(&state, "Anonymous").await;
+        let result = ensure_unlocked_for_active_output(&state).await;
 
         assert!(
             result.is_ok(),
@@ -879,7 +1086,7 @@ mod tests {
             .expect("backoff should remain capped");
         let now = chrono::Utc::now().timestamp();
         assert!((capped - now) >= 3599 && (capped - now) <= 3600);
-        assert!(state.keystore_failed_attempts().await >= 12);
+        assert!(state.keystore_failed_attempts() >= 12);
     }
 
     #[tokio::test]
@@ -892,7 +1099,6 @@ mod tests {
         let mut events = state.subscribe_events();
         let response = unlock(
             State(state),
-            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "   ".to_string(),
                 confirm: None,
