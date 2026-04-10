@@ -64,7 +64,14 @@ pub fn get_kibana_space() -> Option<String> {
 pub fn append_kibana_space(kibana_url: &str) -> String {
     let kibana_url = kibana_url.trim_end_matches('/');
     match get_kibana_space() {
-        Some(space) => format!("{kibana_url}/s/{space}"),
+        Some(space) => {
+            if let Some((base, _)) = kibana_url.rsplit_once("/s/") {
+                if !base.is_empty() {
+                    return format!("{base}/s/{space}");
+                }
+            }
+            format!("{kibana_url}/s/{space}")
+        }
         None => kibana_url.to_string(),
     }
 }

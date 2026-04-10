@@ -65,6 +65,38 @@ pub struct TocEntry {
     pub is_dir: bool,
 }
 
+fn can_use_keystore(state: &crate::server::ServerState) -> bool {
+    #[cfg(feature = "keystore")]
+    {
+        state.runtime_mode_policy.allows_local_runtime_features()
+    }
+    #[cfg(not(feature = "keystore"))]
+    {
+        let _ = state;
+        false
+    }
+}
+
+async fn docs_keystore_state(
+    state: &std::sync::Arc<crate::server::ServerState>,
+) -> (bool, bool, i64) {
+    #[cfg(feature = "keystore")]
+    {
+        let can_use_keystore = can_use_keystore(state);
+        if !can_use_keystore {
+            return (false, false, 0);
+        }
+
+        let (keystore_locked, keystore_lock_time) = state.keystore_status().await;
+        (true, keystore_locked, keystore_lock_time)
+    }
+    #[cfg(not(feature = "keystore"))]
+    {
+        let _ = state;
+        (false, false, 0)
+    }
+}
+
 pub async fn handler_index(
     headers: HeaderMap,
     state: axum::extract::State<std::sync::Arc<crate::server::ServerState>>,
@@ -158,10 +190,8 @@ pub async fn handler(
                     .next()
                     .unwrap_or('_')
                     .to_ascii_uppercase();
-                let (keystore_locked, keystore_lock_time) =
-                    state.keystore_status().await;
-                let can_use_keystore = cfg!(feature = "keystore")
-                    && state.runtime_mode_policy.allows_local_runtime_features();
+                let (can_use_keystore, keystore_locked, keystore_lock_time) =
+                    docs_keystore_state(&state).await;
 
                 let template = DocsTemplate {
                     nav_root_items,

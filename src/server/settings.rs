@@ -1,7 +1,7 @@
 #[cfg(feature = "keystore")]
 use super::keystore;
 use super::{ServerState, append_body_event, execute_script_event, html_event, signal_event};
-use crate::data::{HostRole, KnownHost, Settings, Uri, with_scoped_keystore_password};
+use crate::data::{HostRole, KnownHost, Settings, Uri};
 use crate::exporter::Exporter;
 use crate::server::template::{self, SettingsModal};
 use askama::Template;
@@ -12,6 +12,9 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
+
+#[cfg(feature = "keystore")]
+use crate::data::with_scoped_keystore_password;
 
 pub async fn get_modal(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
     let can_update_exporter = state.runtime_mode_policy.allows_exporter_updates();
@@ -141,7 +144,10 @@ pub async fn update_settings(
 
     // 3. Validate and update the active Exporter in ServerState (user mode only)
     if state.runtime_mode_policy.allows_exporter_updates() {
+        #[cfg(feature = "keystore")]
         let keystore_password = state.keystore_password().await;
+        #[cfg(not(feature = "keystore"))]
+        let keystore_password: Option<String> = None;
 
         let next_exporter = if !target_changed {
             Ok(current_exporter)
@@ -243,7 +249,8 @@ async fn secure_host_unlock_required_response(
     err_msg: String,
 ) -> Response {
     #[cfg(feature = "keystore")]
-    let _ = keystore::get_unlock_modal(State(state.clone()), headers).await;
+    let _ = headers;
+    let _ = keystore::get_unlock_modal(State(state.clone())).await;
     #[cfg(not(feature = "keystore"))]
     let _ = headers;
     settings_error_response(state, prior_active_target, err_msg).await

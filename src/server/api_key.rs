@@ -6,10 +6,7 @@ use super::{
     ApiKeyFormSignals, ServerEvent, ServerState, WorkflowRunSignals, job_feed_event,
     receiver_stream, signal_event, template, template_event, workflow,
 };
-use crate::{
-    data::{KnownHostBuilder, with_scoped_keystore_password},
-    processor::new_job_id,
-};
+use crate::{data::KnownHostBuilder, processor::new_job_id};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -18,6 +15,9 @@ use axum::{
 use datastar::axum::ReadSignals;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
+
+#[cfg(feature = "keystore")]
+use crate::data::with_scoped_keystore_password;
 
 const DOWNLOAD_REJECTION_TTL: Duration = Duration::from_secs(300);
 
@@ -159,13 +159,21 @@ pub(super) async fn run_api_key_form(
         },
     };
     let job_id = new_job_id();
-    let keystore_password = state.keystore_password().await;
-    if let Some(password) = keystore_password {
-        with_scoped_keystore_password(password, async move {
+    #[cfg(feature = "keystore")]
+    {
+        let keystore_password = state.keystore_password().await;
+        if let Some(password) = keystore_password {
+            with_scoped_keystore_password(password, async move {
+                workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false)
+                    .await;
+            })
+            .await;
+        } else {
             workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
-        })
-        .await;
-    } else {
+        }
+    }
+    #[cfg(not(feature = "keystore"))]
+    {
         workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
     }
 }

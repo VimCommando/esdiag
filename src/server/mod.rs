@@ -422,18 +422,6 @@ impl ServerState {
         )
     }
 
-    /// Stub for builds without the keystore feature. Returns locked state.
-    #[cfg(not(feature = "keystore"))]
-    pub async fn keystore_status(&self) -> (bool, i64) {
-        (true, 0)
-    }
-
-    /// Stub for builds without the keystore feature. Returns None.
-    #[cfg(not(feature = "keystore"))]
-    pub async fn keystore_password(&self) -> Option<String> {
-        None
-    }
-
     pub async fn record_job_started(&self) {
         let mut stats = self.stats.write().await;
         stats.jobs.active += 1;
@@ -1375,6 +1363,7 @@ mod tests {
         ServerEvent, ServerState, Stats, WorkflowRunSignals, event_visible_to_user,
         receiver_stream, replace_job_event, signal_event, targeted_signal_event, test_server_state,
     };
+    #[cfg(feature = "keystore")]
     use crate::data::{create_keystore, write_unlock_lease};
     use crate::exporter::Exporter;
     use axum::http::HeaderMap;
@@ -1546,6 +1535,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "keystore")]
     #[tokio::test]
     async fn service_mode_keystore_session_remains_disabled() {
         let state = test_state(RuntimeMode::Service);
@@ -1566,6 +1556,7 @@ mod tests {
         assert_eq!(state.keystore_password().await, None);
     }
 
+    #[cfg(feature = "keystore")]
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn user_mode_keystore_session_is_shared_across_request_users() {
@@ -1593,6 +1584,7 @@ mod tests {
         assert!(!state.is_keystore_unlocked().await);
     }
 
+    #[cfg(feature = "keystore")]
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn user_mode_reads_cli_unlock_file() {
@@ -1610,6 +1602,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "keystore")]
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn explicit_web_lock_deletes_unlock_file() {
@@ -1631,6 +1624,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "keystore")]
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn service_mode_does_not_read_unlock_file() {

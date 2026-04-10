@@ -3,9 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{ServerState, get_theme_dark, template};
-use crate::data::{
-    HostRole, KnownHost, Product, SavedJob, Settings, keystore_exists, load_saved_jobs_async,
-};
+use crate::data::{HostRole, KnownHost, Product, SavedJob, Settings, load_saved_jobs_async};
 use crate::exporter::Exporter;
 use crate::processor::api::ApiResolver;
 use askama::Template;
@@ -16,6 +14,9 @@ use axum::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{path::PathBuf, str::FromStr, sync::Arc};
+
+#[cfg(feature = "keystore")]
+use crate::data::keystore_exists;
 
 #[allow(dead_code)] // Needed when deserializing signals to modify selected tab in Web UI
 #[derive(Deserialize, Serialize)]
@@ -61,6 +62,42 @@ where
     }
 }
 
+fn can_use_keystore(state: &ServerState) -> bool {
+    #[cfg(feature = "keystore")]
+    {
+        state.runtime_mode_policy.allows_local_runtime_features()
+    }
+    #[cfg(not(feature = "keystore"))]
+    {
+        let _ = state;
+        false
+    }
+}
+
+async fn keystore_page_state(state: &Arc<ServerState>) -> (bool, bool, i64, bool) {
+    #[cfg(feature = "keystore")]
+    {
+        let can_use_keystore = can_use_keystore(state);
+        if !can_use_keystore {
+            return (false, false, 0, false);
+        }
+
+        let (keystore_locked, keystore_lock_time) = state.keystore_status().await;
+        let show_keystore_bootstrap = !keystore_exists().unwrap_or(false);
+        (
+            true,
+            keystore_locked,
+            keystore_lock_time,
+            show_keystore_bootstrap,
+        )
+    }
+    #[cfg(not(feature = "keystore"))]
+    {
+        let _ = state;
+        (false, false, 0, false)
+    }
+}
+
 pub async fn handler(
     State(state): State<Arc<ServerState>>,
     Query(params): Query<Params>,
@@ -86,7 +123,6 @@ pub async fn handler(
         .unwrap_or('_')
         .to_ascii_uppercase();
     let allows_local_runtime_features = state.runtime_mode_policy.allows_local_runtime_features();
-    let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
     let theme_dark = get_theme_dark(&headers);
     let kibana_url = { state.kibana_url.read().await.clone() };
     let output_secure = if allows_local_runtime_features {
@@ -115,12 +151,8 @@ pub async fn handler(
     } else {
         false
     };
-    let (keystore_locked, keystore_lock_time) = if can_use_keystore {
-        state.keystore_status().await
-    } else {
-        (true, 0)
-    };
-    let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
+    let (can_use_keystore, keystore_locked, keystore_lock_time, show_keystore_bootstrap) =
+        keystore_page_state(&state).await;
     let page = template::Index {
         auth_header,
         debug: tracing::enabled!(tracing::Level::DEBUG),
@@ -179,7 +211,6 @@ pub async fn workflow_page(
         .to_ascii_uppercase();
 
     let allows_local_runtime_features = state.runtime_mode_policy.allows_local_runtime_features();
-    let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
     let exporter = { state.exporter.read().await.clone() };
     let send_defaults = classify_configured_exporter(&exporter);
     let workflow_hosts = workflow_host_options(&state);
@@ -189,12 +220,8 @@ pub async fn workflow_page(
             .unwrap_or_else(|_| "{}".to_string());
     let theme_dark = get_theme_dark(&headers);
     let kibana_url = { state.kibana_url.read().await.clone() };
-    let (keystore_locked, keystore_lock_time) = if can_use_keystore {
-        state.keystore_status().await
-    } else {
-        (true, 0)
-    };
-    let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
+    let (can_use_keystore, keystore_locked, keystore_lock_time, show_keystore_bootstrap) =
+        keystore_page_state(&state).await;
     let page = template::Workflow {
         auth_header,
         debug: tracing::enabled!(tracing::Level::DEBUG),
@@ -285,7 +312,6 @@ async fn build_jobs_page(
         .to_ascii_uppercase();
 
     let allows_local_runtime_features = state.runtime_mode_policy.allows_local_runtime_features();
-    let can_use_keystore = cfg!(feature = "keystore") && allows_local_runtime_features;
     let exporter = { state.exporter.read().await.clone() };
     let send_defaults = classify_configured_exporter(&exporter);
     let workflow_hosts = workflow_host_options(&state);
@@ -295,12 +321,8 @@ async fn build_jobs_page(
             .unwrap_or_else(|_| "{}".to_string());
     let theme_dark = get_theme_dark(&headers);
     let kibana_url = { state.kibana_url.read().await.clone() };
-    let (keystore_locked, keystore_lock_time) = if can_use_keystore {
-        state.keystore_status().await
-    } else {
-        (true, 0)
-    };
-    let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
+    let (can_use_keystore, keystore_locked, keystore_lock_time, show_keystore_bootstrap) =
+        keystore_page_state(&state).await;
 
     // Resolve saved job if a name was provided
     let (saved_job, job_not_found, job_load_error) = if let Some(ref name) = saved_job_name {
