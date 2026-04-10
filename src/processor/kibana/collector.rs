@@ -2,7 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::super::collector::{CollectOptions, CollectionResult};
+use super::super::collector::{CollectOptions, CollectionResult, default_collect_archive_name};
 use crate::{
     data::Product,
     exporter::ArchiveExporter,
@@ -37,7 +37,7 @@ impl KibanaCollector {
             .and_then(|name| std::path::Path::new(name).file_stem())
             .map(|stem| stem.to_string_lossy().to_string())
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| format!("api-diagnostics-{}", timestamp));
+            .unwrap_or_else(|| default_collect_archive_name(&options.product, &timestamp));
         Ok(Self {
             receiver,
             exporter: exporter.with_archive_name(&collection_name)?,

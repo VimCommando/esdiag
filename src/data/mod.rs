@@ -21,14 +21,17 @@ pub mod workflow;
 
 pub use auth::{Auth, AuthType};
 pub use keystore::{
-    BasicSecret, SecretAuth, SecretEntry, UnlockStatus, add_secret, authenticate,
+    BasicSecret, SecretAuth, SecretEntry, UnlockLease, UnlockStatus, add_secret, authenticate,
     clear_unlock_lease, create_keystore, default_unlock_ttl, get_keystore_password,
-    get_password_for_secret_commands, get_password_from_unlock_file, get_secret, get_unlock_path,
-    get_unlock_status, keystore_exists, list_secret_names, parse_unlock_ttl, remove_secret,
-    resolve_secret_auth, rotate_keystore_password, update_secret, upsert_secret_auth,
-    validate_existing_keystore_password, with_scoped_keystore_password, write_unlock_lease,
+    get_keystore_path, get_password_for_secret_commands, get_password_from_unlock_file, get_secret,
+    get_unlock_path, get_unlock_status, keystore_exists, list_secret_names, parse_unlock_ttl,
+    read_unlock_lease, remove_secret, resolve_secret_auth, rotate_keystore_password, update_secret,
+    upsert_secret_auth, validate_existing_keystore_password, with_scoped_keystore_password,
+    write_unlock_lease,
 };
 pub use known_host::{ElasticCloud, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate};
+#[cfg(test)]
+pub(crate) use known_host::write_hosts_yml_for_tests;
 pub use product::Product;
 pub use saved_jobs::{
     SavedJob, SavedJobs, load_saved_jobs, load_saved_jobs_async, save_saved_jobs,

@@ -233,8 +233,7 @@ fn find_diag_zip(path: &Path) -> Option<PathBuf> {
         let entry = entry.ok()?;
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
-        let valid_prefix =
-            file_name.starts_with("api-diagnostics-") || file_name.starts_with("esdiag-");
+        let valid_prefix = file_name.starts_with("logstash-api-diagnostics-");
         if entry.file_type().ok()?.is_file() && valid_prefix && file_name.ends_with(".zip") {
             return Some(entry.path());
         }

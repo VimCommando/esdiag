@@ -53,10 +53,10 @@ esdiag keystore update prod-es-apikey --apikey
 
 ## Reference Secrets from hosts.yml
 
-Use `--secret` when creating/updating hosts:
+Use `--secret` when adding or updating hosts:
 
 ```bash
-esdiag host prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
+esdiag host add prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
 ```
 
 The stored host entry keeps `secret` and omits plaintext auth values.
@@ -64,7 +64,7 @@ The stored host entry keeps `secret` and omits plaintext auth values.
 You can combine secret references with host roles:
 
 ```bash
-esdiag host prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey --roles collect,send
+esdiag host add prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey --roles collect,send
 ```
 
 Role values are `collect`, `send`, and `view`.
@@ -91,10 +91,10 @@ If you do not use keystore secrets, keep legacy auth fields in `hosts.yml`.
 
 ## Related CLI Arguments
 
-- `esdiag host --secret <secret_id>` stores a secret reference instead of plaintext credentials
-- `esdiag host --roles collect,send,view` assigns workflow roles to a host
-- `esdiag host --user <name> --password <value>` stores legacy basic auth fields (alias: `--username`)
-- `esdiag host --apikey <value>` stores a legacy API key field
+- `esdiag host add|update ... --secret <secret_id>` stores a secret reference instead of plaintext credentials
+- `esdiag host add|update ... --roles collect,send,view` assigns workflow roles to a host
+- Legacy plaintext basic auth fields in `hosts.yml` use `username`/`password` (CLI alias: `--user`/`--username` with `--password`) and remain read-compatible for migration
+- Legacy plaintext API key auth in `hosts.yml` uses `apikey` and remains read-compatible for migration
 - `esdiag keystore add/update/remove <secret_id> --user/--password/--apikey` manages encrypted secret entries
 - `esdiag keystore unlock [--ttl <duration>]` creates a local unlock lease for future CLI runs
 - `esdiag keystore status` reports whether the local unlock lease is active

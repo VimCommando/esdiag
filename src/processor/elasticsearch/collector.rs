@@ -4,7 +4,7 @@
 
 use super::super::{
     SourceContext,
-    collector::{CollectOptions, CollectionResult},
+    collector::{CollectOptions, CollectionResult, default_collect_archive_name},
 };
 use super::{
     AliasList, Cluster, ClusterSettings, DataSource, DataStreams, DiagnosticManifest, HealthReport,
@@ -15,7 +15,7 @@ use super::{
 use crate::{
     data::Product,
     exporter::ArchiveExporter,
-    receiver::{ElasticsearchRequestError, Receiver},
+    receiver::{ElasticCloudAdminRequestError, ElasticsearchRequestError, Receiver},
 };
 use eyre::{Result, WrapErr};
 use std::path::PathBuf;
@@ -45,7 +45,7 @@ impl ElasticsearchCollector {
             .and_then(|name| std::path::Path::new(name).file_stem())
             .map(|stem| stem.to_string_lossy().to_string())
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| format!("api-diagnostics-{}", timestamp));
+            .unwrap_or_else(|| default_collect_archive_name(&options.product, &timestamp));
         Ok(Self {
             receiver,
             exporter: exporter.with_archive_name(&collection_name)?,
@@ -126,7 +126,7 @@ impl ElasticsearchCollector {
                 Err(e) => {
                     if !should_retry_elasticsearch_error(&e) {
                         tracing::warn!(
-                            "Skipping non-retriable authentication failure for {}: {}",
+                            "Skipping non-retriable failure for {}: {}",
                             api.as_str(),
                             e
                         );
@@ -205,12 +205,13 @@ impl ElasticsearchCollector {
                     return Ok(0);
                 }
             },
-            Receiver::ElasticCloudAdmin(_) => {
-                tracing::debug!(
-                    "ElasticCloudAdmin receiver not fully supported for raw by path yet"
-                );
-                return Ok(0);
-            }
+            Receiver::ElasticCloudAdmin(r) => match r.get_version().await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::debug!("Cannot collect raw API without version: {}", e);
+                    return Ok(0);
+                }
+            },
             _ => return Ok(0),
         };
 
@@ -307,7 +308,10 @@ impl ElasticsearchCollector {
 
 fn should_retry_elasticsearch_error(error: &eyre::Report) -> bool {
     if let Some(request_error) = error.downcast_ref::<ElasticsearchRequestError>() {
-        return request_error.status.as_u16() != 401 && request_error.status.as_u16() != 403;
+        return request_error.status.as_u16() == 429 || request_error.status.is_server_error();
+    }
+    if let Some(request_error) = error.downcast_ref::<ElasticCloudAdminRequestError>() {
+        return request_error.status.as_u16() == 429 || request_error.status.is_server_error();
     }
     true
 }
@@ -318,7 +322,7 @@ mod tests {
     use elasticsearch::http::StatusCode;
 
     #[test]
-    fn retry_policy_skips_authentication_errors() {
+    fn retry_policy_skips_non_retriable_client_errors() {
         let unauthorized = eyre::Report::from(ElasticsearchRequestError {
             status: StatusCode::UNAUTHORIZED,
             body: "unauthorized".to_string(),
@@ -327,20 +331,41 @@ mod tests {
             status: StatusCode::FORBIDDEN,
             body: "forbidden".to_string(),
         });
+        let not_found = eyre::Report::from(ElasticsearchRequestError {
+            status: StatusCode::NOT_FOUND,
+            body: "missing".to_string(),
+        });
 
         assert!(!should_retry_elasticsearch_error(&unauthorized));
         assert!(!should_retry_elasticsearch_error(&forbidden));
+        assert!(!should_retry_elasticsearch_error(&not_found));
+
+        let cloud_admin_not_found = eyre::Report::from(ElasticCloudAdminRequestError {
+            status: StatusCode::NOT_FOUND,
+            body: "missing".to_string(),
+        });
+        assert!(!should_retry_elasticsearch_error(&cloud_admin_not_found));
     }
 
     #[test]
-    fn retry_policy_retries_non_auth_failures() {
+    fn retry_policy_retries_rate_limits_server_errors_and_transport_failures() {
         let rate_limited = eyre::Report::from(ElasticsearchRequestError {
             status: StatusCode::TOO_MANY_REQUESTS,
             body: "slow down".to_string(),
         });
+        let server_error = eyre::Report::from(ElasticsearchRequestError {
+            status: StatusCode::BAD_GATEWAY,
+            body: "gateway".to_string(),
+        });
+        let cloud_admin_server_error = eyre::Report::from(ElasticCloudAdminRequestError {
+            status: StatusCode::BAD_GATEWAY,
+            body: "gateway".to_string(),
+        });
         let transport = eyre::eyre!("connection reset");
 
         assert!(should_retry_elasticsearch_error(&rate_limited));
+        assert!(should_retry_elasticsearch_error(&server_error));
+        assert!(should_retry_elasticsearch_error(&cloud_admin_server_error));
         assert!(should_retry_elasticsearch_error(&transport));
     }
 }

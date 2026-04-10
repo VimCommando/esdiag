@@ -1,6 +1,6 @@
 ## Purpose
 
-Define the web session unlock, relock, lease, and availability behavior for keychain-backed operations.
+Define the web keystore unlock, relock, and availability behavior for keychain-backed operations. Unlock state is shared with the CLI via a file-based lease.
 
 ## ADDED Requirements
 
@@ -8,51 +8,53 @@ Define the web session unlock, relock, lease, and availability behavior for keyc
 The system SHALL require the user to provide the secrets password before any encrypted keychain read or write operation is performed from the web interface.
 
 #### Scenario: Keychain operation attempted while locked
-- **WHEN** the user initiates a keychain-backed action and the session is locked
+- **WHEN** the user initiates a keychain-backed action and the keystore unlock file is absent or expired
 - **THEN** the system prompts for the secrets password and does not perform the keychain operation until unlock succeeds
 
-### Requirement: Session-Scoped Unlock Retention
-In user mode, the system SHALL retain keychain unlock state as a single local in-memory web session after a successful unlock until the session is relocked, expired, or terminated. User mode MAY initialize that in-memory session from a valid existing CLI unlock lease, but the web runtime SHALL NOT create, refresh, extend, or otherwise write the CLI unlock file as part of normal session lifecycle. Readers MAY still perform best-effort deletion of expired or otherwise stale CLI unlock files encountered while reading them. Service mode SHALL NOT expose or maintain keystore session state and SHALL ignore CLI unlock files.
+### Requirement: File-Based Unlock Shared With CLI
+The web runtime SHALL write the `keystore.unlock` file on a successful unlock, using the same format and default TTL as `esdiag keystore unlock`. Web lock actions SHALL delete the `keystore.unlock` file. Lock state is determined solely by whether a valid, unexpired `keystore.unlock` file exists on disk; no separate in-memory session state is maintained.
 
-#### Scenario: Successful unlock retains session state
-- **WHEN** the user submits a valid secrets password
-- **THEN** subsequent keychain-backed actions in that session execute without prompting again until the session is relocked, expired, or terminated
+#### Scenario: Successful web unlock writes unlock file
+- **WHEN** the user submits a valid secrets password via the web interface
+- **THEN** the system writes `keystore.unlock` alongside the active keystore path with a 24-hour TTL
+- **AND** subsequent keychain-backed CLI runs and the Agent Skill may read that lease without re-authenticating
 
-#### Scenario: Existing CLI unlock lease seeds web session
-- **GIVEN** the application is running in user mode
-- **AND** the in-memory web session is still locked
-- **AND** a valid CLI unlock lease already exists
-- **WHEN** the web runtime first checks whether keystore access is available
-- **THEN** the system initializes the in-memory web session as unlocked from that lease
-- **AND** the web runtime does not create, refresh, extend, or rewrite the CLI unlock file
+#### Scenario: Web lock deletes unlock file
+- **WHEN** the user triggers lock from the web interface
+- **THEN** the system deletes the `keystore.unlock` file alongside the active keystore path
+- **AND** the CLI and web interface both reflect locked state immediately
 
-#### Scenario: Explicit relock does not delete CLI unlock file
-- **GIVEN** the user-mode web session was initialized from a valid CLI unlock lease
-- **WHEN** the user triggers relock from the web interface
-- **THEN** the system clears only the in-memory web session unlock state
-- **AND** the CLI unlock file remains unchanged
-- **AND** the same running web process does not immediately reseed itself from that file again
+#### Scenario: Web lock state derived from unlock file
+- **GIVEN** no in-memory session state exists
+- **WHEN** the web server checks whether the keystore is unlocked
+- **THEN** it reads `keystore.unlock` and treats the keystore as unlocked if and only if a valid unexpired lease is found
 
-### Requirement: User Mode Session Lease
-In user mode, keystore session awareness SHALL use a 12-hour in-memory session lease for unlocked state tracking.
+#### Scenario: CLI unlock is reflected in web interface
+- **GIVEN** the user has run `esdiag keystore unlock` from the terminal
+- **WHEN** the web interface checks keystore status
+- **THEN** it reads the `keystore.unlock` file and shows the keystore as unlocked
 
-#### Scenario: Unlock establishes 12-hour lease
-- **WHEN** the user successfully unlocks keystore in user mode
-- **THEN** the server issues or refreshes a session lease with a 12-hour expiry
-
-### Requirement: Session Lease Refresh on Keystore Access
-The system SHALL refresh the session lease on any keystore read and on any request sent to a secure saved host so unlock does not timeout during processing lifecycle.
-
-#### Scenario: Secure host request refreshes lease
-- **WHEN** the user sends a request to a secure host while unlocked
-- **THEN** the session lease expiry is extended by another 12 hours from that request
+#### Scenario: CLI lock is reflected in web interface
+- **GIVEN** the web session shows keystore as unlocked
+- **AND** the user runs `esdiag keystore lock` from the terminal
+- **WHEN** the web interface checks keystore status next
+- **THEN** it shows the keystore as locked because the unlock file is gone
 
 ### Requirement: Explicit Relock Support
-The system SHALL provide an explicit relock action that clears session unlock state and requires a new secrets password for future keychain-backed actions.
+The system SHALL provide an explicit relock action that deletes the `keystore.unlock` file and requires a new secrets password for future keychain-backed actions.
 
 #### Scenario: Relock requested
 - **WHEN** the user triggers relock from the web interface
-- **THEN** the system clears session unlock state and marks keychain access as locked
+- **THEN** the system deletes the `keystore.unlock` file and marks keychain access as locked for all clients
+
+### Requirement: Bootstrap Creates Unlock Lease
+When the web bootstrap flow creates a new keystore after the user confirms creation and sets a password, the system SHALL immediately write a `keystore.unlock` file so the newly bootstrapped process reflects unlocked state without requiring a separate unlock action.
+
+#### Scenario: Bootstrap writes unlock lease after keystore creation
+- **GIVEN** no keystore file exists
+- **WHEN** the user completes the web bootstrap modal and a new keystore is created
+- **THEN** the system writes `keystore.unlock` alongside the new keystore path with a 24-hour TTL
+- **AND** the web interface immediately shows the keystore as unlocked
 
 ### Requirement: User Menu Keystore Toggle
 The system SHALL provide a `Keystore` menu item in the user pop-up menu that toggles behavior by lock state: selecting it while locked prompts for password, and selecting it while unlocked asks for confirmation before relocking.
@@ -70,7 +72,7 @@ The system SHALL expose only `/keystore/unlock` and `/keystore/lock` endpoints f
 
 #### Scenario: Repeated unlock request while unlocked
 - **WHEN** the user calls `/keystore/unlock` while already unlocked with a valid password
-- **THEN** lock state remains unlocked and the session lease is refreshed
+- **THEN** lock state remains unlocked and the unlock file lease is rewritten
 
 #### Scenario: Repeated lock request while locked
 - **WHEN** the user calls `/keystore/lock` while already locked
@@ -120,22 +122,22 @@ When keystore is unavailable (feature disabled or runtime mode `service`), `/key
 - **THEN** the server responds with HTTP 404
 
 ### Requirement: Keystore Status Signal Ownership
-The backend SHALL own Datastar status signals `keystore.locked` and `keystore.lock_time` (epoch seconds). These fields are UI status only and SHALL be mutable only by backend state transitions, including successful `/keystore/unlock` and `/keystore/lock` responses and timeout-driven lease expiry.
+The backend SHALL own Datastar status signals `keystore.locked` and `keystore.lock_time` (epoch seconds). These fields are UI status only and SHALL be mutable only by backend state transitions, including successful `/keystore/unlock` and `/keystore/lock` responses and lease expiry or external deletion detected on status reads.
 
 #### Scenario: Unlock returns PatchSignals update
 - **WHEN** `/keystore/unlock` succeeds
 - **THEN** the response includes PatchSignals updates for `keystore.locked` and `keystore.lock_time`
 
-#### Scenario: Timeout closure updates backend-owned status signals
-- **WHEN** an unlocked session expires due to lease timeout
-- **THEN** the backend updates `keystore.locked` and `keystore.lock_time` to reflect the timeout-driven lock transition
+#### Scenario: Lease expiry or external lock publishes locked signal
+- **WHEN** a status read detects that a previously valid unlock lease has expired or been deleted externally
+- **THEN** the backend publishes `keystore.locked` and `keystore.lock_time` signals to reflect the lock transition
 
 #### Scenario: Client cannot set lock status directly
 - **WHEN** a client attempts to mutate `keystore.locked` or `keystore.lock_time` in a request body
 - **THEN** the server ignores or rejects the mutation and keeps backend state authoritative
 
-### Requirement: Authentication and Timeout Logging
-The system SHALL log successful keystore authentications and timeout-based closures as INFO, and failed authentications as WARN.
+### Requirement: Authentication and Expiry Logging
+The system SHALL log successful keystore authentications and lease expiry detections as INFO, and failed authentications as WARN.
 
 #### Scenario: Successful unlock logged
 - **WHEN** keystore unlock succeeds
@@ -145,9 +147,9 @@ The system SHALL log successful keystore authentications and timeout-based closu
 - **WHEN** keystore unlock fails due to invalid password
 - **THEN** a WARN log event is emitted for failed authentication
 
-#### Scenario: Timeout lock logged
-- **WHEN** an unlocked keystore session is closed due to lease timeout
-- **THEN** an INFO log event is emitted for timeout closure
+#### Scenario: Lease expiry or external lock logged
+- **WHEN** a status read detects the unlock lease has expired or been cleared externally
+- **THEN** an INFO log event is emitted for the detected lock transition
 
 ### Requirement: Missing Keystore Bootstrap Flow
 When keystore storage does not exist, the web UI SHALL prompt the user to create a keystore through the explicit bootstrap modal instead of auto-creating one at process startup.

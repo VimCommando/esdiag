@@ -175,41 +175,32 @@ The `esdiag host` command allows you to configure and test authentication inform
 Alternatively you can use a `.env` file and set `ESDIAG_OUTPUT_*` values; see `example.env`.
 
 ```
-Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
+Manage saved host connections in `~/.esdiag/hosts.yml`
 
-Usage: esdiag host [OPTIONS] <NAME> [APP] [URL]
+Usage: esdiag host <COMMAND>
 
-Arguments:
-  <NAME>  A name to identify this host
-  [APP]   Application of this host (elasticsearch, kibana, logstash, etc.)
-  [URL]   A host URL to connect to
-
-Options:
-      --accept-invalid-certs <ACCEPT_INVALID_CERTS>  Accept invalid certificates
-      --delete                                     Delete the saved host configuration
-  -a, --apikey <APIKEY>                            ApiKey, passed as http header
-  -u, --user <USERNAME>                            Username for authentication (alias: --username)
-  -p, --password <PASSWORD>                        Password for authentication
-      --secret <SECRET>                            Secret identifier in the encrypted keystore
-      --roles <ROLES>                              Comma-separated host roles (collect,send,view)
-  -n, --nosave                                     Don't save the host configuration on successful connection
-  -h, --help                                       Print help
+Commands:
+  add <NAME> <APP> <URL>   Add a saved host
+  update <NAME>            Update an existing saved host
+  remove <NAME>            Remove an existing saved host
+  list                     List all saved hosts
+  auth <NAME>              Test authentication for a saved host
 ```
 
 Examples:
 
 ```sh
 # Host backed by a keystore secret reference
-esdiag host prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
+esdiag host add prod-es elasticsearch http://localhost:9200 --secret prod-es-apikey
 
 # Host with explicit roles for workflow filtering
-esdiag host prod-es elasticsearch http://localhost:9200 --roles collect,send
+esdiag host add prod-es elasticsearch http://localhost:9200 --roles collect,send
 
 # Update only the saved certificate setting in place
-esdiag host prod-es --accept-invalid-certs false
+esdiag host update prod-es --accept-invalid-certs false
 
 # Delete a saved host
-esdiag host prod-es --delete
+esdiag host remove prod-es
 ```
 
 #### Keystore
@@ -401,22 +392,33 @@ curl -F "file=@/path/to/diagnostic.zip" http://localhost:2501/upload
 
 #### Collect
 
-The `esdiag collect` command pulls the minimum required diagnostics from an Elasticsearch host and saves them to a directory. These are JSON-only, not pretty-printed, and do not include human-readable metrics. This bunlde captures only what is needed to then import with `esdiag`.
+The `esdiag collect` command pulls the minimum required diagnostics from a supported Elastic Stack host and saves them to a directory. These are JSON-only, not pretty-printed, and do not include human-readable metrics. This bundle captures only what is needed to then import with `esdiag`.
 
-Authentication must be setup in advance with the `esdiag host` command or `hosts.yml` file. Direct access to the clsuter is required, this cannot be done through any Elastic Cloud API.
+Authentication must be set up in advance with the `esdiag host` command or `hosts.yml` file. Direct access to the cluster is required, this cannot be done through any Elastic Cloud API.
 
-```
+```text
 Collect a diagnostic bundle from a known host's API endpoints, writes output to a directory
 
-Usage: esdiag collect <HOST> <OUTPUT>
+Usage: esdiag collect [OPTIONS] <HOST> <OUTPUT>
 
 Arguments:
-  <HOST>    The Elasticsearch host to collect diagnostics from
+  <HOST>    The Elastic Stack host to collect diagnostics from
   <OUTPUT>  An existing directory to create a diagnostic directory and files in
 
 Options:
-  -h, --help  Print help
+      --type <TYPE>                Diagnostic type (minimal, light, standard, support) [default: standard]
+      --include <INCLUDE>          Comma-separated list of APIs to include
+      --exclude <EXCLUDE>          Comma-separated list of APIs to exclude
+      --sources <SOURCES>          Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow. The file must match the active product or the command fails before collection
+  -a, --account <ACCOUNT>          Diagnostic report account name
+  -c, --case <CASE>                Diagnostic report case number
+  -o, --opportunity <OPPORTUNITY>  Diagnostic report opportunity
+  -u, --user <USER>                Diagnostic report user
+      --upload <UPLOAD_ID>         Elastic Upload Service upload id or URL for immediate upload after collection
+  -h, --help                       Print help
 ```
+
+When `--upload` is provided, `esdiag collect` still writes the archive locally first and then uploads that exact collected archive to Elastic Upload Service.
 
 ### Debugging
 

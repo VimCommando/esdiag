@@ -1,6 +1,6 @@
 ---
 name: esdiag
-description: Operate Elastic Stack Diagnostics (`esdiag`) end-to-end for host configuration, secret management, asset setup, diagnostic collection, processing, saved-job management, and upload-service workflows. Use when a user asks to run or troubleshoot `esdiag` commands (`host`, `keystore`, `setup`, `collect`, `process`, `serve`, `job`), wire output targets via known hosts or `ESDIAG_OUTPUT_*` environment variables, process support-diagnostics archives/directories/upload links, manage saved jobs, or expose the local web/API service.
+description: Collect or process Elasticsearch, Kibana, and Logstash diagnostics with `esdiag`. Use for collecting live API diagnostics from a cluster, processing support bundle archives or Elastic upload links, sending results to an output cluster, managing saved hosts and encrypted credentials, running saved diagnostic jobs, or hosting the web user interface.
 ---
 
 # ESDiag
@@ -20,27 +20,40 @@ Use `--sources <path/to/sources.yml>` when diagnostics API selection must follow
 - If the task is "save, list, run, or delete a reusable diagnostic job", run `esdiag job`.
 - If the task is "accept browser uploads or API submissions", run `esdiag serve`.
 
+## Pre-flight: Keystore Check
+
+Before running any `esdiag` command for the first time in a session, run:
+
+```
+esdiag keystore status
+```
+
+- `Keystore: unlocked until <date> (duration)` — proceed normally.
+- `Keystore: locked` — stop and tell the user to unlock it via the web UI or with `esdiag keystore unlock` before continuing.
+
 ## Standard Flow
 
 1. Configure output host or output environment variables.
 2. Run `esdiag setup` against the Elasticsearch output target.
 3. Ingest diagnostics via `esdiag process` or `esdiag serve`.
 4. Confirm completion output and share destination details (host/file/stdout).
+5. If `esdiag process` outputs a `Kibana Link: <url>` line, present it to the user as a clickable markdown link.
 
 ## Step 1: Configure Hosts and Auth
 
-- Use `esdiag host [OPTIONS] <NAME> [APP] [URL]` to test and save host configuration to `~/.esdiag/hosts.yml`.
-- When `APP` and `URL` are supplied, `esdiag host` creates or replaces the saved host definition.
-- When `APP` and `URL` are omitted and `<NAME>` already exists, `esdiag host` re-validates the saved host and applies any supplied mutable overrides before saving.
+- Use `esdiag host add <NAME> <APP> <URL>` to create and save a new host definition in `~/.esdiag/hosts.yml`.
+- Use `esdiag host update <NAME>` with mutable flags to modify an existing saved host in place.
+- Use `esdiag host remove <NAME>` to delete an existing saved host from `hosts.yml`.
+- Use `esdiag host list` to print a compact inventory of saved hosts (`name`, `app`, `secret`).
+- Use `esdiag host auth <NAME>` to test a saved host's persisted authentication and connection settings without modifying it.
 - Use `--apikey` for API key auth or `--user`/`--password` for basic auth.
 - `--user` is the primary basic-auth flag (with `--username` available as an alias).
 - Use `--secret <secret_id>` to reference credentials stored in the encrypted keystore.
-- Use `--secret`, `--apikey`, `--user`/`--password`, and `--roles` to update an existing saved host in place without restating `APP` and `URL`.
+- Use `--secret`, `--apikey`, `--user`/`--password`, and `--roles` with `host add` or `host update` to set authentication and workflow roles.
 - Use `--roles collect,send,view` to assign host workflow roles.
-- Use `--accept-invalid-certs true` to enable invalid-certificate acceptance for a saved host, and `--accept-invalid-certs false` to remove it. If the flag is omitted during an update, the saved certificate setting is preserved.
-- Saved-host updates always re-test the live connection before persistence.
-- Use `--delete` to remove an existing saved host from `hosts.yml`.
-- Use `--nosave` for connectivity tests that should not persist.
+- Use `--accept-invalid-certs true` to enable invalid-certificate acceptance for a saved host, and `--accept-invalid-certs false` to remove it. If the flag is omitted during `host update`, the saved certificate setting is preserved.
+- `host add` fails if the host already exists; `host update`, `host remove`, and `host auth` fail if the host does not exist.
+- `host update` always re-tests the live connection before persistence.
 - Use environment variables (optionally by sourcing a `.env` file in the shell) when the user does not want a saved host.
 
 ## Step 1b: Manage Encrypted Secrets (Optional)
@@ -87,12 +100,13 @@ Use `--sources <path/to/sources.yml>` when diagnostics API selection must follow
   - `--opportunity`
   - `--user`
 - Use `--sources` to override endpoint source definitions when testing new API mappings or reproducing source-selection behavior.
+- After a successful `esdiag process`, if the output contains a `Kibana Link: <url>` line, present that URL to the user as a clickable markdown link. Do not manually look up Kibana hosts.
 
 ## Step 4: Collect Then Process (Optional)
 
 - Use `esdiag collect [OPTIONS] <HOST> <OUTPUT>` when the user needs fresh API diagnostics.
 - Ensure `<OUTPUT>` already exists; command creates a diagnostic subdirectory within it.
-- Use `--type` to control collection level (`minimal`, `light`, `standard`, `support`).
+- Use `--type` to control collection level, in ascending breadth: `minimal` (cluster + nodes only) → `light` (light-tagged APIs) → `standard` (fixed ~20 API set) → `support` (every available API in the sources definition).
 - Use `--include` and `--exclude` to explicitly control which APIs are collected.
 - Use metadata options (`--account`, `--case`, `--opportunity`, `--user`) when collected artifacts should carry report context.
 - Use `--sources` when the collection endpoints should come from a non-default `sources.yml`.
@@ -123,11 +137,12 @@ Saved jobs persist named diagnostic configurations to `~/.esdiag/jobs.yml` so th
 
 - If command behavior looks inconsistent with docs, trust live help output first.
 - If auth fails, re-check saved host/app/url/auth mode and whether cert validation is required.
-- If a saved-host update fails, remember that `esdiag host <NAME>` now re-validates the merged host definition live before saving it.
-- If a host should be removed entirely, prefer `esdiag host <NAME> --delete` instead of hand-editing `hosts.yml`.
+- If a saved-host update fails, remember that `esdiag host update <NAME>` re-validates the merged host definition live before saving it.
+- If a host should be removed entirely, prefer `esdiag host remove <NAME>` instead of hand-editing `hosts.yml`.
 - If output is not where expected, verify `[OUTPUT]` parsing and known-host name collisions with filenames.
 - If setup or ingest fails after version changes, rerun `esdiag setup` before retrying `process`.
 
 ## References
 
-- Use `references/cli.md` for command syntax and option details.
+- Use `references/cli.md` for command syntax, option details, and output resolution rules.
+- Use `references/env-vars.md` for all `ESDIAG_*` environment variables and their purpose.

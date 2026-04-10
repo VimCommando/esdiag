@@ -158,10 +158,7 @@ pub async fn handler(
                     .next()
                     .unwrap_or('_')
                     .to_ascii_uppercase();
-                let (keystore_locked, keystore_lock_time) =
-                    state.keystore_status_for(&user_email).await;
-                let can_use_keystore = cfg!(feature = "keystore")
-                    && state.runtime_mode_policy.allows_local_runtime_features();
+                let keystore_state = state.keystore_page_state().await;
 
                 let template = DocsTemplate {
                     nav_root_items,
@@ -178,9 +175,9 @@ pub async fn handler(
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     theme_dark: crate::server::get_theme_dark(&headers),
                     runtime_mode: state.runtime_mode.to_string(),
-                    can_use_keystore,
-                    keystore_locked,
-                    keystore_lock_time,
+                    can_use_keystore: keystore_state.can_use_keystore,
+                    keystore_locked: keystore_state.locked,
+                    keystore_lock_time: keystore_state.lock_time,
                 };
 
                 match template.render() {

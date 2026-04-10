@@ -1,14 +1,10 @@
-use esdiag::data::{
-    Auth, HostRole, KnownHost, Product, authenticate, get_secret, get_unlock_status,
-};
+use esdiag::data::{Auth, KnownHost, authenticate, get_secret, get_unlock_status};
 use std::{
-    collections::BTreeMap,
     path::PathBuf,
     process::{Command, Output},
     sync::{Mutex, OnceLock},
 };
 use tempfile::TempDir;
-use url::Url;
 
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -106,34 +102,24 @@ fn keystore_migrate_command_scrubs_plaintext_hosts_and_preserves_reads() {
         std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
     }
 
-    let mut hosts = BTreeMap::new();
-    hosts.insert(
-        "es-prod".to_string(),
-        KnownHost::ApiKey {
-            accept_invalid_certs: false,
-            apikey: Some("apikey-1".to_string()),
-            app: Product::Elasticsearch,
-            cloud_id: None,
-            roles: vec![HostRole::Collect],
-            secret: None,
-            viewer: None,
-            url: Url::parse("http://localhost:9200").expect("url"),
-        },
+    let plaintext_hosts = concat!(
+        "es-prod:\n",
+        "  auth: ApiKey\n",
+        "  app: Elasticsearch\n",
+        "  apikey: apikey-1\n",
+        "  roles:\n",
+        "    - collect\n",
+        "  url: http://localhost:9200/\n",
+        "kb-prod:\n",
+        "  auth: Basic\n",
+        "  app: Kibana\n",
+        "  username: elastic\n",
+        "  password: pass-1\n",
+        "  roles:\n",
+        "    - collect\n",
+        "  url: http://localhost:5601/\n",
     );
-    hosts.insert(
-        "kb-prod".to_string(),
-        KnownHost::Basic {
-            accept_invalid_certs: false,
-            app: Product::Kibana,
-            password: Some("pass-1".to_string()),
-            roles: vec![HostRole::Collect],
-            secret: None,
-            viewer: None,
-            url: Url::parse("http://localhost:5601").expect("url"),
-            username: Some("elastic".to_string()),
-        },
-    );
-    KnownHost::write_hosts_yml(&hosts).expect("write plaintext hosts");
+    std::fs::write(&hosts_path, plaintext_hosts).expect("write plaintext hosts");
 
     let migrate_output = run_esdiag(
         &["keystore", "migrate"],
@@ -145,27 +131,23 @@ fn keystore_migrate_command_scrubs_plaintext_hosts_and_preserves_reads() {
     let migrated_hosts = KnownHost::parse_hosts_yml().expect("read migrated hosts");
     let raw_hosts = std::fs::read_to_string(&hosts_path).expect("read hosts");
 
-    match migrated_hosts.get("es-prod").expect("es host exists") {
-        KnownHost::ApiKey { apikey, secret, .. } => {
-            assert!(apikey.is_none(), "plaintext api key should be removed");
-            assert_eq!(secret.as_deref(), Some("es-prod"));
-        }
-        _ => panic!("expected api key host"),
-    }
+    let es_host = migrated_hosts.get("es-prod").expect("es host exists");
+    assert!(
+        es_host.legacy_apikey.is_none(),
+        "plaintext api key should be removed"
+    );
+    assert_eq!(es_host.secret.as_deref(), Some("es-prod"));
 
-    match migrated_hosts.get("kb-prod").expect("kb host exists") {
-        KnownHost::Basic {
-            username,
-            password,
-            secret,
-            ..
-        } => {
-            assert!(username.is_none(), "plaintext username should be removed");
-            assert!(password.is_none(), "plaintext password should be removed");
-            assert_eq!(secret.as_deref(), Some("kb-prod"));
-        }
-        _ => panic!("expected basic host"),
-    }
+    let kb_host = migrated_hosts.get("kb-prod").expect("kb host exists");
+    assert!(
+        kb_host.legacy_username.is_none(),
+        "plaintext username should be removed"
+    );
+    assert!(
+        kb_host.legacy_password.is_none(),
+        "plaintext password should be removed"
+    );
+    assert_eq!(kb_host.secret.as_deref(), Some("kb-prod"));
 
     assert!(!raw_hosts.contains("apikey: apikey-1"));
     assert!(!raw_hosts.contains("username: elastic"));
