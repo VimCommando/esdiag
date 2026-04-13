@@ -46,13 +46,13 @@ fn process_archive(archive: &Path) -> PathBuf {
         String::from_utf8_lossy(&process.stderr)
     );
 
-    output.into_path()
+    output.keep()
 }
 
 fn first_doc(output_dir: &Path, file_name: &str) -> Value {
     let path = output_dir.join(file_name);
-    let content =
-        fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {} failed: {}", path.display(), e));
+    let content = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("read {} failed: {}", path.display(), e));
     let line = content
         .lines()
         .find(|line| !line.trim().is_empty())
@@ -63,14 +63,15 @@ fn first_doc(output_dir: &Path, file_name: &str) -> Value {
 
 fn read_docs(output_dir: &Path, file_name: &str) -> Vec<Value> {
     let path = output_dir.join(file_name);
-    let content =
-        fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {} failed: {}", path.display(), e));
+    let content = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("read {} failed: {}", path.display(), e));
     let docs: Vec<Value> = content
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
-            serde_json::from_str::<Value>(line)
-                .unwrap_or_else(|e| panic!("failed parsing document from {}: {}", path.display(), e))
+            serde_json::from_str::<Value>(line).unwrap_or_else(|e| {
+                panic!("failed parsing document from {}: {}", path.display(), e)
+            })
         })
         .collect();
     assert!(!docs.is_empty(), "{} had no documents", path.display());
@@ -170,15 +171,18 @@ fn test_archive_lookup_enriched_processors_match_expected_shape() {
         let metrics_shard = first_doc(&output_dir, "metrics-shard-esdiag.ndjson");
         assert_node_lookup_enrichment(&metrics_shard["node"], &archive, "metrics-shard-esdiag");
 
-        let metrics_http_clients = first_doc(&output_dir, "metrics-node.http.clients-esdiag.ndjson");
+        let metrics_http_clients =
+            first_doc(&output_dir, "metrics-node.http.clients-esdiag.ndjson");
         assert_node_lookup_enrichment(
             &metrics_http_clients["node"],
             &archive,
             "metrics-node.http.clients-esdiag",
         );
 
-        let metrics_cluster_applier =
-            first_doc(&output_dir, "metrics-node.discovery.cluster_applier-esdiag.ndjson");
+        let metrics_cluster_applier = first_doc(
+            &output_dir,
+            "metrics-node.discovery.cluster_applier-esdiag.ndjson",
+        );
         assert_node_lookup_enrichment(
             &metrics_cluster_applier["node"],
             &archive,
@@ -190,7 +194,11 @@ fn test_archive_lookup_enriched_processors_match_expected_shape() {
 #[test]
 fn test_archive_node_lookup_specific_os_values_for_9_1_fixture() {
     let archive = Path::new("tests/archives/elasticsearch-api-diagnostics-9.1.3.zip");
-    assert!(archive.exists(), "missing archive fixture: {}", archive.display());
+    assert!(
+        archive.exists(),
+        "missing archive fixture: {}",
+        archive.display()
+    );
 
     let output_dir = process_archive(archive);
     let metrics_node = first_doc(&output_dir, "metrics-node-esdiag.ndjson");
@@ -199,7 +207,10 @@ fn test_archive_node_lookup_specific_os_values_for_9_1_fixture() {
     assert_eq!(node["name"], "esdiag-node");
     assert_eq!(node["os"]["allocated_processors"], 8);
     assert_eq!(node["os"]["available_processors"], 8);
-    assert_eq!(node["os"]["pretty_name"], "Red Hat Enterprise Linux 9.6 (Plow)");
+    assert_eq!(
+        node["os"]["pretty_name"],
+        "Red Hat Enterprise Linux 9.6 (Plow)"
+    );
 }
 
 #[test]
