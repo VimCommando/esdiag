@@ -3188,7 +3188,6 @@ panel.no-padding {
     padding: 0;
 }
 
-button,
 .button {
     padding: var(--size) var(--size-m);
     border: none;
@@ -3198,12 +3197,10 @@ button,
     cursor: pointer;
 }
 
-button:hover,
 .button:hover {
     background-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
 }
 
-button:disabled,
 .button:disabled {
     background-color: color-mix(in srgb, var(--border-color) 45%, transparent);
     color: var(--text-subdued-color);
