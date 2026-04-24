@@ -900,7 +900,7 @@ pub fn list_secret_names(keystore_password: &str) -> Result<Vec<String>> {
     Ok(names)
 }
 
-pub fn list_secret_entries(keystore_password: &str) -> Result<Vec<(String, SecretEntry)>> {
+pub(crate) fn list_secret_entries(keystore_password: &str) -> Result<Vec<(String, SecretEntry)>> {
     let store = read_store(keystore_password)?;
     Ok(store.secrets.into_iter().collect())
 }
