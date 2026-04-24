@@ -570,7 +570,7 @@ Valid feature names:
 - `advanced`: enables the Advanced page at `/advanced`
 - `job-builder`: enables the Job Builder page at `/jobs` and its saved-job web routes
 
-The feature list is authoritative when set. For example, `--web-features job-builder` enables Job Builder and disables Advanced; use `--web-features advanced,job-builder` to enable both. An empty value disables all optional web features. Unknown values fail startup and list the known feature names.
+The feature list is authoritative when set. For example, `--web-features job-builder` enables Job Builder and disables Advanced; use `--web-features advanced,job-builder` to enable both. An empty value disables all optional web features. Unknown values fail startup and list the known feature names. `job-builder` also fails startup when the binary was built without `keystore` support, because that web UI depends on keystore-backed saved-job flows.
 
 The Job Builder flag only controls web UI routes. CLI saved-job commands such as `esdiag job list`, `esdiag job run`, and `esdiag job delete` remain available when the web UI is disabled.
 

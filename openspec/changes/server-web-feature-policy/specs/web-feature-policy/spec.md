@@ -54,6 +54,13 @@ The server SHALL support `serve --web-features` and `ESDIAG_WEB_FEATURES` as opt
 - **THEN** startup fails with an error naming `unknown-feature`
 - **AND** the error lists `advanced` and `job-builder` as supported feature names
 
+#### Scenario: Unsupported build rejects job builder
+- **GIVEN** the server binary was built without `keystore` support
+- **AND** `ESDIAG_WEB_FEATURES=job-builder` is set or `--web-features job-builder` is provided
+- **WHEN** the server starts
+- **THEN** startup fails with an error naming `job-builder`
+- **AND** the error explains that Job Builder requires a build with keystore support
+
 ### Requirement: Unified Server Policy Decisions
 The server SHALL expose a single `ServerPolicy` decision surface that composes runtime mode and web feature availability. Route registration, web handlers, and templates SHALL use policy decision methods rather than independently combining raw runtime mode and environment variable checks.
 

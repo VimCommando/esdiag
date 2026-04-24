@@ -110,6 +110,13 @@ impl ServerPolicy {
             },
         };
 
+        #[cfg(not(feature = "keystore"))]
+        if web_features.contains(WebFeature::JobBuilder) {
+            return Err(eyre!(
+                "Web feature 'job-builder' requires a build with keystore support; supported feature names in this build: advanced"
+            ));
+        }
+
         Ok(Self { mode, web_features })
     }
 
@@ -1436,21 +1443,32 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    struct WebFeaturesEnvGuard {
+        previous: Option<String>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for WebFeaturesEnvGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe { std::env::set_var("ESDIAG_WEB_FEATURES", value) },
+                None => unsafe { std::env::remove_var("ESDIAG_WEB_FEATURES") },
+            }
+        }
+    }
+
     fn with_web_features_env<T>(value: Option<&str>, test: impl FnOnce() -> T) -> T {
-        let _guard = web_features_env_lock().lock().expect("web features env lock");
-        let previous = std::env::var("ESDIAG_WEB_FEATURES").ok();
+        let env_guard = WebFeaturesEnvGuard {
+            _guard: web_features_env_lock().lock().expect("web features env lock"),
+            previous: std::env::var("ESDIAG_WEB_FEATURES").ok(),
+        };
         match value {
             Some(value) => unsafe { std::env::set_var("ESDIAG_WEB_FEATURES", value) },
             None => unsafe { std::env::remove_var("ESDIAG_WEB_FEATURES") },
         }
 
         let result = test();
-
-        match previous {
-            Some(value) => unsafe { std::env::set_var("ESDIAG_WEB_FEATURES", value) },
-            None => unsafe { std::env::remove_var("ESDIAG_WEB_FEATURES") },
-        }
-
+        drop(env_guard);
         result
     }
 
@@ -1478,20 +1496,42 @@ mod tests {
 
     #[test]
     fn explicit_web_features_are_authoritative() {
-        let policy =
-            ServerPolicy::with_web_features(RuntimeMode::User, Some("job-builder")).expect("explicit web features");
+        #[cfg(feature = "keystore")]
+        {
+            let policy =
+                ServerPolicy::with_web_features(RuntimeMode::User, Some("job-builder")).expect("explicit web features");
 
-        assert!(!policy.allows_advanced());
-        assert_eq!(policy.allows_job_builder(), cfg!(feature = "keystore"));
+            assert!(!policy.allows_advanced());
+            assert!(policy.allows_job_builder());
+        }
+
+        #[cfg(not(feature = "keystore"))]
+        {
+            let err = ServerPolicy::with_web_features(RuntimeMode::User, Some("job-builder"))
+                .expect_err("job-builder should require keystore support");
+
+            assert!(err.to_string().contains("requires a build with keystore support"));
+        }
     }
 
     #[test]
     fn env_web_features_are_used_when_cli_value_is_absent() {
         with_web_features_env(Some("job-builder"), || {
-            let policy = ServerPolicy::with_web_features(RuntimeMode::User, None).expect("env web features");
+            #[cfg(feature = "keystore")]
+            {
+                let policy = ServerPolicy::with_web_features(RuntimeMode::User, None).expect("env web features");
 
-            assert!(!policy.allows_advanced());
-            assert_eq!(policy.allows_job_builder(), cfg!(feature = "keystore"));
+                assert!(!policy.allows_advanced());
+                assert!(policy.allows_job_builder());
+            }
+
+            #[cfg(not(feature = "keystore"))]
+            {
+                let err = ServerPolicy::with_web_features(RuntimeMode::User, None)
+                    .expect_err("job-builder env should require keystore support");
+
+                assert!(err.to_string().contains("requires a build with keystore support"));
+            }
         });
     }
 
@@ -1533,6 +1573,18 @@ mod tests {
         assert!(message.contains("unknown-feature"));
         assert!(message.contains("advanced"));
         assert!(message.contains("job-builder"));
+    }
+
+    #[test]
+    #[cfg(not(feature = "keystore"))]
+    fn job_builder_feature_requires_keystore_support() {
+        let err = ServerPolicy::with_web_features(RuntimeMode::User, Some("advanced,job-builder"))
+            .expect_err("job-builder should fail without keystore support");
+
+        let message = err.to_string();
+        assert!(message.contains("job-builder"));
+        assert!(message.contains("requires a build with keystore support"));
+        assert!(message.contains("advanced"));
     }
 
     #[test]
