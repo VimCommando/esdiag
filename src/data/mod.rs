@@ -29,6 +29,7 @@ pub use keystore::{
     upsert_secret_auth, validate_existing_keystore_password, with_scoped_keystore_password,
     write_unlock_lease,
 };
+pub(crate) use keystore::list_secret_entries;
 pub use known_host::{ElasticCloud, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate};
 #[cfg(test)]
 pub(crate) use known_host::write_hosts_yml_for_tests;
