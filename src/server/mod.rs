@@ -911,10 +911,7 @@ pub(crate) fn test_server_state() -> Arc<ServerState> {
         workflow_jobs: Arc::new(RwLock::new(HashMap::new())),
         retained_bundles: Arc::new(RwLock::new(HashMap::new())),
         runtime_mode,
-        server_policy: ServerPolicy {
-            mode: runtime_mode,
-            web_features: WebFeatureSet::defaults_for(runtime_mode),
-        },
+        server_policy: ServerPolicy::defaults(runtime_mode),
         #[cfg(feature = "keystore")]
         keystore_rate_limit: Arc::new(std::sync::Mutex::new(keystore::KeystoreRateLimit::default())),
         shutdown: watch::channel(false).1,
