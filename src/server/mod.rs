@@ -1456,7 +1456,7 @@ mod tests {
             ServerPolicy::with_web_features(RuntimeMode::User, Some("job-builder")).expect("explicit web features");
 
         assert!(!policy.allows_advanced());
-        assert!(policy.allows_job_builder());
+        assert_eq!(policy.allows_job_builder(), cfg!(feature = "keystore"));
     }
 
     #[test]

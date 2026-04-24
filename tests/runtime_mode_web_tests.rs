@@ -9,7 +9,11 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 async fn start_server(mode: RuntimeMode) -> (Server, Client, String) {
-    start_server_with_features(mode, None).await
+    let default_web_features = match mode {
+        RuntimeMode::User => Some("advanced"),
+        RuntimeMode::Service => Some(""),
+    };
+    start_server_with_features(mode, default_web_features).await
 }
 
 async fn start_server_with_features(mode: RuntimeMode, web_features: Option<&str>) -> (Server, Client, String) {
@@ -62,16 +66,16 @@ async fn service_mode_requires_iap_header_for_web_access() {
 }
 
 #[tokio::test]
-async fn service_mode_does_not_mount_workflow_or_jobs_routes() {
+async fn service_mode_does_not_mount_advanced_or_jobs_routes() {
     let (mut server, client, base) = start_server(RuntimeMode::Service).await;
 
-    let workflow_response = client
+    let advanced_response = client
         .get(format!("{base}/advanced"))
         .header("X-Goog-Authenticated-User-Email", "accounts.google.com:ops@example.com")
         .send()
         .await
-        .expect("service mode workflow request");
-    assert_eq!(workflow_response.status(), reqwest::StatusCode::NOT_FOUND);
+        .expect("service mode advanced request");
+    assert_eq!(advanced_response.status(), reqwest::StatusCode::NOT_FOUND);
 
     let jobs_response = client
         .get(format!("{base}/jobs"))
@@ -111,6 +115,7 @@ async fn user_mode_default_nav_exposes_advanced_not_job_builder() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "keystore")]
 #[tokio::test]
 async fn explicit_job_builder_feature_mounts_jobs_and_omits_advanced() {
     let (mut server, client, base) = start_server_with_features(RuntimeMode::User, Some("job-builder")).await;
@@ -134,6 +139,7 @@ async fn explicit_job_builder_feature_mounts_jobs_and_omits_advanced() {
     server.shutdown().await;
 }
 
+#[cfg(feature = "keystore")]
 #[tokio::test]
 async fn explicit_advanced_and_job_builder_features_mount_both_pages() {
     let (mut server, client, base) =
