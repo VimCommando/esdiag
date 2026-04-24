@@ -881,7 +881,7 @@ fn read_secret_rows(
         };
         secret_ids.push(secret_id.clone());
         rows.push(template::SecretTableRow {
-            secret_id: secret_id.clone(),
+            secret_id,
             auth_type: auth_type.to_string(),
             username,
         });

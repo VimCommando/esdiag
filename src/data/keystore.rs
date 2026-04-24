@@ -38,6 +38,7 @@ const KDF_ALGORITHM: &str = "pbkdf2-sha256";
 const KEY_SIZE: usize = 32;
 const SALT_SIZE: usize = 16;
 const NONCE_SIZE: usize = 12;
+const ENCRYPTED_ENVELOPE_VERSION: u8 = 2;
 const KEYSTORE_FILE: &str = "secrets.yml";
 const UNLOCK_FILE: &str = "keystore.unlock";
 const DEFAULT_UNLOCK_TTL_SECS: u64 = 24 * 60 * 60;
@@ -436,7 +437,7 @@ fn encrypt_unlock_lease(data: &UnlockLeaseData) -> Result<EncryptedUnlockLease> 
         .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
         .map_err(|_| eyre!("Failed to encrypt unlock lease"))?;
     Ok(EncryptedUnlockLease {
-        version: 1,
+        version: ENCRYPTED_ENVELOPE_VERSION,
         kdf,
         salt: base64::engine::general_purpose::STANDARD.encode(salt),
         nonce: base64::engine::general_purpose::STANDARD.encode(nonce),
@@ -445,7 +446,7 @@ fn encrypt_unlock_lease(data: &UnlockLeaseData) -> Result<EncryptedUnlockLease> 
 }
 
 fn decrypt_unlock_lease(encrypted: EncryptedUnlockLease) -> Result<UnlockLeaseData> {
-    if encrypted.version != 1 {
+    if !matches!(encrypted.version, 1 | ENCRYPTED_ENVELOPE_VERSION) {
         return Err(eyre!(
             "Unsupported unlock lease version {}",
             encrypted.version
@@ -917,7 +918,7 @@ fn read_store(keystore_password: &str) -> Result<KeystoreData> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let encrypted: EncryptedKeystore = serde_yaml::from_reader(reader)?;
-    if encrypted.version != 1 {
+    if !matches!(encrypted.version, 1 | ENCRYPTED_ENVELOPE_VERSION) {
         return Err(eyre!("Unsupported keystore version {}", encrypted.version));
     }
 
@@ -960,7 +961,7 @@ fn write_store(store: &KeystoreData, keystore_password: &str) -> Result<()> {
         .map_err(|_| eyre!("Failed to encrypt keystore"))?;
 
     let envelope = EncryptedKeystore {
-        version: 1,
+        version: ENCRYPTED_ENVELOPE_VERSION,
         kdf,
         salt: base64::engine::general_purpose::STANDARD.encode(salt),
         nonce: base64::engine::general_purpose::STANDARD.encode(nonce),
@@ -1228,11 +1229,13 @@ mod tests {
         let keystore_file = File::open(keystore_path).expect("open keystore");
         let keystore: EncryptedKeystore =
             serde_yaml::from_reader(BufReader::new(keystore_file)).expect("keystore envelope");
+        assert_eq!(keystore.version, ENCRYPTED_ENVELOPE_VERSION);
         assert_eq!(keystore.kdf, KdfParams::current());
 
         let unlock_file = File::open(unlock_path).expect("open unlock lease");
         let unlock: EncryptedUnlockLease =
             serde_yaml::from_reader(BufReader::new(unlock_file)).expect("unlock envelope");
+        assert_eq!(unlock.version, ENCRYPTED_ENVELOPE_VERSION);
         assert_eq!(unlock.kdf, KdfParams::current());
     }
 
