@@ -872,10 +872,12 @@ fn read_secret_rows(
     let mut secret_ids = Vec::with_capacity(entries.len());
 
     for (secret_id, entry) in entries {
-        let (auth_type, username) = match entry.resolve_auth() {
-            Some(SecretAuth::ApiKey { .. }) => ("ApiKey", String::new()),
-            Some(SecretAuth::Basic { username, .. }) => ("Basic", username),
-            None => ("Unknown", String::new()),
+        let (auth_type, username) = if entry.apikey.is_some() {
+            ("ApiKey", String::new())
+        } else if let Some(basic) = entry.basic.as_ref() {
+            ("Basic", basic.username.clone())
+        } else {
+            ("Unknown", String::new())
         };
         secret_ids.push(secret_id.clone());
         rows.push(template::SecretTableRow {

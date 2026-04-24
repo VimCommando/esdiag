@@ -29,9 +29,6 @@ use std::{
 const KDF_ROUNDS: u32 = 100_000;
 #[cfg(debug_assertions)]
 const KDF_ROUNDS: u32 = 1_000;
-#[cfg(not(debug_assertions))]
-const MIN_KDF_ROUNDS: u32 = 100_000;
-#[cfg(debug_assertions)]
 const MIN_KDF_ROUNDS: u32 = 1_000;
 const MAX_KDF_ROUNDS: u32 = 1_000_000;
 const LEGACY_KDF_ROUNDS: u32 = 100_000;
@@ -407,7 +404,7 @@ fn validate_kdf_params(params: &KdfParams) -> Result<()> {
     }
     if params.rounds < MIN_KDF_ROUNDS {
         return Err(eyre!(
-            "KDF rounds {} are below the minimum supported value {}",
+            "KDF rounds {} are below the minimum readable value {}",
             params.rounds,
             MIN_KDF_ROUNDS
         ));
