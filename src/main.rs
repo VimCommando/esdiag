@@ -102,6 +102,10 @@ enum Commands {
             long = "upload"
         )]
         upload_id: Option<String>,
+        /// Save the effective invocation as a named job before continuing execution
+        #[cfg(feature = "keystore")]
+        #[arg(long = "save-job", value_name = "NAME")]
+        save_job: Option<String>,
     },
     /// Start a web server to receive diagnostic bundle uploads
     #[cfg(feature = "server")]
@@ -169,6 +173,10 @@ enum Commands {
         /// The file must match the active product or the command fails before processing.
         #[arg(long)]
         sources: Option<String>,
+        /// Save the effective invocation as a named job before continuing execution
+        #[cfg(feature = "keystore")]
+        #[arg(long = "save-job", value_name = "NAME")]
+        save_job: Option<String>,
     },
     /// Upload a raw diagnostic archive to Elastic Upload Service
     Upload {
@@ -619,7 +627,16 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 opportunity,
                 user,
                 upload_id,
+                #[cfg(feature = "keystore")]
+                save_job,
             } => {
+                #[cfg(feature = "keystore")]
+                if let Some(name) = save_job.as_deref() {
+                    let identifiers =
+                        Identifiers::new(account.clone(), case.clone(), None, opportunity.clone(), user.clone());
+                    let job = derive_collect_job(&host, &output, &r#type, upload_id.as_deref(), identifiers)?;
+                    esdiag::job::save_job(name, job)?;
+                }
                 let known_host = Uri::try_from(host)?;
                 let output = Uri::try_from(output)?;
                 match known_host {
@@ -845,8 +862,17 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 opportunity,
                 user,
                 sources,
+                #[cfg(feature = "keystore")]
+                save_job,
             } => {
                 let has_explicit_output = output.is_some();
+                #[cfg(feature = "keystore")]
+                if let Some(name) = save_job.as_deref() {
+                    let identifiers =
+                        Identifiers::new(account.clone(), case.clone(), None, opportunity.clone(), user.clone());
+                    let job = derive_process_job(&input, output.as_deref(), identifiers)?;
+                    esdiag::job::save_job(name, job)?;
+                }
                 let input_uri = Uri::try_from(input)?;
                 let output_uri = Uri::try_from(output)?;
                 ensure_uri_role(&input_uri, HostRole::Collect, "process input")?;
@@ -1054,6 +1080,37 @@ where
         upload_fn(PathBuf::from(&result.path), upload_id.to_string()).await?;
     }
     Ok(result)
+}
+
+#[cfg(feature = "keystore")]
+fn derive_collect_job(
+    host: &str,
+    output: &str,
+    diagnostic_type: &str,
+    upload_id: Option<&str>,
+    identifiers: Identifiers,
+) -> Result<esdiag::data::Job> {
+    let builder = esdiag::data::Job::builder()
+        .identifiers(identifiers)
+        .collect_from(host)?
+        .diagnostic_type(diagnostic_type);
+
+    match upload_id {
+        Some(upload_id) => builder.upload_to(upload_id),
+        None => builder.collect_to(output),
+    }
+}
+
+#[cfg(feature = "keystore")]
+fn derive_process_job(input: &str, output: Option<&str>, identifiers: Identifiers) -> Result<esdiag::data::Job> {
+    let output = output.ok_or_else(|| eyre!("Saved jobs require an explicit process output target"))?;
+    let output_uri = Uri::try_from(output.to_string())?;
+    ensure_uri_role(&output_uri, HostRole::Send, "save-job output")?;
+    let output = esdiag::data::JobOutput::from_cli_target(output)?;
+    esdiag::data::Job::builder()
+        .identifiers(identifiers)
+        .collect_from(input)?
+        .process_to(output)
 }
 
 async fn upload_collected_archive(file_path: PathBuf, upload_id: String) -> Result<()> {
@@ -1520,12 +1577,14 @@ mod tests {
         resolve_tracing_filter, should_error_for_missing_subcommand, upload_collected_archive,
         write_completion_summary,
     };
+    #[cfg(feature = "keystore")]
+    use super::{derive_collect_job, derive_process_job};
     #[cfg(feature = "server")]
     use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
     use clap::Parser;
-    use esdiag::data::{HostRole, KnownHost, Product, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
+    use esdiag::data::{HostRole, JobAction, KnownHost, Product, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
     use esdiag::processor::diagnostic::DiagnosticReportBuilder;
-    use esdiag::processor::{CollectionResult, DiagnosticManifest};
+    use esdiag::processor::{CollectionResult, DiagnosticManifest, Identifiers};
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
     use std::sync::{
@@ -1776,6 +1835,104 @@ mod tests {
             }
             _ => panic!("expected collect command"),
         }
+    }
+
+    #[cfg(feature = "keystore")]
+    #[test]
+    fn collect_command_parses_save_job_flag() {
+        let cli = Cli::parse_from(["esdiag", "collect", "prod-es", "diag-dir", "--save-job", "nightly-prod"]);
+        match cli.command.expect("command") {
+            Commands::Collect { save_job, .. } => {
+                assert_eq!(save_job.as_deref(), Some("nightly-prod"));
+            }
+            _ => panic!("expected collect command"),
+        }
+    }
+
+    #[cfg(feature = "keystore")]
+    #[test]
+    fn process_command_parses_save_job_flag() {
+        let cli = Cli::parse_from([
+            "esdiag",
+            "process",
+            "prod-es",
+            "monitoring-es",
+            "--save-job",
+            "process-prod",
+        ]);
+        match cli.command.expect("command") {
+            Commands::Process { save_job, .. } => {
+                assert_eq!(save_job.as_deref(), Some("process-prod"));
+            }
+            _ => panic!("expected process command"),
+        }
+    }
+
+    #[cfg(feature = "keystore")]
+    #[test]
+    fn derive_collect_job_requires_known_host_input() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        let err = match derive_collect_job(
+            "https://example.com",
+            "diag-dir",
+            "standard",
+            None,
+            Identifiers::default(),
+        ) {
+            Ok(_) => panic!("non-host input should be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("Jobs require a saved known host name as input")
+        );
+    }
+
+    #[cfg(feature = "keystore")]
+    #[test]
+    fn derive_collect_job_uses_output_dir_without_save_dir() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        let host = KnownHost::new_no_auth(
+            Product::Elasticsearch,
+            Url::parse("http://localhost:9200").expect("valid url"),
+            vec![HostRole::Collect],
+            None,
+            false,
+        );
+        host.save("prod-es").expect("save known host");
+
+        let job = derive_collect_job("prod-es", "/tmp/esdiag-output", "support", None, Identifiers::default())
+            .expect("derive collect job");
+
+        assert_eq!(job.collect.save_dir, None);
+        match job.action {
+            JobAction::Collect { output_dir } => {
+                assert_eq!(output_dir, std::path::PathBuf::from("/tmp/esdiag-output"));
+            }
+            _ => panic!("expected collect action"),
+        }
+    }
+
+    #[cfg(feature = "keystore")]
+    #[test]
+    fn derive_process_job_requires_explicit_output() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        let host = KnownHost::new_no_auth(
+            Product::Elasticsearch,
+            Url::parse("http://localhost:9200").expect("valid url"),
+            vec![HostRole::Collect],
+            None,
+            false,
+        );
+        host.save("prod-es").expect("save known host");
+        let err = match derive_process_job("prod-es", None, Identifiers::default()) {
+            Ok(_) => panic!("missing process output should be rejected"),
+            Err(err) => err,
+        };
+        assert_eq!(err.to_string(), "Saved jobs require an explicit process output target");
     }
 
     #[tokio::test]

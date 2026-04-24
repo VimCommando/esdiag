@@ -1,27 +1,412 @@
-use eyre::Result;
+use eyre::{Result, eyre};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
     io::{BufWriter, Write},
+    marker::PhantomData,
     path::{Path, PathBuf},
     sync::OnceLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{sync::Mutex, task};
 
-use super::workflow::Workflow;
+use super::{CollectMode, CollectSource, HostRole, KnownHost, ProcessMode, SendMode, Uri, Workflow};
 use crate::processor::Identifiers;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub struct SavedJob {
-    #[serde(default)]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Job {
+    #[serde(default, skip_serializing_if = "Identifiers::is_empty")]
     pub identifiers: Identifiers,
-    #[serde(default)]
-    pub workflow: Workflow,
+    pub collect: JobCollect,
+    #[serde(flatten)]
+    pub action: JobAction,
 }
 
-pub type SavedJobs = IndexMap<String, SavedJob>;
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JobCollect {
+    pub host: String,
+    #[serde(default = "default_diagnostic_type")]
+    pub diagnostic_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+pub enum JobAction {
+    Collect {
+        output_dir: PathBuf,
+    },
+    Upload {
+        upload_id: String,
+    },
+    Process {
+        output: JobOutput,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selection: Option<JobProcessSelection>,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum JobOutput {
+    KnownHost { name: String },
+    File { path: PathBuf },
+    Directory { output_dir: PathBuf },
+    Stdout,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JobProcessSelection {
+    #[serde(default = "default_process_product")]
+    pub product: String,
+    #[serde(default = "default_diagnostic_type")]
+    pub diagnostic_type: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected: Vec<String>,
+}
+
+pub struct NeedsCollect;
+pub struct NeedsAction;
+
+pub struct JobBuilder<State> {
+    identifiers: Identifiers,
+    collect: Option<JobCollect>,
+    _state: PhantomData<State>,
+}
+
+pub type SavedJobs = IndexMap<String, Job>;
+
+fn default_process_product() -> String {
+    "elasticsearch".to_string()
+}
+
+fn default_diagnostic_type() -> String {
+    "standard".to_string()
+}
+
+impl Job {
+    pub fn builder() -> JobBuilder<NeedsCollect> {
+        JobBuilder::new()
+    }
+
+    pub fn collect_host(&self) -> &str {
+        &self.collect.host
+    }
+
+    pub fn processing_label(&self) -> &str {
+        match &self.action {
+            JobAction::Process { selection, .. } => selection
+                .as_ref()
+                .map(|selection| selection.diagnostic_type.as_str())
+                .unwrap_or("standard"),
+            JobAction::Collect { .. } | JobAction::Upload { .. } => "skipped",
+        }
+    }
+
+    pub fn send_target_label(&self) -> String {
+        match &self.action {
+            JobAction::Collect { output_dir } => format!("dir:{}", output_dir.display()),
+            JobAction::Upload { upload_id } => upload_id.clone(),
+            JobAction::Process { output, .. } => output.label(),
+        }
+    }
+
+    pub fn referenced_hosts(&self) -> Vec<&str> {
+        let mut hosts = vec![self.collect.host.as_str()];
+        if let JobAction::Process {
+            output: JobOutput::KnownHost { name },
+            ..
+        } = &self.action
+        {
+            hosts.push(name.as_str());
+        }
+        hosts
+    }
+
+    pub fn to_workflow(&self) -> Workflow {
+        let mut workflow = Workflow::default();
+        workflow.collect.mode = CollectMode::Collect;
+        workflow.collect.source = CollectSource::KnownHost;
+        workflow.collect.known_host = self.collect.host.clone();
+        workflow.collect.diagnostic_type = self.collect.diagnostic_type.clone();
+        workflow.collect.save = self.collect.save_dir.is_some();
+        workflow.collect.save_dir = self
+            .collect
+            .save_dir
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+
+        match &self.action {
+            JobAction::Collect { output_dir } => {
+                workflow.process.enabled = false;
+                workflow.process.mode = ProcessMode::Forward;
+                workflow.send.mode = SendMode::Local;
+                workflow.send.local_target = "directory".to_string();
+                workflow.send.local_directory = output_dir.display().to_string();
+            }
+            JobAction::Upload { upload_id } => {
+                workflow.process.enabled = false;
+                workflow.process.mode = ProcessMode::Forward;
+                workflow.send.mode = SendMode::Remote;
+                workflow.send.remote_target = upload_id.clone();
+            }
+            JobAction::Process { output, selection } => {
+                workflow.process.enabled = true;
+                workflow.process.mode = ProcessMode::Process;
+                if let Some(selection) = selection {
+                    workflow.process.product = selection.product.clone();
+                    workflow.process.diagnostic_type = selection.diagnostic_type.clone();
+                    workflow.process.advanced = !selection.selected.is_empty();
+                    workflow.process.selected = selection.selected.join(",");
+                }
+                output.apply_to_workflow(&mut workflow);
+            }
+        }
+
+        workflow
+    }
+
+    pub fn from_workflow(workflow: Workflow, identifiers: Identifiers) -> Result<Self> {
+        let mut builder = Job::builder()
+            .identifiers(identifiers)
+            .collect_from(workflow.collect.known_host.clone())?
+            .diagnostic_type(workflow.collect.diagnostic_type.clone());
+
+        if workflow.process.enabled && workflow.process.mode == ProcessMode::Process {
+            if workflow.collect.save && !workflow.collect.save_dir.trim().is_empty() {
+                builder = builder.save_collected_bundle_to(workflow.collect.save_dir.clone());
+            }
+            let output = JobOutput::from_workflow_send(&workflow)?;
+            let selection = JobProcessSelection::from_workflow(&workflow);
+            builder.process_to_with_selection(output, selection)
+        } else if workflow.process.mode == ProcessMode::Forward && workflow.send.mode == SendMode::Remote {
+            if workflow.collect.save && !workflow.collect.save_dir.trim().is_empty() {
+                builder = builder.save_collected_bundle_to(workflow.collect.save_dir.clone());
+            }
+            builder.upload_to(workflow.send.remote_target)
+        } else {
+            let output_dir = if workflow.send.local_target == "directory" && !workflow.send.local_directory.is_empty() {
+                workflow.send.local_directory
+            } else {
+                return Err(eyre!("Collect-only jobs require an output directory"));
+            };
+            builder.collect_to(output_dir)
+        }
+    }
+}
+
+impl JobOutput {
+    pub fn from_cli_target(target: &str) -> Result<Self> {
+        match Uri::try_from(target.to_string())? {
+            Uri::KnownHost(_) | Uri::ElasticCloudAdmin(_) | Uri::ElasticGovCloudAdmin(_) => Ok(Self::KnownHost {
+                name: target.to_string(),
+            }),
+            Uri::Directory(output_dir) => Ok(Self::Directory { output_dir }),
+            Uri::File(path) => Ok(Self::File { path }),
+            Uri::Stream => Ok(Self::Stdout),
+            _ => Err(eyre!(
+                "Jobs require an explicit known host or local filesystem output target"
+            )),
+        }
+    }
+
+    pub fn target_uri(&self) -> String {
+        match self {
+            Self::KnownHost { name } => name.clone(),
+            Self::File { path } => path.display().to_string(),
+            Self::Directory { output_dir } => output_dir.display().to_string(),
+            Self::Stdout => "-".to_string(),
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::KnownHost { name } => name.clone(),
+            Self::File { path } => path.display().to_string(),
+            Self::Directory { output_dir } => format!("dir:{}", output_dir.display()),
+            Self::Stdout => "stdout".to_string(),
+        }
+    }
+
+    fn from_workflow_send(workflow: &Workflow) -> Result<Self> {
+        match workflow.send.mode {
+            SendMode::Remote => {
+                let target = workflow.send.remote_target.trim();
+                if target.is_empty() {
+                    return Err(eyre!("Process jobs require a remote output target"));
+                }
+                Ok(Self::KnownHost {
+                    name: target.to_string(),
+                })
+            }
+            SendMode::Local => {
+                if workflow.send.local_target == "directory" {
+                    let directory = workflow.send.local_directory.trim();
+                    if directory.is_empty() {
+                        return Err(eyre!("Process jobs require a local output directory"));
+                    }
+                    Ok(Self::Directory {
+                        output_dir: PathBuf::from(directory),
+                    })
+                } else {
+                    let target = workflow.send.local_target.trim();
+                    if target.is_empty() {
+                        return Err(eyre!("Process jobs require a local output target"));
+                    }
+                    Ok(Self::File {
+                        path: PathBuf::from(target),
+                    })
+                }
+            }
+        }
+    }
+
+    fn apply_to_workflow(&self, workflow: &mut Workflow) {
+        match self {
+            Self::KnownHost { name } => {
+                workflow.send.mode = SendMode::Remote;
+                workflow.send.remote_target = name.clone();
+            }
+            Self::Directory { output_dir } => {
+                workflow.send.mode = SendMode::Local;
+                workflow.send.local_target = "directory".to_string();
+                workflow.send.local_directory = output_dir.display().to_string();
+            }
+            Self::File { path } => {
+                workflow.send.mode = SendMode::Local;
+                workflow.send.local_target = path.display().to_string();
+            }
+            Self::Stdout => {
+                workflow.send.mode = SendMode::Local;
+                workflow.send.local_target = "-".to_string();
+            }
+        }
+    }
+}
+
+impl JobProcessSelection {
+    fn from_workflow(workflow: &Workflow) -> Option<Self> {
+        let selected: Vec<String> = workflow
+            .process
+            .selected
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect();
+        let has_explicit_choice = !selected.is_empty()
+            || workflow.process.product != "elasticsearch"
+            || workflow.process.diagnostic_type != "standard";
+        has_explicit_choice.then(|| Self {
+            product: workflow.process.product.clone(),
+            diagnostic_type: workflow.process.diagnostic_type.clone(),
+            selected,
+        })
+    }
+}
+
+impl JobBuilder<NeedsCollect> {
+    pub fn new() -> Self {
+        Self {
+            identifiers: Identifiers::default(),
+            collect: None,
+            _state: PhantomData,
+        }
+    }
+
+    pub fn identifiers(mut self, identifiers: Identifiers) -> Self {
+        self.identifiers = identifiers;
+        self
+    }
+
+    pub fn collect_from(self, host: impl Into<String>) -> Result<JobBuilder<NeedsAction>> {
+        let host = host.into();
+        let host_name = host.trim();
+        let known_host = KnownHost::get_known(&host_name.to_string())
+            .ok_or_else(|| eyre!("Jobs require a saved known host name as input"))?;
+        if !known_host.has_role(HostRole::Collect) {
+            return Err(eyre!(
+                "Host role validation failed for job input: required role 'collect' not present"
+            ));
+        }
+        Ok(JobBuilder {
+            identifiers: self.identifiers,
+            collect: Some(JobCollect {
+                host: host_name.to_string(),
+                diagnostic_type: default_diagnostic_type(),
+                save_dir: None,
+            }),
+            _state: PhantomData,
+        })
+    }
+}
+
+impl Default for JobBuilder<NeedsCollect> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JobBuilder<NeedsAction> {
+    pub fn identifiers(mut self, identifiers: Identifiers) -> Self {
+        self.identifiers = identifiers;
+        self
+    }
+
+    pub fn diagnostic_type(mut self, diagnostic_type: impl Into<String>) -> Self {
+        self.collect_mut().diagnostic_type = diagnostic_type.into();
+        self
+    }
+
+    pub fn save_collected_bundle_to(mut self, save_dir: impl Into<PathBuf>) -> Self {
+        self.collect_mut().save_dir = Some(save_dir.into());
+        self
+    }
+
+    pub fn collect_to(mut self, output_dir: impl Into<PathBuf>) -> Result<Job> {
+        let output_dir = output_dir.into();
+        if output_dir.as_os_str().is_empty() {
+            return Err(eyre!("Collect jobs require an output directory"));
+        }
+        if self.collect_mut().save_dir.is_some() {
+            return Err(eyre!(
+                "Collect jobs use output_dir as their final diagnostic bundle destination"
+            ));
+        }
+        self.build(JobAction::Collect { output_dir })
+    }
+
+    pub fn upload_to(self, upload_id: impl Into<String>) -> Result<Job> {
+        let upload_id = upload_id.into();
+        if upload_id.trim().is_empty() {
+            return Err(eyre!("Upload jobs require an Elastic Upload Service upload id or URL"));
+        }
+        self.build(JobAction::Upload { upload_id })
+    }
+
+    pub fn process_to(self, output: JobOutput) -> Result<Job> {
+        self.process_to_with_selection(output, None)
+    }
+
+    pub fn process_to_with_selection(self, output: JobOutput, selection: Option<JobProcessSelection>) -> Result<Job> {
+        self.build(JobAction::Process { output, selection })
+    }
+
+    fn collect_mut(&mut self) -> &mut JobCollect {
+        self.collect.as_mut().expect("typestate guarantees collect")
+    }
+
+    fn build(self, action: JobAction) -> Result<Job> {
+        Ok(Job {
+            identifiers: self.identifiers,
+            collect: self.collect.expect("typestate guarantees collect"),
+            action,
+        })
+    }
+}
 
 fn saved_jobs_io_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -177,21 +562,134 @@ mod tests {
         tmp
     }
 
+    fn test_job(host: &str) -> Job {
+        Job {
+            identifiers: Identifiers::default(),
+            collect: JobCollect {
+                host: host.to_string(),
+                diagnostic_type: "standard".to_string(),
+                save_dir: None,
+            },
+            action: JobAction::Collect {
+                output_dir: PathBuf::from("/tmp/esdiag"),
+            },
+        }
+    }
+
     #[test]
     fn save_saved_jobs_overwrites_existing_file() {
         let _guard = test_env_lock().lock().expect("env lock");
         let _tmp = setup_env();
 
         let mut jobs = SavedJobs::default();
-        jobs.insert("first".to_string(), SavedJob::default());
+        jobs.insert("first".to_string(), test_job("first"));
         save_saved_jobs(&jobs).expect("save initial jobs");
 
         let mut updated_jobs = SavedJobs::default();
-        updated_jobs.insert("second".to_string(), SavedJob::default());
+        updated_jobs.insert("second".to_string(), test_job("second"));
         save_saved_jobs(&updated_jobs).expect("overwrite jobs");
 
         let loaded_jobs = load_saved_jobs().expect("load saved jobs");
         assert!(loaded_jobs.contains_key("second"));
         assert!(!loaded_jobs.contains_key("first"));
+    }
+
+    #[test]
+    fn job_serializes_typed_action_shape() {
+        let yaml = serde_yaml::to_string(&test_job("prod")).expect("serialize job");
+
+        assert!(yaml.contains("host: prod"));
+        assert!(yaml.contains("action: collect"));
+        assert!(yaml.contains("output_dir: /tmp/esdiag"));
+        assert!(!yaml.contains("save_dir"));
+        assert!(!yaml.contains("workflow:"));
+        assert!(!yaml.contains("local_target"));
+    }
+
+    #[test]
+    fn process_directory_output_serializes_as_output_dir() {
+        let job = Job {
+            identifiers: Identifiers::default(),
+            collect: JobCollect {
+                host: "prod".to_string(),
+                diagnostic_type: "standard".to_string(),
+                save_dir: Some(PathBuf::from("/tmp/retain-bundle")),
+            },
+            action: JobAction::Process {
+                output: JobOutput::Directory {
+                    output_dir: PathBuf::from("/tmp/final-output"),
+                },
+                selection: None,
+            },
+        };
+
+        let yaml = serde_yaml::to_string(&job).expect("serialize job");
+
+        assert!(yaml.contains("save_dir: /tmp/retain-bundle"));
+        assert!(yaml.contains("type: directory"));
+        assert!(yaml.contains("output_dir: /tmp/final-output"));
+        assert!(!yaml.contains("path: /tmp/final-output"));
+    }
+
+    #[test]
+    fn collect_job_requires_output_dir() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        crate::data::KnownHostBuilder::new(url::Url::parse("http://localhost:9200/").expect("url"))
+            .product(crate::data::Product::Elasticsearch)
+            .build()
+            .expect("host")
+            .save("prod")
+            .expect("save host");
+
+        let err = match Job::builder().collect_from("prod").expect("known host").collect_to("") {
+            Ok(_) => panic!("empty output directories should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("Collect jobs require an output directory"));
+    }
+
+    #[test]
+    fn collect_job_rejects_separate_save_dir() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        crate::data::KnownHostBuilder::new(url::Url::parse("http://localhost:9200/").expect("url"))
+            .product(crate::data::Product::Elasticsearch)
+            .build()
+            .expect("host")
+            .save("prod")
+            .expect("save host");
+
+        let err = match Job::builder()
+            .collect_from("prod")
+            .expect("known host")
+            .save_collected_bundle_to("/tmp/retain")
+            .collect_to("/tmp/output")
+        {
+            Ok(_) => panic!("collect jobs should not carry a separate save_dir"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("Collect jobs use output_dir as their final diagnostic bundle destination")
+        );
+    }
+
+    #[test]
+    fn job_builder_rejects_unknown_collect_host() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+
+        let err = match Job::builder().collect_from("missing") {
+            Ok(_) => panic!("unknown hosts should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("Jobs require a saved known host name as input")
+        );
     }
 }

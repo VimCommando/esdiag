@@ -5,7 +5,7 @@
 use super::{ServerState, get_theme_dark, template};
 use crate::data::{HostRole, KnownHost, Product, Settings};
 #[cfg(feature = "keystore")]
-use crate::data::{SavedJob, load_saved_jobs_async};
+use crate::data::{Job, load_saved_jobs_async};
 use crate::exporter::Exporter;
 use crate::processor::api::ApiResolver;
 use askama::Template;
@@ -262,8 +262,8 @@ async fn build_jobs_page(
     };
 
     let stale_host = saved_job.as_ref().is_some_and(|job| {
-        let h = &job.workflow.collect.known_host;
-        !h.is_empty() && !workflow_hosts.collect_hosts.contains(h)
+        let h = job.collect_host();
+        !h.is_empty() && !workflow_hosts.collect_hosts.iter().any(|host| host == h)
     });
     let hide_saved_job = job_not_found || job_load_error.is_some();
 
@@ -371,32 +371,33 @@ struct SavedJobDefaults {
 
 #[cfg(feature = "keystore")]
 impl SavedJobDefaults {
-    fn from_job(job: Option<&SavedJob>, send_defaults: &SendDefaults, default_save_dir: &str) -> Self {
+    fn from_job(job: Option<&Job>, send_defaults: &SendDefaults, default_save_dir: &str) -> Self {
         if let Some(job) = job {
+            let workflow = job.to_workflow();
             Self {
-                collect_mode: serde_json::to_string(&job.workflow.collect.mode)
+                collect_mode: serde_json::to_string(&workflow.collect.mode)
                     .unwrap_or_else(|_| "\"upload\"".to_string()),
-                collect_source: serde_json::to_string(&job.workflow.collect.source)
+                collect_source: serde_json::to_string(&workflow.collect.source)
                     .unwrap_or_else(|_| "\"upload-file\"".to_string()),
-                known_host: job.workflow.collect.known_host.clone(),
-                diagnostic_type: job.workflow.collect.diagnostic_type.clone(),
-                collect_save: job.workflow.collect.save,
-                save_dir: if job.workflow.collect.save_dir.is_empty() {
+                known_host: workflow.collect.known_host.clone(),
+                diagnostic_type: workflow.collect.diagnostic_type.clone(),
+                collect_save: workflow.collect.save,
+                save_dir: if workflow.collect.save_dir.is_empty() {
                     default_save_dir.to_string()
                 } else {
-                    job.workflow.collect.save_dir.clone()
+                    workflow.collect.save_dir.clone()
                 },
-                process_mode: serde_json::to_string(&job.workflow.process.mode)
+                process_mode: serde_json::to_string(&workflow.process.mode)
                     .unwrap_or_else(|_| "\"process\"".to_string()),
-                process_enabled: job.workflow.process.enabled,
-                process_product: job.workflow.process.product.clone(),
-                process_diagnostic_type: job.workflow.process.diagnostic_type.clone(),
-                process_selected: job.workflow.process.selected.clone(),
-                send_mode: serde_json::to_string(&job.workflow.send.mode)
+                process_enabled: workflow.process.enabled,
+                process_product: workflow.process.product.clone(),
+                process_diagnostic_type: workflow.process.diagnostic_type.clone(),
+                process_selected: workflow.process.selected.clone(),
+                send_mode: serde_json::to_string(&workflow.send.mode)
                     .unwrap_or_else(|_| format!("\"{}\"", send_defaults.mode)),
-                remote_target: job.workflow.send.remote_target.clone(),
-                local_target: job.workflow.send.local_target.clone(),
-                local_directory: job.workflow.send.local_directory.clone(),
+                remote_target: workflow.send.remote_target.clone(),
+                local_target: workflow.send.local_target.clone(),
+                local_directory: workflow.send.local_directory.clone(),
                 user: job.identifiers.user.clone().unwrap_or_default(),
                 account: job.identifiers.account.clone().unwrap_or_default(),
                 case_number: job.identifiers.case_number.clone().unwrap_or_default(),

@@ -1,7 +1,6 @@
 use super::ServerState;
 use crate::data::{
-    CollectSource, HostRole, KnownHost, SavedJob, Workflow, load_saved_jobs_async, save_saved_jobs,
-    with_saved_jobs_async,
+    CollectSource, HostRole, Job, KnownHost, Workflow, load_saved_jobs_async, save_saved_jobs, with_saved_jobs_async,
 };
 use crate::processor::Identifiers;
 use askama::Template;
@@ -116,9 +115,9 @@ pub async fn save_job(signals: ReadSignals<SaveJobSignals>) -> Response {
         return (StatusCode::BAD_REQUEST, err).into_response();
     }
 
-    let saved_job = SavedJob {
-        identifiers: signals.metadata,
-        workflow: signals.workflow,
+    let saved_job = match Job::from_workflow(signals.workflow, signals.metadata) {
+        Ok(job) => job,
+        Err(err) => return (StatusCode::BAD_REQUEST, err.to_string()).into_response(),
     };
 
     let name_for_save = name.clone();

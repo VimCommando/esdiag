@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Defines persistence, retrieval, and execution of named diagnostic job configurations. A saved job captures a complete workflow (collect -> process -> send) plus metadata so it can be re-run later from the web UI or CLI without reconfiguration.
+Defines persistence, retrieval, and execution of named diagnostic job configurations. A saved job is a persisted `Job` that captures executable diagnostic work plus metadata so it can be re-run later from the web UI or CLI without reconfiguration.
 
 ## Requirements
 
 ### Requirement: Job Configuration Persistence
-The system SHALL persist named job configurations to `~/.esdiag/jobs.yml` as a YAML map from job name to `SavedJob`. A `SavedJob` SHALL contain the workflow stages (collect, process, send) and optional `Identifiers` metadata. No session-specific or credential-bearing state SHALL be included in the persisted payload. Saved jobs therefore depend on persisted known-host definitions from `hosts.yml` rather than embedding API keys, passwords, or other secrets inside `jobs.yml`.
+The system SHALL persist named job configurations to `~/.esdiag/jobs.yml` as a YAML map from job name to `Job`. A `Job` SHALL contain collection input, an explicit executable action, and optional `Identifiers` metadata. No session-specific or credential-bearing state SHALL be included in the persisted payload. Saved jobs therefore depend on persisted known-host definitions from `hosts.yml` rather than embedding API keys, passwords, or other secrets inside `jobs.yml`.
 
 #### Scenario: Save new job
 - **WHEN** the user provides a non-empty name and clicks Save on the `/jobs` page
@@ -21,6 +21,30 @@ The system SHALL persist named job configurations to `~/.esdiag/jobs.yml` as a Y
 #### Scenario: Reject empty name
 - **WHEN** the user attempts to save with an empty or whitespace-only name
 - **THEN** the system rejects the request with a validation error and makes no change to `jobs.yml`
+
+### Requirement: Shared Executable Job Model
+The system SHALL model executable diagnostic work as a `Job` independent of whether the job is persisted. `SavedJobs` SHALL be a YAML map from job name to `Job`, and "saved" SHALL only describe persistence to `jobs.yml`.
+
+#### Scenario: Job contains only executable states
+- **WHEN** a job is constructed for collection, upload, or processing
+- **THEN** the job action is represented as an explicit typed variant
+- **AND** inactive workflow fields and string sentinels are not persisted
+
+#### Scenario: Bundle retention is separate from final output
+- **WHEN** a job retains an intermediate diagnostic bundle in addition to producing its final action output
+- **THEN** the optional `save_dir` records where that intermediate bundle is kept
+- **AND** `save_dir` is not used as the required final output destination
+- **AND** collect actions require `output_dir`
+- **AND** process actions use `output_dir` only when the process output target is a directory
+
+#### Scenario: Builder rejects incomplete jobs
+- **WHEN** CLI or UI draft input lacks a required collect host, action, or output
+- **THEN** `JobBuilder` rejects the input before persistence or execution
+
+#### Scenario: Saved job loads into existing UI draft state
+- **WHEN** a persisted `Job` is loaded by the Jobs page
+- **THEN** the system projects it into the existing workflow draft signals for display and editing
+- **AND** the persisted YAML remains the typed `Job` shape
 
 ### Requirement: Valid Collect Sources for Saved Jobs
 Only known-host collection SHALL be valid for saved jobs. Direct API key collection, direct uploads, and service link downloads either depend on non-persistent credentials or reference one-time paths/URIs and therefore are not repeatable. The Save button SHALL be disabled when the workflow is configured for any collect source other than known host.
@@ -201,3 +225,26 @@ The system SHALL provide `esdiag job delete <name>` as a CLI subcommand that rem
 - **GIVEN** `ESDIAG_WEB_FEATURES` is set to an empty string
 - **WHEN** the user runs `esdiag job delete my-job`
 - **THEN** CLI deletion behavior is unchanged
+
+### Requirement: CLI Invocation-Derived Job Save
+The system SHALL allow compatible `esdiag collect` and `esdiag process` invocations to persist a named job by accepting `--save-job <name>`. The job SHALL be derived from the effective command invocation and persisted to `~/.esdiag/jobs.yml` using the same job validation rules as other persistence paths.
+
+#### Scenario: Collect command saves a compatible job
+- **WHEN** the user runs `esdiag collect --save-job my-job [ARGS]` with a valid known-host collection invocation
+- **THEN** the system persists `my-job` to `~/.esdiag/jobs.yml`
+- **AND** the command continues using the unchanged collect execution arguments
+
+#### Scenario: Process command saves a compatible job
+- **WHEN** the user runs `esdiag process --save-job my-job [ARGS]` with a valid saved-job-compatible invocation
+- **THEN** the system persists `my-job` to `~/.esdiag/jobs.yml`
+- **AND** the command continues using the unchanged process execution arguments
+
+#### Scenario: Incompatible invocation rejects save-job
+- **WHEN** the user runs `esdiag collect --save-job my-job [ARGS]` or `esdiag process --save-job my-job [ARGS]` with an invocation that cannot become a valid saved job
+- **THEN** the system exits with a non-zero code
+- **AND** the command reports that the invocation is not compatible with saved-job persistence
+
+#### Scenario: Save-job overwrites an existing job name
+- **WHEN** the user runs a compatible `--save-job <name>` invocation and `<name>` already exists in `jobs.yml`
+- **THEN** the system replaces the existing saved job definition
+- **AND** the command continues execution with the unchanged command arguments
