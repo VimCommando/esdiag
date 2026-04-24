@@ -1399,7 +1399,10 @@ mod tests {
     use crate::exporter::Exporter;
     use axum::http::HeaderMap;
     use futures::StreamExt;
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex, OnceLock},
+    };
     use tempfile::TempDir;
     use tokio::{
         sync::{RwLock, broadcast, mpsc, watch},
@@ -1426,6 +1429,29 @@ mod tests {
             stats_updates_tx,
             stats_updates_rx,
         }
+    }
+
+    fn web_features_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn with_web_features_env<T>(value: Option<&str>, test: impl FnOnce() -> T) -> T {
+        let _guard = web_features_env_lock().lock().expect("web features env lock");
+        let previous = std::env::var("ESDIAG_WEB_FEATURES").ok();
+        match value {
+            Some(value) => unsafe { std::env::set_var("ESDIAG_WEB_FEATURES", value) },
+            None => unsafe { std::env::remove_var("ESDIAG_WEB_FEATURES") },
+        }
+
+        let result = test();
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("ESDIAG_WEB_FEATURES", value) },
+            None => unsafe { std::env::remove_var("ESDIAG_WEB_FEATURES") },
+        }
+
+        result
     }
 
     #[test]
@@ -1457,6 +1483,37 @@ mod tests {
 
         assert!(!policy.allows_advanced());
         assert_eq!(policy.allows_job_builder(), cfg!(feature = "keystore"));
+    }
+
+    #[test]
+    fn env_web_features_are_used_when_cli_value_is_absent() {
+        with_web_features_env(Some("job-builder"), || {
+            let policy = ServerPolicy::with_web_features(RuntimeMode::User, None).expect("env web features");
+
+            assert!(!policy.allows_advanced());
+            assert_eq!(policy.allows_job_builder(), cfg!(feature = "keystore"));
+        });
+    }
+
+    #[test]
+    fn empty_env_web_features_disable_optional_features() {
+        with_web_features_env(Some(""), || {
+            let policy = ServerPolicy::with_web_features(RuntimeMode::User, None).expect("empty env web features");
+
+            assert!(!policy.allows_advanced());
+            assert!(!policy.allows_job_builder());
+        });
+    }
+
+    #[test]
+    fn explicit_web_features_override_env_value() {
+        with_web_features_env(Some("job-builder"), || {
+            let policy =
+                ServerPolicy::with_web_features(RuntimeMode::User, Some("advanced")).expect("cli overrides env");
+
+            assert!(policy.allows_advanced());
+            assert!(!policy.allows_job_builder());
+        });
     }
 
     #[test]
