@@ -1410,10 +1410,7 @@ mod tests {
     use crate::exporter::Exporter;
     use axum::http::HeaderMap;
     use futures::StreamExt;
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex, OnceLock},
-    };
+    use std::{collections::HashMap, sync::Arc};
     use tempfile::TempDir;
     use tokio::{
         sync::{RwLock, broadcast, mpsc, watch},
@@ -1442,11 +1439,6 @@ mod tests {
         }
     }
 
-    fn web_features_env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
     struct WebFeaturesEnvGuard {
         previous: Option<String>,
         _guard: std::sync::MutexGuard<'static, ()>,
@@ -1463,7 +1455,7 @@ mod tests {
 
     fn with_web_features_env<T>(value: Option<&str>, test: impl FnOnce() -> T) -> T {
         let env_guard = WebFeaturesEnvGuard {
-            _guard: web_features_env_lock().lock().expect("web features env lock"),
+            _guard: crate::test_env_lock().lock().expect("web features env lock"),
             previous: std::env::var("ESDIAG_WEB_FEATURES").ok(),
         };
         match value {

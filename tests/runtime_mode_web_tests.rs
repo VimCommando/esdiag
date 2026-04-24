@@ -10,7 +10,7 @@ use tokio::time::sleep;
 
 async fn start_server(mode: RuntimeMode) -> (Server, Client, String) {
     let default_web_features = match mode {
-        RuntimeMode::User => Some("advanced"),
+        RuntimeMode::User => None,
         RuntimeMode::Service => Some(""),
     };
     start_server_with_features(mode, default_web_features).await
