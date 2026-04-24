@@ -4,7 +4,7 @@
 
 Defines runtime web feature allowlists and the unified server policy used to compose web feature availability with server runtime mode.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Web Feature Allowlist
 The server SHALL support `serve --web-features` and `ESDIAG_WEB_FEATURES` as optional comma-separated allowlists of web feature names. Supported feature names SHALL include `advanced` and `job-builder`. When neither override is set, the server SHALL use runtime-mode defaults. When an override is set, the server SHALL enable exactly the listed known web features after trimming whitespace. When an override is set to an empty or whitespace-only value, the server SHALL disable all optional web features. The CLI argument SHALL take precedence over the environment variable.

@@ -4,7 +4,7 @@
 
 Defines persistence, retrieval, and execution of named diagnostic job configurations. A saved job captures a complete workflow (collect -> process -> send) plus metadata so it can be re-run later from the web UI or CLI without reconfiguration.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Job Configuration Persistence
 The system SHALL persist named job configurations to `~/.esdiag/jobs.yml` as a YAML map from job name to `SavedJob`. A `SavedJob` SHALL contain the workflow stages (collect, process, send) and optional `Identifiers` metadata. No session-specific or credential-bearing state SHALL be included in the persisted payload. Saved jobs therefore depend on persisted known-host definitions from `hosts.yml` rather than embedding API keys, passwords, or other secrets inside `jobs.yml`.
