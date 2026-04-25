@@ -16,13 +16,14 @@ This project supports desktop packaging for:
 
 ## Configuration
 
-- `tauri.conf.json` controls desktop bundles, including Windows `.msi`.
-- `packaging/desktop-targets.json` is the source of truth for:
+- `desktop/tauri.conf.json` is the desktop app config rooted under `desktop/`.
+- Root `tauri.conf.json` remains as a Tauri compatibility entrypoint for repo-root builds and points into `desktop/`.
+- `desktop/packaging/desktop-targets.json` is the source of truth for:
   - Windows minimum version (`10`)
   - Windows bundle format (`msi`)
   - Flatpak base app version (`0.15.0`)
   - Flatpak local-only mode
-- `packaging/flatpak/com.elastic.esdiag.json` defines the Flatpak manifest.
+- `desktop/packaging/flatpak/com.elastic.esdiag.json` defines the Flatpak manifest.
 
 ## Linux Flatpak Notes
 
@@ -40,19 +41,19 @@ This project supports desktop packaging for:
 Validate packaging configuration:
 
 ```sh
-bash bin/verify-desktop-config.sh
+bash desktop/scripts/verify-desktop-config.sh
 ```
 
 Normalize the package version to an MSI-safe form:
 
 ```sh
-bash bin/normalize-cargo-version-for-msi.sh Cargo.toml
+bash desktop/scripts/normalize-cargo-version-for-msi.sh Cargo.toml
 ```
 
 Run the local regression test for MSI version normalization:
 
 ```sh
-bash bin/test-normalize-cargo-version-for-msi.sh
+bash desktop/scripts/test-normalize-cargo-version-for-msi.sh
 ```
 
 Build desktop macOS/Windows bundles with Tauri:
@@ -64,7 +65,7 @@ cargo tauri build --features desktop
 Build a local Windows raw app artifact with Docker Buildx:
 
 ```sh
-bash bin/buildx-windows.sh
+bash desktop/scripts/buildx-windows.sh
 ```
 
 At the moment, the local Buildx path is experimental.
@@ -79,7 +80,7 @@ At the moment, the local Buildx path is experimental.
 Build local Flatpak artifact:
 
 ```sh
-bash bin/build-flatpak-local.sh
+bash desktop/scripts/build-flatpak-local.sh
 ```
 
 Generate an SBOM during a build:
@@ -99,7 +100,7 @@ ESDIAG_GENERATE_NOTICE=0 cargo build
 Validate required artifacts in a staging directory:
 
 ```sh
-bash bin/validate-desktop-artifacts.sh target/artifacts
+bash desktop/scripts/validate-desktop-artifacts.sh target/artifacts
 ```
 
 Expected CI artifacts:

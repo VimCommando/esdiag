@@ -31,6 +31,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Moved the Tauri desktop app root under `desktop/` while keeping root-level `cargo tauri build` and desktop packaging workflows working.
 - Refined workflow card controls.
 - Polished workflow bundle delivery.
 - Refined workflow navigation and jobs UI.

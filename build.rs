@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -86,9 +87,39 @@ fn main() {
 
     #[cfg(feature = "desktop")]
     {
-        println!("cargo:rerun-if-changed=tauri.conf.json");
-        println!("cargo:rerun-if-changed=icons");
-        tauri_build::build();
+        let manifest_dir =
+            env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR for desktop build");
+        let desktop_dir = Path::new(&manifest_dir).join("desktop");
+
+        println!(
+            "cargo:rerun-if-changed={}",
+            desktop_dir.join("tauri.conf.json").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            desktop_dir.join("capabilities").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            desktop_dir.join("frontend-dist").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            desktop_dir.join("icons").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            desktop_dir.join("packaging").display()
+        );
+
+        tauri_build::try_build(
+            tauri_build::Attributes::new()
+                .capabilities_path_pattern("desktop/capabilities/**/*")
+                .codegen(tauri_build::CodegenContext::new().config_path("desktop/tauri.conf.json")),
+        )
+        .expect("failed to build desktop Tauri context");
+
+        sync_desktop_generated_schemas(Path::new(&manifest_dir));
     }
 }
 
@@ -99,4 +130,39 @@ fn env_flag(name: &str, default: bool) -> bool {
             matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
         })
         .unwrap_or(default)
+}
+
+fn sync_desktop_generated_schemas(repo_root: &Path) {
+    let generated_dir = repo_root.join("gen").join("schemas");
+    let desktop_dir = repo_root.join("desktop").join("gen").join("schemas");
+
+    if !generated_dir.exists() {
+        return;
+    }
+
+    fs::create_dir_all(&desktop_dir).expect("failed to create desktop schema directory");
+
+    for entry in fs::read_dir(&generated_dir).expect("failed to read generated schema directory") {
+        let entry = entry.expect("failed to read generated schema entry");
+        let source_path = entry.path();
+
+        if !entry
+            .file_type()
+            .expect("failed to stat generated schema entry")
+            .is_file()
+        {
+            continue;
+        }
+
+        let destination_path = desktop_dir.join(entry.file_name());
+        let source_bytes = fs::read(&source_path).expect("failed to read generated schema file");
+        let needs_write = fs::read(&destination_path)
+            .map(|existing| existing != source_bytes)
+            .unwrap_or(true);
+
+        if needs_write {
+            fs::write(&destination_path, source_bytes)
+                .expect("failed to sync generated desktop schema file");
+        }
+    }
 }
