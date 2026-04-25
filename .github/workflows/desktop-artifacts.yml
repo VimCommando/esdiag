@@ -5,6 +5,9 @@ on:
   pull_request:
     paths:
       - "tauri.conf.json"
+      - "build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "desktop/**"
       - ".github/workflows/desktop-artifacts.yml"
 

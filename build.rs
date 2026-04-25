@@ -91,26 +91,11 @@ fn main() {
             env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR for desktop build");
         let desktop_dir = Path::new(&manifest_dir).join("desktop");
 
-        println!(
-            "cargo:rerun-if-changed={}",
-            desktop_dir.join("tauri.conf.json").display()
-        );
-        println!(
-            "cargo:rerun-if-changed={}",
-            desktop_dir.join("capabilities").display()
-        );
-        println!(
-            "cargo:rerun-if-changed={}",
-            desktop_dir.join("frontend-dist").display()
-        );
-        println!(
-            "cargo:rerun-if-changed={}",
-            desktop_dir.join("icons").display()
-        );
-        println!(
-            "cargo:rerun-if-changed={}",
-            desktop_dir.join("packaging").display()
-        );
+        emit_rerun_if_changed(&desktop_dir.join("tauri.conf.json"));
+        emit_rerun_if_changed(&desktop_dir.join("capabilities"));
+        emit_rerun_if_changed(&desktop_dir.join("frontend-dist"));
+        emit_rerun_if_changed(&desktop_dir.join("icons"));
+        emit_rerun_if_changed(&desktop_dir.join("packaging"));
 
         tauri_build::try_build(
             tauri_build::Attributes::new()
@@ -142,6 +127,19 @@ fn sync_desktop_generated_schemas(repo_root: &Path) {
 
     fs::create_dir_all(&desktop_dir).expect("failed to create desktop schema directory");
 
+    for entry in fs::read_dir(&desktop_dir).expect("failed to read desktop schema directory") {
+        let entry = entry.expect("failed to read desktop schema entry");
+        let destination_path = entry.path();
+
+        if destination_path.is_file() {
+            let source_path = generated_dir.join(entry.file_name());
+            if !source_path.exists() {
+                fs::remove_file(&destination_path)
+                    .expect("failed to remove stale synced desktop schema file");
+            }
+        }
+    }
+
     for entry in fs::read_dir(&generated_dir).expect("failed to read generated schema directory") {
         let entry = entry.expect("failed to read generated schema entry");
         let source_path = entry.path();
@@ -164,5 +162,18 @@ fn sync_desktop_generated_schemas(repo_root: &Path) {
             fs::write(&destination_path, source_bytes)
                 .expect("failed to sync generated desktop schema file");
         }
+    }
+}
+
+fn emit_rerun_if_changed(path: &Path) {
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    if !path.is_dir() {
+        return;
+    }
+
+    for entry in fs::read_dir(path).expect("failed to read rerun-if-changed directory") {
+        let entry = entry.expect("failed to read rerun-if-changed entry");
+        emit_rerun_if_changed(&entry.path());
     }
 }
