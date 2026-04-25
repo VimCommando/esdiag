@@ -86,7 +86,7 @@ fn main() {
         let manifest_path = Path::new(&manifest_dir);
         let desktop_dir = manifest_path.join("desktop");
 
-        emit_rerun_if_changed(manifest_path, &desktop_dir.join("tauri.conf.json"));
+        emit_rerun_if_changed(manifest_path, &manifest_path.join("tauri.conf.json"));
         emit_rerun_if_changed(manifest_path, &desktop_dir.join("capabilities"));
         emit_rerun_if_changed(manifest_path, &desktop_dir.join("frontend-dist"));
         emit_rerun_if_changed(manifest_path, &desktop_dir.join("icons"));
@@ -95,7 +95,7 @@ fn main() {
         tauri_build::try_build(
             tauri_build::Attributes::new()
                 .capabilities_path_pattern("desktop/capabilities/**/*")
-                .codegen(tauri_build::CodegenContext::new().config_path("desktop/tauri.conf.json")),
+                .codegen(tauri_build::CodegenContext::new().config_path("tauri.conf.json")),
         )
         .expect("failed to build desktop Tauri context");
     }

@@ -16,8 +16,8 @@ This project supports desktop packaging for:
 
 ## Configuration
 
-- `desktop/tauri.conf.json` is the desktop app config rooted under `desktop/`.
-- Root `tauri.conf.json` remains as a Tauri compatibility entrypoint for repo-root builds and points into `desktop/`.
+- Root `tauri.conf.json` is the Tauri CLI and `tauri-build` source of truth for repo-root desktop builds.
+- `desktop/tauri.conf.json` remains as a desktop-scoped mirror with paths relative to `desktop/`.
 - `desktop/packaging/desktop-targets.json` is the source of truth for:
   - Windows minimum version (`10`)
   - Windows bundle format (`msi`)
@@ -82,6 +82,13 @@ Build local Flatpak artifact:
 ```sh
 bash desktop/scripts/build-flatpak-local.sh
 ```
+
+## CI Workflow
+
+The `Desktop Artifacts` GitHub Actions workflow is intentionally manual.
+
+- PR updates do not trigger desktop artifact builds automatically.
+- When a branch is ready for packaging validation, run the workflow with `workflow_dispatch` from the Actions tab and select the PR branch/ref you want to build.
 
 Generate an SBOM during a build:
 
