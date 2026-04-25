@@ -7,6 +7,7 @@ use super::{DiagnosticManifest, DiagnosticMetadata, Lookup};
 use crate::data::Product;
 use eyre::{OptionExt, Report, Result, eyre};
 use serde::{Deserialize, Serialize};
+use serde_with::{NoneAsEmptyString, serde_as, skip_serializing_none};
 use std::collections::HashMap;
 
 pub struct DiagnosticReportBuilder {
@@ -72,31 +73,44 @@ impl TryFrom<DiagnosticManifest> for DiagnosticReportBuilder {
 }
 
 /// Identifiers associated with a diagnostic report
+#[skip_serializing_none]
+#[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
 pub struct Identifiers {
     /// Account identifier
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub account: Option<String>,
     /// Case number associated with the diagnostic
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub case_number: Option<String>,
     /// Filename of the diagnostic bundle
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub filename: Option<String>,
     /// Opportunity identifier
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub opportunity: Option<String>,
     /// User who generated the diagnostic
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub user: Option<String>,
     /// Parent diagnostic identifier
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub parent_id: Option<String>,
     /// Orchestration platform
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub orchestration: Option<String>,
 }
 impl Identifiers {
+    pub fn is_empty(&self) -> bool {
+        self.account.is_none()
+            && self.case_number.is_none()
+            && self.filename.is_none()
+            && self.opportunity.is_none()
+            && self.user.is_none()
+            && self.parent_id.is_none()
+            && self.orchestration.is_none()
+    }
+
     pub fn new(
         account: Option<String>,
         case_number: Option<String>,
@@ -105,11 +119,11 @@ impl Identifiers {
         user: Option<String>,
     ) -> Self {
         Self {
-            account,
-            case_number,
-            filename,
-            opportunity,
-            user: user.or_else(|| std::env::var("ESDIAG_USER").ok()),
+            account: normalize_identifier(account),
+            case_number: normalize_identifier(case_number),
+            filename: normalize_identifier(filename),
+            opportunity: normalize_identifier(opportunity),
+            user: normalize_identifier(user).or_else(|| normalize_identifier(std::env::var("ESDIAG_USER").ok())),
             parent_id: None,
             orchestration: None,
         }
@@ -117,7 +131,7 @@ impl Identifiers {
 
     pub fn default_user(self, username: Option<&String>) -> Self {
         Self {
-            user: self.user.or_else(|| username.cloned()),
+            user: self.user.or_else(|| normalize_identifier(username.cloned())),
             ..self
         }
     }
@@ -127,19 +141,22 @@ impl Identifiers {
     }
 
     pub fn with_filename(self, filename: Option<String>) -> Self {
-        Self { filename, ..self }
+        Self {
+            filename: normalize_identifier(filename),
+            ..self
+        }
     }
 
     pub fn with_parent_id(self, parent_id: String) -> Self {
         Self {
-            parent_id: Some(parent_id),
+            parent_id: normalize_identifier(Some(parent_id)),
             ..self
         }
     }
 
     pub fn with_orchestration(self, orchestration: String) -> Self {
         Self {
-            orchestration: Some(orchestration),
+            orchestration: normalize_identifier(Some(orchestration)),
             ..self
         }
     }
@@ -147,7 +164,7 @@ impl Identifiers {
 
 impl Default for Identifiers {
     fn default() -> Self {
-        let user = std::env::var("ESDIAG_USER").ok();
+        let user = normalize_identifier(std::env::var("ESDIAG_USER").ok());
         Self {
             account: None,
             case_number: None,
@@ -158,6 +175,17 @@ impl Default for Identifiers {
             orchestration: None,
         }
     }
+}
+
+fn normalize_identifier(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 #[derive(Serialize, Clone)]
@@ -246,17 +274,12 @@ impl DiagnosticReport {
     pub fn add_processor_summary(&mut self, summary: ProcessorSummary) {
         if !summary.source.parsed {
             self.diagnostic.processor.errors += 1;
-            self.diagnostic
-                .processor
-                .failures
-                .push(summary.index.clone());
+            self.diagnostic.processor.failures.push(summary.index.clone());
         }
         self.diagnostic.docs.created += summary.docs;
         self.diagnostic.docs.errors += summary.doc_errors;
         self.diagnostic.docs.total += summary.docs + summary.doc_errors;
-        self.diagnostic
-            .processor
-            .push(summary.processor.clone(), summary);
+        self.diagnostic.processor.push(summary.processor.clone(), summary);
     }
 
     pub fn add_lookup<T>(&mut self, name: &str, lookup: &Lookup<T>)
@@ -486,9 +509,7 @@ impl TryFrom<String> for Origin {
     type Error = Report;
 
     fn try_from(receiver: String) -> Result<Self> {
-        let (r#type, path) = receiver
-            .split_once(' ')
-            .ok_or_eyre("Invalid receiver string")?;
+        let (r#type, path) = receiver.split_once(' ').ok_or_eyre("Invalid receiver string")?;
         Ok(Self {
             r#type: r#type.to_string(),
             path: path.to_string(),
@@ -511,10 +532,9 @@ mod tests {
             runner: "test".to_string(),
             uuid: "test".to_string(),
         };
-        let mut report = DiagnosticReport::try_from(
-            DiagnosticReportBuilder::from(metadata).receiver("file path".to_string()),
-        )
-        .unwrap();
+        let mut report =
+            DiagnosticReport::try_from(DiagnosticReportBuilder::from(metadata).receiver("file path".to_string()))
+                .unwrap();
 
         let mut lookup = Lookup::<String>::new();
         lookup.parsed = true;
@@ -536,10 +556,9 @@ mod tests {
             runner: "test".to_string(),
             uuid: "test".to_string(),
         };
-        let mut report = DiagnosticReport::try_from(
-            DiagnosticReportBuilder::from(metadata).receiver("file path".to_string()),
-        )
-        .unwrap();
+        let mut report =
+            DiagnosticReport::try_from(DiagnosticReportBuilder::from(metadata).receiver("file path".to_string()))
+                .unwrap();
 
         let lookup = Lookup::<String>::new(); // parsed is false by default
 
@@ -551,5 +570,38 @@ mod tests {
         assert_eq!(stats.failures.len(), 1);
         assert!(stats.failures.contains(&"failed_lookup".to_string()));
         assert!(!stats.stats.get("failed_lookup").unwrap().parsed);
+    }
+
+    #[test]
+    fn identifiers_deserialize_empty_strings_as_none() {
+        let identifiers: Identifiers = serde_yaml::from_str(
+            r#"
+account: ''
+case_number: ''
+user: ada
+"#,
+        )
+        .expect("deserialize identifiers");
+
+        assert_eq!(identifiers.account, None);
+        assert_eq!(identifiers.case_number, None);
+        assert_eq!(identifiers.user.as_deref(), Some("ada"));
+    }
+
+    #[test]
+    fn identifiers_do_not_serialize_empty_values() {
+        let identifiers = Identifiers::new(
+            Some("".to_string()),
+            Some("  ".to_string()),
+            None,
+            None,
+            Some("ada".to_string()),
+        );
+
+        let yaml = serde_yaml::to_string(&identifiers).expect("serialize identifiers");
+
+        assert!(!yaml.contains("account"));
+        assert!(!yaml.contains("case_number"));
+        assert!(yaml.contains("user: ada"));
     }
 }

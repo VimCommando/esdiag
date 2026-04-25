@@ -3,8 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{
-    KnownHostFormSignals, ServerEvent, ServerState, job_feed_event, receiver_stream, signal_event,
-    template, workflow,
+    KnownHostFormSignals, ServerEvent, ServerState, job_feed_event, job_runner, receiver_stream, signal_event, template,
 };
 use crate::{data::KnownHost, processor::new_job_id};
 use axum::{
@@ -37,7 +36,7 @@ pub async fn form(
     headers: HeaderMap,
     ReadSignals(signals): ReadSignals<KnownHostFormSignals>,
 ) -> impl IntoResponse {
-    let source = signals.workflow.collect.known_host.clone();
+    let source = signals.job.collect.known_host.clone();
     let (tx, rx) = mpsc::channel(64);
     match state.resolve_user_email(&headers) {
         Ok((_, request_user)) => {
@@ -75,7 +74,7 @@ pub(super) async fn run_known_host_form(
     tx: mpsc::Sender<ServerEvent>,
 ) {
     let download_token = signals.archive.download_token.clone();
-    let Some(host) = KnownHost::get_known(&signals.workflow.collect.known_host) else {
+    let Some(host) = KnownHost::get_known(&signals.job.collect.known_host) else {
         state
             .reject_retained_bundle(
                 &download_token,
@@ -90,7 +89,7 @@ pub(super) async fn run_known_host_form(
             job_feed_event(template::JobFailed {
                 job_id: new_job_id(),
                 error: "Known host not found",
-                source: &signals.workflow.collect.known_host,
+                source: &signals.job.collect.known_host,
             }),
         )
         .await;
@@ -106,12 +105,7 @@ pub(super) async fn run_known_host_form(
     if host.requires_keystore_secret() && keystore_password.is_none() {
         let error_message = saved_host_secret_error_message();
         state
-            .reject_retained_bundle(
-                &download_token,
-                &request_user,
-                error_message,
-                DOWNLOAD_REJECTION_TTL,
-            )
+            .reject_retained_bundle(&download_token, &request_user, error_message, DOWNLOAD_REJECTION_TTL)
             .await;
         state.record_failure().await;
         send_event(
@@ -119,7 +113,7 @@ pub(super) async fn run_known_host_form(
             job_feed_event(template::JobFailed {
                 job_id,
                 error: error_message,
-                source: &signals.workflow.collect.known_host,
+                source: &signals.job.collect.known_host,
             }),
         )
         .await;
@@ -127,12 +121,12 @@ pub(super) async fn run_known_host_form(
         return;
     }
 
-    let job = super::WorkflowJob {
+    let job = super::JobRequest {
         identifiers: signals.metadata.clone(),
-        input: super::WorkflowInput::FromRemoteHost {
+        input: super::JobInput::FromRemoteHost {
             source: host.get_url().to_string(),
             host,
-            diagnostic_type: signals.workflow.collect.diagnostic_type.clone(),
+            diagnostic_type: signals.job.collect.diagnostic_type.clone(),
         },
     };
 
@@ -140,16 +134,15 @@ pub(super) async fn run_known_host_form(
     {
         if let Some(password) = keystore_password {
             with_scoped_keystore_password(password, async move {
-                workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false)
-                    .await;
+                job_runner::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
             })
             .await;
         } else {
-            workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
+            job_runner::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
         }
     }
     #[cfg(not(feature = "keystore"))]
     {
-        workflow::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
+        job_runner::run_job(state, signals.into(), job_id, request_user, tx, job, false).await;
     }
 }

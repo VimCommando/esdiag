@@ -25,10 +25,20 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(not(debug_assertions))]
 const KDF_ROUNDS: u32 = 100_000;
+#[cfg(debug_assertions)]
+const KDF_ROUNDS: u32 = 1_000;
+#[cfg(not(debug_assertions))]
+const MIN_KDF_ROUNDS: u32 = 100_000;
+#[cfg(debug_assertions)]
+const MIN_KDF_ROUNDS: u32 = 1_000;
+const MAX_KDF_ROUNDS: u32 = 1_000_000;
+const KDF_ALGORITHM: &str = "pbkdf2-sha256";
 const KEY_SIZE: usize = 32;
 const SALT_SIZE: usize = 16;
 const NONCE_SIZE: usize = 12;
+const ENCRYPTED_ENVELOPE_VERSION: u8 = 2;
 const KEYSTORE_FILE: &str = "secrets.yml";
 const UNLOCK_FILE: &str = "keystore.unlock";
 const DEFAULT_UNLOCK_TTL_SECS: u64 = 24 * 60 * 60;
@@ -82,9 +92,7 @@ impl SecretEntry {
 
     pub fn resolve_auth(&self) -> Option<SecretAuth> {
         if let Some(apikey) = &self.apikey {
-            return Some(SecretAuth::ApiKey {
-                apikey: apikey.clone(),
-            });
+            return Some(SecretAuth::ApiKey { apikey: apikey.clone() });
         }
         self.basic.as_ref().map(|basic| SecretAuth::Basic {
             username: basic.username.clone(),
@@ -121,6 +129,8 @@ impl Default for KeystoreData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct EncryptedKeystore {
     version: u8,
+    #[serde(default)]
+    kdf: KdfParams,
     salt: String,
     nonce: String,
     ciphertext: String,
@@ -136,9 +146,45 @@ struct UnlockLeaseData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct EncryptedUnlockLease {
     version: u8,
+    #[serde(default)]
+    kdf: KdfParams,
     salt: String,
     nonce: String,
     ciphertext: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct KdfParams {
+    #[serde(default = "default_kdf_algorithm")]
+    algorithm: String,
+    #[serde(default = "default_kdf_rounds")]
+    rounds: u32,
+}
+
+impl KdfParams {
+    fn current() -> Self {
+        Self {
+            algorithm: KDF_ALGORITHM.to_string(),
+            rounds: KDF_ROUNDS,
+        }
+    }
+}
+
+impl Default for KdfParams {
+    fn default() -> Self {
+        Self {
+            algorithm: KDF_ALGORITHM.to_string(),
+            rounds: KDF_ROUNDS,
+        }
+    }
+}
+
+fn default_kdf_algorithm() -> String {
+    KDF_ALGORITHM.to_string()
+}
+
+fn default_kdf_rounds() -> u32 {
+    KDF_ROUNDS
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -275,12 +321,9 @@ pub fn get_keystore_path() -> Result<PathBuf> {
 
 pub fn get_unlock_path() -> Result<PathBuf> {
     let keystore_path = get_keystore_path()?;
-    let parent = keystore_path.parent().ok_or_else(|| {
-        eyre!(
-            "Keystore path '{}' has no parent directory",
-            keystore_path.display()
-        )
-    })?;
+    let parent = keystore_path
+        .parent()
+        .ok_or_else(|| eyre!("Keystore path '{}' has no parent directory", keystore_path.display()))?;
     Ok(parent.join(UNLOCK_FILE))
 }
 
@@ -295,9 +338,9 @@ pub fn parse_unlock_ttl(input: &str) -> Result<Duration> {
         ));
     }
     let (value, suffix) = input.split_at(input.len() - 1);
-    let value: u64 = value.parse().map_err(|_| {
-        eyre!("Invalid unlock TTL '{input}'. Use an integer followed by m, h, or d.")
-    })?;
+    let value: u64 = value
+        .parse()
+        .map_err(|_| eyre!("Invalid unlock TTL '{input}'. Use an integer followed by m, h, or d."))?;
     let seconds = match suffix {
         "m" => value.saturating_mul(60),
         "h" => value.saturating_mul(60 * 60),
@@ -317,11 +360,7 @@ pub fn parse_unlock_ttl(input: &str) -> Result<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 
-fn parse_secret_auth(
-    username: Option<String>,
-    password: Option<String>,
-    apikey: Option<String>,
-) -> Result<SecretAuth> {
+fn parse_secret_auth(username: Option<String>, password: Option<String>, apikey: Option<String>) -> Result<SecretAuth> {
     match (apikey, username, password) {
         (Some(apikey), None, None) => Ok(SecretAuth::ApiKey { apikey }),
         (None, Some(username), Some(password)) => Ok(SecretAuth::Basic { username, password }),
@@ -347,23 +386,50 @@ fn unlock_context_material() -> Result<String> {
     ))
 }
 
-fn derive_context_key(context: &str, salt: &[u8]) -> [u8; KEY_SIZE] {
+fn validate_kdf_params(params: &KdfParams) -> Result<()> {
+    if params.algorithm != KDF_ALGORITHM {
+        return Err(eyre!("Unsupported KDF algorithm '{}'", params.algorithm));
+    }
+    if params.rounds == 0 {
+        return Err(eyre!("KDF rounds must be greater than zero"));
+    }
+    if params.rounds < MIN_KDF_ROUNDS {
+        return Err(eyre!(
+            "KDF rounds {} are below the minimum readable value {}",
+            params.rounds,
+            MIN_KDF_ROUNDS
+        ));
+    }
+    if params.rounds > MAX_KDF_ROUNDS {
+        return Err(eyre!(
+            "KDF rounds {} exceed the maximum supported value {}",
+            params.rounds,
+            MAX_KDF_ROUNDS
+        ));
+    }
+    Ok(())
+}
+
+fn derive_context_key(context: &str, salt: &[u8], params: &KdfParams) -> Result<[u8; KEY_SIZE]> {
+    validate_kdf_params(params)?;
     let mut key = [0_u8; KEY_SIZE];
-    pbkdf2_hmac::<Sha256>(context.as_bytes(), salt, KDF_ROUNDS, &mut key);
-    key
+    pbkdf2_hmac::<Sha256>(context.as_bytes(), salt, params.rounds, &mut key);
+    Ok(key)
 }
 
 fn encrypt_unlock_lease(data: &UnlockLeaseData) -> Result<EncryptedUnlockLease> {
     let salt = rand::random::<[u8; SALT_SIZE]>();
     let nonce = rand::random::<[u8; NONCE_SIZE]>();
-    let key = derive_context_key(&unlock_context_material()?, &salt);
+    let kdf = KdfParams::current();
+    let key = derive_context_key(&unlock_context_material()?, &salt, &kdf)?;
     let plaintext = serde_yaml::to_string(data)?;
     let cipher = Aes256GcmSiv::new_from_slice(&key)?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
         .map_err(|_| eyre!("Failed to encrypt unlock lease"))?;
     Ok(EncryptedUnlockLease {
-        version: 1,
+        version: ENCRYPTED_ENVELOPE_VERSION,
+        kdf,
         salt: base64::engine::general_purpose::STANDARD.encode(salt),
         nonce: base64::engine::general_purpose::STANDARD.encode(nonce),
         ciphertext: base64::engine::general_purpose::STANDARD.encode(ciphertext),
@@ -371,11 +437,8 @@ fn encrypt_unlock_lease(data: &UnlockLeaseData) -> Result<EncryptedUnlockLease> 
 }
 
 fn decrypt_unlock_lease(encrypted: EncryptedUnlockLease) -> Result<UnlockLeaseData> {
-    if encrypted.version != 1 {
-        return Err(eyre!(
-            "Unsupported unlock lease version {}",
-            encrypted.version
-        ));
+    if !matches!(encrypted.version, 1 | ENCRYPTED_ENVELOPE_VERSION) {
+        return Err(eyre!("Unsupported unlock lease version {}", encrypted.version));
     }
     let salt = base64::engine::general_purpose::STANDARD.decode(encrypted.salt)?;
     let nonce = base64::engine::general_purpose::STANDARD.decode(encrypted.nonce)?;
@@ -394,7 +457,7 @@ fn decrypt_unlock_lease(encrypted: EncryptedUnlockLease) -> Result<UnlockLeaseDa
             NONCE_SIZE
         ));
     }
-    let key = derive_context_key(&unlock_context_material()?, &salt);
+    let key = derive_context_key(&unlock_context_material()?, &salt, &encrypted.kdf)?;
     let cipher = Aes256GcmSiv::new_from_slice(&key)?;
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
@@ -407,12 +470,7 @@ fn remove_unlock_file_best_effort(path: &Path, reason: &str) {
         return;
     }
     if let Err(err) = std::fs::remove_file(path) {
-        tracing::warn!(
-            "Failed to delete {} unlock lease '{}': {}",
-            reason,
-            path.display(),
-            err
-        );
+        tracing::warn!("Failed to delete {} unlock lease '{}': {}", reason, path.display(), err);
     }
 }
 
@@ -548,15 +606,10 @@ pub async fn with_scoped_keystore_password<F>(keystore_password: String, future:
 where
     F: Future,
 {
-    SCOPED_KEYSTORE_PASSWORD
-        .scope(keystore_password, future)
-        .await
+    SCOPED_KEYSTORE_PASSWORD.scope(keystore_password, future).await
 }
 
-fn get_password_for_secret_commands_with_prompt<F>(
-    interactive: bool,
-    prompt_fn: F,
-) -> Result<String>
+fn get_password_for_secret_commands_with_prompt<F>(interactive: bool, prompt_fn: F) -> Result<String>
 where
     F: FnOnce(&str) -> Result<String>,
 {
@@ -631,11 +684,7 @@ pub fn update_secret(
     Ok(get_keystore_path()?.display().to_string())
 }
 
-pub fn remove_secret(
-    secret_id: &str,
-    expected: Option<SecretAuth>,
-    keystore_password: &str,
-) -> Result<String> {
+pub fn remove_secret(secret_id: &str, expected: Option<SecretAuth>, keystore_password: &str) -> Result<String> {
     let mut store = read_store(keystore_password)?;
     if !store.secrets.contains_key(secret_id) {
         return Err(eyre!("Secret '{secret_id}' not found"));
@@ -701,33 +750,8 @@ fn ensure_secret_is_unreferenced(secret_id: &str) -> Result<()> {
     ))
 }
 
-fn referenced_job_hosts(job: &crate::data::SavedJob) -> Vec<&str> {
-    let mut hosts = Vec::new();
-    if !job.workflow.collect.known_host.trim().is_empty() {
-        hosts.push(job.workflow.collect.known_host.trim());
-    }
-
-    match job.workflow.send.mode {
-        crate::data::SendMode::Remote => {
-            let remote = job.workflow.send.remote_target.trim();
-            if is_probable_hostname(remote) {
-                hosts.push(remote);
-            }
-        }
-        crate::data::SendMode::Local => {
-            let local = job.workflow.send.local_target.trim();
-            if is_probable_hostname(local) && local != "directory" {
-                hosts.push(local);
-            }
-        }
-    }
-
-    hosts
-}
-
-fn is_probable_hostname(target: &str) -> bool {
-    let trimmed = target.trim();
-    !trimmed.is_empty() && !trimmed.contains("://")
+fn referenced_job_hosts(job: &crate::data::Job) -> Vec<&str> {
+    job.referenced_hosts()
 }
 
 pub fn get_secret(secret_id: &str, keystore_password: &str) -> Result<Option<SecretEntry>> {
@@ -735,11 +759,7 @@ pub fn get_secret(secret_id: &str, keystore_password: &str) -> Result<Option<Sec
     Ok(store.secrets.get(secret_id).cloned())
 }
 
-pub fn upsert_secret_auth(
-    secret_id: &str,
-    auth: SecretAuth,
-    keystore_password: &str,
-) -> Result<()> {
+pub fn upsert_secret_auth(secret_id: &str, auth: SecretAuth, keystore_password: &str) -> Result<()> {
     let mut store = read_store(keystore_password)?;
     let entry = store
         .secrets
@@ -758,10 +778,7 @@ where
     let mut updated = 0_usize;
 
     for (secret_id, auth) in entries {
-        let entry = store
-            .secrets
-            .entry(secret_id)
-            .or_insert_with(SecretEntry::default);
+        let entry = store.secrets.entry(secret_id).or_insert_with(SecretEntry::default);
         entry.upsert_auth(auth);
         updated += 1;
     }
@@ -774,10 +791,7 @@ where
 
 pub fn resolve_secret_auth(secret_id: &str, keystore_password: &str) -> Result<Option<SecretAuth>> {
     let store = read_store(keystore_password)?;
-    Ok(store
-        .secrets
-        .get(secret_id)
-        .and_then(SecretEntry::resolve_auth))
+    Ok(store.secrets.get(secret_id).and_then(SecretEntry::resolve_auth))
 }
 
 pub fn authenticate(keystore_password: &str) -> Result<()> {
@@ -790,10 +804,7 @@ pub fn authenticate(keystore_password: &str) -> Result<()> {
 
 pub fn validate_existing_keystore_password(keystore_password: &str) -> Result<()> {
     if !keystore_exists()? {
-        return Err(eyre!(
-            "No keystore exists at {}",
-            get_keystore_path()?.display()
-        ));
+        return Err(eyre!("No keystore exists at {}", get_keystore_path()?.display()));
     }
     read_store(keystore_password).map(|_| ())
 }
@@ -825,6 +836,11 @@ pub fn list_secret_names(keystore_password: &str) -> Result<Vec<String>> {
     Ok(names)
 }
 
+pub(crate) fn list_secret_entries(keystore_password: &str) -> Result<Vec<(String, SecretEntry)>> {
+    let store = read_store(keystore_password)?;
+    Ok(store.secrets.into_iter().collect())
+}
+
 pub fn keystore_exists() -> Result<bool> {
     Ok(get_keystore_path()?.is_file())
 }
@@ -838,7 +854,7 @@ fn read_store(keystore_password: &str) -> Result<KeystoreData> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let encrypted: EncryptedKeystore = serde_yaml::from_reader(reader)?;
-    if encrypted.version != 1 {
+    if !matches!(encrypted.version, 1 | ENCRYPTED_ENVELOPE_VERSION) {
         return Err(eyre!("Unsupported keystore version {}", encrypted.version));
     }
 
@@ -860,7 +876,7 @@ fn read_store(keystore_password: &str) -> Result<KeystoreData> {
         ));
     }
 
-    let key = derive_key(keystore_password, &salt);
+    let key = derive_key(keystore_password, &salt, &encrypted.kdf)?;
     let cipher = Aes256GcmSiv::new_from_slice(&key)?;
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
@@ -871,7 +887,8 @@ fn read_store(keystore_password: &str) -> Result<KeystoreData> {
 fn write_store(store: &KeystoreData, keystore_password: &str) -> Result<()> {
     let salt = rand::random::<[u8; SALT_SIZE]>();
     let nonce = rand::random::<[u8; NONCE_SIZE]>();
-    let key = derive_key(keystore_password, &salt);
+    let kdf = KdfParams::current();
+    let key = derive_key(keystore_password, &salt, &kdf)?;
     let plaintext = serde_yaml::to_string(store)?;
 
     let cipher = Aes256GcmSiv::new_from_slice(&key)?;
@@ -880,7 +897,8 @@ fn write_store(store: &KeystoreData, keystore_password: &str) -> Result<()> {
         .map_err(|_| eyre!("Failed to encrypt keystore"))?;
 
     let envelope = EncryptedKeystore {
-        version: 1,
+        version: ENCRYPTED_ENVELOPE_VERSION,
+        kdf,
         salt: base64::engine::general_purpose::STANDARD.encode(salt),
         nonce: base64::engine::general_purpose::STANDARD.encode(nonce),
         ciphertext: base64::engine::general_purpose::STANDARD.encode(ciphertext),
@@ -891,18 +909,18 @@ fn write_store(store: &KeystoreData, keystore_password: &str) -> Result<()> {
     Ok(())
 }
 
-fn derive_key(password: &str, salt: &[u8]) -> [u8; KEY_SIZE] {
+fn derive_key(password: &str, salt: &[u8], params: &KdfParams) -> Result<[u8; KEY_SIZE]> {
+    validate_kdf_params(params)?;
     let mut key = [0_u8; KEY_SIZE];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, KDF_ROUNDS, &mut key);
-    key
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, params.rounds, &mut key);
+    Ok(key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::{
-        CollectMode, CollectSource, CollectStage, HostRole, KnownHostBuilder, ProcessStage,
-        Product, SavedJob, SavedJobs, SendMode, SendStage, Workflow, save_saved_jobs,
+        HostRole, Job, JobAction, JobCollect, JobOutput, KnownHostBuilder, Product, SavedJobs, save_saved_jobs,
     };
     use crate::test_env_lock;
     use tempfile::TempDir;
@@ -947,10 +965,7 @@ mod tests {
 
         let status = get_unlock_status().expect("status");
         assert!(!status.unlock_active);
-        assert!(
-            !unlock_path.exists(),
-            "expired unlock file should be deleted"
-        );
+        assert!(!unlock_path.exists(), "expired unlock file should be deleted");
         assert!(
             get_keystore_password().is_err(),
             "expired lease should not provide password"
@@ -963,14 +978,7 @@ mod tests {
         let (_tmp, _keystore_path, _unlock_path) = setup_env();
 
         create_keystore("pw").expect("create keystore");
-        add_secret(
-            "api-secret",
-            None,
-            None,
-            Some("secret-key".to_string()),
-            "pw",
-        )
-        .expect("add secret");
+        add_secret("api-secret", None, None, Some("secret-key".to_string()), "pw").expect("add secret");
         write_unlock_lease_until("pw", current_epoch_seconds() + 300).expect("write unlock lease");
 
         rotate_keystore_password("pw", "new-pw").expect("rotate password");
@@ -979,10 +987,7 @@ mod tests {
             .expect("read secret")
             .expect("secret exists");
         assert_eq!(secret.apikey.as_deref(), Some("secret-key"));
-        assert_eq!(
-            get_keystore_password().expect("unlock lease password"),
-            "new-pw"
-        );
+        assert_eq!(get_keystore_password().expect("unlock lease password"), "new-pw");
     }
 
     #[test]
@@ -992,10 +997,7 @@ mod tests {
         std::fs::create_dir_all(&unlock_path).expect("create unlock directory");
 
         assert!(!clear_unlock_lease().expect("clear unlock lease"));
-        assert!(
-            unlock_path.is_dir(),
-            "non-file unlock path should be left alone"
-        );
+        assert!(unlock_path.is_dir(), "non-file unlock path should be left alone");
     }
 
     #[test]
@@ -1006,10 +1008,7 @@ mod tests {
         write_unlock_lease_until("stale-pw", current_epoch_seconds() + 300).expect("write lease");
 
         let prompted = get_password_for_secret_commands_with_prompt(true, |prompt| {
-            assert_eq!(
-                prompt,
-                "Enter keystore password (ESDIAG_KEYSTORE_PASSWORD): "
-            );
+            assert_eq!(prompt, "Enter keystore password (ESDIAG_KEYSTORE_PASSWORD): ");
             Ok("prompted-pw".to_string())
         })
         .expect("prompted fallback");
@@ -1029,10 +1028,7 @@ mod tests {
         write_unlock_lease_until("stale-pw", current_epoch_seconds() + 300).expect("write lease");
 
         let err = get_keystore_password().expect_err("stale lease should be rejected");
-        assert!(
-            err.to_string()
-                .contains("no valid unlock lease is available")
-        );
+        assert!(err.to_string().contains("no valid unlock lease is available"));
         assert!(
             !unlock_path.exists(),
             "stale unlock lease should be cleared on invalid password"
@@ -1079,10 +1075,7 @@ mod tests {
         write_unlock_lease_until("pw", current_epoch_seconds() + 300).expect("write lease");
 
         let err = get_keystore_password().expect_err("missing keystore should reject lease");
-        assert!(
-            err.to_string()
-                .contains("no valid unlock lease is available")
-        );
+        assert!(err.to_string().contains("no valid unlock lease is available"));
         assert!(
             !unlock_path.exists(),
             "unlock lease should be cleared when keystore is absent"
@@ -1096,10 +1089,7 @@ mod tests {
         write_unlock_lease_until("pw", current_epoch_seconds() + 300).expect("write lease");
 
         let prompted = get_password_for_secret_commands_with_prompt(true, |prompt| {
-            assert_eq!(
-                prompt,
-                "Enter keystore password (ESDIAG_KEYSTORE_PASSWORD): "
-            );
+            assert_eq!(prompt, "Enter keystore password (ESDIAG_KEYSTORE_PASSWORD): ");
             Ok("prompted-pw".to_string())
         })
         .expect("prompted fallback");
@@ -1133,6 +1123,58 @@ mod tests {
 
         let status = get_unlock_status().expect("unlock status");
         assert_eq!(status.expires_at_epoch, Some(i64::MAX));
+    }
+
+    #[test]
+    fn encrypted_envelopes_persist_current_kdf_params() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let (_tmp, keystore_path, unlock_path) = setup_env();
+
+        create_keystore("pw").expect("create keystore");
+        write_unlock_lease("pw", Duration::from_secs(300)).expect("write unlock lease");
+
+        let keystore_file = File::open(keystore_path).expect("open keystore");
+        let keystore: EncryptedKeystore =
+            serde_yaml::from_reader(BufReader::new(keystore_file)).expect("keystore envelope");
+        assert_eq!(keystore.version, ENCRYPTED_ENVELOPE_VERSION);
+        assert_eq!(keystore.kdf, KdfParams::current());
+
+        let unlock_file = File::open(unlock_path).expect("open unlock lease");
+        let unlock: EncryptedUnlockLease =
+            serde_yaml::from_reader(BufReader::new(unlock_file)).expect("unlock envelope");
+        assert_eq!(unlock.version, ENCRYPTED_ENVELOPE_VERSION);
+        assert_eq!(unlock.kdf, KdfParams::current());
+    }
+
+    #[test]
+    fn encrypted_envelopes_default_missing_kdf_to_current_rounds() {
+        let keystore: EncryptedKeystore = serde_yaml::from_str(
+            r#"
+version: 1
+salt: ""
+nonce: ""
+ciphertext: ""
+"#,
+        )
+        .expect("keystore envelope with defaulted KDF params");
+
+        assert_eq!(keystore.kdf.algorithm, KDF_ALGORITHM);
+        assert_eq!(keystore.kdf.rounds, KDF_ROUNDS);
+    }
+
+    #[test]
+    fn kdf_params_reject_unsupported_round_counts() {
+        let too_low = KdfParams {
+            algorithm: KDF_ALGORITHM.to_string(),
+            rounds: MIN_KDF_ROUNDS - 1,
+        };
+        assert!(validate_kdf_params(&too_low).is_err());
+
+        let too_high = KdfParams {
+            algorithm: KDF_ALGORITHM.to_string(),
+            rounds: MAX_KDF_ROUNDS + 1,
+        };
+        assert!(validate_kdf_params(&too_high).is_err());
     }
 
     #[test]
@@ -1207,11 +1249,7 @@ mod tests {
         let err = remove_secret("used-secret", None, "pw").expect_err("secret should be protected");
 
         assert!(err.to_string().contains("hosts: prod"));
-        assert!(
-            get_secret("used-secret", "pw")
-                .expect("read secret")
-                .is_some()
-        );
+        assert!(get_secret("used-secret", "pw").expect("read secret").is_some());
     }
 
     #[test]
@@ -1233,17 +1271,18 @@ mod tests {
         let mut jobs = SavedJobs::default();
         jobs.insert(
             "nightly-prod".to_string(),
-            SavedJob {
+            Job {
                 identifiers: Default::default(),
-                workflow: Workflow {
-                    collect: CollectStage {
-                        mode: CollectMode::Collect,
-                        source: CollectSource::KnownHost,
-                        known_host: "prod".to_string(),
-                        ..Default::default()
+                collect: JobCollect {
+                    host: "prod".to_string(),
+                    diagnostic_type: "standard".to_string(),
+                    save_dir: None,
+                },
+                action: JobAction::Process {
+                    output: JobOutput::KnownHost {
+                        name: "prod".to_string(),
                     },
-                    process: ProcessStage::default(),
-                    send: SendStage::default(),
+                    selection: None,
                 },
             },
         );
@@ -1253,11 +1292,7 @@ mod tests {
 
         assert!(err.to_string().contains("hosts: prod"));
         assert!(err.to_string().contains("saved jobs: nightly-prod"));
-        assert!(
-            get_secret("used-secret", "pw")
-                .expect("read secret")
-                .is_some()
-        );
+        assert!(get_secret("used-secret", "pw").expect("read secret").is_some());
     }
 
     #[test]
@@ -1276,31 +1311,23 @@ mod tests {
 
         remove_secret("unused-secret", None, "pw").expect("remove secret");
 
-        assert!(
-            get_secret("unused-secret", "pw")
-                .expect("read secret")
-                .is_none()
-        );
+        assert!(get_secret("unused-secret", "pw").expect("read secret").is_none());
     }
 
     #[test]
     fn referenced_job_hosts_only_uses_active_send_mode_targets() {
-        let job = SavedJob {
+        let job = Job {
             identifiers: Default::default(),
-            workflow: Workflow {
-                collect: CollectStage {
-                    mode: CollectMode::Collect,
-                    source: CollectSource::KnownHost,
-                    known_host: "collector".to_string(),
-                    ..Default::default()
+            collect: JobCollect {
+                host: "collector".to_string(),
+                diagnostic_type: "standard".to_string(),
+                save_dir: None,
+            },
+            action: JobAction::Process {
+                output: JobOutput::KnownHost {
+                    name: "sender".to_string(),
                 },
-                process: ProcessStage::default(),
-                send: SendStage {
-                    mode: SendMode::Local,
-                    remote_target: "stale-remote".to_string(),
-                    local_target: "sender".to_string(),
-                    local_directory: String::new(),
-                },
+                selection: None,
             },
         };
 
@@ -1309,22 +1336,15 @@ mod tests {
 
     #[test]
     fn referenced_job_hosts_ignores_remote_urls() {
-        let job = SavedJob {
+        let job = Job {
             identifiers: Default::default(),
-            workflow: Workflow {
-                collect: CollectStage {
-                    mode: CollectMode::Collect,
-                    source: CollectSource::KnownHost,
-                    known_host: "collector".to_string(),
-                    ..Default::default()
-                },
-                process: ProcessStage::default(),
-                send: SendStage {
-                    mode: SendMode::Remote,
-                    remote_target: "https://upload.elastic.co/g/abc123".to_string(),
-                    local_target: String::new(),
-                    local_directory: String::new(),
-                },
+            collect: JobCollect {
+                host: "collector".to_string(),
+                diagnostic_type: "standard".to_string(),
+                save_dir: None,
+            },
+            action: JobAction::Upload {
+                upload_id: "https://upload.elastic.co/g/abc123".to_string(),
             },
         };
 

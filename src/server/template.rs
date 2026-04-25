@@ -34,6 +34,8 @@ pub struct Index {
     pub version: String,
     pub theme_dark: bool,
     pub runtime_mode: String,
+    pub show_advanced: bool,
+    pub show_job_builder: bool,
     pub can_use_keystore: bool,
     pub output_secure: bool,
     pub keystore_locked: bool,
@@ -42,8 +44,8 @@ pub struct Index {
 }
 
 #[derive(Template)]
-#[template(path = "workflow.html")]
-pub struct Workflow {
+#[template(path = "advanced.html")]
+pub struct Advanced {
     pub auth_header: bool,
     pub debug: bool,
     pub desktop: bool,
@@ -69,6 +71,8 @@ pub struct Workflow {
     pub version: String,
     pub theme_dark: bool,
     pub runtime_mode: String,
+    pub show_advanced: bool,
+    pub show_job_builder: bool,
     pub can_use_keystore: bool,
     pub keystore_locked: bool,
     pub keystore_lock_time: i64,
@@ -100,6 +104,8 @@ pub struct Jobs {
     pub version: String,
     pub theme_dark: bool,
     pub runtime_mode: String,
+    pub show_advanced: bool,
+    pub show_job_builder: bool,
     pub can_use_keystore: bool,
     pub keystore_locked: bool,
     pub keystore_lock_time: i64,
@@ -111,7 +117,7 @@ pub struct Jobs {
     pub saved_known_host: String,
     pub saved_diagnostic_type: String,
     pub saved_collect_save: bool,
-    pub saved_save_dir: String,
+    pub saved_download_dir: String,
     pub saved_process_mode: String,
     pub saved_process_enabled: bool,
     pub saved_process_product: String,
@@ -257,6 +263,8 @@ pub struct HostsPage {
     pub version: String,
     pub theme_dark: bool,
     pub runtime_mode: String,
+    pub show_advanced: bool,
+    pub show_job_builder: bool,
     pub can_use_keystore: bool,
     pub keystore_locked: bool,
     pub keystore_lock_time: i64,
@@ -337,9 +345,7 @@ pub fn build_footer_output_context(
     let exporter_value = exporter.target_uri();
     let selected_output = preferred_target
         .filter(|target| send_hosts.iter().any(|host| host == *target))
-        .and_then(|target| {
-            preferred_target_matches_exporter(hosts_by_name, target, exporter).then_some(target)
-        })
+        .and_then(|target| preferred_target_matches_exporter(hosts_by_name, target, exporter).then_some(target))
         .map(str::to_string)
         .unwrap_or_else(|| exporter_value.clone());
 
@@ -351,10 +357,7 @@ pub fn build_footer_output_context(
         })
         .collect::<Vec<_>>();
 
-    if !output_options
-        .iter()
-        .any(|option| option.value == selected_output)
-    {
+    if !output_options.iter().any(|option| option.value == selected_output) {
         let label = if selected_output == exporter_value {
             exporter.target_label()
         } else {
@@ -493,8 +496,7 @@ mod tests {
         let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_hosts();
         let send_hosts = vec!["localhost".to_string(), "secure-prod".to_string()];
-        let exporter = Exporter::try_from(Uri::Directory(PathBuf::from("/tmp/output")))
-            .expect("directory exporter");
+        let exporter = Exporter::try_from(Uri::Directory(PathBuf::from("/tmp/output"))).expect("directory exporter");
 
         let (options, selected_output, label) = build_footer_output_context(
             &KnownHost::parse_hosts_yml().unwrap_or_default(),
@@ -539,8 +541,8 @@ mod tests {
             &secure_exporter
         ));
 
-        let dir_exporter = Exporter::try_from(Uri::Directory(PathBuf::from("/tmp/output")))
-            .expect("directory exporter");
+        let dir_exporter =
+            Exporter::try_from(Uri::Directory(PathBuf::from("/tmp/output"))).expect("directory exporter");
         assert!(!active_output_requires_keystore(
             &hosts_by_name,
             &send_hosts,
@@ -550,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn jobs_template_does_not_seed_conflicting_workflow_root_signal() {
+    fn jobs_template_does_not_seed_conflicting_job_root_signal() {
         let page = Jobs {
             auth_header: false,
             debug: false,
@@ -574,6 +576,8 @@ mod tests {
             version: "test".to_string(),
             theme_dark: false,
             runtime_mode: "user".to_string(),
+            show_advanced: true,
+            show_job_builder: true,
             can_use_keystore: true,
             keystore_locked: false,
             keystore_lock_time: 0,
@@ -584,7 +588,7 @@ mod tests {
             saved_known_host: String::new(),
             saved_diagnostic_type: "standard".to_string(),
             saved_collect_save: false,
-            saved_save_dir: "/tmp".to_string(),
+            saved_download_dir: "/tmp".to_string(),
             saved_process_mode: "process".to_string(),
             saved_process_enabled: true,
             saved_process_product: "elasticsearch".to_string(),
@@ -604,8 +608,8 @@ mod tests {
 
         let html = page.render().expect("jobs template renders");
         assert!(
-            !html.contains(r#"data-signals:workflow="{}""#),
-            "jobs page should not seed a top-level workflow object that overrides nested workflow signals"
+            !html.contains(r#"data-signals:job="{}""#),
+            "jobs page should not seed a top-level job object that overrides nested job signals"
         );
     }
 }

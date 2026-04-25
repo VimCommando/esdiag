@@ -5,24 +5,30 @@ description: Collect or process Elasticsearch, Kibana, and Logstash diagnostics 
 
 # ESDiag
 
-Use this skill to choose and run the right `esdiag` command sequence quickly and safely.
+Use this skill to choose and run the right `esdiag` command sequence safely.
 
-Prefer command output from `esdiag help` and `esdiag <command> --help` over memory when behavior is unclear.
-Use `--sources <path/to/sources.yml>` when diagnostics API selection must follow a custom or version-specific sources definition.
+Prefer live help output over memory when behavior is unclear:
 
-## Workflow Decision Tree
+```sh
+esdiag --help
+esdiag <command> --help
+```
 
-- If the task is "save/test a connection", run `esdiag host`.
-- If the task is "add/remove/migrate encrypted credentials", run `esdiag keystore`.
-- If the task is "install templates/pipelines/assets", run `esdiag setup`.
-- If the task is "transform diagnostics into documents and send somewhere", run `esdiag process`.
-- If the task is "collect API diagnostics from a host into local files", run `esdiag collect`.
-- If the task is "save, list, run, or delete a reusable diagnostic job", run `esdiag job`.
-- If the task is "accept browser uploads or API submissions", run `esdiag serve`.
+## Command Routing
 
-## Pre-flight: Keystore Check
+- Connection management: `esdiag host`
+- Credentials and unlock state: `esdiag keystore`
+- Asset setup: `esdiag setup`
+- Process diagnostics into output docs: `esdiag process`
+- Collect fresh API diagnostics: `esdiag collect`
+- Saved reusable jobs: `esdiag job`, or `--save-job <NAME>` on compatible `collect`/`process`
+- Web/API intake: `esdiag serve`
 
-Before running any `esdiag` command for the first time in a session, run:
+## Required Checks
+
+Run `esdiag keystore status` before authenticated collection, processing from saved hosts, saved jobs, or host/keystore changes.
+
+If locked, stop and ask the user to unlock with `esdiag keystore unlock` or through the web UI.
 
 ```
 esdiag keystore status
@@ -31,15 +37,7 @@ esdiag keystore status
 - `Keystore: unlocked until <date> (duration)` — proceed normally.
 - `Keystore: locked` — stop and tell the user to unlock it via the web UI or with `esdiag keystore unlock` before continuing.
 
-## Standard Flow
-
-1. Configure output host or output environment variables.
-2. Run `esdiag setup` against the Elasticsearch output target.
-3. Ingest diagnostics via `esdiag process` or `esdiag serve`.
-4. Confirm completion output and share destination details (host/file/stdout).
-5. If `esdiag process` outputs a `Kibana Link: <url>` line, present it to the user as a clickable markdown link.
-
-## Step 1: Configure Hosts and Auth
+## Detailed Workflow
 
 - Use `esdiag host add <NAME> <APP> <URL>` to create and save a new host definition in `~/.esdiag/hosts.yml`.
 - Use `esdiag host update <NAME>` with mutable flags to modify an existing saved host in place.
@@ -56,7 +54,7 @@ esdiag keystore status
 - `host update` always re-tests the live connection before persistence.
 - Use environment variables (optionally by sourcing a `.env` file in the shell) when the user does not want a saved host.
 
-## Step 1b: Manage Encrypted Secrets (Optional)
+## Manage Encrypted Secrets
 
 - Use `esdiag keystore add <secret_id>` to create encrypted credentials.
 - Use `esdiag keystore update <secret_id>` to change an existing encrypted secret.
@@ -69,7 +67,7 @@ esdiag keystore status
 - Set `ESDIAG_KEYSTORE_PASSWORD` for non-interactive keystore operations.
 - In interactive shells, `keystore add/update/remove/unlock/password` can prompt for the keystore password when `ESDIAG_KEYSTORE_PASSWORD` is unset.
 
-## Step 2: Setup Output Cluster
+## Setup Output Cluster
 
 - Run `esdiag setup [HOST]` before first ingestion into a cluster.
 - If `[HOST]` is omitted, rely on:
@@ -80,7 +78,7 @@ esdiag keystore status
   - `ESDIAG_KIBANA_URL` (required for Kibana asset setup in host-omitted mode)
 - In host-omitted mode, `setup` attempts both Elasticsearch and Kibana asset setup.
 
-## Step 3: Process Diagnostics
+## Process Diagnostics
 
 - Use `esdiag process [OPTIONS] <INPUT> [OUTPUT]`.
 - Accept these input patterns:
@@ -101,8 +99,9 @@ esdiag keystore status
   - `--user`
 - Use `--sources` to override endpoint source definitions when testing new API mappings or reproducing source-selection behavior.
 - After a successful `esdiag process`, if the output contains a `Kibana Link: <url>` line, present that URL to the user as a clickable markdown link. Do not manually look up Kibana hosts.
+- Use `--save-job <NAME>` on compatible `process` invocations to persist the job before execution. The input must be a saved known host, and `[OUTPUT]` must be explicit.
 
-## Step 4: Collect Then Process (Optional)
+## Collect Diagnostics
 
 - Use `esdiag collect [OPTIONS] <HOST> <OUTPUT>` when the user needs fresh API diagnostics.
 - Ensure `<OUTPUT>` already exists; command creates a diagnostic subdirectory within it.
@@ -110,6 +109,7 @@ esdiag keystore status
 - Use `--include` and `--exclude` to explicitly control which APIs are collected.
 - Use metadata options (`--account`, `--case`, `--opportunity`, `--user`) when collected artifacts should carry report context.
 - Use `--sources` when the collection endpoints should come from a non-default `sources.yml`.
+- Use `--save-job <NAME>` on compatible `collect` invocations to persist the job before execution. `<HOST>` must be a saved host with the `collect` role, and `<OUTPUT>` must be an existing directory.
 - For repeated captures, use `bin/min-diag.sh watch` and process each generated directory with `esdiag process`.
 
 ## Saved Jobs
@@ -126,15 +126,30 @@ Saved jobs persist named diagnostic configurations to `~/.esdiag/jobs.yml` so th
   - Fails with a clear error if the job name is not found.
 - In the web UI (`/jobs` page, user mode only), the left panel lists saved jobs with Load and Delete actions. The Save form derives a default name from the workflow (`{host}-{action}-{destination}`) and disables saving for upload-file and service-link sources since those are not repeatable.
 
-## Step 5: Run Upload Service (Optional)
+## Run Upload Service
 
 - Use `esdiag serve [OPTIONS] [OUTPUT]` to host upload and API endpoints.
 - Default port is `2501`; override with `--port`.
 - Pass `--kibana <URL>` (or set `ESDIAG_KIBANA_URL`) to show direct links in UI flows.
 - Use output resolution rules from `process`.
 
-## Troubleshooting Rules
+## Workflow Notes
 
+- Configure an output host or `ESDIAG_OUTPUT_*` before processing into Elasticsearch.
+- Run `esdiag setup [HOST]` before first ingestion into a cluster.
+- Use `--sources <path/to/sources.yml>` for custom or version-specific API endpoint definitions.
+- For `process`, resolve output as stdout (`-`), saved host, filesystem target, or `ESDIAG_OUTPUT_*` when omitted. Do not use raw HTTP URLs as output targets unless saved as hosts.
+- For `collect`, `<HOST>` must be a saved host with the `collect` role and `<OUTPUT>` must be an existing directory.
+- Use metadata flags (`--account`, `--case`, `--opportunity`, `--user`) when reports need context.
+- If `process` prints a `Kibana Link: <url>`, present it as a clickable markdown link.
+
+## Saved Jobs
+
+- Use `--save-job <NAME>` on compatible `collect` or `process` invocations to persist the job before execution. Requires a saved known-host collection input; `process` also requires an explicit output. See `references/cli.md` for command-specific details.
+- Use `esdiag job list`, `esdiag job run <NAME>`, and `esdiag job delete <NAME>` to manage saved jobs.
+- Saved jobs require persisted known hosts and the keystore feature.
+
+## Troubleshooting Rules
 - If command behavior looks inconsistent with docs, trust live help output first.
 - If auth fails, re-check saved host/app/url/auth mode and whether cert validation is required.
 - If a saved-host update fails, remember that `esdiag host update <NAME>` re-validates the merged host definition live before saving it.

@@ -388,8 +388,11 @@ Options:
   -u, --user <USER>
           Diagnostic report user
 
+      --save-job <NAME>
+          Save this invocation as a named job in `~/.esdiag/jobs.yml` before processing
+
       --sources <SOURCES>
-          Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow. The file must match the active product or the command fails before processing
+          Override the embedded sources.yml for the detected Elasticsearch or Logstash job. The file must match the active product or the command fails before processing
 
   -h, --help
           Print help (see a summary with '-h')
@@ -418,9 +421,16 @@ These annotate the generated report context:
 - `--opportunity`
 - `--user`
 
+### `--save-job`
+
+- `--save-job <NAME>` stores a saved job before execution, then continues processing
+- saved-job creation requires `<INPUT>` to be a saved known host name with the `collect` role
+- saved-job creation also requires an explicit process output target (known host or local filesystem)
+- directory process outputs are stored as the job's final `output_dir`; intermediate bundle retention is separate and only stored when explicitly requested
+
 ### `--sources`
 
-Use `--sources <path>` when endpoint definitions must come from a custom or version-specific `sources.yml`. The file must match the detected product when processing a host-backed Elasticsearch or Logstash workflow.
+Use `--sources <path>` when endpoint definitions must come from a custom or version-specific `sources.yml`. The file must match the detected product when processing a host-backed Elasticsearch or Logstash job.
 
 ### Examples
 
@@ -455,12 +465,13 @@ Options:
       --type <TYPE>                Diagnostic type (minimal, light, standard, support) [default: standard]
       --include <INCLUDE>          Comma-separated list of APIs to include
       --exclude <EXCLUDE>          Comma-separated list of APIs to exclude
-      --sources <SOURCES>          Override the embedded sources.yml for the detected Elasticsearch or Logstash workflow. The file must match the active product or the command fails before collection
+      --sources <SOURCES>          Override the embedded sources.yml for the detected Elasticsearch or Logstash job. The file must match the active product or the command fails before collection
   -a, --account <ACCOUNT>          Diagnostic report account name
   -c, --case <CASE>                Diagnostic report case number
   -o, --opportunity <OPPORTUNITY>  Diagnostic report opportunity
   -u, --user <USER>                Diagnostic report user
       --upload <UPLOAD_ID>         Elastic Upload Service upload id or URL for immediate upload after collection
+      --save-job <NAME>            Save this invocation as a named job in `~/.esdiag/jobs.yml` before collection
   -h, --help                       Print help
 ```
 
@@ -471,6 +482,7 @@ Options:
 - `<OUTPUT>` must already exist
 - `esdiag` creates a diagnostic directory or archive structure within that output directory
 - `--upload` uploads the exact collected archive after a successful collect run; the archive still remains on disk locally
+- `--save-job <NAME>` stores `<OUTPUT>` as the collect action's required final `output_dir`; it does not also store it as `save_dir`
 
 ### Collection level
 
@@ -485,7 +497,7 @@ Options:
 
 - `--include` narrows to a comma-separated list of APIs
 - `--exclude` removes a comma-separated list of APIs
-- `--sources` overrides the embedded endpoint definitions for Elasticsearch or Logstash workflows
+- `--sources` overrides the embedded endpoint definitions for Elasticsearch or Logstash jobs
 
 ### Metadata options
 
@@ -499,6 +511,12 @@ Options:
 - `--upload` accepts an Elastic Upload Service upload id or URL
 - upload starts only after collection succeeds
 - upload uses the runtime-resolved archive path, so you do not need to know the generated filename ahead of time
+
+### `--save-job`
+
+- `--save-job <NAME>` stores a saved job before execution, then continues collection
+- saved-job creation requires `<HOST>` to resolve to a saved known host with the `collect` role
+- when `--upload` is provided, the saved job records remote-forward behavior to that upload target
 
 ### Examples
 
@@ -542,6 +560,9 @@ Options:
 
           [possible values: service, user]
 
+      --web-features <FEATURES>
+          Optional comma-separated web feature allowlist (advanced, job-builder)
+
       --kibana <KIBANA>
           Kibana URL to display in the web interface. If not provided, will use the ESDIAG_KIBANA_URL environment variable.
 
@@ -557,6 +578,19 @@ Options:
 - `service`
 
 If omitted, `serve` checks `ESDIAG_MODE`. Invalid values fail clearly.
+
+### Web features
+
+`--web-features <FEATURES>` controls optional web UI surfaces for local testing and release gating. If omitted, `serve` checks `ESDIAG_WEB_FEATURES`. If both are omitted, user mode enables `advanced` by default and service mode enables no optional web features. Desktop-hosted user mode uses the same default as `serve --mode user`.
+
+Valid feature names:
+
+- `advanced`: enables the Advanced page at `/advanced`
+- `job-builder`: enables the Job Builder page at `/jobs` and its saved-job web routes
+
+The feature list is authoritative when set. For example, `--web-features job-builder` enables Job Builder and disables Advanced; use `--web-features advanced,job-builder` to enable both. An empty value disables all optional web features. Unknown values fail startup and list the known feature names. `job-builder` also fails startup when the binary was built without `keystore` support, because that web UI depends on keystore-backed saved-job flows.
+
+The Job Builder flag only controls web UI routes. CLI saved-job commands such as `esdiag job list`, `esdiag job run`, and `esdiag job delete` remain available when the web UI is disabled.
 
 ### Kibana URL behavior
 
