@@ -117,7 +117,7 @@ pub struct Jobs {
     pub saved_known_host: String,
     pub saved_diagnostic_type: String,
     pub saved_collect_save: bool,
-    pub saved_save_dir: String,
+    pub saved_download_dir: String,
     pub saved_process_mode: String,
     pub saved_process_enabled: bool,
     pub saved_process_product: String,
@@ -552,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn jobs_template_does_not_seed_conflicting_workflow_root_signal() {
+    fn jobs_template_does_not_seed_conflicting_job_root_signal() {
         let page = Jobs {
             auth_header: false,
             debug: false,
@@ -588,7 +588,7 @@ mod tests {
             saved_known_host: String::new(),
             saved_diagnostic_type: "standard".to_string(),
             saved_collect_save: false,
-            saved_save_dir: "/tmp".to_string(),
+            saved_download_dir: "/tmp".to_string(),
             saved_process_mode: "process".to_string(),
             saved_process_enabled: true,
             saved_process_product: "elasticsearch".to_string(),
@@ -608,8 +608,8 @@ mod tests {
 
         let html = page.render().expect("jobs template renders");
         assert!(
-            !html.contains(r#"data-signals:workflow="{}""#),
-            "jobs page should not seed a top-level workflow object that overrides nested workflow signals"
+            !html.contains(r#"data-signals:job="{}""#),
+            "jobs page should not seed a top-level job object that overrides nested job signals"
         );
     }
 }
