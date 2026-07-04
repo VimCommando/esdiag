@@ -65,6 +65,21 @@ pub fn get_string(name: &str) -> std::io::Result<String> {
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, format!("{} not found", name)))
 }
 
+pub fn get_optional_string_with_fallback(primary: &str, fallback: &str) -> Option<String> {
+    std::env::var(primary).ok().or_else(|| std::env::var(fallback).ok())
+}
+
+pub fn get_string_with_fallback(primary: &str, fallback: &str) -> std::io::Result<String> {
+    get_optional_string_with_fallback(primary, fallback)
+        .or_else(|| default_str(primary).map(str::to_string))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{} and {} not found", primary, fallback),
+            )
+        })
+}
+
 pub fn get_kibana_space() -> Option<String> {
     kibana_space_setting(std::env::var("ESDIAG_KIBANA_SPACE").ok().as_deref())
 }
@@ -149,7 +164,7 @@ pub fn kibana_url_with_space(kibana_url: &str, space: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_kibana_space, get_kibana_space};
+    use super::{append_kibana_space, get_kibana_space, get_string_with_fallback};
 
     #[cfg(windows)]
     #[test]
@@ -243,5 +258,29 @@ mod tests {
             "https://kb:5601/app/home"
         );
         assert_eq!(append_kibana_space("https://kb:5601/proxy/s"), "https://kb:5601/proxy");
+    }
+
+    #[test]
+    fn string_with_fallback_prefers_primary_env() {
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_TEST_PRIMARY", "primary");
+        env.set("ELASTIC_TEST_FALLBACK", "fallback");
+
+        assert_eq!(
+            get_string_with_fallback("ESDIAG_TEST_PRIMARY", "ELASTIC_TEST_FALLBACK").expect("env value"),
+            "primary"
+        );
+    }
+
+    #[test]
+    fn string_with_fallback_uses_fallback_env() {
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_TEST_PRIMARY");
+        env.set("ELASTIC_TEST_FALLBACK", "fallback");
+
+        assert_eq!(
+            get_string_with_fallback("ESDIAG_TEST_PRIMARY", "ELASTIC_TEST_FALLBACK").expect("env value"),
+            "fallback"
+        );
     }
 }

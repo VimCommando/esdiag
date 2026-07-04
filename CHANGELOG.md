@@ -15,6 +15,7 @@ published release notes, maintenance branches, and tagged history.
 - Added `esdiag setup completions <shell>` to install bash, zsh, fish, and PowerShell completion scripts for the running binary, or print them with `--print`.
 - Added `esdiag setup env [--env-file <path>]` to install assets into the deployment that `ESDIAG_OUTPUT_*`, `ESDIAG_KIBANA_URL`, and `ESDIAG_KIBANA_SPACE` declare, and `esdiag setup context [name]` to install assets into the services an Elastic CLI `.elasticrc` context defines. Both set up whichever of Elasticsearch and Kibana the source declares (#431).
 - Added `--activate-trial` and `ESDIAG_SETUP_ACTIVATE_TRIAL` to start a 30-day Elasticsearch trial license during setup, a trial checkbox to the web onboarding output setup, and `--activate-trial=true|false` to `esdiag local` and `esdiag-local` (#431).
+- Added experimental Elastic CLI extension support with `elastic diag`, Elastic CLI context environment fallbacks, and `.service` / `.context.service` target references (#339).
 - Added `esdiag-lite.sh` and `esdiag-lite.ps1`, each with a SHA-256 checksum, to every GitHub release.
 - Added pull-request checks for the ESDiag Lite scripts, including the Windows PowerShell tests.
 
