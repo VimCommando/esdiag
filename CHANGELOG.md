@@ -12,6 +12,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Added
 
+- Added experimental Elastic CLI extension support with `elastic diag`, Elastic CLI context environment fallbacks, and `.service` / `.context.service` target references (#339).
 - Added `esdiag-lite.sh` and `esdiag-lite.ps1`, each with a SHA-256 checksum, to every GitHub release.
 - Added pull-request checks for the ESDiag Lite scripts, including the Windows PowerShell tests.
 

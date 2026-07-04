@@ -461,7 +461,7 @@ fn saved_viewer_kibana_base_url(host: &KnownHost) -> Option<String> {
 }
 
 fn kibana_base_url_from_env() -> Option<String> {
-    std::env::var("ESDIAG_KIBANA_URL")
+    crate::env::get_string_with_fallback("ESDIAG_KIBANA_URL", "ELASTIC_KIBANA_URL")
         .ok()
         .filter(|url| !url.trim().is_empty())
         .map(|url| crate::env::append_kibana_space(&url))
@@ -737,6 +737,7 @@ mod tests {
         );
         KnownHost::write_hosts_yml(&hosts).expect("write hosts");
         env.set("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
+        env.remove("ELASTIC_KIBANA_URL");
         env.remove("ESDIAG_KIBANA_SPACE");
 
         let exporter = Exporter::try_from(Uri::try_from("send-host").expect("host uri")).expect("exporter");
@@ -752,11 +753,58 @@ mod tests {
     fn kibana_link_is_omitted_for_non_cluster_outputs() {
         let mut env = crate::TestEnv::new();
         env.set("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
+        env.remove("ELASTIC_KIBANA_URL");
         env.set("ESDIAG_KIBANA_SPACE", "ops");
 
         let stream = Exporter::default();
         let directory = Exporter::try_from(Uri::Directory(env.tmp.path().to_path_buf())).expect("directory exporter");
         assert!(stream.kibana_link("diag-123", 1_700_000_000_000).is_none());
         assert!(directory.kibana_link("diag-123", 1_700_000_000_000).is_none());
+    }
+
+    #[test]
+    fn kibana_link_falls_back_to_elastic_kibana_env() {
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_KIBANA_URL");
+        env.set("ELASTIC_KIBANA_URL", "https://elastic-kb.example:5601");
+        env.set("ESDIAG_KIBANA_SPACE", "ops");
+
+        let exporter = Exporter::default();
+        let kibana_link = exporter
+            .kibana_link("diag-123", 1_700_000_000_000)
+            .expect("kibana link");
+
+        assert!(kibana_link.starts_with("https://elastic-kb.example:5601/s/ops/app/dashboards#/view/"));
+    }
+
+    #[test]
+    fn kibana_link_omits_space_when_explicitly_empty() {
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
+        env.remove("ELASTIC_KIBANA_URL");
+        env.set("ESDIAG_KIBANA_SPACE", "");
+
+        let exporter = Exporter::default();
+        let kibana_link = exporter
+            .kibana_link("diag-123", 1_700_000_000_000)
+            .expect("kibana link");
+
+        assert!(kibana_link.starts_with("https://env-kb.example:5601/app/dashboards#/view/"));
+    }
+
+    #[test]
+    fn kibana_link_falls_back_to_default_kibana_url_when_no_override_exists() {
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_KIBANA_URL");
+        env.remove("ELASTIC_KIBANA_URL");
+        env.remove("ESDIAG_KIBANA_SPACE");
+
+        let exporter = Exporter::default();
+
+        let kibana_link = exporter
+            .kibana_link("diag-123", 1_700_000_000_000)
+            .expect("default kibana link");
+
+        assert!(kibana_link.starts_with("http://localhost:5601/s/esdiag/app/dashboards#/view/"));
     }
 }
