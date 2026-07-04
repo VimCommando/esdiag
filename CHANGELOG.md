@@ -12,6 +12,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Added
 
+- Added experimental Elastic CLI extension support with `elastic diag`, Elastic CLI context environment fallbacks, and `.service` / `.context.service` target references (#339).
 - Added role- and deployment-based onboarding guides for collection and sharing, processing and analysis, local and remote diagnostic clusters, Agent Skills, and shared services.
 - Added interactive `esdiag init` onboarding for securely configuring a local diagnostic user, output deployment, collect hosts, and default saved job (#377).
 - Added `esdiag agent ask` for finite Kibana Agent Builder questions with explicit conversation follow-ups and Kibana recovery links (#379).
