@@ -612,7 +612,7 @@ fn parse_cli() -> Result<Option<Cli>> {
             err.print()?;
             Ok(None)
         }
-        Err(err) => Err(err.into()),
+        Err(err) => err.exit(),
     }
 }
 
