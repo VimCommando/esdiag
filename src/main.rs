@@ -619,7 +619,7 @@ fn parse_cli() -> Result<Option<Cli>> {
         Ok(cli) => Ok(Some(cli)),
         Err(err) if err.kind() == ErrorKind::DisplayHelp => {
             err.print()?;
-            if is_elastic_cli_invocation() {
+            if esdiag::env::is_elastic_cli_invocation() {
                 println!("{}", elastic_cli_help_text());
             }
             Ok(None)
@@ -630,10 +630,6 @@ fn parse_cli() -> Result<Option<Cli>> {
         }
         Err(err) => Err(err.into()),
     }
-}
-
-fn is_elastic_cli_invocation() -> bool {
-    std::env::var("ESDIAG_ELASTIC_CLI").is_ok_and(|value| value == "1")
 }
 
 fn elastic_cli_help_text() -> &'static str {
@@ -4575,12 +4571,12 @@ mod tests {
         unsafe {
             std::env::set_var("ESDIAG_ELASTIC_CLI", "1");
         }
-        assert!(is_elastic_cli_invocation());
+        assert!(esdiag::env::is_elastic_cli_invocation());
 
         unsafe {
             std::env::set_var("ESDIAG_ELASTIC_CLI", "true");
         }
-        assert!(!is_elastic_cli_invocation());
+        assert!(!esdiag::env::is_elastic_cli_invocation());
 
         unsafe {
             std::env::remove_var("ESDIAG_ELASTIC_CLI");
