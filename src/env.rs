@@ -80,6 +80,10 @@ pub fn get_string_with_fallback(primary: &str, fallback: &str) -> std::io::Resul
         })
 }
 
+pub fn is_elastic_cli_invocation() -> bool {
+    std::env::var("ESDIAG_ELASTIC_CLI").is_ok_and(|value| value == "1")
+}
+
 pub fn get_kibana_space() -> Option<String> {
     kibana_space_setting(std::env::var("ESDIAG_KIBANA_SPACE").ok().as_deref())
 }
