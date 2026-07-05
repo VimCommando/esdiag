@@ -68,10 +68,6 @@ fn try_from_active_context_service(service: ElasticCliService) -> Result<Uri> {
     }
 }
 
-fn is_elastic_cli_invocation() -> bool {
-    std::env::var("ESDIAG_ELASTIC_CLI").is_ok_and(|value| value == "1")
-}
-
 #[cfg(feature = "elasticrc")]
 fn uri_from_elasticrc_service(service: elasticrc::ResolvedService) -> Result<Uri> {
     let application = match service.kind {
@@ -363,7 +359,7 @@ impl TryFrom<&str> for Uri {
 
         if let Some(service) = parse_active_context_service(uri) {
             tracing::debug!("Creating Uri from active Elastic CLI context reference: {uri}");
-            if is_elastic_cli_invocation() {
+            if env::is_elastic_cli_invocation() {
                 match try_from_active_context_service(service) {
                     Ok(uri) => return Ok(uri),
                     Err(active_context_error) => {
