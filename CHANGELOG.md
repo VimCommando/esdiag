@@ -86,6 +86,10 @@ published release notes, maintenance branches, and tagged history.
 - Improved saved host authentication persistence (#306).
 - Improved agentic CLI summaries and viewer-aware Kibana links (#306).
 
+### Security
+
+- Clarified credential custody so saved credentials are mediated by the user-mode keystore, service-mode outputs use runtime-provided credentials, and ad-hoc input API keys remain transient (#352).
+
 ### Fixed
 
 - Fixed Elasticsearch node stats processing to preserve lookup-enriched node identity fields.

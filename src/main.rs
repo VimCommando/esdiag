@@ -2693,6 +2693,27 @@ mod tests {
             std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
         }
     }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_service_mode_resolves_output_from_env() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_OUTPUT_URL", "http://output.example:9200");
+            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "runtime-output-api-key");
+            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
+            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
+        }
+
+        let exporter = resolve_serve_exporter(None, RuntimeMode::Service).expect("resolve service output exporter");
+
+        assert_eq!(exporter.target_uri(), "http://output.example:9200/");
+
+        unsafe {
+            std::env::remove_var("ESDIAG_OUTPUT_URL");
+            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
+        }
+    }
 }
 
 #[cfg(all(test, feature = "server", feature = "desktop"))]
