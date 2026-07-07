@@ -610,6 +610,7 @@ async fn render_child_diagnostic_events(
                 let source = child_source(&path);
                 let product = display_label(application, platform);
                 let duration = format!("{:.3}", duration_ms as f64 / 1000.0);
+                let outcome = outcome.to_string();
                 let kibana_link = kibana_link.unwrap_or_default();
                 send_event(
                     &tx,
@@ -623,7 +624,7 @@ async fn render_child_diagnostic_events(
                             source: &source,
                             kibana_link: &kibana_link,
                             product: &product,
-                            outcome: &outcome.to_string(),
+                            outcome: &outcome,
                         },
                     ),
                 )
@@ -632,13 +633,14 @@ async fn render_child_diagnostic_events(
             IncludedDiagnosticJobEvent::Skipped {
                 job_id,
                 path,
-                outcome: _,
+                outcome,
                 application,
                 platform,
                 reason,
             } => {
                 let source = child_source(&path);
                 let product = display_label(application, platform);
+                let reason = skipped_child_reason(&reason, &outcome);
                 send_event(
                     &tx,
                     replace_job_event(
@@ -674,6 +676,10 @@ async fn render_child_diagnostic_events(
 
 fn child_source(path: &str) -> String {
     format!("Included diagnostic: {path}")
+}
+
+fn skipped_child_reason(reason: &str, outcome: &crate::processor::DiagnosticOutcome) -> String {
+    format!("{reason} ({outcome})")
 }
 
 fn explicit_process_selection(signals: &JobRunSignals) -> Result<Option<ProcessSelection>> {
@@ -1147,12 +1153,13 @@ async fn cleanup_local_path(path: &Path) {
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::{
-        download_service_link_to_path, run_job, select_processed_exporter, validate_job_request,
+        download_service_link_to_path, run_job, select_processed_exporter, skipped_child_reason, validate_job_request,
         validate_local_send_uri, validate_remote_send_uri,
     };
     use crate::{
         data::{HostRole, KnownHostBuilder, Product, Uri},
         exporter::Exporter,
+        processor::{DiagnosticOutcome, SkipKind},
         server::{
             CollectSource, JobInput, JobRequest, JobRunSignals, ProcessMode, RetainedBundle, RuntimeMode, SendMode,
             ServerEvent, ServerPolicy, ServerState, Stats,
@@ -1410,6 +1417,19 @@ mod tests {
 
         let uri = Uri::try_from(host).expect("known-host uri");
         assert!(validate_remote_send_uri(&uri).is_err());
+    }
+
+    #[test]
+    fn skipped_child_reason_includes_skip_kind() {
+        let reason = skipped_child_reason(
+            "Kibana processing is not yet implemented",
+            &DiagnosticOutcome::Skipped(SkipKind::NotImplemented),
+        );
+
+        assert_eq!(
+            reason,
+            "Kibana processing is not yet implemented (skipped (not implemented))"
+        );
     }
 
     #[tokio::test]
