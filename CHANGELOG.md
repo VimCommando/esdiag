@@ -10,6 +10,10 @@ published release notes, maintenance branches, and tagged history.
 
 ## [Unreleased]
 
+### Changed
+
+- Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
+
 ## [0.16.0] - 2026-07-11
 
 ### Added
