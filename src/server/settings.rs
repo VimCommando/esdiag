@@ -333,33 +333,11 @@ mod tests {
         response::IntoResponse,
     };
     use datastar::axum::ReadSignals;
-    use std::{
-        collections::BTreeMap,
-        path::PathBuf,
-        sync::{Arc, Mutex},
-    };
-    use tempfile::TempDir;
+    use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
     use url::Url;
 
-    fn env_lock() -> &'static Mutex<()> {
-        crate::test_env_lock()
-    }
-
-    fn setup_env() -> (TempDir, PathBuf, PathBuf) {
-        let tmp = TempDir::new().expect("temp dir");
-        let config_dir = tmp.path().join(".esdiag");
-        std::fs::create_dir_all(&config_dir).expect("create config dir");
-        let hosts_path = config_dir.join("hosts.yml");
-        let keystore_path = config_dir.join("secrets.yml");
-        let settings_path = config_dir.join("settings.yml");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-            std::env::set_var("USERPROFILE", tmp.path());
-            std::env::set_var("ESDIAG_HOSTS", &hosts_path);
-            std::env::set_var("ESDIAG_KEYSTORE", &keystore_path);
-            std::env::set_var("ESDIAG_SETTINGS", &settings_path);
-        }
-        (tmp, hosts_path, keystore_path)
+    fn setup_env() -> crate::TestEnv {
+        crate::TestEnv::new()
     }
 
     fn write_hosts(hosts: BTreeMap<String, KnownHost>) {
@@ -369,8 +347,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "keystore")]
     async fn secure_saved_host_selection_prompts_unlock_when_locked() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
         authenticate("pw").expect("create keystore");
 
         let mut hosts = BTreeMap::new();
@@ -439,8 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn settings_modal_includes_live_exporter_option_when_no_saved_target_selected() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -474,8 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn collect_only_host_cannot_be_selected_as_output_target() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -534,11 +509,9 @@ mod tests {
 
     #[tokio::test]
     async fn service_mode_settings_modal_does_not_touch_local_runtime_features() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, hosts_path, _keystore_path) = setup_env();
-        let settings_path = std::env::var_os("ESDIAG_SETTINGS")
-            .map(PathBuf::from)
-            .expect("settings path env");
+        let env = setup_env();
+        let hosts_path = env.hosts_path.clone();
+        let settings_path = env.settings_path.clone();
 
         let mut state = test_server_state();
         let state_mut = Arc::get_mut(&mut state).expect("unique state");
@@ -562,8 +535,7 @@ mod tests {
 
     #[tokio::test]
     async fn service_mode_settings_update_requires_iap_header() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         let mut state = test_server_state();
         let state_mut = Arc::get_mut(&mut state).expect("unique state");
@@ -580,8 +552,7 @@ mod tests {
 
     #[tokio::test]
     async fn service_mode_settings_update_accepts_iap_header() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         let mut state = test_server_state();
         let state_mut = Arc::get_mut(&mut state).expect("unique state");
@@ -605,8 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_target_keeps_existing_output_selection() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         Settings {
             active_target: Some("stdout".to_string()),
@@ -632,8 +602,7 @@ mod tests {
 
     #[tokio::test]
     async fn unchanged_saved_target_does_not_require_unlock_for_kibana_only_update() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
         authenticate("pw").expect("create keystore");
 
         let mut hosts = BTreeMap::new();
