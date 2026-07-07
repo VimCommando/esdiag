@@ -18,6 +18,7 @@ published release notes, maintenance branches, and tagged history.
 - Changed diagnostic outcome derivation so optional sources absent from imported bundles do not make otherwise successful processing partial (#350).
 - Changed `process` to return a non-zero exit when the derived diagnostic outcome is failed (#350).
 - Changed synchronous API results to include a derived `outcome` field and align failed statuses with failed report outcomes (#350).
+- Changed service-mode web authentication, event delivery, and job admission to use a pluggable auth provider, owner-scoped UI events, and service job caps (#351).
 
 ## [0.16.0] - 2026-07-11
 
