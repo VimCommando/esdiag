@@ -15,6 +15,7 @@ published release notes, maintenance branches, and tagged history.
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
 - Changed collection and processing source selection to use canonical registry keys and added a maintainer reconciliation utility for upstream support-diagnostics sources (#348).
 - Kept manifests and indexed diagnostics compatible across the platform/application split (#354).
+- Changed diagnostic outcome derivation so optional sources absent from imported bundles do not make otherwise successful processing partial (#350).
 
 ## [0.16.0] - 2026-07-11
 
