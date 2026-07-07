@@ -282,6 +282,8 @@ pub struct JobCompleted<'a> {
     pub source: &'a str,
     pub kibana_link: &'a str,
     pub product: &'a str,
+    /// The derived diagnostic outcome (ADR-0016), e.g. `complete`/`partial`.
+    pub outcome: &'a str,
 }
 
 #[derive(Template)]
@@ -573,6 +575,7 @@ mod tests {
             source: "Included diagnostic: child-es",
             kibana_link: "https://kb.example/app/dashboards#/view/child",
             product: "Elasticsearch",
+            outcome: "complete",
         }
         .render()
         .expect("completed template renders");
@@ -589,6 +592,7 @@ mod tests {
             source: "Included diagnostic: child-es",
             kibana_link: "",
             product: "Elasticsearch",
+            outcome: "complete",
         }
         .render()
         .expect("completed template without Kibana link renders");
