@@ -13,7 +13,7 @@
 
 use super::model::{ExecutionMode, ExportTarget, Input, Job, Process, SendTarget};
 use crate::{
-    data::{HostRole, KnownHost, Product, Uri},
+    data::{Application, HostRole, KnownHost, Product, Uri},
     exporter::Exporter,
     processor::{
         Collector, Identifiers, Processor,
@@ -79,7 +79,7 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
                     outcome.bundle_retained = save.is_retained();
 
                     let receiver = Receiver::try_from(host.clone())?;
-                    let product = host.app().clone();
+                    let product = collect_product(host.app())?;
                     let collect_exporter = Exporter::for_collect_archive(output_dir)?;
                     let collector = Collector::try_new(
                         receiver,
@@ -127,7 +127,7 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
                     let process = job
                         .process()
                         .ok_or_else(|| eyre!("streaming job without process (unreachable by construction)"))?;
-                    let product = host.app().clone();
+                    let product = collect_product(host.app())?;
                     let selection = collect_process_selection(
                         &product,
                         diagnostic_type,
@@ -164,6 +164,20 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
     }
 
     Ok(outcome)
+}
+
+fn collect_product(app: Option<Application>) -> Result<Product> {
+    match app {
+        Some(application @ (Application::Elasticsearch | Application::Kibana | Application::Logstash)) => {
+            Ok(Product::from(application))
+        }
+        Some(Application::Agent) => Err(eyre!(
+            "Collect is out of scope by design for Elastic Agent. Elastic Agent provides its own diagnostic bundle; use `read`/Load instead."
+        )),
+        None => Err(eyre!(
+            "Collect is out of scope by design for platform diagnostics. Load the platform-generated bundle with `read`/Load instead."
+        )),
+    }
 }
 
 /// Run the `Process` stage (with its `Export` sink) over the given input
@@ -252,7 +266,7 @@ fn export_target_exporter(target: &ExportTarget) -> Result<Exporter> {
             if !host.has_role(HostRole::Send) {
                 return Err(eyre!("Export host '{host_key}' is missing the send role"));
             }
-            if host.app() != &Product::Elasticsearch {
+            if host.app() != Some(Application::Elasticsearch) {
                 return Err(eyre!("Export host '{host_key}' must be an Elasticsearch host"));
             }
             Exporter::try_from(Uri::try_from(host)?)
