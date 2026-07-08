@@ -1849,7 +1849,6 @@ mod tests {
 
     #[tokio::test]
     async fn host_upsert_can_persist_no_application_for_concrete_hosts() {
-        let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
         let state = test_server_state();
 
