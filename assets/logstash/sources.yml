@@ -28,7 +28,6 @@ logstash_node:
   source_weight: 1
   processable: true
   required: true
-  dependencies: [logstash_version]
   collect_dependencies: [logstash_version, logstash_plugins]
   versions:
     "> 5.0.0": "/_node"
@@ -51,7 +50,7 @@ logstash_node_stats:
   source_weight: 3
   processable: true
   required: false
-  dependencies: [logstash_node, logstash_version]
+  dependencies: [logstash_node]
   collect_dependencies: [logstash_node]
   versions:
     "> 5.0.0": "/_node/stats"
@@ -61,13 +60,11 @@ logstash_plugins:
   source_weight: 1
   processable: true
   required: true
-  dependencies: [logstash_version]
   versions:
     "> 5.0.0": "/_node/plugins"
 
 logstash_version:
   tags: support
   source_weight: 1
-  required: true
   versions:
     "> 5.0.0": "/"
