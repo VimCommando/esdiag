@@ -67,7 +67,7 @@ use super::{
 use crate::{
     data::{self, Application},
     exporter::Exporter,
-    receiver::Receiver,
+    receiver::{MissingSource, Receiver},
 };
 use eyre::{Result, eyre};
 use futures::stream::FuturesUnordered;
@@ -372,14 +372,12 @@ impl ElasticsearchDiagnostic {
 }
 
 pub(super) fn missing_source_error(err: &eyre::Report) -> bool {
-    if err
-        .downcast_ref::<std::io::Error>()
-        .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
-    {
-        return true;
-    }
-
-    err.to_string().starts_with("File not found in archive: ")
+    err.chain().any(|cause| {
+        cause.is::<MissingSource>()
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 fn lookup_from_result<T, U>(result: Result<U>, label: &str) -> Lookup<T>
