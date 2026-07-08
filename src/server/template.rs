@@ -619,7 +619,6 @@ mod tests {
 
         assert!(skipped.contains("status-info"));
         assert!(skipped.contains("Included diagnostic: child-kibana"));
-        assert!(skipped.contains("not implemented"));
-        assert!(skipped.contains("Kibana processing is not yet implemented"));
+        assert!(skipped.contains("Kibana processing is not yet implemented (not implemented)"));
     }
 }
