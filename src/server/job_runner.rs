@@ -7,7 +7,7 @@ use super::{
     ServerState, job_feed_event, replace_job_event, signal_event, template, template_event,
 };
 use crate::{
-    data::{Application, HostRole, Product, Uri},
+    data::{Application, HostRole, Uri, collect_product},
     exporter::Exporter,
     processor::{
         Collector, DiagnosticOutcome, Identifiers, IncludedDiagnosticJobEvent, Processor, SkipKind,
@@ -1094,20 +1094,6 @@ async fn collect_remote_archive(
             cleanup_path,
         },
     })
-}
-
-fn collect_product(app: Option<Application>) -> Result<Product> {
-    match app {
-        Some(application @ (Application::Elasticsearch | Application::Kibana | Application::Logstash)) => {
-            Ok(Product::from(application))
-        }
-        Some(Application::Agent) => Err(eyre!(
-            "Collect is out of scope by design for Elastic Agent. Elastic Agent provides its own diagnostic bundle; use `read`/Load instead."
-        )),
-        None => Err(eyre!(
-            "Collect is out of scope by design for platform diagnostics. Load the platform-generated bundle with `read`/Load instead."
-        )),
-    }
 }
 
 async fn collect_service_link_archive(
