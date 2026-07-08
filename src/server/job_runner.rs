@@ -545,7 +545,7 @@ async fn run_processor_job(ctx: ProcessorJobContext<'_>) -> Result<()> {
                         source: job.source,
                         kibana_link: report.diagnostic.kibana_link.as_deref().unwrap_or(""),
                         product: &product,
-                        outcome: &report.outcome().to_string(),
+                        outcome: report.outcome().as_str(),
                     },
                 ),
             )
@@ -610,7 +610,6 @@ async fn render_child_diagnostic_events(
                 let source = child_source(&path);
                 let product = display_label(application, platform);
                 let duration = format!("{:.3}", duration_ms as f64 / 1000.0);
-                let outcome = outcome.to_string();
                 let kibana_link = kibana_link.unwrap_or_default();
                 send_event(
                     &tx,
@@ -624,7 +623,7 @@ async fn render_child_diagnostic_events(
                             source: &source,
                             kibana_link: &kibana_link,
                             product: &product,
-                            outcome: &outcome,
+                            outcome: outcome.as_str(),
                         },
                     ),
                 )
