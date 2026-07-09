@@ -20,7 +20,10 @@ use crate::{
 use eyre::{Result, eyre};
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{fs, fs::File, io::AsyncWriteExt, sync::mpsc};
@@ -31,6 +34,7 @@ struct JobDescriptor<'a> {
     id: u64,
     owner: &'a str,
     source: &'a str,
+    started: Arc<AtomicBool>,
 }
 
 struct JobExecutionContext<'a> {
@@ -42,6 +46,7 @@ struct JobExecutionContext<'a> {
     request_user: &'a str,
     tx: &'a mpsc::Sender<ServerEvent>,
     replace_existing_entry: bool,
+    started: Arc<AtomicBool>,
 }
 
 struct LocalArchiveJobContext<'a> {
@@ -85,6 +90,7 @@ pub async fn run_job(
 ) {
     let source = job.source().to_string();
     let owner = job.owner.clone();
+    let started = Arc::new(AtomicBool::new(false));
     let download_token = signals.archive.download_token.trim().to_string();
     let should_track_download = signals.job.collect.save && !download_token.is_empty();
     let validation = validate_job_request(&state, &signals, &job).await;
@@ -140,6 +146,7 @@ pub async fn run_job(
                     id: job_id,
                     owner: &owner,
                     source: &source,
+                    started: started.clone(),
                 },
                 path: path.clone(),
                 identifiers,
@@ -159,6 +166,7 @@ pub async fn run_job(
                     request_user: &request_user,
                     tx: &tx,
                     replace_existing_entry,
+                    started: started.clone(),
                 },
                 uri.clone(),
             )
@@ -177,6 +185,7 @@ pub async fn run_job(
                     request_user: &request_user,
                     tx: &tx,
                     replace_existing_entry,
+                    started: started.clone(),
                 },
                 host.clone(),
                 diagnostic_type.clone(),
@@ -198,7 +207,7 @@ pub async fn run_job(
                     .await;
             }
         }
-        if is_job_admission_error(&error) {
+        if is_job_admission_error(&error) || !started.load(Ordering::SeqCst) {
             state.record_job_rejected().await;
         } else {
             state.record_failure(&owner).await;
@@ -274,10 +283,12 @@ async fn execute_service_link_job(ctx: JobExecutionContext<'_>, uri: Uri) -> Res
         request_user,
         tx,
         replace_existing_entry,
+        started,
     } = ctx;
 
     if signals.job.collect.save {
         state.record_job_started(request_user).await?;
+        started.store(true, Ordering::SeqCst);
         if !replace_existing_entry {
             send_event(tx, job_feed_event(template::JobCollectionProcessing { job_id, source })).await;
         }
@@ -300,6 +311,7 @@ async fn execute_service_link_job(ctx: JobExecutionContext<'_>, uri: Uri) -> Res
             )
             .await?;
             state.record_success(request_user, 0, 0).await;
+            started.store(false, Ordering::SeqCst);
             send_event(
                 tx,
                 replace_job_event(
@@ -320,6 +332,7 @@ async fn execute_service_link_job(ctx: JobExecutionContext<'_>, uri: Uri) -> Res
                     id: handoff_job_id,
                     owner: request_user,
                     source,
+                    started,
                 },
                 path,
                 identifiers: collected.identifiers,
@@ -348,6 +361,7 @@ async fn execute_service_link_job(ctx: JobExecutionContext<'_>, uri: Uri) -> Res
                     id: job_id,
                     owner: request_user,
                     source,
+                    started: started.clone(),
                 },
                 replace_existing_entry: false,
             })
@@ -363,6 +377,7 @@ async fn execute_service_link_job(ctx: JobExecutionContext<'_>, uri: Uri) -> Res
                     id: job_id,
                     owner: request_user,
                     source,
+                    started,
                 },
                 path: &path,
                 replace_existing_entry: false,
@@ -387,6 +402,7 @@ async fn execute_remote_collection_job(
         request_user,
         tx,
         replace_existing_entry,
+        started,
         ..
     } = ctx;
 
@@ -418,6 +434,7 @@ async fn execute_remote_collection_job(
                 id: job_id,
                 owner: request_user,
                 source: &source,
+                started: started.clone(),
             },
             // The collection entry above is now the element that processor
             // completion or failure must replace.
@@ -428,6 +445,7 @@ async fn execute_remote_collection_job(
 
     if signals.job.collect.save {
         state.record_job_started(request_user).await?;
+        started.store(true, Ordering::SeqCst);
         if !replace_existing_entry {
             send_event(
                 tx,
@@ -471,6 +489,7 @@ async fn execute_remote_collection_job(
             )
             .await?;
             state.record_success(request_user, 0, 0).await;
+            started.store(false, Ordering::SeqCst);
             send_event(
                 tx,
                 replace_job_event(
@@ -491,6 +510,7 @@ async fn execute_remote_collection_job(
                     id: handoff_job_id,
                     owner: request_user,
                     source: &source,
+                    started,
                 },
                 path,
                 identifiers: collected.identifiers,
@@ -506,6 +526,7 @@ async fn execute_remote_collection_job(
                     id: job_id,
                     owner: request_user,
                     source: &source,
+                    started,
                 },
                 path,
                 identifiers: collected.identifiers,
@@ -556,6 +577,7 @@ async fn run_processor_job(ctx: ProcessorJobContext<'_>) -> Result<()> {
         }
     };
     state.record_job_started(job.owner).await?;
+    job.started.store(true, Ordering::SeqCst);
 
     if !replace_existing_entry {
         send_event(
@@ -580,6 +602,7 @@ async fn run_processor_job(ctx: ProcessorJobContext<'_>) -> Result<()> {
             state
                 .record_outcome(job.owner, outcome, report.diagnostic.docs.errors)
                 .await;
+            job.started.store(false, Ordering::SeqCst);
             let product = report.diagnostic.display_label();
             send_event(
                 tx,
@@ -819,6 +842,7 @@ async fn run_forward_job(ctx: ForwardJobContext<'_>) -> Result<()> {
             .await;
         }
         state.record_job_started(owner).await?;
+        job.started.store(true, Ordering::SeqCst);
         send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
 
         let destination = Path::new(path)
@@ -827,6 +851,7 @@ async fn run_forward_job(ctx: ForwardJobContext<'_>) -> Result<()> {
             .map(|name| format!("Browser download started for {name}"))
             .unwrap_or_else(|| "Browser download started".to_string());
         state.record_success(owner, 0, 0).await;
+        job.started.store(false, Ordering::SeqCst);
         send_event(
             tx,
             terminal_job_event(
@@ -862,10 +887,12 @@ async fn run_forward_job(ctx: ForwardJobContext<'_>) -> Result<()> {
         .await;
     }
     state.record_job_started(owner).await?;
+    job.started.store(true, Ordering::SeqCst);
     send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
 
     let response = uploader::upload_file(path, target, uploader::DEFAULT_UPLOAD_API_URL).await?;
     state.record_success(owner, 0, 0).await;
+    job.started.store(false, Ordering::SeqCst);
     let destination = format!("https://upload.elastic.co/g/{}", response.slug);
     send_event(
         tx,
