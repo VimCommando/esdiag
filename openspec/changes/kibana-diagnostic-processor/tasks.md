@@ -19,7 +19,6 @@
 - [x] 3.4 Implement `kibana-spaces` processor
 - [x] 3.5 Implement `kibana-task-manager` and `kibana-stack-monitoring` processors
 - [x] 3.6 Implement `kibana-synthetics-uptime` and `kibana-detection-engine` processors
-- [x] 3.7 Implement `kibana-logs` processor for `diagnostics.log`
 
 ## 4. Integration & Validation
 

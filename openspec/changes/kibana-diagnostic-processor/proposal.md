@@ -23,7 +23,6 @@ ESDiag currently lacks support for processing Kibana-specific diagnostic data (l
 - `kibana-synthetics-uptime`: Process Synthetics and Uptime settings and locations.
 - `kibana-detection-engine`: Process Detection Engine health and rules.
 - `kibana-metadata`: Extract and provide common metadata (diagnostic and node info) for document enrichment.
-- `kibana-logs`: Process Kibana diagnostic logs.
 
 ### Modified Capabilities
 <!-- None -->
