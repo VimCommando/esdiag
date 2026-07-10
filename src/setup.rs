@@ -39,7 +39,7 @@ const KIBANA_MANIFEST_DIR: &str = "manifest";
 const KIBANA_SAVED_OBJECTS_MANIFEST: &str = "saved_objects.json";
 const DEFAULT_AGENT_BUILDER_AGENT_ID: &str = "elastic-ai-agent";
 static JSON5_TRIPLE_QUOTED_STRINGS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?s)"""(.*?)""""#).expect("valid JSON5 triple-quoted string pattern"));
+    LazyLock::new(|| Regex::new(r#"(?s)"{3}(.*?)"{3}"#).expect("valid JSON5 triple-quoted string pattern"));
 
 struct EmbeddedAssets;
 
@@ -192,10 +192,6 @@ pub async fn assets(client: &Client) -> Result<()> {
         return kibana_assets(client, &embedded_assets).await;
     }
 
-    if Product::from(client) == Product::Elasticsearch {
-        ensure_enterprise_license(client).await?;
-    }
-
     // load asset list from ./assets/{product}/assets.yml
     let assets = parse_assets_yml(client.into(), &embedded_assets)?;
 
@@ -300,7 +296,7 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
     }
 }
 
-async fn ensure_enterprise_license(client: &Client) -> Result<()> {
+pub async fn ensure_enterprise_license(client: &Client) -> Result<()> {
     let license = get_json_response(client, Method::GET, "_license").await?;
     let license_type = license
         .pointer("/license/type")

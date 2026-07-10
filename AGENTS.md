@@ -22,7 +22,7 @@ For deeper repository structure see `docs/repository/organization.md`
 
 - Update nearby docs when behavior changes
 - Update `CHANGELOG.md` for user-visible changes with `.agents/skills/changelog/SKILL.md`
-- Treat Kibana saved assets (`assets/kibana/**/*.json`) as JSON5. Preserve JSON5 constructs such as triple-quoted multiline strings; do not normalize them to strict JSON.
+- Treat checked-in Kibana saved assets (`assets/kibana/**/*.json`) as JSON5. Preserve JSON5 constructs such as triple-quoted multiline strings; do not normalize their source format to strict JSON. The runtime upload pipeline may normalize an extracted temporary copy where required.
 
 ## Design Patterns
 

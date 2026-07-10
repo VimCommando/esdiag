@@ -52,7 +52,7 @@ curl http://localhost:11434/v1/chat/completions
 Configure Kibana to route its generative AI and Playground features to your local computer instead of the cloud.
 
 1. Log into your local Kibana dashboard.  
-2. Navigate to **Stack Management \> Alerts and Insights \> Connectors** (or search for *Connectors* in the search bar) \[381\].  
+2. Navigate to **Stack Management \> Alerts and Insights \> Connectors** (or search for *Connectors* in the search bar).  
 3. Click **Create connector** and select **OpenAI**.  
 4. Fill out the connector configuration form with the following exact settings:  
    * **Connector name**: Name it something recognizable (e.g., `Ollama-Local`).  

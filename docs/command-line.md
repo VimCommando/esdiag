@@ -349,7 +349,7 @@ Options:
   - `ESDIAG_OUTPUT_USERNAME`
   - `ESDIAG_OUTPUT_PASSWORD`
 - In host-omitted mode, Kibana asset setup also relies on `ESDIAG_KIBANA_URL`
-- Before installing assets, Elasticsearch setup verifies that Enterprise features are available. On an eligible non-Enterprise cluster, it starts the 30-day Enterprise trial; setup stops before Kibana import when the trial has already been used.
+- In host-omitted mode, setup verifies that Enterprise features are available before Kibana import. On an eligible non-Enterprise cluster, it starts the 30-day Enterprise trial; setup stops before Kibana import when the trial has already been used. Supplying `[HOST]` installs only Elasticsearch assets and does not change the license.
 - Kibana setup imports the bundled saved objects, workflow, tool, and skill, then assigns the ESDiag skill to the `elastic-ai-agent` Agent Builder agent in the `esdiag` space. This requires Kibana 9.4 or later and Agent Builder management privileges.
 
 Run setup before the first ingest into a cluster and again after version changes that may require refreshed templates, pipelines, or dashboards.
