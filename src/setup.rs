@@ -307,6 +307,11 @@ pub async fn ensure_enterprise_license(client: &Client) -> Result<()> {
         tracing::info!("Enterprise features are available through the {license_type} license");
         return Ok(());
     }
+    if license_type != "basic" {
+        return Err(eyre!(
+            "Enterprise features are required for Kibana Agent Builder assets, but this cluster has a {license_type} license"
+        ));
+    }
 
     let trial_status = get_json_response(client, Method::GET, "_license/trial_status").await?;
     let eligible = trial_status
@@ -315,7 +320,7 @@ pub async fn ensure_enterprise_license(client: &Client) -> Result<()> {
         .ok_or_else(|| eyre!("Elasticsearch did not return trial eligibility"))?;
     if !eligible {
         return Err(eyre!(
-            "Enterprise features are required for Kibana Agent Builder assets, but this cluster's trial has already been used"
+            "Enterprise features are required for Kibana Agent Builder assets, but this cluster is not eligible to start an Enterprise trial"
         ));
     }
 
@@ -706,12 +711,22 @@ mod tests {
 
         let error = ensure_enterprise_license(&client).await.unwrap_err();
 
-        assert!(error.to_string().contains("trial has already been used"));
+        assert!(error.to_string().contains("not eligible"));
         let requests = server.await.unwrap();
         assert_eq!(
             requests,
             vec!["GET /_license HTTP/1.1", "GET /_license/trial_status HTTP/1.1",]
         );
+    }
+
+    #[tokio::test]
+    async fn non_basic_license_returns_error_without_trial_check() {
+        let (client, server) = mock_elasticsearch(vec![r#"{"license":{"type":"platinum"}}"#.to_string()]).await;
+
+        let error = ensure_enterprise_license(&client).await.unwrap_err();
+
+        assert!(error.to_string().contains("platinum license"));
+        assert_eq!(server.await.unwrap(), vec!["GET /_license HTTP/1.1"]);
     }
 
     #[test]
