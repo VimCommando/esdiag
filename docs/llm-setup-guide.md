@@ -59,7 +59,7 @@ Configure Kibana to route its generative AI and Playground features to your loca
    * **Select an OpenAI provider**: Choose **Other (OpenAI Compatible Service)**.  
    * **URL**: Enter the API route depending on your environment setup:  
      * *Standard local binary setup*: `http://localhost:11434/v1/chat/completions`  
-     * *Docker environment (ES/Kibana running in container)*: `http://docker.internal:11434/v1/chat/completions`  
+     * *Docker environment (ES/Kibana running in container)*: `http://host.docker.internal:11434/v1/chat/completions` (on Linux, configure the `host-gateway` mapping)  
      * *Elastic Cloud (tunneling local port to the web)*: Tunnel your local port using a tool like ngrok and paste that public forwarding URL here (e.g., `https://<your-ngrok-id>.ngrok-free.app/v1/chat/completions`).  
    * **Default model**: Enter the exact model identifier you pulled locally (e.g., `llama3.2` or `gemma4`).  
    * **API key**: Ollama does not require local authentication, but Kibana requires this field to be filled to satisfy UI form validations. Type an arbitrary string (e.g., `local-secret`) to bypass this requirement.  
