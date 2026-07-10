@@ -605,6 +605,12 @@ fn kibana_saved_objects_manifest_path(space_id: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::ElasticsearchBuilder;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    use url::Url;
 
     #[test]
     fn test_asset_deserialization_with_requires_security() {
@@ -653,6 +659,59 @@ mod tests {
         // Security disabled: skip security asset
         assert!(should_skip_asset(&security_asset, false));
         assert!(!should_skip_asset(&normal_asset, false));
+    }
+
+    #[tokio::test]
+    async fn enterprise_and_trial_licenses_do_not_start_a_trial() {
+        for license_type in ["enterprise", "trial"] {
+            let (client, server) =
+                mock_elasticsearch(vec![format!(r#"{{"license":{{"type":"{license_type}"}}}}"#)]).await;
+
+            ensure_enterprise_license(&client).await.unwrap();
+
+            let requests = server.await.unwrap();
+            assert_eq!(requests, vec!["GET /_license HTTP/1.1"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn eligible_license_starts_enterprise_trial() {
+        let (client, server) = mock_elasticsearch(vec![
+            r#"{"license":{"type":"basic"}}"#.to_string(),
+            r#"{"eligible_to_start_trial":true}"#.to_string(),
+            r#"{"trial_was_started":true}"#.to_string(),
+        ])
+        .await;
+
+        ensure_enterprise_license(&client).await.unwrap();
+
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests,
+            vec![
+                "GET /_license HTTP/1.1",
+                "GET /_license/trial_status HTTP/1.1",
+                "POST /_license/start_trial?acknowledge=true HTTP/1.1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn ineligible_license_returns_error_without_starting_trial() {
+        let (client, server) = mock_elasticsearch(vec![
+            r#"{"license":{"type":"basic"}}"#.to_string(),
+            r#"{"eligible_to_start_trial":false}"#.to_string(),
+        ])
+        .await;
+
+        let error = ensure_enterprise_license(&client).await.unwrap_err();
+
+        assert!(error.to_string().contains("trial has already been used"));
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests,
+            vec!["GET /_license HTTP/1.1", "GET /_license/trial_status HTTP/1.1",]
+        );
     }
 
     #[test]
@@ -785,5 +844,36 @@ mod tests {
             .unwrap_or_else(|| panic!("{label}.visState.params.spec should be a string"));
         serde_json::from_str::<Value>(spec)
             .unwrap_or_else(|err| panic!("{label}.visState.params.spec should parse as JSON: {err}"));
+    }
+
+    async fn mock_elasticsearch(responses: Vec<String>) -> (Client, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for body in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 1024];
+                let bytes_read = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..bytes_read]);
+                requests.push(request.lines().next().unwrap().to_string());
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+
+        (
+            Client::Elasticsearch(ElasticsearchBuilder::new(url).build().unwrap()),
+            server,
+        )
     }
 }
