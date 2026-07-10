@@ -5,8 +5,8 @@
 //! Kibana diagnostic processor
 //!
 //! This module provides the entry point for processing Kibana diagnostic bundles.
-//! It follows a single-node workflow similar to Logstash, extracting metrics,
-//! settings, and logs from various JSON and log files.
+//! It follows a single-node workflow similar to Logstash, extracting metrics
+//! and settings from various JSON files.
 
 /// Kibana alerts processor
 mod alerts;
@@ -18,8 +18,6 @@ mod detection_engine;
 mod fleet;
 /// Kibana health processor
 mod health;
-/// Kibana logs processor
-mod logs;
 /// Kibana diagnostic metadata
 mod metadata;
 /// Kibana node stats processor
@@ -54,7 +52,6 @@ use detection_engine::{DetectionEngineHealth, DetectionEngineRules};
 use eyre::{Result, eyre};
 use fleet::{AgentPolicies, AgentStatus, Agents, Packages};
 use health::{StackMonitoringHealth, TaskManagerHealth};
-use logs::Logs;
 use metadata::KibanaMetadata;
 use node_stats::NodeStats;
 use security::{Actions, Roles, Users};
@@ -100,25 +97,6 @@ impl KibanaDiagnostic {
             }
             Err(e) => {
                 tracing::debug!("Skipping {}: {}", T::name(), e);
-                Ok(())
-            }
-        }
-    }
-
-    async fn process_datasource_raw<T>(&mut self, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()>
-    where
-        T: DataSource + DocumentExporter<Lookups, KibanaMetadata> + Send + Sync,
-    {
-        match self.receiver.get_raw::<T>().await {
-            Ok(data) => {
-                let summary = T::export_raw(data, &self.exporter, &self.lookups, &self.metadata).await;
-                summary_tx.send(summary).await.map_err(|err| {
-                    tracing::error!("Failed to send summary: {}", err);
-                    eyre!(err)
-                })
-            }
-            Err(e) => {
-                tracing::debug!("Skipping raw {}: {}", T::name(), e);
                 Ok(())
             }
         }
@@ -188,8 +166,6 @@ impl DiagnosticProcessor for KibanaDiagnostic {
             .await?;
         self.process_datasource::<DetectionEngineRules>(summary_tx.clone())
             .await?;
-
-        self.process_datasource_raw::<Logs>(summary_tx.clone()).await?;
 
         Ok(())
     }

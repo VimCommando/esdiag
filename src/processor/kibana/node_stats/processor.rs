@@ -32,7 +32,7 @@ struct NodeStatsDoc {
 
 impl NodeStatsDoc {
     fn new(node: NodeStats, metadata: Value) -> Self {
-        let mut node_with_metadata = json!(metadata.get("node").take());
+        let mut node_with_metadata = json!(metadata.get("node"));
         json_patch::merge(&mut node_with_metadata, &json!(node));
 
         Self {
