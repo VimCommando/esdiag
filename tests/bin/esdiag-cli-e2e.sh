@@ -15,11 +15,11 @@ home_dir="${work_dir}/home"
 output_dir="${work_dir}/output"
 logs_dir="${work_dir}/logs"
 
-es_host_name="${ESDIAG_E2E_ES_HOST:-ironhide-es}"
-kibana_host_name="${ESDIAG_E2E_KIBANA_HOST:-ironhide-kibana}"
+es_host_name="${ESDIAG_E2E_ES_HOST:-e2e-es}"
+kibana_host_name="${ESDIAG_E2E_KIBANA_HOST:-e2e-kibana}"
 job_name="${ESDIAG_E2E_JOB_NAME:-test-job}"
-keystore_password="${ESDIAG_E2E_KEYSTORE_PASSWORD:-ironhide-e2e-keystore-password}"
-case_prefix="${ESDIAG_E2E_CASE_PREFIX:-ironhide-e2e-${run_id}}"
+keystore_password="${ESDIAG_E2E_KEYSTORE_PASSWORD:-esdiag-e2e-keystore-password}"
+case_prefix="${ESDIAG_E2E_CASE_PREFIX:-esdiag-e2e-${run_id}}"
 
 es_url="${ESDIAG_OUTPUT_URL:-http://localhost:9200}"
 kibana_url="${ESDIAG_KIBANA_URL:-http://localhost:5601}"
@@ -180,28 +180,28 @@ function main() {
 
     [[ -n "${ELASTIC_PASSWORD:-}" ]] || fail "ELASTIC_PASSWORD was not found after sourcing ${env_file}"
 
-    run_esdiag_step keystore-create keystore add ironhide-es-basic --user elastic --password "${ELASTIC_PASSWORD}"
-    run_esdiag_step keystore-add-kibana keystore add ironhide-kibana-basic --user elastic --password "${ELASTIC_PASSWORD}"
+    run_esdiag_step keystore-create keystore add e2e-es-basic --user elastic --password "${ELASTIC_PASSWORD}"
+    run_esdiag_step keystore-add-kibana keystore add e2e-kibana-basic --user elastic --password "${ELASTIC_PASSWORD}"
 
-    run_esdiag_step host-add-es host add "${es_host_name}" "${es_url}" --app elasticsearch --secret ironhide-es-basic --roles collect,send
-    run_esdiag_step host-add-kibana host add "${kibana_host_name}" "${kibana_url}" --app kibana --secret ironhide-kibana-basic --roles collect,view
+    run_esdiag_step host-add-es host add "${es_host_name}" "${es_url}" --app elasticsearch --secret e2e-es-basic --roles collect,send
+    run_esdiag_step host-add-kibana host add "${kibana_host_name}" "${kibana_url}" --app kibana --secret e2e-kibana-basic --roles collect,view
     run_esdiag_step host-auth-es host auth "${es_host_name}"
     run_esdiag_step host-auth-kibana host auth "${kibana_host_name}"
 
-    run_esdiag_step collect-es collect "${es_host_name}" "${output_dir}/collect-es" --case "${case_prefix}-collect-es" --user ironhide-e2e
-    run_esdiag_step collect-kibana collect "${kibana_host_name}" "${output_dir}/collect-kibana" --case "${case_prefix}-collect-kibana" --user ironhide-e2e
+    run_esdiag_step collect-es collect "${es_host_name}" "${output_dir}/collect-es" --case "${case_prefix}-collect-es" --user e2e
+    run_esdiag_step collect-kibana collect "${kibana_host_name}" "${output_dir}/collect-kibana" --case "${case_prefix}-collect-kibana" --user e2e
 
-    run_esdiag_step process-es process "${es_host_name}" "${es_host_name}" --case "${case_prefix}-process-es" --user ironhide-e2e
+    run_esdiag_step process-es process "${es_host_name}" "${es_host_name}" --case "${case_prefix}-process-es" --user e2e
     wait_for_report_case "${case_prefix}-process-es" 1
 
     if [[ "${ESDIAG_E2E_PROCESS_KIBANA:-false}" == "true" ]]; then
-        run_esdiag_step process-kibana process "${kibana_host_name}" "${es_host_name}" --case "${case_prefix}-process-kibana" --user ironhide-e2e
+        run_esdiag_step process-kibana process "${kibana_host_name}" "${es_host_name}" --case "${case_prefix}-process-kibana" --user e2e
         wait_for_report_case "${case_prefix}-process-kibana" 1
     else
         log "SKIP  process-kibana: Kibana processing is not implemented in this build"
     fi
 
-    run_esdiag_step save-compound-job process "${es_host_name}" "${es_host_name}" --save-job "${job_name}" --case "${case_prefix}-compound-save" --user ironhide-e2e
+    run_esdiag_step save-compound-job process "${es_host_name}" "${es_host_name}" --save-job "${job_name}" --case "${case_prefix}-compound-save" --user e2e
     wait_for_report_case "${case_prefix}-compound-save" 1
 
     run_esdiag_step job-list job list

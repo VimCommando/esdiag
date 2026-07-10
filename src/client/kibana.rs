@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use url::Url;
 
 pub(crate) const KIBANA_REQUEST_CONCURRENCY: usize = 5;
+const ESDIAG_KIBANA_SPACE: &str = "esdiag";
 
 /// An exporter that sends requests to an Kibana cluster.
 #[derive(Clone, Debug)]
@@ -27,6 +28,7 @@ impl KibanaClient {
         let inner = kibana_sync::KibanaClient::builder(url)
             .auth(to_kibana_sync_auth(auth))
             .max_concurrency(max_concurrency)
+            .spaces([(ESDIAG_KIBANA_SPACE.to_string(), ESDIAG_KIBANA_SPACE.to_string())])
             .build()
             .wrap_err("Failed to build Kibana client")?;
 
@@ -52,8 +54,7 @@ impl KibanaClient {
         self.request(Method::GET, &HashMap::new(), "/api/status", None).await
     }
 
-    #[cfg(test)]
-    fn inner(&self) -> &kibana_sync::KibanaClient {
+    pub(crate) fn inner(&self) -> &kibana_sync::KibanaClient {
         &self.inner
     }
 }

@@ -5471,7 +5471,7 @@ Apache License 2.0
 - [include-flate-compress]( https://github.com/SOF3/include-flate.git ) 0.3.2
 - [indenter]( https://github.com/yaahc/indenter ) 0.3.4
 - [itoa]( https://github.com/dtolnay/itoa ) 1.0.18
-- [kibana-sync]( https://github.com/VimCommando/kibana-object-manager ) 0.2.0
+- [kibana-sync]( https://github.com/VimCommando/kibana-object-manager ) 0.2.1
 - [libc]( https://github.com/rust-lang/libc ) 0.2.186
 - [miniz_oxide]( https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide ) 0.8.9
 - [pin-project-lite]( https://github.com/taiki-e/pin-project-lite ) 0.2.17

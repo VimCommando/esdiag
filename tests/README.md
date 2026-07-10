@@ -64,7 +64,7 @@ Linux runs do not fail trying to launch a browser. Logs are written to
 Useful overrides:
 
 ```sh
-ESDIAG_E2E_ENV_FILE=.env.ironhide ./tests/bin/esdiag-cli-e2e.sh
+ESDIAG_E2E_ENV_FILE=.env.e2e ./tests/bin/esdiag-cli-e2e.sh
 ESDIAG_E2E_RUN_ID=manual-001 ./tests/bin/esdiag-cli-e2e.sh
 ESDIAG_E2E_JOB_NAME=test-job ./tests/bin/esdiag-cli-e2e.sh
 ESDIAG_E2E_CLEAN_REMOTE=false ./tests/bin/esdiag-cli-e2e.sh

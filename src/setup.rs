@@ -9,16 +9,22 @@ use crate::{
 };
 //use bytes::Bytes;
 use eyre::{Result, WrapErr, eyre};
-use kibana_sync::kibana::{
-    saved_objects::{SavedObject, SavedObjectsManifest},
-    spaces::{SpaceEntry, SpacesManifest},
+#[cfg(test)]
+use kibana_sync::kibana::saved_objects::SavedObjectsManifest;
+use kibana_sync::kibana::spaces::{SpaceEntry, SpacesManifest};
+use kibana_sync::{
+    KibanaFsBundle,
+    sync::{SyncOptions, push_sync},
 };
+use regex::Regex;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use tempfile::TempDir;
 use zip::ZipArchive;
 
 // Subdirectory for templates and configs files
@@ -27,9 +33,13 @@ pub static SOURCES_FILE: &str = "sources.yml";
 const KIBANA_ASSETS_DIR: &str = "kibana";
 const KIBANA_SPACES_FILE: &str = "spaces.yml";
 const KIBANA_SPACE_DEFINITION_FILE: &str = "space.json";
+#[cfg(test)]
 const KIBANA_MANIFEST_DIR: &str = "manifest";
-const KIBANA_OBJECTS_DIR: &str = "objects";
+#[cfg(test)]
 const KIBANA_SAVED_OBJECTS_MANIFEST: &str = "saved_objects.json";
+const DEFAULT_AGENT_BUILDER_AGENT_ID: &str = "elastic-ai-agent";
+static JSON5_TRIPLE_QUOTED_STRINGS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?s)"""(.*?)""""#).expect("valid JSON5 triple-quoted string pattern"));
 
 struct EmbeddedAssets;
 
@@ -182,6 +192,10 @@ pub async fn assets(client: &Client) -> Result<()> {
         return kibana_assets(client, &embedded_assets).await;
     }
 
+    if Product::from(client) == Product::Elasticsearch {
+        ensure_enterprise_license(client).await?;
+    }
+
     // load asset list from ./assets/{product}/assets.yml
     let assets = parse_assets_yml(client.into(), &embedded_assets)?;
 
@@ -270,26 +284,11 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
             tracing::error!("Failed to send Kibana space asset: {e:?}");
             error_count += 1;
         }
+    }
 
-        let saved_objects = kibana_saved_objects_ndjson(&space.id, embedded_assets)?;
-        if saved_objects.is_empty() {
-            continue;
-        }
-
-        let saved_objects_asset = Asset {
-            endpoint: format!("s/{}/api/saved_objects/_import?overwrite", space.id),
-            method: Method::POST.to_string(),
-            name: KIBANA_SAVED_OBJECTS_MANIFEST.to_string(),
-            headers: HashMap::from([("Content-Type".to_string(), "multipart/form-data".to_string())]),
-            suffix: None,
-            query: None,
-            requires_security: false,
-        };
-        let saved_objects_path = kibana_saved_objects_manifest_path(&space.id);
-        if let Err(e) = send_asset(client, &saved_objects_asset, &saved_objects_path, &saved_objects, false).await {
-            tracing::error!("Failed to send Kibana saved objects asset: {e:?}");
-            error_count += 1;
-        }
+    if let Err(e) = kibana_bundle_assets(client).await {
+        tracing::error!("Failed to send Kibana bundled assets: {e:?}");
+        error_count += 1;
     }
 
     if error_count == 0 {
@@ -298,6 +297,254 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
     } else {
         tracing::error!("{error_count} errors in setup for {client}");
         Err(eyre!("{error_count} errors in setup for {client}"))
+    }
+}
+
+async fn ensure_enterprise_license(client: &Client) -> Result<()> {
+    let license = get_json_response(client, Method::GET, "_license").await?;
+    let license_type = license
+        .pointer("/license/type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("Elasticsearch did not return a license type"))?;
+
+    if matches!(license_type, "enterprise" | "trial") {
+        tracing::info!("Enterprise features are available through the {license_type} license");
+        return Ok(());
+    }
+
+    let trial_status = get_json_response(client, Method::GET, "_license/trial_status").await?;
+    let eligible = trial_status
+        .get("eligible_to_start_trial")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| eyre!("Elasticsearch did not return trial eligibility"))?;
+    if !eligible {
+        return Err(eyre!(
+            "Enterprise features are required for Kibana Agent Builder assets, but this cluster's trial has already been used"
+        ));
+    }
+
+    let response = client
+        .request(
+            Method::POST,
+            &default_headers(),
+            "_license/start_trial?acknowledge=true",
+            None,
+        )
+        .await
+        .wrap_err("Failed to start the Elasticsearch Enterprise trial")?;
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .wrap_err("Failed to read Elasticsearch trial activation response")?;
+    if !status.is_success() {
+        return Err(eyre!("Failed to start the Elasticsearch Enterprise trial: {body}"));
+    }
+    if body.get("trial_was_started").and_then(Value::as_bool) != Some(true) {
+        return Err(eyre!(
+            "Elasticsearch did not start the Enterprise trial: {}",
+            body.get("error_message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        ));
+    }
+
+    tracing::info!("Started the 30-day Elasticsearch Enterprise trial");
+    Ok(())
+}
+
+async fn get_json_response(client: &Client, method: Method, path: &str) -> Result<Value> {
+    let response = client.request(method, &HashMap::new(), path, None).await?;
+    let status = response.status();
+    let body: Value = response.json().await?;
+    if status.is_success() {
+        Ok(body)
+    } else {
+        Err(eyre!("Request to {path} failed with {status}: {body}"))
+    }
+}
+
+async fn kibana_bundle_assets(client: &Client) -> Result<()> {
+    let mut bundle = read_embedded_kibana_sync_bundle()?;
+    // Space definitions carry additional ESDiag settings that the generic
+    // filesystem manifest does not represent, so they are created above.
+    bundle.spaces.clear();
+
+    let Client::Kibana(kibana_client) = client else {
+        return Err(eyre!("Kibana Agent Builder assets require a Kibana client"));
+    };
+    let summary = push_sync(kibana_client.inner(), &bundle, &SyncOptions::default())
+        .await
+        .map_err(|error| eyre!(error))?;
+
+    let expected_saved_objects = bundle
+        .by_space
+        .values()
+        .map(|space| space.saved_objects.len())
+        .sum::<usize>();
+    let expected_tools = bundle.by_space.values().map(|space| space.tools.len()).sum::<usize>();
+    let expected_skills = bundle.by_space.values().map(|space| space.skills.len()).sum::<usize>();
+    let expected_workflows = bundle
+        .by_space
+        .values()
+        .map(|space| space.workflows.len())
+        .sum::<usize>();
+    if (
+        summary.saved_objects_applied,
+        summary.tools_applied,
+        summary.skills_applied,
+        summary.workflows_applied,
+    ) != (
+        expected_saved_objects,
+        expected_tools,
+        expected_skills,
+        expected_workflows,
+    ) {
+        return Err(eyre!(
+            "Kibana did not apply all bundled assets (saved objects {}/{}, tools {}/{}, skills {}/{}, workflows {}/{})",
+            summary.saved_objects_applied,
+            expected_saved_objects,
+            summary.tools_applied,
+            expected_tools,
+            summary.skills_applied,
+            expected_skills,
+            summary.workflows_applied,
+            expected_workflows
+        ));
+    }
+
+    for (space_id, space) in bundle.by_space {
+        let skill_ids = space
+            .skills
+            .iter()
+            .filter_map(|skill| skill.get("id").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        if !skill_ids.is_empty() {
+            associate_skills_with_default_agent(client, &space_id, &skill_ids).await?;
+        }
+    }
+    Ok(())
+}
+
+fn extract_kibana_bundle() -> Result<TempDir> {
+    let temporary_bundle = TempDir::new().wrap_err("Failed to create temporary Kibana asset directory")?;
+    let mut archive = open_kibana_bundle().ok_or_else(|| eyre!("Failed to open embedded Kibana asset bundle"))?;
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index)?;
+        let path = file
+            .enclosed_name()
+            .ok_or_else(|| eyre!("Kibana asset bundle contains an invalid path"))?
+            .to_path_buf();
+        let destination = temporary_bundle.path().join(&path);
+        if file.is_dir() {
+            std::fs::create_dir_all(destination)?;
+            continue;
+        }
+        let parent = destination
+            .parent()
+            .ok_or_else(|| eyre!("Kibana asset bundle file has no parent directory"))?;
+        std::fs::create_dir_all(parent)?;
+        let mut contents = Vec::with_capacity(file.size() as usize);
+        file.read_to_end(&mut contents)?;
+        if destination.extension().and_then(|extension| extension.to_str()) == Some("json") {
+            contents = normalize_kibana_asset_json5(&contents, &path)?;
+        }
+        let mut output = std::fs::File::create(destination)?;
+        output.write_all(&contents)?;
+        output.flush()?;
+    }
+    Ok(temporary_bundle)
+}
+
+fn read_embedded_kibana_sync_bundle() -> Result<kibana_sync::sync::SyncBundle> {
+    let temporary_bundle = extract_kibana_bundle()?;
+    KibanaFsBundle::open(temporary_bundle.path().join(KIBANA_ASSETS_DIR))
+        .map_err(|error| eyre!("{error}"))?
+        .read_all()
+        .map_err(|error| eyre!("{error}"))
+}
+
+fn normalize_kibana_asset_json5(contents: &[u8], path: &Path) -> Result<Vec<u8>> {
+    let source = std::str::from_utf8(contents)
+        .wrap_err_with(|| format!("Kibana JSON5 asset is not UTF-8: {}", path.display()))?;
+    let triple_quote_count = source.matches("\"\"\"").count();
+    if !triple_quote_count.is_multiple_of(2) {
+        return Err(eyre!(
+            "Kibana JSON5 asset has an unmatched triple-quoted string: {}",
+            path.display()
+        ));
+    }
+    Ok(JSON5_TRIPLE_QUOTED_STRINGS
+        .replace_all(source, |captures: &regex::Captures| {
+            serde_json::to_string(&captures[1]).unwrap()
+        })
+        .into_owned()
+        .into_bytes())
+}
+
+async fn associate_skills_with_default_agent(client: &Client, space_id: &str, skill_ids: &[&str]) -> Result<()> {
+    let agent_path = format!("s/{space_id}/api/agent_builder/agents/{DEFAULT_AGENT_BUILDER_AGENT_ID}");
+    let mut agent = get_json_response(client, Method::GET, &agent_path)
+        .await
+        .wrap_err_with(|| {
+            format!(
+                "Failed to load the default Agent Builder agent in Kibana space '{space_id}'. Open Agent Builder in that space once, then rerun setup"
+            )
+        })?;
+    if agent.get("readonly").and_then(Value::as_bool) == Some(true) {
+        return Err(eyre!(
+            "The default Agent Builder agent in Kibana space '{space_id}' is read-only and cannot be assigned ESDiag skills"
+        ));
+    }
+
+    let agent_object = agent
+        .as_object_mut()
+        .ok_or_else(|| eyre!("Kibana returned an invalid default Agent Builder agent"))?;
+    for field in [
+        "id",
+        "readonly",
+        "schema",
+        "type",
+        "created_at",
+        "created_by",
+        "updated_at",
+        "updated_by",
+    ] {
+        agent_object.remove(field);
+    }
+    let configuration = agent_object
+        .entry("configuration")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| eyre!("Kibana returned an invalid Agent Builder configuration"))?;
+    let assigned_skills = configuration
+        .entry("skill_ids")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or_else(|| eyre!("Kibana returned invalid Agent Builder skill assignments"))?;
+    for skill_id in skill_ids {
+        if !assigned_skills.iter().any(|value| value.as_str() == Some(*skill_id)) {
+            assigned_skills.push(json!(skill_id));
+        }
+    }
+
+    let response = client
+        .request(
+            Method::PUT,
+            &default_headers(),
+            &agent_path,
+            Some(&serde_json::to_vec(&agent)?),
+        )
+        .await?;
+    let status = response.status();
+    if status.is_success() {
+        tracing::info!("Associated ESDiag skills with the default Agent Builder agent in space '{space_id}'");
+        Ok(())
+    } else {
+        let body = response.text().await.unwrap_or_default();
+        Err(eyre!(
+            "Failed to associate ESDiag skills with the default Agent Builder agent in space '{space_id}': {status} {body}"
+        ))
     }
 }
 
@@ -321,6 +568,7 @@ fn parse_kibana_spaces_yml(assets_store: &EmbeddedAssets) -> Result<SpacesManife
     Ok(manifest)
 }
 
+#[cfg(test)]
 fn parse_kibana_saved_objects_manifest(space_id: &str, assets_store: &EmbeddedAssets) -> Result<SavedObjectsManifest> {
     let filename = kibana_saved_objects_manifest_path(space_id);
     let contents = assets_store.get_file(&filename).ok_or(eyre!(
@@ -344,78 +592,18 @@ fn kibana_space_payload(space: &SpaceEntry, assets_store: &EmbeddedAssets) -> Re
     .map_err(Into::into)
 }
 
-fn kibana_saved_objects_ndjson(space_id: &str, assets_store: &EmbeddedAssets) -> Result<Vec<u8>> {
-    let manifest = parse_kibana_saved_objects_manifest(space_id, assets_store)?;
-    let mut out = Vec::new();
-
-    for object in manifest.objects {
-        let path = kibana_saved_object_path(space_id, &object);
-        let contents = assets_store.get_file(&path).ok_or(eyre!(
-            "embedded assets did not contain expected file {}",
-            path.display()
-        ))?;
-        let value: Value = serde_json::from_slice(&contents)
-            .wrap_err_with(|| format!("Failed to parse Kibana saved object {}", path.display()))?;
-        ensure_saved_object_matches_manifest(&value, &object, &path)?;
-        serde_json::to_writer(&mut out, &value)?;
-        out.push(b'\n');
-    }
-
-    Ok(out)
-}
-
-fn ensure_saved_object_matches_manifest(value: &Value, object: &SavedObject, path: &Path) -> Result<()> {
-    let actual_type = value.get("type").and_then(Value::as_str);
-    let actual_id = value.get("id").and_then(Value::as_str);
-    if actual_type != Some(object.object_type.as_str()) || actual_id != Some(object.id.as_str()) {
-        return Err(eyre!(
-            "saved object {} does not match manifest entry {}/{}",
-            path.display(),
-            object.object_type,
-            object.id
-        ));
-    }
-    Ok(())
-}
-
 fn kibana_space_definition_path(space_id: &str) -> PathBuf {
     PathBuf::from(KIBANA_ASSETS_DIR)
         .join(space_id)
         .join(KIBANA_SPACE_DEFINITION_FILE)
 }
 
+#[cfg(test)]
 fn kibana_saved_objects_manifest_path(space_id: &str) -> PathBuf {
     PathBuf::from(KIBANA_ASSETS_DIR)
         .join(space_id)
         .join(KIBANA_MANIFEST_DIR)
         .join(KIBANA_SAVED_OBJECTS_MANIFEST)
-}
-
-fn kibana_saved_object_path(space_id: &str, object: &SavedObject) -> PathBuf {
-    PathBuf::from(KIBANA_ASSETS_DIR)
-        .join(space_id)
-        .join(KIBANA_OBJECTS_DIR)
-        .join(sanitize_kibana_asset_component(&object.object_type))
-        .join(format!("{}.json", sanitize_kibana_asset_component(&object.id)))
-}
-
-fn sanitize_kibana_asset_component(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|character| match character {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '&' => '_',
-            character if character.is_control() => '_',
-            character => character,
-        })
-        .collect::<String>()
-        .trim()
-        .to_string();
-
-    if sanitized.is_empty() {
-        "unnamed".to_string()
-    } else {
-        sanitized
-    }
 }
 
 #[cfg(test)]
@@ -473,19 +661,17 @@ mod tests {
 
     #[test]
     fn kibana_assets_follow_kibana_sync_bundle_layout() {
-        let bundle = kibana_sync::KibanaFsBundle::open("assets/kibana")
-            .unwrap()
-            .read_all()
-            .unwrap();
+        let bundle = read_embedded_kibana_sync_bundle().unwrap();
 
         assert_eq!(bundle.spaces.len(), 1);
         assert_eq!(bundle.spaces[0]["id"], "esdiag");
 
         let esdiag = bundle.by_space.get("esdiag").unwrap();
         assert_eq!(esdiag.saved_objects.len(), 90);
-        assert!(esdiag.workflows.is_empty());
+        assert_eq!(esdiag.workflows.len(), 1);
         assert!(esdiag.agents.is_empty());
-        assert!(esdiag.tools.is_empty());
+        assert_eq!(esdiag.tools.len(), 1);
+        assert_eq!(esdiag.skills.len(), 1);
     }
 
     #[test]
@@ -510,35 +696,29 @@ mod tests {
 
         assert_eq!(value["id"], "esdiag");
         assert_eq!(value["description"], "Elastic Stack Diagnostics");
-        assert_eq!(value["solution"], "classic");
-        assert!(value["disabledFeatures"].as_array().unwrap().contains(&json!("canvas")));
+        assert_eq!(value["solution"], "oblt");
+        assert!(value["disabledFeatures"].as_array().unwrap().contains(&json!("siemV5")));
     }
 
     #[test]
     fn kibana_saved_objects_ndjson_uses_manifest_order() {
-        let embedded_assets = EmbeddedAssets::new().unwrap();
-        let manifest = parse_kibana_saved_objects_manifest("esdiag", &embedded_assets).unwrap();
-        let ndjson = kibana_saved_objects_ndjson("esdiag", &embedded_assets).unwrap();
-        let lines: Vec<_> = ndjson
-            .split(|byte| *byte == b'\n')
-            .filter(|line| !line.is_empty())
-            .collect();
+        let manifest = parse_kibana_saved_objects_manifest("esdiag", &EmbeddedAssets::new().unwrap()).unwrap();
+        let bundle = read_embedded_kibana_sync_bundle().unwrap();
+        let saved_objects = &bundle.by_space["esdiag"].saved_objects;
 
-        assert_eq!(lines.len(), manifest.objects.len());
+        assert_eq!(saved_objects.len(), manifest.objects.len());
         assert_eq!(manifest.objects.len(), 90);
-
-        let first: Value = serde_json::from_slice(lines[0]).unwrap();
-        assert_eq!(first["type"], manifest.objects[0].object_type);
-        assert_eq!(first["id"], manifest.objects[0].id);
+        for (object, expected) in saved_objects.iter().zip(manifest.objects) {
+            assert_eq!(object["type"], expected.object_type);
+            assert_eq!(object["id"], expected.id);
+        }
     }
 
     #[test]
     fn kibana_saved_objects_have_valid_embedded_json_content() {
-        let embedded_assets = EmbeddedAssets::new().unwrap();
-        let ndjson = kibana_saved_objects_ndjson("esdiag", &embedded_assets).unwrap();
+        let bundle = read_embedded_kibana_sync_bundle().unwrap();
 
-        for line in ndjson.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
-            let object: Value = serde_json::from_slice(line).unwrap();
+        for object in &bundle.by_space["esdiag"].saved_objects {
             let label = saved_object_label(&object);
             let attributes = object
                 .get("attributes")
@@ -551,16 +731,16 @@ mod tests {
 
     #[test]
     fn kibana_readme_dashboard_links_to_esdiag_issues() {
-        let embedded_assets = EmbeddedAssets::new().unwrap();
-        let path = Path::new("kibana/esdiag/objects/dashboard/esdiag-readme.json");
-        let contents = embedded_assets
-            .get_file(path)
+        let bundle = read_embedded_kibana_sync_bundle().unwrap();
+        let object = bundle.by_space["esdiag"]
+            .saved_objects
+            .iter()
+            .find(|object| object["type"] == "dashboard" && object["id"] == "esdiag-readme")
             .expect("readme dashboard should be embedded");
-        let object: Value = serde_json::from_slice(&contents).unwrap();
-        let panels_json = object["attributes"]["panelsJSON"].as_str().unwrap();
+        let dashboard = object.to_string();
 
-        assert!(panels_json.contains("https://github.com/elastic/esdiag/issues"));
-        assert!(!panels_json.contains("https://github.com/elastic/issues)"));
+        assert!(dashboard.contains("https://github.com/elastic/esdiag/issues"));
+        assert!(!dashboard.contains("https://github.com/elastic/issues)"));
     }
 
     fn saved_object_label(object: &Value) -> String {
