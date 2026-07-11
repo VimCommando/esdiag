@@ -44,8 +44,8 @@ published release notes, maintenance branches, and tagged history.
 - Improved saved host authentication persistence.
 - Improved agentic CLI summaries and viewer-aware Kibana links.
 - Changed Kibana collection and setup to use the shared `kibana-sync` client and bundled asset layout (#341).
-- Changed the combined Elasticsearch and Kibana setup flow to activate an eligible Enterprise trial before installing Kibana Agent Builder assets (#1).
-- Changed setup to assign the bundled ESDiag skill to the default Agent Builder agent (#1).
+- Changed the combined Elasticsearch and Kibana setup flow to activate an eligible Enterprise trial before installing Kibana Agent Builder assets.
+- Changed setup to assign the bundled ESDiag skill to the default Agent Builder agent.
 - Made embedded documentation minimally Open Knowledge Format compliant while preserving clean docs viewer rendering (#345).
 - Added documentation viewer tag filtering with debug-mode visibility for developer-only docs (#345).
 

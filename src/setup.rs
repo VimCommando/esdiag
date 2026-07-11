@@ -541,13 +541,9 @@ async fn associate_skills_with_default_agent(client: &Client, space_id: &str, sk
         }
     }
 
+    let agent_payload = serde_json::to_vec(&agent)?;
     let response = client
-        .request(
-            Method::PUT,
-            &default_headers(),
-            &agent_path,
-            Some(&serde_json::to_vec(&agent)?),
-        )
+        .request(Method::PUT, &default_headers(), &agent_path, Some(&agent_payload))
         .await?;
     let status = response.status();
     if status.is_success() {
