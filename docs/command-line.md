@@ -43,7 +43,7 @@ Commands:
   keystore  Manage encrypted secrets in the local keystore
   process   Receives a diagnostic from the input, processes it, and sends processed docs to the output
   upload    Upload a raw diagnostic archive to Elastic Upload Service
-  setup     Import assets (templates, ingest pipelines, etc.) to a known Elasticsearch host
+  setup     Import assets (templates, ingest pipelines, etc.) to a known Elastic Stack host
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -249,6 +249,7 @@ Commands:
 
 Options:
       --debug  Enable debug logging
+  -a, --agent  Enable agent-oriented low-noise CLI behavior
   -h, --help   Print help
 ```
 
@@ -328,12 +329,12 @@ Use `esdiag setup` to install or refresh Elasticsearch and Kibana assets.
 Current help:
 
 ```text
-Import assets (templates, ingest pipelines, etc.) to a known Elasticsearch host
+Import assets (templates, ingest pipelines, etc.) to a known Elastic Stack host
 
 Usage: esdiag setup [OPTIONS] [HOST]
 
 Arguments:
-  [HOST]  Known Elasticsearch host to import assets into; if omitted the ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, ESDIAG_OUTPUT_PASSWORD variables will be checked.
+  [HOST]  Known Elasticsearch or Kibana host to import assets into; if omitted the ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, ESDIAG_OUTPUT_PASSWORD variables will be checked.
 
 Options:
       --debug  Enable debug logging

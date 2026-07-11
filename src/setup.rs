@@ -293,6 +293,7 @@ async fn upsert_kibana_space(client: &Client, space_id: &str, payload: &[u8]) ->
             "Failed to create Kibana space {space_id}: {create_status} {body}"
         ));
     }
+    let _ = create_response.bytes().await?;
 
     let endpoint = format!("api/spaces/space/{space_id}");
     let update_response = client.request(Method::PUT, &headers, &endpoint, Some(payload)).await?;
