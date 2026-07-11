@@ -31,7 +31,7 @@ For air-gapped, offline, or highly restricted environments where external intern
 
 Kibana treats Ollama as a standard OpenAI service provider because Ollama provides a native, OpenAI-compatible API endpoint. This allows you to perform the entire setup directly within the Kibana user interface.
 
-### Step 1: Prepare Your local LLM
+### Step 1: Prepare your local LLM
 
 Before jumping into Kibana, ensure your local LLM instance is up and running with the model you want to use. Below is an example with Ollama.
 
@@ -74,4 +74,3 @@ Once saved, you can instantly run a Retrieval-Augmented Generation (RAG) test us
 3. Choose the OpenAI connector you created in Step 2\.  
 4. Click **Add data sources** to select the Elasticsearch data index you want your local LLM to interact with.  
 5. Start typing questions into the chat bar; your queries will perform hybrid vector searches on Elasticsearch and stream private responses using your local Ollama instance\!
-

@@ -309,7 +309,7 @@ async fn upsert_kibana_space(client: &Client, space_id: &str, payload: &[u8]) ->
 }
 
 pub async fn ensure_enterprise_license(client: &Client) -> Result<()> {
-    let license = get_json_response(client, Method::GET, "_license").await?;
+    let license = get_json_response(client, Method::GET, "/_license").await?;
     let license_type = license
         .pointer("/license/type")
         .and_then(Value::as_str)
@@ -325,7 +325,7 @@ pub async fn ensure_enterprise_license(client: &Client) -> Result<()> {
         ));
     }
 
-    let trial_status = get_json_response(client, Method::GET, "_license/trial_status").await?;
+    let trial_status = get_json_response(client, Method::GET, "/_license/trial_status").await?;
     let eligible = trial_status
         .get("eligible_to_start_trial")
         .and_then(Value::as_bool)
@@ -340,7 +340,7 @@ pub async fn ensure_enterprise_license(client: &Client) -> Result<()> {
         .request(
             Method::POST,
             &default_headers(),
-            "_license/start_trial?acknowledge=true",
+            "/_license/start_trial?acknowledge=true",
             None,
         )
         .await
