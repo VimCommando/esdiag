@@ -308,6 +308,8 @@ async fn upsert_kibana_space(client: &Client, space_id: &str, payload: &[u8]) ->
     }
 }
 
+// The binary is a separate crate and needs public visibility, but this is not a supported library API.
+#[doc(hidden)]
 pub async fn ensure_enterprise_license(client: &Client) -> Result<()> {
     let license = get_json_response(client, Method::GET, "/_license").await?;
     let license_type = license
