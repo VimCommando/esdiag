@@ -257,26 +257,7 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
 
     for space in &spaces_manifest.spaces {
         let space_payload = kibana_space_payload(space, embedded_assets)?;
-        let space_asset = Asset {
-            endpoint: "api/spaces/space".to_string(),
-            method: Method::POST.to_string(),
-            name: KIBANA_SPACE_DEFINITION_FILE.to_string(),
-            headers: default_headers(),
-            suffix: None,
-            query: None,
-            requires_security: false,
-        };
-        let space_path = kibana_space_definition_path(&space.id);
-        if let Err(e) = send_asset_with_allowed_statuses(
-            client,
-            &space_asset,
-            &space_path,
-            &space_payload,
-            false,
-            &[StatusCode::CONFLICT],
-        )
-        .await
-        {
+        if let Err(e) = upsert_kibana_space(client, &space.id, &space_payload).await {
             tracing::error!("Failed to send Kibana space asset: {e:?}");
             error_count += 1;
         }
@@ -293,6 +274,37 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
     } else {
         tracing::error!("{error_count} errors in setup for {client}");
         Err(eyre!("{error_count} errors in setup for {client}"))
+    }
+}
+
+async fn upsert_kibana_space(client: &Client, space_id: &str, payload: &[u8]) -> Result<()> {
+    let headers = default_headers();
+    let create_response = client
+        .request(Method::POST, &headers, "api/spaces/space", Some(payload))
+        .await?;
+    let create_status = create_response.status();
+    if create_status.is_success() {
+        tracing::info!("Created Kibana space {space_id}: {create_status}");
+        return Ok(());
+    }
+    if create_status != StatusCode::CONFLICT {
+        let body = create_response.text().await?;
+        return Err(eyre!(
+            "Failed to create Kibana space {space_id}: {create_status} {body}"
+        ));
+    }
+
+    let endpoint = format!("api/spaces/space/{space_id}");
+    let update_response = client.request(Method::PUT, &headers, &endpoint, Some(payload)).await?;
+    let update_status = update_response.status();
+    if update_status.is_success() {
+        tracing::info!("Updated Kibana space {space_id}: {update_status}");
+        Ok(())
+    } else {
+        let body = update_response.text().await?;
+        Err(eyre!(
+            "Failed to update Kibana space {space_id}: {update_status} {body}"
+        ))
     }
 }
 
@@ -610,7 +622,10 @@ fn kibana_saved_objects_manifest_path(space_id: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::ElasticsearchBuilder;
+    use crate::{
+        client::{ElasticsearchBuilder, KibanaClient},
+        data::Auth,
+    };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -729,6 +744,45 @@ mod tests {
         assert_eq!(server.await.unwrap(), vec!["GET /_license HTTP/1.1"]);
     }
 
+    #[tokio::test]
+    async fn existing_kibana_space_is_updated() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for status in ["409 Conflict", "200 OK"] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 2048];
+                let bytes_read = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..bytes_read]);
+                requests.push(request.lines().next().unwrap().to_string());
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        let client = Client::Kibana(KibanaClient::try_new(url, Auth::None).unwrap());
+
+        upsert_kibana_space(&client, "esdiag", br#"{"id":"esdiag","name":"ESDiag"}"#)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            server.await.unwrap(),
+            vec![
+                "POST /api/spaces/space HTTP/1.1",
+                "PUT /api/spaces/space/esdiag HTTP/1.1",
+            ]
+        );
+    }
+
     #[test]
     fn kibana_assets_follow_kibana_sync_bundle_layout() {
         let bundle = read_embedded_kibana_sync_bundle().unwrap();
@@ -746,7 +800,7 @@ mod tests {
 
     #[test]
     fn kibana_assets_are_embedded_as_bundle_not_raw_files() {
-        assert!(KIBANA_ASSETS_BUNDLE.len() > 0);
+        assert!(!KIBANA_ASSETS_BUNDLE.is_empty());
         assert!(Assets::get("kibana/spaces.yml").is_none());
 
         let embedded_assets = EmbeddedAssets::new().unwrap();
@@ -789,7 +843,7 @@ mod tests {
         let bundle = read_embedded_kibana_sync_bundle().unwrap();
 
         for object in &bundle.by_space["esdiag"].saved_objects {
-            let label = saved_object_label(&object);
+            let label = saved_object_label(object);
             let attributes = object
                 .get("attributes")
                 .unwrap_or_else(|| panic!("{label} should have attributes"));
