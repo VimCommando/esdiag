@@ -4,7 +4,7 @@ use crate::server::template::{KeystoreBootstrapModal, KeystoreProcessUnlockModal
 use askama::Template;
 use axum::{
     extract::{Form, State},
-    http::{HeaderValue, header::RETRY_AFTER},
+    http::{HeaderMap, HeaderValue, header::RETRY_AFTER},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -81,7 +81,7 @@ impl ServerState {
     }
 
     pub(crate) fn can_use_keystore_session(&self) -> bool {
-        self.server_policy.allows_local_runtime_features() && !self.server_policy.requires_iap_headers()
+        self.server_policy.allows_local_runtime_features() && !self.server_policy.requires_authentication()
     }
 
     pub async fn keystore_status(&self) -> (bool, i64) {
@@ -236,27 +236,42 @@ pub(crate) struct KeystoreForm {
     confirm: Option<String>,
 }
 
-pub async fn get_unlock_modal(State(state): State<Arc<ServerState>>) -> Response {
+fn request_owner(state: &ServerState, headers: &HeaderMap) -> String {
+    state
+        .resolve_user_email(headers)
+        .map(|(_, owner)| owner)
+        .unwrap_or_else(|_| super::DEFAULT_OWNER.to_string())
+}
+
+pub async fn get_unlock_modal(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> Response {
+    let owner = request_owner(&state, &headers);
     if !keystore_exists().unwrap_or(false) {
-        return get_bootstrap_modal(State(state)).await;
+        return get_bootstrap_modal(State(state), headers).await;
     }
     let modal = KeystoreUnlockModal {};
     match modal.render() {
-        Ok(html) => state.publish_event(append_body_event(html)),
-        Err(err) => state.publish_event(html_event(format!("<div>Error: {}</div>", err))),
+        Ok(html) => state.publish_event_for_owner(&owner, append_body_event(html)),
+        Err(err) => {
+            tracing::error!("Failed to render keystore unlock modal: {}", err);
+            state.publish_event_for_owner(&owner, html_event("<div>Error rendering keystore modal.</div>"));
+        }
     }
     axum::http::StatusCode::NO_CONTENT.into_response()
 }
 
-pub async fn get_process_unlock_modal(State(state): State<Arc<ServerState>>) -> Response {
+pub async fn get_process_unlock_modal(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> Response {
+    let owner = request_owner(&state, &headers);
     if !keystore_exists().unwrap_or(false) {
-        return get_bootstrap_modal(State(state)).await;
+        return get_bootstrap_modal(State(state), headers).await;
     }
 
     let modal = KeystoreProcessUnlockModal {};
     match modal.render() {
-        Ok(html) => state.publish_event(append_body_event(html)),
-        Err(err) => state.publish_event(html_event(format!("<div>Error: {}</div>", err))),
+        Ok(html) => state.publish_event_for_owner(&owner, append_body_event(html)),
+        Err(err) => {
+            tracing::error!("Failed to render keystore process unlock modal: {}", err);
+            state.publish_event_for_owner(&owner, html_event("<div>Error rendering keystore modal.</div>"));
+        }
     }
     axum::http::StatusCode::NO_CONTENT.into_response()
 }
@@ -283,12 +298,13 @@ fn missing_keystore_unlock_message() -> &'static str {
     }
 }
 
-async fn missing_keystore_response(state: &Arc<ServerState>) -> Response {
-    state.publish_event(signal_event(format!(
-        r#"{{"message":"{}"}}"#,
-        missing_keystore_unlock_message()
-    )));
-    get_bootstrap_modal(State(state.clone())).await;
+async fn missing_keystore_response(state: &Arc<ServerState>, headers: HeaderMap) -> Response {
+    let owner = request_owner(state, &headers);
+    state.publish_event_for_owner(
+        &owner,
+        signal_event(format!(r#"{{"message":"{}"}}"#, missing_keystore_unlock_message())),
+    );
+    get_bootstrap_modal(State(state.clone()), headers).await;
     axum::http::StatusCode::PRECONDITION_FAILED.into_response()
 }
 
@@ -311,7 +327,8 @@ async fn blocked_unlock_response(state: &Arc<ServerState>) -> Option<Response> {
     Some(response)
 }
 
-pub async fn get_bootstrap_modal(State(state): State<Arc<ServerState>>) -> Response {
+pub async fn get_bootstrap_modal(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> Response {
+    let owner = request_owner(&state, &headers);
     if keystore_exists().unwrap_or(false) {
         return axum::http::StatusCode::NO_CONTENT.into_response();
     }
@@ -320,8 +337,11 @@ pub async fn get_bootstrap_modal(State(state): State<Arc<ServerState>>) -> Respo
         migrate: migration_needed(),
     };
     match modal.render() {
-        Ok(html) => state.publish_event(append_body_event(html)),
-        Err(err) => state.publish_event(html_event(format!("<div>Error: {}</div>", err))),
+        Ok(html) => state.publish_event_for_owner(&owner, append_body_event(html)),
+        Err(err) => {
+            tracing::error!("Failed to render keystore bootstrap modal: {}", err);
+            state.publish_event_for_owner(&owner, html_event("<div>Error rendering keystore modal.</div>"));
+        }
     }
     axum::http::StatusCode::NO_CONTENT.into_response()
 }
@@ -379,9 +399,13 @@ pub async fn bootstrap(State(state): State<Arc<ServerState>>, Form(form): Form<K
     axum::http::StatusCode::NO_CONTENT.into_response()
 }
 
-pub async fn unlock(State(state): State<Arc<ServerState>>, Form(form): Form<KeystoreForm>) -> Response {
+pub async fn unlock(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Form(form): Form<KeystoreForm>,
+) -> Response {
     if !keystore_exists().unwrap_or(false) {
-        return missing_keystore_response(&state).await;
+        return missing_keystore_response(&state, headers).await;
     }
 
     if let Some(response) = blocked_unlock_response(&state).await {
@@ -469,7 +493,7 @@ mod tests {
     };
     use axum::{
         extract::{Form, State},
-        http::StatusCode,
+        http::{HeaderMap, StatusCode},
         response::IntoResponse,
     };
     use std::{
@@ -499,6 +523,7 @@ mod tests {
             server_policy: ServerPolicy::new(runtime_mode).expect("test server policy"),
             keystore_rate_limit: Arc::new(std::sync::Mutex::new(KeystoreRateLimit::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
+            active_jobs_by_owner: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             shutdown: watch::channel(false).1,
             event_tx: broadcast::channel(16).0,
             stats_updates_tx,
@@ -518,6 +543,7 @@ mod tests {
 
         let response = unlock(
             State(state.clone()),
+            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -532,7 +558,7 @@ mod tests {
 
         let first = events.recv().await.expect("unlock signal");
         match first {
-            ServerEvent::Signals(payload) => {
+            ServerEvent::Signals { payload, .. } => {
                 assert!(payload.contains(r#""keystore":{"locked":false"#));
             }
             other => panic!("expected keystore signal, got {other:?}"),
@@ -540,6 +566,7 @@ mod tests {
 
         let response = unlock(
             State(state.clone()),
+            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -558,6 +585,7 @@ mod tests {
         let state = test_server_state();
         let response = unlock(
             State(state.clone()),
+            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "wrong".to_string(),
                 confirm: None,
@@ -578,6 +606,7 @@ mod tests {
         let state = test_server_state();
         let response = unlock(
             State(state),
+            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -613,6 +642,7 @@ mod tests {
         let mut events = state.subscribe_events();
         let response = unlock(
             State(state),
+            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -624,7 +654,7 @@ mod tests {
 
         let first = events.recv().await.expect("migration message event");
         match first {
-            ServerEvent::Signals(payload) => {
+            ServerEvent::Signals { payload, .. } => {
                 assert!(payload.contains("Migrate hosts to a new keystore before unlocking."));
             }
             other => panic!("expected migration message signal, got {other:?}"),
@@ -632,7 +662,7 @@ mod tests {
 
         let second = events.recv().await.expect("bootstrap modal event");
         match second {
-            ServerEvent::AppendBody(html) => {
+            ServerEvent::AppendBody { html, .. } => {
                 assert!(html.contains("keystore-bootstrap-modal"));
                 assert!(html.contains("Migrate to Keystore"));
             }
@@ -648,12 +678,12 @@ mod tests {
 
         let state = test_server_state();
         let mut events = state.subscribe_events();
-        let response = get_unlock_modal(State(state)).await;
+        let response = get_unlock_modal(State(state), HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
         let event = events.recv().await.expect("bootstrap modal event");
         match event {
-            ServerEvent::AppendBody(html) => {
+            ServerEvent::AppendBody { html, .. } => {
                 assert!(html.contains("keystore-bootstrap-modal"));
                 assert!(html.contains("Create Keystore"));
             }
@@ -669,12 +699,12 @@ mod tests {
 
         let state = test_server_state();
         let mut events = state.subscribe_events();
-        let response = get_process_unlock_modal(State(state)).await;
+        let response = get_process_unlock_modal(State(state), HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
         let event = events.recv().await.expect("bootstrap modal event");
         match event {
-            ServerEvent::AppendBody(html) => {
+            ServerEvent::AppendBody { html, .. } => {
                 assert!(html.contains("keystore-bootstrap-modal"));
                 assert!(html.contains("Create Keystore"));
             }
@@ -692,13 +722,13 @@ mod tests {
 
         let state = test_server_state();
         let mut events = state.subscribe_events();
-        let response = get_unlock_modal(State(state)).await;
+        let response = get_unlock_modal(State(state), HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(!hosts_path.exists(), "host inspection should not create hosts.yml");
 
         let event = events.recv().await.expect("bootstrap modal event");
         match event {
-            ServerEvent::AppendBody(html) => {
+            ServerEvent::AppendBody { html, .. } => {
                 assert!(html.contains("keystore-bootstrap-modal"));
                 assert!(html.contains("Create Keystore"));
                 assert!(!html.contains("Migrate to Keystore"));
@@ -730,12 +760,12 @@ mod tests {
 
         let state = test_server_state();
         let mut events = state.subscribe_events();
-        let response = get_unlock_modal(State(state)).await;
+        let response = get_unlock_modal(State(state), HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
         let event = events.recv().await.expect("bootstrap modal event");
         match event {
-            ServerEvent::AppendBody(html) => {
+            ServerEvent::AppendBody { html, .. } => {
                 assert!(html.contains("keystore-bootstrap-modal"));
                 assert!(html.contains("Migrate to Keystore"));
             }
@@ -825,6 +855,7 @@ mod tests {
         let state = test_server_state();
         unlock(
             State(state.clone()),
+            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
@@ -1031,6 +1062,7 @@ mod tests {
         let mut events = state.subscribe_events();
         let response = unlock(
             State(state),
+            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "   ".to_string(),
                 confirm: None,
@@ -1042,7 +1074,7 @@ mod tests {
 
         let mut saw_invalid = false;
         while let Ok(event) = events.try_recv() {
-            if let ServerEvent::Signals(payload) = event
+            if let ServerEvent::Signals { payload, .. } = event
                 && payload.contains(r#""keystore":{"password":"","invalid":true}"#)
             {
                 saw_invalid = true;

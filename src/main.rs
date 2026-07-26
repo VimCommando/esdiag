@@ -6,7 +6,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use clap::{ArgAction, Args, Parser, Subcommand, builder::BoolishValueParser, builder::styling};
 #[cfg(feature = "server")]
-use esdiag::server::{RuntimeMode, Server};
+use esdiag::server::{AuthProvider, RuntimeMode, Server, ServerStartOptions};
 #[cfg(feature = "setup")]
 use esdiag::setup;
 use esdiag::{
@@ -124,6 +124,9 @@ enum Commands {
         /// Web runtime mode for the server
         #[arg(long, value_enum, help = "Web runtime mode: user or service")]
         mode: Option<RuntimeMode>,
+        /// Request authentication provider for the server
+        #[arg(long, value_enum, help = "Request authentication provider: google-iap or none")]
+        auth_provider: Option<AuthProvider>,
         /// Optional comma-separated web feature allowlist (advanced, job-builder)
         #[arg(long, value_name = "FEATURES")]
         web_features: Option<String>,
@@ -647,6 +650,7 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 port,
                 output,
                 mode,
+                auth_provider,
                 web_features,
                 kibana,
             } => {
@@ -660,13 +664,17 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         .unwrap_or_else(|_| "http://localhost:5601".to_string())
                 });
 
-                let (mut server, _bound_addr) = Server::start_with_web_features(
+                let (mut server, _bound_addr) = Server::start_with_options(
                     [0, 0, 0, 0],
                     port,
                     exporter,
                     kibana_url,
                     runtime_mode,
-                    web_features.as_deref(),
+                    ServerStartOptions {
+                        auth_provider,
+                        web_features: web_features.as_deref(),
+                        ..ServerStartOptions::default()
+                    },
                 )
                 .await?;
 
