@@ -13,7 +13,7 @@
 
 use super::model::{ExecutionMode, ExportTarget, Input, Job, Process, SendTarget};
 use crate::{
-    data::{Product, Uri},
+    data::{HostRole, KnownHost, Product, Uri},
     exporter::Exporter,
     processor::{
         Collector, Identifiers, Processor,
@@ -50,11 +50,20 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
 
     match job.input() {
         Input::Collect {
-            host,
+            host: host_name,
             diagnostic_type,
             include,
             exclude,
         } => {
+            let hosts = KnownHost::parse_hosts_yml()?;
+            let host_key = host_name.trim();
+            let host = hosts
+                .get(host_key)
+                .cloned()
+                .ok_or_else(|| eyre!("Host '{host_key}' referenced by job not found in hosts.yml"))?;
+            if !host.has_role(HostRole::Collect) {
+                return Err(eyre!("Collect host '{host_key}' is missing the collect role"));
+            }
             match job.execution_mode() {
                 ExecutionMode::Staged => {
                     // `Save` is the serialization barrier: collection
@@ -69,7 +78,7 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
                     };
                     outcome.bundle_retained = save.is_retained();
 
-                    let receiver = Receiver::try_from((**host).clone())?;
+                    let receiver = Receiver::try_from(host.clone())?;
                     let product = host.app().clone();
                     let collect_exporter = Exporter::for_collect_archive(output_dir)?;
                     let collector = Collector::try_new(
@@ -126,13 +135,7 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
                         exclude.as_ref(),
                         process,
                     )?;
-                    run_process(
-                        Receiver::try_from((**host).clone())?,
-                        process,
-                        job.identifiers.clone(),
-                        selection,
-                    )
-                    .await?;
+                    run_process(Receiver::try_from(host)?, process, job.identifiers.clone(), selection).await?;
                     outcome.processed = true;
                 }
             }
@@ -239,9 +242,23 @@ async fn run_send(bundle_path: &std::path::Path, send: &SendTarget) -> Result<St
 /// Resolve the `Export` sink for processed documents.
 fn export_target_exporter(target: &ExportTarget) -> Result<Exporter> {
     match target {
-        ExportTarget::KnownHost { name } => Exporter::try_from(Uri::try_from(name.clone())?),
+        ExportTarget::KnownHost { name } => {
+            let hosts = KnownHost::parse_hosts_yml()?;
+            let host_key = name.trim();
+            let host = hosts
+                .get(host_key)
+                .cloned()
+                .ok_or_else(|| eyre!("Export host '{host_key}' not found in hosts.yml"))?;
+            if !host.has_role(HostRole::Send) {
+                return Err(eyre!("Export host '{host_key}' is missing the send role"));
+            }
+            if host.app() != &Product::Elasticsearch {
+                return Err(eyre!("Export host '{host_key}' must be an Elasticsearch host"));
+            }
+            Exporter::try_from(Uri::try_from(host)?)
+        }
         ExportTarget::File { path } => Exporter::try_from(Uri::File(path.clone())),
-        ExportTarget::Directory { dir } => Exporter::try_from(Uri::Directory(dir.clone())),
+        ExportTarget::Directory { output_dir } => Exporter::try_from(Uri::Directory(output_dir.clone())),
         ExportTarget::Stdout => Exporter::try_from(Uri::Stream),
     }
 }
@@ -293,7 +310,7 @@ mod tests {
             Some(Process {
                 selection: None,
                 export: ExportTarget::Directory {
-                    dir: output.path().to_path_buf(),
+                    output_dir: output.path().to_path_buf(),
                 },
             }),
             None,

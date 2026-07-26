@@ -6,7 +6,7 @@ use crate::data::Product;
 
 use super::{ElasticCloud, KnownHost, KnownHostBuilder};
 use eyre::{OptionExt, Report, Result, eyre};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     path::{Path, PathBuf},
     str::FromStr,
@@ -95,6 +95,35 @@ impl<'de> Deserialize<'de> for Uri {
         let s = String::deserialize(deserializer)?;
         Uri::try_from(&s).map_err(serde::de::Error::custom)
     }
+}
+
+impl Serialize for Uri {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Uri::ServiceLink(url) | Uri::ServiceLinkNoAuth(url) | Uri::Url(url) => {
+                serializer.serialize_str(redacted_url_string(url).as_str())
+            }
+            Uri::Directory(path) | Uri::File(path) => serializer.serialize_str(&path.display().to_string()),
+            Uri::ElasticCloud(host)
+            | Uri::ElasticCloudAdmin(host)
+            | Uri::ElasticGovCloudAdmin(host)
+            | Uri::KnownHost(host) => Err(serde::ser::Error::custom(format!(
+                "resolved host URI '{}' cannot be serialized without losing saved-host semantics",
+                host.transport_display()
+            ))),
+            Uri::Stream => serializer.serialize_str("-"),
+        }
+    }
+}
+
+fn redacted_url_string(url: &Url) -> String {
+    let mut url = url.clone();
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.to_string()
 }
 
 impl From<Uri> for Url {
