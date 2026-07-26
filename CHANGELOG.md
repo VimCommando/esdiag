@@ -10,6 +10,12 @@ published release notes, maintenance branches, and tagged history.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-07-26
+
+### Fixed
+
+- Fixed index settings ingestion for clusters containing standard indices without a searchable snapshot `repository_uuid` (#362).
+
 ## [0.16.0] - 2026-07-11
 
 ### Added
@@ -205,7 +211,8 @@ published release notes, maintenance branches, and tagged history.
   fail on invalid zip paths (#177).
 - Fixed ECK diagnostic path handling for correctly structured archives (#179).
 
-[Unreleased]: https://github.com/elastic/esdiag/compare/0.16.0...0.16
+[Unreleased]: https://github.com/elastic/esdiag/compare/0.16.1...0.16
+[0.16.1]: https://github.com/elastic/esdiag/compare/0.16.0...0.16.1
 [0.16.0]: https://github.com/elastic/esdiag/compare/0.15.0...0.16.0
 [0.15.0]: https://github.com/elastic/esdiag/compare/0.14.2...0.15.0
 [0.14]: https://github.com/elastic/esdiag/compare/0.13.0...0.14.2
