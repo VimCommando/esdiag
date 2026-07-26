@@ -276,12 +276,16 @@ pub struct HostsPage {
 #[template(path = "job/completed.html")]
 pub struct JobCompleted<'a> {
     pub job_id: u64,
+    pub status_class: &'a str,
+    pub heading: &'a str,
     pub diagnostic_id: &'a str,
     pub docs_created: &'a u32,
     pub duration: &'a str,
     pub source: &'a str,
     pub kibana_link: &'a str,
     pub product: &'a str,
+    /// The derived diagnostic outcome (ADR-0016), e.g. `complete`/`partial`.
+    pub outcome: &'a str,
 }
 
 #[derive(Template)]
@@ -567,12 +571,15 @@ mod tests {
         let docs_created = 42;
         let completed = JobCompleted {
             job_id: 100,
+            status_class: "status-success",
+            heading: "Processing complete!",
             diagnostic_id: "elasticsearch_diagnostic@2026-01-01~abcd",
             docs_created: &docs_created,
             duration: "0.500",
             source: "Included diagnostic: child-es",
             kibana_link: "https://kb.example/app/dashboards#/view/child",
             product: "Elasticsearch",
+            outcome: "complete",
         }
         .render()
         .expect("completed template renders");
@@ -580,15 +587,20 @@ mod tests {
         assert!(completed.contains("elasticsearch_diagnostic@2026-01-01~abcd"));
         assert!(completed.contains("https://kb.example/app/dashboards#/view/child"));
         assert!(completed.contains("Included diagnostic: child-es"));
+        assert!(completed.contains("status-success"));
+        assert!(completed.contains("Processing complete!"));
 
         let no_link = JobCompleted {
             job_id: 102,
+            status_class: "status-success",
+            heading: "Processing complete!",
             diagnostic_id: "elasticsearch_diagnostic@2026-01-01~efgh",
             docs_created: &docs_created,
             duration: "0.500",
             source: "Included diagnostic: child-es",
             kibana_link: "",
             product: "Elasticsearch",
+            outcome: "complete",
         }
         .render()
         .expect("completed template without Kibana link renders");
