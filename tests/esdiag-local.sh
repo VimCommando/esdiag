@@ -33,8 +33,8 @@ if [[ "$1" == compose ]]; then
   while [[ $# -gt 0 ]]; do
     case "$1" in --project-name) project=$2; shift 2 ;; up|down|run|ps|logs|version) action=$1; shift; break ;; *) shift ;; esac
   done
-  if [[ "$action" == up ]]; then touch "${FAKE_VOLUMES}/${project}_elasticsearch-data" "${FAKE_VOLUMES}/${project}_kibana-data"; fi
-  if [[ "$action" == down && "$*" == *--volumes* ]]; then rm -f "${FAKE_VOLUMES}/${project}_elasticsearch-data" "${FAKE_VOLUMES}/${project}_kibana-data"; fi
+  if [[ "$action" == up ]]; then touch "${FAKE_VOLUMES}/${project}_elasticsearch-data" "${FAKE_VOLUMES}/${project}_kibana-data" "${FAKE_VOLUMES}/${project}_esdiag-data"; fi
+  if [[ "$action" == down && "$*" == *--volumes* ]]; then rm -f "${FAKE_VOLUMES}/${project}_elasticsearch-data" "${FAKE_VOLUMES}/${project}_kibana-data" "${FAKE_VOLUMES}/${project}_esdiag-data"; fi
 fi
 exit 0
 EOF
@@ -73,7 +73,7 @@ export FAKE_CLIPBOARD="$tmp/clipboard" FAKE_UI_LOG="$tmp/ui.log"
 
 # Shell, help, platform adapters, and repository-independent execution.
 bash -n "$script"
-[[ "$($script version)" == "0.16.0-SNAPSHOT" ]] || fail version
+[[ "$($script version)" == "0.17.0-SNAPSHOT" ]] || fail version
 PATH="$fake_bin:$PATH" ESDIAG_TEST_OS=Darwin "$script" help >"$tmp/help-macos"
 PATH="$fake_bin:$PATH" ESDIAG_TEST_OS=Linux "$script" help >"$tmp/help-linux"
 PATH="$fake_bin:$PATH" ESDIAG_TEST_OS=Linux ESDIAG_TEST_WSL=true "$script" help >"$tmp/help-wsl"
@@ -91,6 +91,19 @@ assert_mode "$tmp/secure" 700; assert_mode "$tmp/secure/.env" 600
 assert_contains "$tmp/secure/compose.yml" 'Generated secure configuration'
 assert_contains "$tmp/secure/compose.yml" "127.0.0.1:\${ESDIAG_PORT}:2501"
 assert_contains "$tmp/secure/compose.yml" "ESDIAG_OUTPUT_APIKEY: \${ESDIAG_OUTPUT_APIKEY}"
+[[ "$(grep -c "ESDIAG_OUTPUT_APIKEY: \${ESDIAG_OUTPUT_APIKEY}" "$tmp/secure/compose.yml")" == 2 ]] || fail 'setup and web do not share the runtime API key'
+assert_not_contains "$tmp/secure/compose.yml" 'hosts.yml'
+assert_not_contains "$tmp/secure/compose.yml" 'settings.yml'
+assert_not_contains "$tmp/secure/compose.yml" 'secrets.yml'
+assert_contains "$tmp/secure/compose.yml" "ESDIAG_MODE: user"
+assert_contains "$tmp/secure/compose.yml" 'ESDIAG_KIBANA_URL: http://kibana:5601/s/${ESDIAG_KIBANA_SPACE}'
+assert_contains "$tmp/secure/compose.yml" 'ESDIAG_KIBANA_URL: http://localhost:${ESDIAG_KIBANA_PORT}/s/${ESDIAG_KIBANA_SPACE}'
+[[ "$(grep -c 'ESDIAG_KIBANA_URL: http://kibana:5601' "$tmp/secure/compose.yml")" == 1 ]] || fail 'internal Kibana URL leaked into web configuration'
+[[ "$(grep -c 'ESDIAG_KIBANA_URL: http://localhost:${ESDIAG_KIBANA_PORT}' "$tmp/secure/compose.yml")" == 1 ]] || fail 'browser Kibana URL is not unique to web configuration'
+assert_contains "$tmp/secure/compose.yml" 'esdiag-data:/root/.esdiag'
+assert_contains "$tmp/secure/compose.yml" '  esdiag-data:'
+[[ "$(grep -c "LOG_LEVEL: \${LOG_LEVEL}" "$tmp/secure/compose.yml")" == 2 ]] || fail 'log level is not passed to ESDiag services'
+assert_contains "$tmp/secure/.env" 'LOG_LEVEL=info'
 [[ "$(grep -c "image: \${ESDIAG_IMAGE}" "$tmp/secure/compose.yml")" == 2 ]] || fail 'setup/service image mismatch'
 
 # Idempotence, status/auth/log secrecy, raw secrets, setup, down, and reset.
@@ -101,14 +114,24 @@ run_local setup --runtime podman --state-dir "$tmp/secure" >"$tmp/setup.out" 2>"
 run_local status --runtime podman --state-dir "$tmp/secure" >"$tmp/status" 2>&1
 run_local auth --state-dir "$tmp/secure" >"$tmp/auth" 2>&1
 run_local logs --runtime podman --state-dir "$tmp/secure" >"$tmp/logs" 2>&1
+run_local restart esdiag --runtime podman --state-dir "$tmp/secure" --log-level debug
+assert_contains "$tmp/secure/.env" 'LOG_LEVEL=debug'
+assert_contains "$tmp/runtime.log" 'up -d --no-deps --force-recreate esdiag'
+LOG_LEVEL=trace run_local restart esdiag --runtime podman --state-dir "$tmp/secure"
+assert_contains "$tmp/secure/.env" 'LOG_LEVEL=trace'
+if run_local restart unknown --runtime podman --state-dir "$tmp/secure" 2>"$tmp/restart-error"; then fail 'unknown service restarted'; fi
+assert_contains "$tmp/restart-error" 'Unknown service: unknown'
 for output in "$tmp/status" "$tmp/auth" "$tmp/logs"; do assert_not_contains "$output" "$password"; assert_not_contains "$output" fixture-api-key; done
 [[ "$(run_local secrets password --state-dir "$tmp/secure")" == "$password" ]] || fail password
 [[ "$(run_local secrets apikey --state-dir "$tmp/secure")" == fixture-api-key ]] || fail apikey
 run_local down --runtime podman --state-dir "$tmp/secure"
 [[ -f "$tmp/secure/.env" ]] || fail 'down removed state'
+secure_project_id=$(printf '%s' "$tmp/secure" | cksum | cut -d' ' -f1)
+[[ -f "$tmp/volumes/esdiag-local-${secure_project_id}_esdiag-data" ]] || fail 'down removed ESDiag user-state volume'
 if run_local reset --runtime podman --state-dir "$tmp/secure" </dev/null 2>/dev/null; then fail 'reset lacked confirmation'; fi
 run_local reset --runtime podman --state-dir "$tmp/secure" --force
 [[ ! -e "$tmp/secure" ]] || fail reset
+[[ ! -f "$tmp/volumes/esdiag-local-${secure_project_id}_esdiag-data" ]] || fail 'reset preserved ESDiag user-state volume'
 
 # Image/registry/version precedence and configurable port validation.
 run_local up --runtime podman --state-dir "$tmp/overrides" --pull never --open-browser=false \
@@ -144,6 +167,18 @@ assert_contains "$tmp/missing-env-error" '.env is missing'
 cp -R "$tmp/overrides" "$tmp/missing-volume"
 if run_local up --runtime podman --state-dir "$tmp/missing-volume" --pull never 2>"$tmp/missing-volume-error"; then fail 'missing volumes accepted'; fi
 assert_contains "$tmp/missing-volume-error" 'deployment volumes are missing'
+
+# Existing deployments add the new ESDiag volume without invalidating credentials.
+cp -R "$tmp/overrides" "$tmp/schema-one"
+sed -i.bak 's/^STATE_SCHEMA_VERSION=.*/STATE_SCHEMA_VERSION=1/' "$tmp/schema-one/.env"
+schema_one_project_id=$(printf '%s' "$tmp/schema-one" | cksum | cut -d' ' -f1)
+touch "$tmp/volumes/esdiag-local-${schema_one_project_id}_elasticsearch-data" "$tmp/volumes/esdiag-local-${schema_one_project_id}_kibana-data"
+run_local up --runtime podman --state-dir "$tmp/schema-one" --pull never --upgrade --open-browser=false
+assert_contains "$tmp/schema-one/.env" 'STATE_SCHEMA_VERSION=2'
+[[ -f "$tmp/volumes/esdiag-local-${schema_one_project_id}_esdiag-data" ]] || fail 'schema migration did not add ESDiag volume'
+rm -f "$tmp/volumes/esdiag-local-${schema_one_project_id}_esdiag-data"
+run_local up --runtime podman --state-dir "$tmp/schema-one" --pull never --open-browser=false
+[[ -f "$tmp/volumes/esdiag-local-${schema_one_project_id}_esdiag-data" ]] || fail 'missing ESDiag volume was not restored'
 
 # Script-versus-stack upgrade behavior.
 sed -i.bak 's/^STACK_ESDIAG_VERSION=.*/STACK_ESDIAG_VERSION=0.1.0/' "$tmp/overrides/.env"
