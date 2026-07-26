@@ -45,6 +45,30 @@ pub struct RawResponse {
     pub response_size_bytes: u64,
 }
 
+/// A source a receiver looked for but the bundle does not contain.
+///
+/// Processors match on this type to tell a legitimately absent source apart
+/// from a source that is present but unreadable, so receivers must report
+/// missing sources with this error rather than an ad-hoc message.
+#[derive(Clone, Debug)]
+pub enum MissingSource {
+    /// None of the candidate filenames for the data source were present.
+    NoCandidates { source: String },
+    /// The archive did not contain the resolved entry path.
+    ArchiveEntry { path: String },
+}
+
+impl std::fmt::Display for MissingSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoCandidates { source } => write!(f, "No candidate source files available for {source}"),
+            Self::ArchiveEntry { path } => write!(f, "File not found in archive: {path}"),
+        }
+    }
+}
+
+impl std::error::Error for MissingSource {}
+
 #[allow(async_fn_in_trait)]
 pub trait Receive {
     async fn is_connected(&self) -> bool;

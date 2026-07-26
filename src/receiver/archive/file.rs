@@ -5,7 +5,7 @@
 use super::resolve_archive_path;
 use crate::{
     processor::{DataSource, SourceContext, StreamingDataSource},
-    receiver::{RawResponse, Receive, ReceiveMultiple, ReceiveRaw},
+    receiver::{MissingSource, RawResponse, Receive, ReceiveMultiple, ReceiveRaw},
 };
 use eyre::{Result, eyre};
 use futures::stream::BoxStream;
@@ -105,7 +105,7 @@ impl Receive for ArchiveFileReceiver {
 
         match last_resolve_error {
             Some(e) => Err(e),
-            None => Err(eyre!("No candidate source files available for {}", T::name())),
+            None => Err(MissingSource::NoCandidates { source: T::name() }.into()),
         }
     }
 
@@ -161,7 +161,7 @@ impl ReceiveRaw for ArchiveFileReceiver {
 
         match last_resolve_error {
             Some(e) => Err(e),
-            None => Err(eyre!("No candidate source files available for {}", T::name())),
+            None => Err(MissingSource::NoCandidates { source: T::name() }.into()),
         }
     }
 }

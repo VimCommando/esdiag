@@ -31,7 +31,7 @@ use super::{
 use crate::{
     data::{self, Application},
     exporter::Exporter,
-    receiver::Receiver,
+    receiver::{MissingSource, Receiver},
 };
 use eyre::{Result, eyre};
 use node::Node;
@@ -207,19 +207,16 @@ impl DiagnosticProcessor for LogstashDiagnostic {
 
 fn is_missing_source_error(err: &eyre::Report) -> bool {
     err.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
-    }) || {
-        let message = err.to_string();
-        message.starts_with("No candidate source files available for ")
-            || message.starts_with("File not found in archive: ")
-    }
+        cause.is::<MissingSource>()
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_missing_source_error;
+    use super::{MissingSource, is_missing_source_error};
     use eyre::eyre;
 
     #[test]
@@ -227,10 +224,16 @@ mod tests {
         let file_error = eyre!(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
         assert!(is_missing_source_error(&file_error));
 
-        let candidate_error = eyre!("No candidate source files available for logstash_plugins");
+        let candidate_error: eyre::Report = MissingSource::NoCandidates {
+            source: "logstash_plugins".to_string(),
+        }
+        .into();
         assert!(is_missing_source_error(&candidate_error));
 
-        let archive_error = eyre!("File not found in archive: logstash_plugins.json");
+        let archive_error: eyre::Report = MissingSource::ArchiveEntry {
+            path: "logstash_plugins.json".to_string(),
+        }
+        .into();
         assert!(is_missing_source_error(&archive_error));
     }
 
@@ -240,6 +243,13 @@ mod tests {
         let parse_error = eyre!(parse_error);
 
         assert!(!is_missing_source_error(&parse_error));
+    }
+
+    #[test]
+    fn messages_resembling_missing_sources_are_not_tolerated() {
+        let lookalike = eyre!("File not found in archive: reported without the missing-source type");
+
+        assert!(!is_missing_source_error(&lookalike));
     }
 }
 

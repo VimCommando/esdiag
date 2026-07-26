@@ -3,6 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use crate::processor::{DataSource, SourceContext, StreamingDataSource};
+use crate::receiver::MissingSource;
 use eyre::Result;
 use futures::stream::{self, BoxStream};
 use serde::de::DeserializeOwned;
@@ -178,7 +179,7 @@ pub fn resolve_archive_path<A: Read + Seek>(
     if archive.by_name(&path).is_ok() {
         Ok(path)
     } else {
-        Err(eyre::eyre!("File not found in archive: {}", path))
+        Err(MissingSource::ArchiveEntry { path }.into())
     }
 }
 
