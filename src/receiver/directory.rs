@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::processor::{DataSource, SourceContext, StreamingDataSource};
-use super::{RawResponse, Receive, ReceiveMultiple, ReceiveRaw};
+use super::{MissingSource, RawResponse, Receive, ReceiveMultiple, ReceiveRaw};
 use eyre::{Result, eyre};
 use futures::stream::{self, BoxStream};
 use serde::de::DeserializeOwned;
@@ -90,7 +90,7 @@ impl Receive for DirectoryReceiver {
 
         match last_open_error {
             Some(e) => Err(e.into()),
-            None => Err(eyre!("No candidate source files available for {}", T::name())),
+            None => Err(MissingSource::NoCandidates { source: T::name() }.into()),
         }
     }
 
@@ -176,7 +176,7 @@ impl ReceiveRaw for DirectoryReceiver {
 
         match last_open_error {
             Some(e) => Err(e.into()),
-            None => Err(eyre!("No candidate source files available for {}", T::name())),
+            None => Err(MissingSource::NoCandidates { source: T::name() }.into()),
         }
     }
 }

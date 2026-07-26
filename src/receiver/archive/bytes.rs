@@ -5,7 +5,7 @@
 use super::resolve_archive_path;
 use crate::{
     processor::{DataSource, SourceContext, StreamingDataSource},
-    receiver::{Receive, ReceiveMultiple},
+    receiver::{MissingSource, Receive, ReceiveMultiple},
 };
 use bytes::Bytes;
 use eyre::{Result, eyre};
@@ -76,7 +76,7 @@ impl Receive for ArchiveBytesReceiver {
 
         match last_resolve_error {
             Some(e) => Err(e),
-            None => Err(eyre!("No candidate source files available for {}", T::name())),
+            None => Err(MissingSource::NoCandidates { source: T::name() }.into()),
         }
     }
 

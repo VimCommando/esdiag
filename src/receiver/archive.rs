@@ -3,6 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use crate::processor::{DataSource, SourceContext, StreamingDataSource};
+use crate::receiver::MissingSource;
 use eyre::Result;
 use futures::stream::{self, BoxStream};
 use serde::de::DeserializeOwned;
@@ -117,9 +118,11 @@ pub(crate) fn archive_has_dir<'a>(
         .unwrap_or_default();
 
     file_names.any(|name| {
-        let normalized = name.replace('\\', "/");
-        let explicit_dir_entry = normalized.ends_with('/');
-        let components: Vec<&str> = normalized.split('/').filter(|c| !c.is_empty()).collect();
+        let explicit_dir_entry = name.ends_with('/') || name.ends_with('\\');
+        let components: Vec<&str> = name
+            .split(|ch| ch == '/' || ch == '\\')
+            .filter(|c| !c.is_empty())
+            .collect();
         // The directory must appear after the subdir components when scoped.
         // A non-terminal component proves a directory through a child path;
         // a terminal component only counts when the zip has an explicit
@@ -176,7 +179,7 @@ pub fn resolve_archive_path<A: Read + Seek>(
     if archive.by_name(&path).is_ok() {
         Ok(path)
     } else {
-        Err(eyre::eyre!("File not found in archive: {}", path))
+        Err(MissingSource::ArchiveEntry { path }.into())
     }
 }
 
