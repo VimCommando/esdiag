@@ -127,12 +127,18 @@ pub(crate) fn archive_has_dir<'a>(
         let start = if subdir_components.is_empty() {
             0
         } else {
+            // `subdir` is a working-directory prefix (see `resolve_archive_path`),
+            // so it only counts at the archive root or directly beneath a single
+            // top-level bundle directory. Accepting it at any depth would let an
+            // unrelated subtree that repeats the same component names answer for
+            // this receiver.
+            const MAX_BUNDLE_ROOT_DEPTH: usize = 1;
             match components
                 .windows(subdir_components.len())
                 .position(|window| window.iter().zip(&subdir_components).all(|(a, b)| a == b))
             {
-                Some(pos) => pos + subdir_components.len(),
-                None => return false,
+                Some(pos) if pos <= MAX_BUNDLE_ROOT_DEPTH => pos + subdir_components.len(),
+                _ => return false,
             }
         };
         components[start..].iter().enumerate().any(|(index, component)| {
@@ -330,6 +336,15 @@ mod tests {
         assert!(archive_has_dir(
             ["root/cluster/syscalls/processes.txt"].into_iter(),
             Some(&PathBuf::from("cluster")),
+            "syscalls"
+        ));
+    }
+
+    #[test]
+    fn archive_has_dir_ignores_a_matching_component_in_an_unrelated_subtree() {
+        assert!(!archive_has_dir(
+            ["root/child-b/child-a/syscalls/processes.txt"].into_iter(),
+            Some(&PathBuf::from("child-a")),
             "syscalls"
         ));
     }
