@@ -54,9 +54,6 @@ impl DocumentExporter<Lookups, ElasticsearchMetadata> for SearchableSnapshotsSta
 
 // Serializing data structures
 
-// Searchable snapshot stats are not wired into collection yet; keep the serializer
-// types near the processor until the source is enabled.
-#[allow(dead_code)]
 #[derive(Clone, Serialize)]
 pub struct SearchableSnapshotStatsDoc {
     #[serde(flatten)]
@@ -65,8 +62,6 @@ pub struct SearchableSnapshotStatsDoc {
     searchable_snapshot: Box<RawValue>,
 }
 
-// Kept with SearchableSnapshotStatsDoc so the dormant serialized shape is explicit.
-#[allow(dead_code)]
 #[derive(Clone, Serialize)]
 pub struct IndexName {
     pub name: String,
