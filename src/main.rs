@@ -615,7 +615,7 @@ fn format_process_summary(completed: &Completed) -> String {
 /// from the CLI summary to keep it scannable.
 fn format_report_events(report: &esdiag::processor::DiagnosticReport) -> String {
     let mut rendered = String::new();
-    for event in &report.diagnostic.events {
+    for event in report.events() {
         match event.severity {
             esdiag::processor::EventSeverity::Success => {}
             severity => {

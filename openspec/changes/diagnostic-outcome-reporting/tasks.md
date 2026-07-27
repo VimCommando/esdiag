@@ -38,9 +38,11 @@
 
 - 5.2 is implemented minimally: the job feed's completed rows (parent and
   child) render the derived outcome from the persisted report, and child rows
-  carry the unified outcome including `Partial`; per-source event rows in the
-  web feed (rendering `diagnostic.events` entries individually) are left for
-  the feed rework in `web-multiuser-isolation`.
+  carry the unified outcome including `Partial`. Rendering the events behind
+  that verdict as individual rows was scoped into `web-multiuser-isolation`,
+  which deferred it in turn (its base predated the event log); it is now
+  tracked by #364. Until it lands, a `partial` verdict is explainable from the
+  CLI summary but not from the web feed alone.
 - Fixture-based children with only absent optional sources now remain
   `Complete`; missing imported-bundle sources are tracked separately from
   unreadable/parse-failed sources so the report event log does not turn benign
