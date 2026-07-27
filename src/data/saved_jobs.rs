@@ -749,6 +749,7 @@ fn schema_version(content: &str) -> Result<Option<u32>> {
     let Some(version) = mapping.get(&key) else {
         return Ok(None);
     };
+    let has_jobs_key = mapping.get(&serde_yaml::Value::String("jobs".to_string())).is_some();
 
     match version {
         serde_yaml::Value::Number(number) => number
@@ -756,7 +757,10 @@ fn schema_version(content: &str) -> Result<Option<u32>> {
             .and_then(|version| u32::try_from(version).ok())
             .map(Some)
             .ok_or_else(|| eyre!("Invalid saved jobs schema_version value")),
-        serde_yaml::Value::Mapping(_) => Ok(None),
+        // A v1 file may hold a job literally named `schema_version`, whose value is
+        // the job mapping. A versioned document instead pairs `schema_version` with
+        // `jobs`, so that pairing means the version itself is malformed.
+        serde_yaml::Value::Mapping(_) if !has_jobs_key => Ok(None),
         _ => Err(eyre!("Invalid saved jobs schema_version value")),
     }
 }
@@ -1024,6 +1028,32 @@ schema_version:
         let migrated = std::fs::read_to_string(&path).expect("read migrated file");
         assert!(migrated.contains("schema_version: 2"));
         assert!(migrated.contains("jobs:"));
+    }
+
+    #[test]
+    fn versioned_document_with_malformed_schema_version_is_rejected() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        let path = tmp.path().join("jobs.yml");
+        write_jobs(
+            &path,
+            r#"
+schema_version:
+  unexpected: mapping
+jobs:
+  prod:
+    input:
+      type: collect
+      host: prod
+      diagnostic_type: standard
+    save:
+      dir: /tmp/collect
+"#,
+        );
+
+        let err = load_saved_jobs().expect_err("malformed schema_version must be rejected");
+
+        assert!(err.to_string().contains("Invalid saved jobs schema_version value"));
     }
 
     #[test]
