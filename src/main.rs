@@ -1745,10 +1745,11 @@ mod tests {
     use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
     use clap::Parser;
     use esdiag::data::{HostRole, KnownHost, Product, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
+    #[cfg(feature = "keystore")]
+    use esdiag::processor::Identifiers;
     use esdiag::processor::diagnostic::DiagnosticReportBuilder;
     use esdiag::processor::{
-        CollectionResult, Completed, DiagnosticManifest, DiagnosticOutcome, Identifiers, IncludedDiagnosticOutcome,
-        SkipKind,
+        CollectionResult, Completed, DiagnosticManifest, DiagnosticOutcome, IncludedDiagnosticOutcome, SkipKind,
     };
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;

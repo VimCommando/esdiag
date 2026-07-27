@@ -23,7 +23,9 @@ mod uri;
 
 pub use application::Application;
 pub use auth::{Auth, AuthType};
+#[cfg(all(feature = "server", feature = "keystore"))]
 pub(crate) use keystore::get_active_unlock_keystore_password;
+#[cfg(all(feature = "server", feature = "keystore"))]
 pub(crate) use keystore::list_secret_entries;
 pub use keystore::{
     BasicSecret, SecretAuth, SecretEntry, UnlockLease, UnlockStatus, add_secret, authenticate, clear_unlock_lease,
@@ -32,7 +34,7 @@ pub use keystore::{
     read_unlock_lease, remove_secret, resolve_secret_auth, rotate_keystore_password, update_secret, upsert_secret_auth,
     validate_existing_keystore_password, with_scoped_keystore_password, write_unlock_lease,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 pub(crate) use known_host::write_hosts_yml_for_tests;
 pub use known_host::{CredentialDirection, ElasticCloud, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate};
 pub use platform::Platform;

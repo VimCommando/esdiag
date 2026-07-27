@@ -14,6 +14,8 @@ pub(crate) const KIBANA_REQUEST_CONCURRENCY: usize = 5;
 #[derive(Clone, Debug)]
 pub struct KibanaClient {
     inner: kibana_sync::KibanaClient,
+    /// Retained only to seed the space-scoped client used by asset setup.
+    #[cfg(feature = "setup")]
     auth: Auth,
 }
 
@@ -31,7 +33,11 @@ impl KibanaClient {
             .build()
             .wrap_err("Failed to build Kibana client")?;
 
-        Ok(Self { inner, auth })
+        Ok(Self {
+            inner,
+            #[cfg(feature = "setup")]
+            auth,
+        })
     }
 
     /// Send a request to a given path on the Kibana client
@@ -48,6 +54,7 @@ impl KibanaClient {
             .wrap_err("Failed to send request")
     }
 
+    #[cfg(feature = "setup")]
     pub(crate) fn sync_client(
         &self,
         spaces: impl IntoIterator<Item = (String, String)>,

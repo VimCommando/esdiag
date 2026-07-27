@@ -600,6 +600,7 @@ pub fn get_keystore_password() -> Result<String> {
     ))
 }
 
+#[cfg(all(feature = "server", feature = "keystore"))]
 pub(crate) fn get_active_unlock_keystore_password() -> Result<Option<String>> {
     Ok(read_unlock_lease()?.map(|lease| lease.password))
 }
@@ -838,6 +839,7 @@ pub fn list_secret_names(keystore_password: &str) -> Result<Vec<String>> {
     Ok(names)
 }
 
+#[cfg(any(test, all(feature = "server", feature = "keystore")))]
 pub(crate) fn list_secret_entries(keystore_password: &str) -> Result<Vec<(String, SecretEntry)>> {
     let store = read_store(keystore_password)?;
     Ok(store.secrets.into_iter().collect())

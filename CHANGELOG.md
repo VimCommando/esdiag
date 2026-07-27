@@ -22,6 +22,10 @@ published release notes, maintenance branches, and tagged history.
 - Changed saved jobs to rewrite legacy `jobs.yml` definitions into the versioned phase-based schema on first read (#353).
 - Scoped live `Collect` to Elasticsearch, Kibana, and Logstash; Agent and platform diagnostics now direct users to `Load`/`read` product-provided bundles (#355).
 
+### Fixed
+
+- Fixed compilation of every `server`, `setup`, and `keystore` feature combination, including `--no-default-features` (#347).
+
 ### Security
 
 - Clarified credential custody so saved credentials are mediated by the user-mode keystore, service-mode outputs use runtime-provided credentials, and ad-hoc input API keys remain transient (#352).
