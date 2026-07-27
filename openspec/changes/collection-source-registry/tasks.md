@@ -17,6 +17,11 @@
 ## 4. Derivation — finish the migration (ADR-0005)
 - [x] 4.1 Remove the `es_base_apis` Minimal/Standard `vec!` lists; derive Elasticsearch `minimal`/`standard` from registry tags/membership like `support`/`light`.
 - [x] 4.2 Replace the hand-written `should_process` dispatch chain with a registry-iterated table keyed on the registry key, resolving one registered `DataSource`/`DocumentExporter` per processable source.
+  > Each `EsDispatchEntry`/`LsDispatchEntry` carries the registry key, the impl's
+  > `DataSource::name()`, and a function pointer that runs it, so a processable source
+  > is one table entry plus its `sources.yml` entry — there is no parallel match arm to
+  > keep in step. `validate_{es,ls}_dispatch_registry` derives its claims from the same
+  > table, so the alignment check cannot drift from what dispatch actually does.
 - [x] 4.3 Remove the `ElasticsearchApi` enum (and Kibana/Logstash siblings); if any is retained for ergonomics, generate it from or validate it against the registry at startup.
 - [x] 4.4 Move `required` and `dependencies` out of `ProcessingOptionDef` into the registry, and keep collect-stage prerequisites in separate `collect_dependencies`.
 - [x] 4.5 Make `streamable` an explicit flag; gate the streaming dispatch (`process_streaming_datasource::<T>`) on it instead of the hardcoded `IndicesStats`/`NodesStats`/`Snapshots` choice.
@@ -33,7 +38,15 @@
 ## 7. Verification
 - [x] 7.1 Tests: ES `minimal`/`standard`/`support`/`light` all derive from tags; no hardcoded list remains.
 - [x] 7.2 Tests: registry-derived dispatch routes each processable key to its single impl; collect-only entry with no impl is not a wiring gap; unaligned key fails at startup.
+  > `dispatch_table_and_registry_agree` in `src/processor/{elasticsearch,logstash}/mod.rs`
+  > runs the real alignment check over the shipped registry, so drift fails the test
+  > suite rather than a diagnostic run; the failure paths (unaligned key, name mismatch,
+  > processable entry with no impl) are covered in `src/processor/diagnostic/data_source.rs`.
 - [x] 7.3 Tests: `source_weight` drives collect concurrency only; `processing_weight` drives processing concurrency only; asymmetric-cost source scheduled independently per stage.
 - [x] 7.4 Tests: `streamable` flag selects the streaming vs buffered path.
 - [x] 7.5 Tests: reconciliation overlay preserves enrichments, adds new sources, normalizes semver; stock `semver::VersionReq` resolves the normalized ranges.
+  > `src/bin/reconcile-sources.rs` covers enrichment preservation across an upstream
+  > refresh and each recorded divergence — `renames` overlaying upstream onto the ESDiag
+  > key, `removed` skipping an upstream source, and `esdiag_only` suppressing the
+  > not-present-upstream report that an unrecorded ESDiag source still raises.
 - [x] 7.6 Confirm the delta-spec scenarios in `specs/{version-dependent-sources,api-selection,source-reconciliation}/spec.md` are covered.
