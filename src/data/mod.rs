@@ -45,10 +45,31 @@ pub use settings::Settings;
 pub use uri::Uri;
 
 use crate::env;
-use eyre::Result;
+use eyre::{Result, eyre};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
+
+pub fn collect_product(app: Option<Application>) -> Result<Product> {
+    match app {
+        Some(application @ (Application::Elasticsearch | Application::Kibana | Application::Logstash)) => {
+            Ok(Product::from(application))
+        }
+        Some(Application::Agent) => Err(eyre!(
+            "Collect is out of scope by design for Elastic Agent. Elastic Agent provides its own diagnostic bundle; use `read`/`Load` instead."
+        )),
+        None => Err(eyre!(
+            "Collect is out of scope by design without an application. Select Elasticsearch, Kibana, or Logstash for API collection, or load a product-provided diagnostic bundle with `read`/`Load`."
+        )),
+    }
+}
+
+pub fn is_collectable_app(app: Option<Application>) -> bool {
+    matches!(
+        app,
+        Some(Application::Elasticsearch | Application::Kibana | Application::Logstash)
+    )
+}
 
 /// Save an arbitrary serializable object to a file
 pub fn save_file<T: Serialize>(filename: &str, content: &T) -> Result<()> {

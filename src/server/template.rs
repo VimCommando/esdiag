@@ -612,13 +612,13 @@ mod tests {
             job_id: 101,
             source: "Included diagnostic: child-kibana",
             product: "Kibana",
-            reason: "Kibana processing is not yet implemented",
+            reason: "Kibana processing is not yet implemented (not implemented)",
         }
         .render()
         .expect("skipped template renders");
 
         assert!(skipped.contains("status-info"));
         assert!(skipped.contains("Included diagnostic: child-kibana"));
-        assert!(skipped.contains("Kibana processing is not yet implemented"));
+        assert!(skipped.contains("Kibana processing is not yet implemented (not implemented)"));
     }
 }

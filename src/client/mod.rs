@@ -15,7 +15,7 @@ pub use kibana::KibanaClient;
 pub use logstash::LogstashClient;
 
 extern crate elasticsearch as es;
-use crate::data::{Product, Uri};
+use crate::data::{Product, Uri, collect_product};
 use eyre::{Result, eyre};
 use reqwest::Method;
 use std::collections::HashMap;
@@ -226,11 +226,11 @@ impl TryFrom<Uri> for Client {
 
     fn try_from(uri: Uri) -> Result<Self, Self::Error> {
         match uri {
-            Uri::KnownHost(host) => match host.app() {
+            Uri::KnownHost(host) => match collect_product(host.app())? {
                 Product::Kibana => Ok(Client::Kibana(KibanaClient::try_from(host)?)),
                 Product::Elasticsearch => Ok(Client::Elasticsearch(ElasticsearchClient::try_from(host)?)),
                 Product::Logstash => Ok(Client::Logstash(LogstashClient::try_from(host)?)),
-                _ => Err(eyre!("Unsupported product: {}", host.app())),
+                product => unreachable!("collect_product returned non-collectable product {product}"),
             },
             _ => Err(eyre!("Unsupported URI")),
         }

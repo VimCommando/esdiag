@@ -13,7 +13,7 @@
 
 use super::model::{ExecutionMode, ExportTarget, Input, Job, Process, SendTarget};
 use crate::{
-    data::{HostRole, KnownHost, Product, Uri},
+    data::{Application, HostRole, KnownHost, Product, Uri, collect_product},
     exporter::Exporter,
     processor::{
         Collector, Identifiers, Processor,
@@ -79,7 +79,7 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
                     outcome.bundle_retained = save.is_retained();
 
                     let receiver = Receiver::try_from(host.clone())?;
-                    let product = host.app().clone();
+                    let product = collect_product(host.app())?;
                     let collect_exporter = Exporter::for_collect_archive(output_dir)?;
                     let collector = Collector::try_new(
                         receiver,
@@ -127,7 +127,7 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
                     let process = job
                         .process()
                         .ok_or_else(|| eyre!("streaming job without process (unreachable by construction)"))?;
-                    let product = host.app().clone();
+                    let product = collect_product(host.app())?;
                     let selection = collect_process_selection(
                         &product,
                         diagnostic_type,
@@ -252,7 +252,7 @@ fn export_target_exporter(target: &ExportTarget) -> Result<Exporter> {
             if !host.has_role(HostRole::Send) {
                 return Err(eyre!("Export host '{host_key}' is missing the send role"));
             }
-            if host.app() != &Product::Elasticsearch {
+            if host.app() != Some(Application::Elasticsearch) {
                 return Err(eyre!("Export host '{host_key}' must be an Elasticsearch host"));
             }
             Exporter::try_from(Uri::try_from(host)?)

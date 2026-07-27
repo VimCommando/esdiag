@@ -7,7 +7,7 @@ use super::{
     ServerState, job_feed_event, replace_job_event, signal_event, template, template_event,
 };
 use crate::{
-    data::{HostRole, Product, Uri},
+    data::{Application, HostRole, Uri, collect_product},
     exporter::Exporter,
     processor::{
         Collector, DiagnosticOutcome, Identifiers, IncludedDiagnosticJobEvent, Processor, SkipKind,
@@ -1040,7 +1040,7 @@ fn validate_remote_send_uri(uri: &Uri) -> Result<()> {
         if !host.has_role(HostRole::Send) {
             return Err(eyre!("Remote known-host send targets must have the `send` role"));
         }
-        if host.app() != &Product::Elasticsearch {
+        if host.app() != Some(Application::Elasticsearch) {
             return Err(eyre!("Remote known-host send targets must be Elasticsearch hosts"));
         }
     }
@@ -1069,7 +1069,7 @@ async fn collect_remote_archive(
     let collector = Collector::try_new(
         receiver,
         exporter,
-        host.app().clone(),
+        collect_product(host.app())?,
         diagnostic_type.to_string(),
         None,
         None,
