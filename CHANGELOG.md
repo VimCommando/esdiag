@@ -61,6 +61,7 @@ published release notes, maintenance branches, and tagged history.
 - Fixed Elasticsearch node stats processing to preserve lookup-enriched node identity fields.
 - Fixed Elastic Cloud and GovCloud host normalization to use the documented `_main` single-resource reference.
 - Fixed Service Link curl parsing to remove single, double, and escaped quotes from pasted URLs and values (#326).
+- Fixed the Lifecycle Overview dashboard resetting the global time filter to the default 15-minute window on cold load, which hid diagnostic data; it now stores a 90-day range so lifecycle data is visible by default. #365
 
 ## [0.14] - 2026-02-25
 
