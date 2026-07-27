@@ -1,7 +1,7 @@
 use crate::processor::diagnostic::data_source::{get_product_sources, get_source, get_source_keys_with_tag};
 use eyre::{Result, eyre};
 use indexmap::IndexSet;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 const MIN_WEIGHT: u8 = 1;
@@ -184,7 +184,7 @@ pub struct ProcessingOption {
     pub selected: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProcessSelection {
     pub product: String,
     pub diagnostic_type: String,

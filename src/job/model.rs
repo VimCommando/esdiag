@@ -17,20 +17,24 @@
 //! barrier): see [`Job::execution_mode`].
 
 use crate::{
-    data::{KnownHost, Uri},
+    data::Uri,
     processor::{Identifiers, api::ProcessSelection},
 };
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Phase 1: where the diagnostic comes from — exactly one of a *new*
 /// collection from live product APIs, or an *existing* bundle.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Input {
     /// Call live product APIs to acquire a new diagnostic.
     Collect {
-        host: Box<KnownHost>,
+        host: String,
         diagnostic_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         include: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         exclude: Option<Vec<String>>,
     },
     /// Read an existing diagnostic from a directory, bundle, or download.
@@ -52,8 +56,9 @@ impl Input {
 /// `dir: None` materialises the bundle in a temporary directory that is not
 /// retained after the job — the bundle still exists during execution (it is
 /// the staged-mode serialization barrier and the `Send` source).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SaveTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<PathBuf>,
 }
 
@@ -73,27 +78,29 @@ impl SaveTarget {
 
 /// Phase 2b: transform the diagnostic into documents, exporting them to
 /// `export`. `Export` ⟺ `Process` is structural: the sink lives here.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Process {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<ProcessSelection>,
     pub export: ExportTarget,
 }
 
 /// The destination for *processed* documents (the `Export` stage).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ExportTarget {
     /// A saved known host (an Elasticsearch output cluster).
     KnownHost { name: String },
     /// A local newline-delimited JSON file.
     File { path: PathBuf },
     /// A local directory of per-stream files.
-    Directory { dir: PathBuf },
+    Directory { output_dir: PathBuf },
     /// Standard output.
     Stdout,
 }
 
 /// Phase 3: transmit an existing bundle to the Elastic Uploader service.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SendTarget {
     pub upload_id: String,
 }
@@ -123,6 +130,12 @@ pub enum JobValidationError {
     SendRequiresArchiveFile,
     /// A job must do something: at least one of `save`/`process`/`send`.
     NoWork,
+    /// A temporary save must feed another stage before the temp dir is removed.
+    TemporarySaveRequiresConsumer,
+    /// Collect jobs need a saved-host reference.
+    EmptyCollectHost,
+    /// Persisted load inputs must keep their wire semantics across a YAML round trip.
+    ResolvedLoadUriNotPersistable,
 }
 
 impl std::fmt::Display for JobValidationError {
@@ -141,6 +154,15 @@ impl std::fmt::Display for JobValidationError {
                 "`send` with `Load` requires a local bundle archive file; provide a .zip bundle or collect with `save` enabled"
             ),
             Self::NoWork => write!(f, "a job must select at least one of `save`, `process`, or `send`"),
+            Self::TemporarySaveRequiresConsumer => write!(
+                f,
+                "temporary `save` requires `process` or `send` so the staged bundle is consumed before cleanup"
+            ),
+            Self::EmptyCollectHost => write!(f, "`Collect` input requires a non-empty host"),
+            Self::ResolvedLoadUriNotPersistable => write!(
+                f,
+                "`Load` input cannot persist resolved host URIs; use a file, directory, URL, or stream reference"
+            ),
         }
     }
 }
@@ -152,13 +174,39 @@ impl std::error::Error for JobValidationError {}
 ///
 /// Constructed only through [`Job::try_new`], which enforces the phase
 /// invariants; the accessors expose the validated stages read-only.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(try_from = "JobWire")]
 pub struct Job {
+    #[serde(default, skip_serializing_if = "Identifiers::is_empty")]
     pub identifiers: Identifiers,
     input: Input,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     save: Option<SaveTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     process: Option<Process>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     send: Option<SendTarget>,
+}
+
+#[derive(Deserialize)]
+struct JobWire {
+    #[serde(default, skip_serializing_if = "Identifiers::is_empty")]
+    identifiers: Identifiers,
+    input: Input,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    save: Option<SaveTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    process: Option<Process>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    send: Option<SendTarget>,
+}
+
+impl TryFrom<JobWire> for Job {
+    type Error = JobValidationError;
+
+    fn try_from(wire: JobWire) -> Result<Self, Self::Error> {
+        Job::try_new(wire.identifiers, wire.input, wire.save, wire.process, wire.send)
+    }
 }
 
 impl Job {
@@ -172,6 +220,17 @@ impl Job {
         if save.is_some() && !input.is_collect() {
             return Err(JobValidationError::SaveRequiresCollect);
         }
+        if let Input::Collect { host, .. } = &input
+            && host.trim().is_empty()
+        {
+            return Err(JobValidationError::EmptyCollectHost);
+        }
+        if let Input::Load {
+            uri: Uri::KnownHost(_) | Uri::ElasticCloud(_) | Uri::ElasticCloudAdmin(_) | Uri::ElasticGovCloudAdmin(_),
+        } = &input
+        {
+            return Err(JobValidationError::ResolvedLoadUriNotPersistable);
+        }
         if send.is_some() && input.is_collect() && save.is_none() {
             return Err(JobValidationError::SendRequiresBundle);
         }
@@ -180,6 +239,9 @@ impl Job {
         }
         if save.is_none() && process.is_none() && send.is_none() {
             return Err(JobValidationError::NoWork);
+        }
+        if matches!(&save, Some(SaveTarget { dir: None })) && process.is_none() && send.is_none() {
+            return Err(JobValidationError::TemporarySaveRequiresConsumer);
         }
         Ok(Self {
             identifiers,
@@ -220,20 +282,10 @@ impl Job {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::KnownHostBuilder;
-    use url::Url;
-
-    fn host() -> Box<KnownHost> {
-        Box::new(
-            KnownHostBuilder::new(Url::parse("http://localhost:9200").expect("url"))
-                .build()
-                .expect("host"),
-        )
-    }
 
     fn collect_input() -> Input {
         Input::Collect {
-            host: host(),
+            host: "prod".to_string(),
             diagnostic_type: "standard".to_string(),
             include: None,
             exclude: None,
@@ -309,6 +361,73 @@ mod tests {
         let err = Job::try_new(Identifiers::default(), collect_input(), None, None, None)
             .expect_err("no-op job must be rejected");
         assert_eq!(err, JobValidationError::NoWork);
+    }
+
+    #[test]
+    fn collect_input_requires_non_empty_host() {
+        let err = Job::try_new(
+            Identifiers::default(),
+            Input::Collect {
+                host: "  ".to_string(),
+                diagnostic_type: "standard".to_string(),
+                include: None,
+                exclude: None,
+            },
+            Some(SaveTarget::retained("/tmp/esdiag".into())),
+            None,
+            None,
+        )
+        .expect_err("empty collect host must be rejected");
+        assert_eq!(err, JobValidationError::EmptyCollectHost);
+    }
+
+    #[test]
+    fn load_input_rejects_resolved_host_uri() {
+        let host = crate::data::KnownHostBuilder::new(url::Url::parse("https://prod.example.com:9200").expect("url"))
+            .build()
+            .expect("known host");
+        let err = Job::try_new(
+            Identifiers::default(),
+            Input::Load {
+                uri: Uri::KnownHost(host),
+            },
+            None,
+            Some(process()),
+            None,
+        )
+        .expect_err("resolved host Uri must not be persisted in jobs.yml");
+
+        assert_eq!(err, JobValidationError::ResolvedLoadUriNotPersistable);
+    }
+
+    #[test]
+    fn temporary_save_must_feed_another_stage() {
+        let err = Job::try_new(
+            Identifiers::default(),
+            collect_input(),
+            Some(SaveTarget { dir: None }),
+            None,
+            None,
+        )
+        .expect_err("temporary save without process or send must be rejected");
+        assert_eq!(err, JobValidationError::TemporarySaveRequiresConsumer);
+    }
+
+    #[test]
+    fn deserialization_rejects_invalid_job_shape() {
+        let err = serde_yaml::from_str::<Job>(
+            r#"
+input:
+  type: collect
+  host: prod
+  diagnostic_type: standard
+send:
+  upload_id: abc123
+"#,
+        )
+        .expect_err("collect+send without save must be rejected");
+
+        assert!(err.to_string().contains("`send` requires a bundle"));
     }
 
     #[test]
