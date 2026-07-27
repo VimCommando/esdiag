@@ -13,8 +13,9 @@ correction the rest of the architecture review depends on. Rationale: **ADR-0001
   (`Elasticsearch | Kibana | Logstash | Agent`).
 - `Platform` is total (every diagnostic has exactly one; a bare install is
   `SelfManaged`) and **best-effort detected** — from indicators such as a `syscalls`
-  folder (⇒ `SelfManaged`) or a manifest `runner` of `ece` (⇒ `ECE`) — falling back to
-  `Unknown` when provenance cannot be established.
+  folder (⇒ `SelfManaged`), a manifest `runner` of `ece` (⇒ `ECE`), or a cluster license
+  issued to `Elastic Cloud` (⇒ `ElasticCloudHosted`) — falling back to `Unknown` when
+  provenance cannot be established.
 - `Application` is optional: a platform's own data has `application: None`; the display
   label is `application` if present, else `platform`.
 - **BREAKING (internal):** retire the untyped `diagnostic.orchestration` string in

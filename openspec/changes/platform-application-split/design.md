@@ -19,7 +19,8 @@ derivation (`src/processor/mod.rs:420`).
   legacy alias to stage the ~90-site migration; it takes no new variants.
 - **Detection:** move the `mod.rs:420` product→string derivation to a typed
   `Platform` detector driven by indicators (manifest `runner`, presence of a
-  `syscalls` folder, cloud markers), defaulting to `Unknown`. This is best-effort by
+  `syscalls` folder, cloud markers — the admin-API receiver hint and the
+  `Elastic Cloud` license holder), defaulting to `Unknown`. This is best-effort by
   contract — callers must tolerate `Unknown`.
 - **Propagation:** where children are spawned (`spawn_sub_processors`), set the child's
   `Platform` from the parent (today this rides on the inherited identifiers) — make it

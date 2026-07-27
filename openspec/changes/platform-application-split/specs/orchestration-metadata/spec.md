@@ -21,6 +21,10 @@ be `Unknown`.
 - **WHEN** a diagnostic bundle is processed from Elastic Cloud Hosted
 - **THEN** the `diagnostic.platform` field MUST be set to `ElasticCloudHosted`
 
+#### Scenario: Identify Elastic Cloud Hosted from the license holder
+- **WHEN** an API-only bundle carries no orchestration indicators but its cluster license is issued to `Elastic Cloud`
+- **THEN** the `diagnostic.platform` field MUST be set to `ElasticCloudHosted`
+
 #### Scenario: Identify Kubernetes Platform
 - **WHEN** a diagnostic bundle is processed from a generic Kubernetes Platform
 - **THEN** the `diagnostic.platform` field MUST be set to `KubernetesPlatform`

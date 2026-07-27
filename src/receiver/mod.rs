@@ -307,6 +307,15 @@ impl Receiver {
         }
     }
 
+    /// Whether the receiver reads a collected bundle rather than a live API.
+    /// Only these receivers can be asked about bundle contents.
+    pub fn is_bundle(&self) -> bool {
+        matches!(
+            self,
+            Receiver::ArchiveBytes(_) | Receiver::ArchiveFile(_) | Receiver::Directory(_)
+        )
+    }
+
     /// Whether the received bundle contains `dir` as a directory. Only local
     /// (archive/directory) receivers can answer; remote receivers report
     /// `false`. Used for platform indicators such as the `syscalls` folder.

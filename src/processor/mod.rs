@@ -37,7 +37,7 @@ use crate::{
 };
 use api::ProcessSelection;
 use elastic_cloud_kubernetes::ElasticCloudKubernetesDiagnostic;
-use elasticsearch::ElasticsearchDiagnostic;
+use elasticsearch::{ElasticsearchDiagnostic, Licenses};
 use eyre::{Result, eyre};
 use futures::{
     FutureExt,
@@ -54,6 +54,8 @@ use tokio::{sync::mpsc, time::Instant};
 
 const KIBANA_PROCESSING_NOT_IMPLEMENTED: &str = "Kibana processing is not yet implemented";
 const UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE: &str = "Unsupported product or diagnostic bundle";
+/// The license holder Elastic Cloud Hosted issues every deployment license to.
+const ELASTIC_CLOUD_LICENSE_HOLDER: &str = "Elastic Cloud";
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 
 pub struct Processor<S: State> {
@@ -399,8 +401,10 @@ fn send_child_outcome_event(
 /// parent diagnostic propagating its platform to a child) wins; then an
 /// explicit manifest field (esdiag-written bundles); then a receiver hint
 /// (e.g. Elastic Cloud admin API); then manifest indicators; then the
-/// `syscalls` folder, which only self-managed collections produce. Anything
-/// indeterminate is `Unknown` — a first-class, non-failing value.
+/// `syscalls` folder, which only self-managed collections produce; then the
+/// bundle's license holder, which is all an API-only Elastic Cloud Hosted
+/// bundle leaves behind. Anything indeterminate is `Unknown` — a first-class,
+/// non-failing value.
 async fn resolve_platform(manifest: &DiagnosticManifest, receiver: &Receiver, identifiers: &Identifiers) -> Platform {
     if let Some(platform) = identifiers.platform {
         return platform;
@@ -418,7 +422,23 @@ async fn resolve_platform(manifest: &DiagnosticManifest, receiver: &Receiver, id
     if receiver.has_bundle_dir("syscalls").await {
         return Platform::SelfManaged;
     }
+    if bundle_license_implies_cloud(receiver).await {
+        return Platform::ElasticCloudHosted;
+    }
     Platform::Unknown
+}
+
+/// Elastic Cloud Hosted issues every deployment's license to a fixed holder,
+/// which is often the only platform trace left in an API-only bundle: such
+/// bundles carry no `syscalls` folder and no orchestration manifest.
+async fn bundle_license_implies_cloud(receiver: &Receiver) -> bool {
+    if !receiver.is_bundle() {
+        return false;
+    }
+    matches!(
+        receiver.get::<Licenses>().await,
+        Ok(licenses) if licenses.license.issued_to() == ELASTIC_CLOUD_LICENSE_HOLDER
+    )
 }
 
 impl Processor<Ready> {
@@ -1075,6 +1095,55 @@ mod tests {
         assert_eq!(
             resolve_platform(&manifest, &receiver, &Identifiers::default()).await,
             Platform::ElasticCloudHosted
+        );
+    }
+
+    fn write_license(bundle: &Path, issued_to: &str) {
+        let license = json!({
+            "license": {
+                "status": "active",
+                "uid": "90db30a7-19e4-42e6-b1fc-c76567ada0e2",
+                "type": "enterprise",
+                "issue_date_in_millis": 1_677_715_200_000_u64,
+                "expiry_date_in_millis": 1_835_481_599_999_u64,
+                "max_nodes": serde_json::Value::Null,
+                "max_resource_units": 100_000,
+                "issued_to": issued_to,
+                "issuer": "API",
+                "start_date_in_millis": 1_677_628_800_000_i64,
+            }
+        });
+        std::fs::write(bundle.join("licenses.json"), license.to_string()).expect("write licenses.json");
+    }
+
+    async fn platform_for_bundle_licensed_to(issued_to: &str) -> Platform {
+        let root = tempfile::tempdir().expect("bundle dir");
+        extract_archive("elasticsearch-api-diagnostics-9.3.3.zip", root.path());
+        write_license(root.path(), issued_to);
+
+        let receiver = Arc::new(Receiver::try_from(Uri::Directory(root.path().to_path_buf())).expect("receiver"));
+        let output = tempfile::tempdir().expect("output dir");
+        let exporter = Arc::new(Exporter::try_from(Uri::Directory(output.path().to_path_buf())).expect("exporter"));
+        let processor = Processor::try_new(receiver, exporter, Identifiers::default())
+            .await
+            .expect("ready processor");
+
+        processor.state.manifest.platform()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cloud_license_holder_implies_elastic_cloud_hosted_platform() {
+        assert_eq!(
+            platform_for_bundle_licensed_to("Elastic Cloud").await,
+            Platform::ElasticCloudHosted
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn self_issued_license_holder_leaves_platform_unknown() {
+        assert_eq!(
+            platform_for_bundle_licensed_to("acme-production").await,
+            Platform::Unknown
         );
     }
 

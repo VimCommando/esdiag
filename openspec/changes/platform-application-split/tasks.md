@@ -8,6 +8,10 @@
 ## 2. Detection
 - [x] 2.1 Replace the product→string derivation in `Processor::start` (`src/processor/mod.rs:420`) with a typed `Platform` detector.
 - [x] 2.2 Implement indicator rules: manifest `runner` (`ece` ⇒ `ECE`, …), presence of a `syscalls` folder ⇒ `SelfManaged`, cloud markers ⇒ `ElasticCloudHosted`/`ECK`/`KubernetesPlatform`; default `Unknown`.
+  > The Elastic Cloud Hosted marker is two-part: the Elastic Cloud admin API receiver
+  > vouches for the platform directly, and for an already-collected bundle the cluster
+  > license issued to `Elastic Cloud` is the last remaining trace — an API-only hosted
+  > bundle has no `syscalls` folder and no orchestration manifest.
 - [x] 2.3 Ensure every consumer tolerates `Platform::Unknown` without failing.
 
 ## 3. Manifest & envelope

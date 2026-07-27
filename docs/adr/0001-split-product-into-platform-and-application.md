@@ -42,7 +42,8 @@ express none of these combinations.
   the escape hatch for indeterminate provenance.
 - **Platform is determined best-effort at the receiver.** ESDiag infers it from
   indicators (a `syscalls` folder implies `SelfManaged`, a manifest `runner` of
-  `ece` implies `ECE`, etc.). Inference is not guaranteed — legacy
+  `ece` implies `ECE`, a cluster license issued to `Elastic Cloud` implies
+  `ElasticCloudHosted`, etc.). Inference is not guaranteed — legacy
   `support-diagnostics` bundles may leave it `Unknown` — so every receiver must set
   it where it can, and downstream code must tolerate `Unknown`.
 - **Platform does not propagate inherently.** When ESDiag processes a platform

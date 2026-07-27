@@ -50,7 +50,7 @@ pub use collector::ElasticsearchCollector;
 pub use metadata::ElasticsearchMetadata;
 use tokio::sync::mpsc;
 pub use {
-    licenses::License,
+    licenses::{License, Licenses},
     version::{Cluster, ClusterMetadata, Version},
 };
 
@@ -84,7 +84,6 @@ use {
     ilm_policies::IlmPolicies,
     indices_settings::{IndexSettings, IndicesSettings},
     indices_stats::IndicesStats,
-    licenses::Licenses,
     mapping_stats::{MappingStats, MappingSummary},
     nodes::{NodeDocument, Nodes},
     nodes_stats::NodesStats,
