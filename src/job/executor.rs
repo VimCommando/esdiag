@@ -355,6 +355,7 @@ mod tests {
 
         assert!(selection.selected.contains(&"logstash_node_stats".to_string()));
         assert!(selection.selected.contains(&"logstash_node".to_string()));
-        assert!(selection.selected.contains(&"logstash_version".to_string()));
+        // `logstash_version` is a collect-only prerequisite with no processor.
+        assert!(!selection.selected.contains(&"logstash_version".to_string()));
     }
 }
