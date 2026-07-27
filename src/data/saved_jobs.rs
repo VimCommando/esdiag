@@ -749,7 +749,7 @@ fn schema_version(content: &str) -> Result<Option<u32>> {
     let Some(version) = mapping.get(&key) else {
         return Ok(None);
     };
-    let has_jobs_key = mapping.get(&serde_yaml::Value::String("jobs".to_string())).is_some();
+    let has_jobs_key = mapping.get(serde_yaml::Value::String("jobs".to_string())).is_some();
 
     match version {
         serde_yaml::Value::Number(number) => number
