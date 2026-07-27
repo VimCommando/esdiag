@@ -40,6 +40,9 @@ impl SavedJobsDocument {
     }
 }
 
+/// The pre-phase `{collect, action}` shape, read only to migrate an existing
+/// `jobs.yml` (ADR-0009). Nothing live may hold these types: the fused action
+/// is what the phase model replaced.
 #[derive(Clone, Deserialize)]
 struct LegacyJob {
     #[serde(default, skip_serializing_if = "Identifiers::is_empty")]
@@ -89,9 +92,17 @@ pub struct NeedsCollect;
 #[derive(Clone)]
 pub struct NeedsAction;
 
+/// The Phase-1 `Collect` input under construction, with the Phase-2a save
+/// directory the terminal builder methods fold into a [`SaveTarget`].
+struct CollectDraft {
+    host: String,
+    diagnostic_type: String,
+    save_dir: Option<PathBuf>,
+}
+
 pub struct JobBuilder<State> {
     identifiers: Identifiers,
-    collect: Option<LegacyJobCollect>,
+    collect: Option<CollectDraft>,
     _state: PhantomData<State>,
 }
 
@@ -592,7 +603,7 @@ impl JobBuilder<NeedsCollect> {
         }
         Ok(JobBuilder {
             identifiers: self.identifiers,
-            collect: Some(LegacyJobCollect {
+            collect: Some(CollectDraft {
                 host: host_name.to_string(),
                 diagnostic_type: default_diagnostic_type(),
                 save_dir: None,
@@ -676,7 +687,7 @@ impl JobBuilder<NeedsAction> {
         )
     }
 
-    fn collect_mut(&mut self) -> &mut LegacyJobCollect {
+    fn collect_mut(&mut self) -> &mut CollectDraft {
         self.collect.as_mut().expect("typestate guarantees collect")
     }
 

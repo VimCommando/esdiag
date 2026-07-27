@@ -53,18 +53,27 @@ executor"):
   construction and typed errors (1.x), derived execution mode, and the one
   executor (2.x) driving staged (Collect→Save barrier→Process), streaming
   (Collect+Process, no Save), Load-input, and and/or Phase-3 (Export+Send)
-  shapes. `esdiag job run` (CLI and saved jobs) now converts the legacy
-  `{collect, action}` shape at the boundary and runs through the executor;
-  the legacy fused actions map to staged jobs preserving behavior. Model,
-  invariant, mode, and Load-input executor tests (7.1–7.3).
+  shapes. `esdiag job run` (CLI and saved jobs) runs through the executor.
+  Model, invariant, mode, and Load-input executor tests (7.1–7.3).
+- **Done since, via `saved-job-migration`:** the persisted job *is* the phase
+  model (`data::Job` re-exports `job::model::Job`), so there is no longer a
+  legacy shape to convert at the `job run` boundary — `LegacyJobAction` and
+  `LegacyJobCollect` survive only to migrate an existing `jobs.yml` (ADR-0009).
+  That leaves 4.2 (remove `JobAction`/the `JobCollect` fusion; construct `Job`s
+  from phases) effectively complete: `JobBuilder` holds its own `CollectDraft`
+  state and builds through `Job::try_new`. It stays unchecked with the rest of
+  4.x until the phase-2 pass retires the remaining legacy types around it.
 - **Semantics already present for 6.x:** included diagnostics run as child
   executions with their own child job IDs and parent `Platform` propagation
   (`spawn_sub_processors` + platform-application-split); restructuring them as
   literal child `model::Job`s is part of the phase-2 retirement below.
-- **Deferred to the phase-2 pass (see QUESTIONS.md):** retiring
-  `Collector`/`Processor`/`JobAction`/`into_collect_exporter` (4.x), the
+- **Deferred to the phase-2 pass — tracked by #368:** retiring
+  `Collector`/`Processor`/`into_collect_exporter` (4.1, 4.3, 4.4), the
   stage-aligned module split of `receiver/`/`processor/`/`exporter/` (3.x),
   routing `collect`/`process`/`read` in `main.rs` and the web `job_runner`
-  through the executor (5.x), and the remaining verification items
-  (7.4–7.6). These are wide, regression-prone refactors of a 99KB `main.rs`
-  and the web runner, deliberately staged after review of the model.
+  through the executor (5.x), child jobs as literal `model::Job`s (6.x), and
+  the remaining verification items (7.4–7.6). These are wide, regression-prone
+  refactors of a 99KB `main.rs` and the web runner, deliberately staged after
+  review of the model. Until they land, the `collection-execution` requirement
+  that both modes run through the same executor holds for saved jobs only, so
+  this change is not archivable.
