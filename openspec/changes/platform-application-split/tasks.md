@@ -20,15 +20,16 @@
 
 ## 5. Migration of call sites
 - [x] 5.1 Migrate `Product` call sites (~90) to `Platform`/`Application`; remove the legacy alias once clear.
-  > **Staged (see QUESTIONS.md):** the processor/report/manifest/display axes are fully
-  > migrated. The remaining `Product` sites are the known-host `app` axis (KnownHost,
-  > client/receiver dispatch, CLI host flags, server host forms) plus the legacy wire
-  > `product` field on manifests (kept deliberately — manifests are additive-only per
-  > ADR-0010). The host axis is blocked on a modeling decision — template hosts use
-  > `Product::Unknown` as a placeholder and `Application` has no `Unknown`; cloud-admin
-  > hosts are not applications — which change 9 (`product-acquisition-scope`, Collect
-  > scoped to ES/Kibana/Logstash) resolves. The alias stays until then, per design
-  > ("Keep `Product` temporarily as a legacy alias to stage the ~90-site migration").
+  > **Staged — alias retirement tracked by #366.** The processor/report/manifest/display
+  > axes are fully migrated. The remaining `Product` sites are the known-host `app` axis
+  > (KnownHost, client/receiver dispatch, CLI host flags, server host forms) plus the
+  > legacy wire `product` field on manifests (kept deliberately — manifests are
+  > additive-only per ADR-0010). The host axis is blocked on a modeling decision —
+  > template hosts use `Product::Unknown` as a placeholder and `Application` has no
+  > `Unknown`; cloud-admin hosts are not applications. Change 9
+  > (`product-acquisition-scope`) was expected to resolve this but scoped live `Collect`
+  > without taking on the host axis, so the alias stays per design ("Keep `Product`
+  > temporarily as a legacy alias to stage the ~90-site migration") until #366 lands.
 
 ## 6. Verification
 - [x] 6.1 Unit tests for detection (each indicator → expected `Platform`; indeterminate → `Unknown`).

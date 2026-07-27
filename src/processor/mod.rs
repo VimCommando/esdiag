@@ -834,11 +834,16 @@ pub fn new_job_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{data::Uri, exporter::Exporter, receiver::Receiver};
+    use crate::{
+        data::{KnownHostBuilder, Product, Uri},
+        exporter::Exporter,
+        receiver::Receiver,
+    };
     use serde_json::json;
     use std::collections::HashSet;
     use std::{fs::File, path::Path, sync::Arc};
     use tempfile::TempDir;
+    use url::Url;
     use zip::ZipArchive;
 
     fn archive_path(name: &str) -> String {
@@ -1046,6 +1051,31 @@ mod tests {
 
         assert_eq!(processor.state.manifest.platform(), Platform::Unknown);
         assert_eq!(processor.state.identifiers.platform, Some(Platform::Unknown));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cloud_admin_receiver_implies_elastic_cloud_hosted_platform() {
+        let host = KnownHostBuilder::new(Url::parse("https://admin.found.no").expect("url"))
+            .apikey(Some("test-api-key".to_string()))
+            .build()
+            .expect("host");
+        let receiver = Receiver::try_from(host).expect("cloud admin receiver");
+        let manifest = DiagnosticManifest::new(
+            "2026-04-25T20:18:43.610Z".to_string(),
+            Some("esdiag-test".to_string()),
+            None,
+            None,
+            Some("support".to_string()),
+            Product::Unknown,
+            None,
+            None,
+            Some("8.19.3".to_string()),
+        );
+
+        assert_eq!(
+            resolve_platform(&manifest, &receiver, &Identifiers::default()).await,
+            Platform::ElasticCloudHosted
+        );
     }
 
     #[test]
