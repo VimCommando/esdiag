@@ -948,10 +948,18 @@ impl KnownHost {
         self.secret.as_deref()
     }
 
+    /// Resolve this host's credential as an *input* credential, the direction
+    /// every `Collect`-side caller wants.
     pub fn get_auth(&self) -> Result<Auth> {
         self.get_auth_for_direction(CredentialDirection::Input)
     }
 
+    /// Resolve this host's credential for a stage `direction`.
+    ///
+    /// Resolution precedence is deliberately identical for both directions: the
+    /// keystore is role-agnostic, so a saved host persists one credential
+    /// regardless of how it is used (ADR-0011). `direction` names the calling
+    /// stage's intent for auditability; it never selects a different secret.
     pub fn get_auth_for_direction(&self, direction: CredentialDirection) -> Result<Auth> {
         tracing::debug!(
             "Resolving {} credential for known host role(s): {}",
