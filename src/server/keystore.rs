@@ -879,6 +879,7 @@ mod tests {
         let state = test_server_state();
         unlock(
             State(state.clone()),
+            HeaderMap::new(),
             Form(KeystoreForm {
                 password: "pw".to_string(),
                 confirm: None,
