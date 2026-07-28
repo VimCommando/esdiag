@@ -27,6 +27,7 @@ published release notes, maintenance branches, and tagged history.
 
 - Fixed compilation of every `server`, `setup`, and `keystore` feature combination, including `--no-default-features` (#347).
 - Fixed the file, stream, and directory exporters reporting a fabricated HTTP `200` request status; they now report the reserved `0` that means "no HTTP transport", so a real Elasticsearch response is distinguishable from a local write (#350).
+- Fixed legacy `jobs.yml` migration failing the whole file when one saved job selected a source the current registry no longer knows; such a selection now migrates as authored and is reported when that job runs (#353).
 
 ### Security
 

@@ -8,8 +8,21 @@
 ## 2. Legacy shape + closed mapping
 - [x] 2.1 Retain the legacy `Job { collect, action }` types as `LegacyJob` (deserialize-only) so v1 files parse.
 - [x] 2.2 Implement a closed, total `From<LegacyJob>` for the phase-based `Job` (ADR-0004): `input` always `Collect`.
+  - Lands as `TryFrom`, because the shared `Job::try_new` constructor has the
+    final word on the phase invariants. The mapping itself is total: verification
+    found it was not, since canonicalizing a legacy `selection` through
+    `ApiResolver` could reject an entry, and the loader collects into one
+    `Result` — so a single saved job naming a product or source the registry no
+    longer knows made *every* saved job unreachable, exactly on the upgrade that
+    migrates. Canonicalization is now best-effort and carries an unresolvable
+    selection through as authored, leaving `job run` to reject that one job. The
+    residual `try_new` failure is a legacy entry with no collect host, which
+    `JobBuilder` never wrote and which could never have run.
 - [x] 2.3 Map `action: Collect { output_dir }` → `save: Some(output_dir)`.
 - [x] 2.4 Map `action: Upload { upload_id }` → `save: Some(dir)`, `send: Some(upload_id)`.
+  - A legacy upload with no `collect.save_dir` stages a *temporary* bundle, which
+    is what keeps `send ⟹ a bundle exists` satisfiable without inventing a
+    retention directory the user never asked for.
 - [x] 2.5 Map `action: Process { output, selection }` → `save: save_dir?`, `process: Some { selection, export: output }`; no `save_dir` ⇒ streaming (no `Save`).
 - [x] 2.6 Carry `JobProcessSelection` through unchanged; leave the `Product` → `Application` mapping to the platform/application split (out of scope here).
 
@@ -30,3 +43,6 @@
 - [x] 5.4 Unit test: a current-version file loads directly with no migration.
 - [x] 5.5 Test that a crash-safe atomic rewrite leaves the original intact on write failure (or assert reuse of the atomic helpers).
 - [x] 5.6 Confirm the delta spec scenarios in `specs/saved-jobs/spec.md` are covered.
+  - Two scenarios were added during verification for branches the mapping takes
+    but nothing exercised: `legacy_upload_without_save_dir_migrates_to_a_temporary_bundle`
+    and `legacy_selection_the_current_registry_rejects_migrates_as_authored`.

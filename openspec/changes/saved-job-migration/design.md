@@ -40,7 +40,12 @@ directly with no versioning hook.
 
 - `schema_version` absent ⟺ v1 legacy shape; present ⟺ current phase-based shape.
 - The migration is **total** over v1 inputs: every legacy `action` has exactly one target
-  mapping (closed `From`, no fallthrough).
+  mapping (closed `From`, no fallthrough), and nothing about the current source registry
+  can reject an entry. Canonicalizing a legacy `selection` to current registry keys is
+  therefore best-effort: an unresolvable selection is carried through as authored so the
+  file still migrates, and `job run` reports it for that one job. Totality is load-bearing
+  because the file is all-or-nothing — a rejected entry would cost the user every saved
+  job, on the upgrade that migrates.
 - Every migrated job satisfies ADR-0004 construction invariants: `save ⟹ input=Collect`
   (holds — input is always `Collect`); `send ⟹ a bundle exists` (holds — `Upload` sets
   `save`); at least one of `save`/`process`/`send` is set.

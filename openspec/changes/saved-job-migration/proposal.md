@@ -12,8 +12,9 @@ ambiguous compatibility guesses forever. Rationale: **ADR-0009**.
   the legacy `Job { collect, action }` shape. This makes every future read
   deterministic: no shape-sniffing, and every migration gets the same versioned hook.
 - On load, v1 entries are mapped to the phase-based `Job` via a **closed
-  `From<LegacyJob>`** (ADR-0004). Every legacy saved job is collect-first, so
-  `input` is always `Collect`; the legacy `action` maps as:
+  `From<LegacyJob>`** (ADR-0004) that no state of the current source registry can
+  reject. Every legacy saved job is collect-first, so `input` is always `Collect`;
+  the legacy `action` maps as:
   - `Collect { output_dir }` → `save: Some(output_dir)`
   - `Upload { upload_id }` → `save: Some(dir)`, `send: Some(upload_id)`
   - `Process { output, selection }` → `save: save_dir?`, `process: Some { selection, export: output }`

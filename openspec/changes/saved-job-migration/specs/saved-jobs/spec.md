@@ -34,9 +34,12 @@ existing atomic-write plumbing (`write_yaml_atomic` / `replace_file_atomic` /
 
 A migrated `Process` job that has no `save_dir` SHALL become **streaming** (no `Save`)
 rather than the legacy always-staged behavior. The mapping SHALL be total: every legacy
-`action` has exactly one target, with no unmapped fallthrough. This migration applies
-only to `jobs.yml` (a file ESDiag owns and writes) and MUST NOT be applied to received
-artifacts such as bundles or manifests.
+`action` has exactly one target, with no unmapped fallthrough, and no v1 entry SHALL be
+rejected on the basis of the current source registry — a legacy `selection` naming a
+product or source that is no longer registered SHALL be carried through as authored and
+left for execution to reject. This migration applies only to `jobs.yml` (a file ESDiag
+owns and writes) and MUST NOT be applied to received artifacts such as bundles or
+manifests.
 
 #### Scenario: Legacy file is migrated and rewritten on first read
 - **WHEN** a `jobs.yml` with no `schema_version` and one or more legacy entries is loaded
@@ -59,6 +62,16 @@ artifacts such as bundles or manifests.
 #### Scenario: Migrated Process without save directory is streaming
 - **WHEN** a legacy entry has `action: Process { output, selection }` and no `collect.save_dir`
 - **THEN** the migrated `Job` MUST have `input: Collect`, no `save`, and `process: Some { selection, export: output }` (streaming)
+
+#### Scenario: Migrate legacy Upload action without a save directory
+- **WHEN** a legacy entry has `action: Upload { upload_id }` and no `collect.save_dir`
+- **THEN** the migrated `Job` MUST stage a temporary bundle so the `send` target has one to upload
+
+#### Scenario: Legacy selection the current registry rejects still migrates
+- **WHEN** a legacy entry's `selection` names a product or source key the current source registry does not know
+- **THEN** that entry MUST migrate with its selection carried through as authored
+- **AND** the remaining entries in the file MUST migrate and the file MUST still be rewritten
+- **AND** the resulting error MUST be raised when that one job is executed, not when the file is loaded
 
 #### Scenario: Migration is not applied to received artifacts
 - **WHEN** a bundle or manifest is read
