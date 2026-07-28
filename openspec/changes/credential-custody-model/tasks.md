@@ -14,12 +14,33 @@
 ## 3. Ad-hoc input non-leakage invariant
 - [x] 3.1 Audit the ad-hoc `Collect` input path for the shared service: no keystore/host-record/disk write of the key.
 - [x] 3.2 Ensure the input key is redacted from all log levels (add redaction at the boundary if absent).
+  - Redaction is now structural rather than incidental. It first passed only
+    because nothing happened to log a credential: `Auth` redacted `Display` but
+    derived `Debug`, and `SecretAuth`, `BasicSecret`, `SecretEntry`,
+    `UnlockLeaseData`, and `KnownHost`'s legacy fields all printed their secrets
+    verbatim under `{:?}`. Credential material now lives in `redact::Secret`,
+    which renders a marker for both `Debug` and `Display` and requires per-field
+    `serialize_with = "expose_secret"` to serialize, so the keystore write path
+    is the only place a value leaves the wrapper. Tests cover the debug output of
+    every carrier.
 - [x] 3.3 Ensure no event payload (including ADR-0008 broadcast/targeted events) can carry the input key or a reconstructable form.
 - [x] 3.4 Ensure the ad-hoc key does not outlive the execution that consumed it.
 
 ## 4. Unlock use-without-disclosure invariant
 - [x] 4.1 Confirm the unlock grant enables mediated *use* of saved credentials but never returns plaintext to the caller (CLI or Web UI).
 - [x] 4.2 Verify the load-bearing property: the unlock file alone (with or without the keystore file) does not yield a usable credential; document the derivation dependency that guarantees it.
+  - Verification found the property as originally written to be unachievable, and
+    restated it. Unattended use means ESDiag decrypts the lease with no secret to
+    hand, so the envelope key derives from machine context (OS, user, home,
+    hostname, keystore path) — all non-secret, and in the common case derivable
+    from the file's own path. An attacker running on the host as the owning user
+    therefore *can* reconstruct the context and recover the keystore password; no
+    file-backed scheme can prevent that, which is why the OS-native backend in
+    5.2 stays on the table. What the derivation does guarantee is that the file
+    holds no plaintext and does not decrypt under a different machine context.
+    ADR-0012 and the delta spec now carry that scoped claim plus its threat
+    model, and `unlock_lease_does_not_decrypt_under_a_different_machine_context`
+    tests the part that holds.
 - [x] 4.3 Confirm expired lease revokes delegated use and that unlock is rate-limited (`KeystoreRateLimit`).
 
 ## 5. Backend-vs-mode axis

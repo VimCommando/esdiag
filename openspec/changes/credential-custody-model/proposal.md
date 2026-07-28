@@ -25,8 +25,10 @@ not expressed as testable spec requirements. Rationale: **ADR-0011**, **ADR-0012
 - Add the **use-without-disclosure invariant** for keystore unlock: unlock is a
   time-limited grant that lets ESDiag *use* saved-host credentials so a delegated actor
   (e.g. an LLM agent) can collect/process *through* ESDiag while never reading plaintext.
-  The load-bearing property — reading the unlock file (with or without the keystore file)
-  MUST NOT by itself yield usable credentials — becomes a spec scenario.
+  The load-bearing property — no interface returns a plaintext credential, and credential
+  material is held in a wrapper that redacts its debug and display forms — becomes a spec
+  scenario, alongside the scoped guarantee that an exfiltrated unlock file does not
+  decrypt under a different machine context.
 - Record that the **custody backend is an axis independent of runtime mode**, and note an
   OS-native keystore (Keychain / Credential Manager / Secret Service) as a **deferred**
   candidate backend, not implemented here.

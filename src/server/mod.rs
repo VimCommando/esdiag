@@ -1903,7 +1903,7 @@ mod tests {
         let super::JobInput::FromRemoteHost { host, .. } = first.input else {
             panic!("expected remote host job input");
         };
-        assert!(matches!(host.get_auth(), Ok(Auth::Apikey(key)) if key == ad_hoc_key));
+        assert!(matches!(host.get_auth(), Ok(Auth::Apikey(key)) if key.expose_secret() == ad_hoc_key));
         assert!(
             state.pop_job_request(42).await.is_none(),
             "ad-hoc input key must not survive the execution handoff"
@@ -2502,14 +2502,7 @@ mod tests {
     async fn secret_delete_path_prefers_secret_id_route_over_generic_action_route() {
         let _tmp = setup_keystore_env();
         authenticate("secretpw").expect("create keystore");
-        upsert_secret_auth(
-            "servermore",
-            SecretAuth::ApiKey {
-                apikey: "super-secret-api-key".to_string(),
-            },
-            "secretpw",
-        )
-        .expect("store secret");
+        upsert_secret_auth("servermore", SecretAuth::apikey("super-secret-api-key"), "secretpw").expect("store secret");
 
         let (mut server, bound_addr) =
             Server::start([127, 0, 0, 1], 0, Exporter::default(), String::new(), RuntimeMode::User)

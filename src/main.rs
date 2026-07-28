@@ -27,6 +27,7 @@ use esdiag::{
     uploader,
 };
 use eyre::{Result, eyre};
+use redact::Secret;
 use std::{
     future::Future,
     io::{IsTerminal, Write},
@@ -321,8 +322,8 @@ impl From<HostMutationArgs> for KnownHostCliUpdate {
     fn from(value: HostMutationArgs) -> Self {
         Self {
             accept_invalid_certs: value.accept_invalid_certs,
-            apikey: value.apikey,
-            password: value.password,
+            apikey: value.apikey.map(Secret::new),
+            password: value.password.map(Secret::new),
             roles: value.roles,
             secret: value.secret,
             username: value.username,
@@ -1298,8 +1299,8 @@ fn expected_secret_auth(
 ) -> Result<Option<SecretAuth>> {
     match (apikey, username, password) {
         (None, None, None) => Ok(None),
-        (Some(apikey), None, None) => Ok(Some(SecretAuth::ApiKey { apikey })),
-        (None, Some(username), Some(password)) => Ok(Some(SecretAuth::Basic { username, password })),
+        (Some(apikey), None, None) => Ok(Some(SecretAuth::apikey(apikey))),
+        (None, Some(username), Some(password)) => Ok(Some(SecretAuth::basic(username, password))),
         _ => Err(eyre!(
             "Invalid auth options: use either --apikey or --user with --password"
         )),
@@ -1347,9 +1348,7 @@ fn build_host_from_definition(
         KnownHostBuilder::new(url).application(app)
     }
     .accept_invalid_certs(update.accept_invalid_certs.unwrap_or(false))
-    .apikey(update.apikey.clone())
-    .username(update.username.clone())
-    .password(update.password.clone())
+    .legacy_credentials(update.apikey.clone(), update.username.clone(), update.password.clone())
     .secret(update.secret.clone());
     if let Some(app) = app {
         builder = builder.application(app);
@@ -2504,14 +2503,7 @@ mod tests {
     fn host_secret_auth_resolution_detects_apikey() {
         let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
-        upsert_secret_auth(
-            "api-secret",
-            SecretAuth::ApiKey {
-                apikey: "secret-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("save api secret");
+        upsert_secret_auth("api-secret", SecretAuth::apikey("secret-key"), "pw").expect("save api secret");
 
         let resolved = resolve_host_secret_auth(Some("api-secret")).expect("resolve auth");
         assert!(matches!(resolved, Some(SecretAuth::ApiKey { .. })));
@@ -2521,15 +2513,8 @@ mod tests {
     fn host_secret_auth_resolution_detects_basic() {
         let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
-        upsert_secret_auth(
-            "basic-secret",
-            SecretAuth::Basic {
-                username: "elastic".to_string(),
-                password: "secret-password".to_string(),
-            },
-            "pw",
-        )
-        .expect("save basic secret");
+        upsert_secret_auth("basic-secret", SecretAuth::basic("elastic", "secret-password"), "pw")
+            .expect("save basic secret");
 
         let resolved = resolve_host_secret_auth(Some("basic-secret")).expect("resolve auth");
         assert!(matches!(resolved, Some(SecretAuth::Basic { .. })));
@@ -2539,14 +2524,7 @@ mod tests {
     fn host_secret_auth_resolution_reads_named_secret() {
         let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
-        upsert_secret_auth(
-            "host-fallback",
-            SecretAuth::ApiKey {
-                apikey: "secret-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("save fallback secret");
+        upsert_secret_auth("host-fallback", SecretAuth::apikey("secret-key"), "pw").expect("save fallback secret");
 
         let resolved = resolve_host_secret_auth(Some("host-fallback")).expect("resolve auth");
         assert!(matches!(resolved, Some(SecretAuth::ApiKey { .. })));

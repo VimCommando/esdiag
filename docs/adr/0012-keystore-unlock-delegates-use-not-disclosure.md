@@ -31,9 +31,24 @@ is delegated; the secret is not.
 - **Blast-radius containment** — a compromised delegated actor can trigger ESDiag
   operations during the window, but cannot exfiltrate the credential for reuse
   elsewhere.
-- **Load-bearing invariant:** the property holds *only if the unlock file does not let
-  a caller reconstruct the plaintext outside ESDiag's mediation* — i.e. reading the
-  unlock file (with or without the keystore file) must not by itself yield usable
-  credentials. This is the security crux and must be preserved by any change to the
-  unlock/derivation scheme.
+- **Load-bearing invariant:** no ESDiag interface returns a saved credential in
+  plaintext. Delegation is safe because the delegated actor drives ESDiag through its
+  CLI and HTTP surfaces, and no path on either surface discloses a secret — the unlock
+  grant selects the credential ESDiag *uses*, and never renders it. This is the
+  security crux, and any change to unlock, key derivation, or the credential-carrying
+  types must preserve it. Credential material is wrapped in `redact::Secret`, whose
+  `Debug` and `Display` render a marker instead of the value and whose serialization
+  is opt-in per field, so a new log line or event field cannot leak a secret by
+  accident.
+- **Threat model.** The unlock envelope's key derives from machine context (OS, user,
+  home, hostname, keystore path) rather than the keystore password, because unattended
+  use means ESDiag has to decrypt the lease with no secret to hand. That buys two
+  things: the file holds no plaintext at rest, and it does not decrypt on another
+  machine, so exfiltrating the bytes alone yields nothing. It does **not** defend
+  against code running on the host as the owning user: such an attacker reconstructs
+  the context, decrypts the lease, and decrypts the keystore. Local file permissions
+  (`0600`) are the boundary there, and closing it properly needs custody the process
+  cannot self-serve — an OS keychain or enclave, deferred in ADR-0011. An unlock lease
+  is therefore a bounded-window grant on a trusted host, not a defense against local
+  compromise, and TTL is what limits the window.
 - Applies only in `User` mode — `Service` mode has no keystore (ADR-0011).

@@ -8,6 +8,9 @@ use crate::data::{
     resolve_secret_auth as resolve_secret_by_id,
 };
 use eyre::{Result, eyre};
+use redact::Secret;
+#[cfg(test)]
+use redact::serde::expose_secret;
 #[cfg(test)]
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
@@ -190,10 +193,10 @@ impl Display for ElasticCloud {
 
 pub struct KnownHostBuilder {
     accept_invalid_certs: bool,
-    apikey: Option<String>,
+    apikey: Option<Secret<String>>,
     app: Option<Application>,
     cloud_id: Option<ElasticCloud>,
-    password: Option<String>,
+    password: Option<Secret<String>>,
     roles: Vec<HostRole>,
     secret: Option<String>,
     url: Option<Url>,
@@ -243,11 +246,34 @@ impl KnownHostBuilder {
     }
 
     pub fn apikey(self, apikey: Option<String>) -> Self {
-        Self { apikey, ..self }
+        Self {
+            apikey: apikey.map(Secret::new),
+            ..self
+        }
     }
 
     pub fn password(self, password: Option<String>) -> Self {
-        Self { password, ..self }
+        Self {
+            password: password.map(Secret::new),
+            ..self
+        }
+    }
+
+    /// Carries already-wrapped legacy credentials into the builder, as rendering
+    /// a template host or applying a CLI update does, without unwrapping them in
+    /// between. Plaintext callers want [`Self::apikey`] and [`Self::password`].
+    pub fn legacy_credentials(
+        self,
+        apikey: Option<Secret<String>>,
+        username: Option<String>,
+        password: Option<Secret<String>>,
+    ) -> Self {
+        Self {
+            apikey,
+            password,
+            username,
+            ..self
+        }
     }
 
     pub fn application(self, app: Application) -> Self {
@@ -411,8 +437,8 @@ fn elastic_cloud_proxy_template(domain: Option<&str>) -> Option<&'static str> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KnownHostCliUpdate {
     pub accept_invalid_certs: Option<bool>,
-    pub apikey: Option<String>,
-    pub password: Option<String>,
+    pub apikey: Option<Secret<String>>,
+    pub password: Option<Secret<String>>,
     pub roles: Option<Vec<HostRole>>,
     pub secret: Option<String>,
     pub username: Option<String>,
@@ -446,9 +472,12 @@ pub struct KnownHost {
     pub viewer: Option<String>,
     pub url: Option<Url>,
     pub url_template: Option<String>,
-    pub legacy_apikey: Option<String>,
+    /// Pre-migration plaintext credentials, wrapped so the derived `Debug` of a
+    /// host cannot print them (ADR-0011). `Serialize` drops them entirely:
+    /// `hosts.yml` carries a `secret` reference into the keystore instead.
+    pub legacy_apikey: Option<Secret<String>>,
     pub legacy_username: Option<String>,
-    pub legacy_password: Option<String>,
+    pub legacy_password: Option<Secret<String>>,
 }
 
 #[derive(Serialize)]
@@ -471,6 +500,16 @@ struct FlatKnownHostRef<'a> {
     url_template: &'a Option<String>,
 }
 
+/// `expose_secret` covers `Option<Secret<T>>` but not a reference to one, which
+/// is the shape a borrowed serialization ref holds.
+#[cfg(test)]
+fn expose_borrowed_secret<S>(secret: &&Option<Secret<String>>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    expose_secret(*secret, serializer)
+}
+
 #[cfg(test)]
 #[derive(Serialize)]
 #[serde(tag = "auth")]
@@ -478,8 +517,8 @@ enum LegacyKnownHostRef<'a> {
     ApiKey {
         #[serde(default = "default_false", skip_serializing_if = "is_false")]
         accept_invalid_certs: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        apikey: &'a Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none", serialize_with = "expose_borrowed_secret")]
+        apikey: &'a Option<Secret<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         app: &'a Option<Application>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -497,8 +536,12 @@ enum LegacyKnownHostRef<'a> {
         accept_invalid_certs: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         app: &'a Option<Application>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        password: &'a Option<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "expose_borrowed_secret"
+        )]
+        password: &'a Option<Secret<String>>,
         #[serde(default = "default_collect_roles", skip_serializing_if = "roles_is_default_collect")]
         roles: &'a Vec<HostRole>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -605,9 +648,9 @@ struct KnownHostParts {
     viewer: Option<String>,
     url: Option<Url>,
     url_template: Option<String>,
-    legacy_apikey: Option<String>,
+    legacy_apikey: Option<Secret<String>>,
     legacy_username: Option<String>,
-    legacy_password: Option<String>,
+    legacy_password: Option<Secret<String>>,
 }
 
 impl Serialize for KnownHost {
@@ -718,9 +761,9 @@ impl KnownHost {
             viewer: wire.viewer,
             url: wire.url,
             url_template: wire.url_template,
-            legacy_apikey: wire.apikey,
+            legacy_apikey: wire.apikey.map(Secret::new),
             legacy_username: wire.username,
-            legacy_password: wire.password,
+            legacy_password: wire.password.map(Secret::new),
         })
     }
 
@@ -744,7 +787,7 @@ impl KnownHost {
                 viewer,
                 url: Some(url),
                 url_template: None,
-                legacy_apikey: apikey,
+                legacy_apikey: apikey.map(Secret::new),
                 legacy_username: None,
                 legacy_password: None,
             }),
@@ -768,7 +811,7 @@ impl KnownHost {
                 url_template: None,
                 legacy_apikey: None,
                 legacy_username: username,
-                legacy_password: password,
+                legacy_password: password.map(Secret::new),
             }),
             LegacyKnownHostWire::NoAuth {
                 accept_invalid_certs,
@@ -855,7 +898,7 @@ impl KnownHost {
             viewer,
             url: Some(url),
             url_template: None,
-            legacy_apikey: apikey,
+            legacy_apikey: apikey.map(Secret::new),
             legacy_username: None,
             legacy_password: None,
         })
@@ -872,7 +915,7 @@ impl KnownHost {
         credentials: Option<(String, String)>,
     ) -> Self {
         let (legacy_username, legacy_password) = credentials
-            .map(|(username, password)| (Some(username), Some(password)))
+            .map(|(username, password)| (Some(username), Some(Secret::new(password))))
             .unwrap_or((None, None));
         Self::from_parts(KnownHostParts {
             accept_invalid_certs,
@@ -1014,9 +1057,11 @@ impl KnownHost {
             .accept_invalid_certs(self.accept_invalid_certs)
             .roles(self.roles.clone())
             .viewer(self.viewer.clone())
-            .apikey(self.legacy_apikey.clone())
-            .username(self.legacy_username.clone())
-            .password(self.legacy_password.clone())
+            .legacy_credentials(
+                self.legacy_apikey.clone(),
+                self.legacy_username.clone(),
+                self.legacy_password.clone(),
+            )
             .secret(self.secret.clone());
         if self.roles.is_empty() {
             builder = builder.roles(default_collect_roles());
@@ -1651,8 +1696,8 @@ fn render_url_template_url(template: &str, id: &str, product: &str) -> Result<Ur
 
 fn resolve_auth_with_precedence(
     secret_id: &Option<String>,
-    legacy_apikey: Option<String>,
-    legacy_basic: Option<(String, String)>,
+    legacy_apikey: Option<Secret<String>>,
+    legacy_basic: Option<(String, Secret<String>)>,
 ) -> Result<Auth> {
     if let Some(secret_id) = secret_id {
         let auth = resolve_explicit_secret(secret_id)?;
@@ -1930,7 +1975,7 @@ mod tests {
 
         let host = KnownHost::get_known(&"legacy-es".to_string()).expect("host");
         let auth = host.get_auth().expect("auth");
-        assert!(matches!(auth, Auth::Apikey(k) if k == "legacy-key"));
+        assert!(matches!(auth, Auth::Apikey(k) if k.expose_secret() == "legacy-key"));
     }
 
     #[test]
@@ -1971,14 +2016,7 @@ mod tests {
     fn explicit_secret_uses_unlock_lease_when_env_password_is_absent() {
         let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
-        upsert_secret_auth(
-            "lease-secret",
-            SecretAuth::ApiKey {
-                apikey: "unlock-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("upsert secret");
+        upsert_secret_auth("lease-secret", SecretAuth::apikey("unlock-key"), "pw").expect("upsert secret");
         write_unlock_lease("pw", std::time::Duration::from_secs(300)).expect("write unlock lease");
         unsafe {
             std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
@@ -2001,7 +2039,29 @@ mod tests {
 
         let host = KnownHost::get_known(&"prod-es".to_string()).expect("host");
         let auth = host.get_auth().expect("auth from unlock lease");
-        assert!(matches!(auth, Auth::Apikey(key) if key == "unlock-key"));
+        assert!(matches!(auth, Auth::Apikey(key) if key.expose_secret() == "unlock-key"));
+    }
+
+    /// A web ad-hoc input key rides on a host's legacy fields, and `KnownHost`
+    /// derives `Debug`, so wrapping those fields is what keeps the key out of a
+    /// `{:?}` (ADR-0011).
+    #[test]
+    fn host_debug_redacts_legacy_credentials() {
+        let apikey = KnownHostBuilder::new(Url::parse("http://localhost:9200").expect("url"))
+            .apikey(Some("ad-hoc-api-key".to_string()))
+            .build()
+            .expect("api key host");
+        let basic = KnownHostBuilder::new(Url::parse("http://localhost:9200").expect("url"))
+            .username(Some("elastic".to_string()))
+            .password(Some("a-password".to_string()))
+            .build()
+            .expect("basic host");
+
+        let rendered = format!("{apikey:?}\n{basic:?}");
+
+        assert!(!rendered.contains("ad-hoc-api-key"), "{rendered}");
+        assert!(!rendered.contains("a-password"), "{rendered}");
+        assert!(rendered.contains("elastic"), "the username is not secret: {rendered}");
     }
 
     #[test]
@@ -2015,14 +2075,7 @@ mod tests {
     fn saved_hosts_resolve_input_and_output_credentials_from_same_role_agnostic_store() {
         let mut env = crate::TestEnv::new();
         env.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
-        upsert_secret_auth(
-            "shared-secret",
-            SecretAuth::ApiKey {
-                apikey: "shared-api-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("upsert shared secret");
+        upsert_secret_auth("shared-secret", SecretAuth::apikey("shared-api-key"), "pw").expect("upsert shared secret");
 
         let collect_host = KnownHostBuilder::new(Url::parse("http://collect.example:9200").expect("url"))
             .roles(vec![HostRole::Collect])
@@ -2042,8 +2095,8 @@ mod tests {
             .get_auth_for_direction(CredentialDirection::Output)
             .expect("output auth");
 
-        assert!(matches!(input, Auth::Apikey(key) if key == "shared-api-key"));
-        assert!(matches!(output, Auth::Apikey(key) if key == "shared-api-key"));
+        assert!(matches!(input, Auth::Apikey(key) if key.expose_secret() == "shared-api-key"));
+        assert!(matches!(output, Auth::Apikey(key) if key.expose_secret() == "shared-api-key"));
     }
 
     #[test]
@@ -2054,14 +2107,7 @@ mod tests {
             std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
         }
 
-        upsert_secret_auth(
-            "custom-secret",
-            SecretAuth::ApiKey {
-                apikey: "secret-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("upsert secret");
+        upsert_secret_auth("custom-secret", SecretAuth::apikey("secret-key"), "pw").expect("upsert secret");
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2080,7 +2126,7 @@ mod tests {
 
         let host = KnownHost::get_known(&"prod-es".to_string()).expect("host");
         let auth = host.get_auth().expect("auth");
-        assert!(matches!(auth, Auth::Apikey(k) if k == "secret-key"));
+        assert!(matches!(auth, Auth::Apikey(k) if k.expose_secret() == "secret-key"));
     }
 
     #[test]
@@ -2091,14 +2137,7 @@ mod tests {
             std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
         }
 
-        upsert_secret_auth(
-            "prod-es",
-            SecretAuth::ApiKey {
-                apikey: "keystore-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("upsert secret");
+        upsert_secret_auth("prod-es", SecretAuth::apikey("keystore-key"), "pw").expect("upsert secret");
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2129,12 +2168,14 @@ mod tests {
 
         let prod_host = KnownHost::get_known(&"prod-es".to_string()).expect("host");
         let prod_auth = prod_host.get_auth().expect("auth");
-        assert!(matches!(prod_auth, Auth::Basic(user, pass) if user == "legacy-user" && pass == "legacy-pass"));
+        assert!(
+            matches!(prod_auth, Auth::Basic(user, pass) if user == "legacy-user" && pass.expose_secret() == "legacy-pass")
+        );
 
         let fallback_host = KnownHost::get_known(&"legacy-only".to_string()).expect("host");
         let fallback_auth = fallback_host.get_auth().expect("auth");
         assert!(
-            matches!(fallback_auth, Auth::Basic(user, pass) if user == "legacy-only-user" && pass == "legacy-only-pass")
+            matches!(fallback_auth, Auth::Basic(user, pass) if user == "legacy-only-user" && pass.expose_secret() == "legacy-only-pass")
         );
     }
 
@@ -2218,28 +2259,36 @@ mod tests {
         let es_secret = get_secret("es-prod", "pw")
             .expect("get secret")
             .expect("es secret exists");
-        assert_eq!(es_secret.apikey.as_deref(), Some("apikey-1"));
+        assert_eq!(
+            es_secret.apikey.as_ref().map(|key| key.expose_secret().as_str()),
+            Some("apikey-1")
+        );
         assert!(es_secret.basic.is_none());
 
         let kb_secret = get_secret("kb-prod", "pw")
             .expect("get secret")
             .expect("kb secret exists");
         assert_eq!(kb_secret.basic.as_ref().map(|b| b.username.as_str()), Some("elastic"));
-        assert_eq!(kb_secret.basic.as_ref().map(|b| b.password.as_str()), Some("pass-1"));
+        assert_eq!(
+            kb_secret.basic.as_ref().map(|b| b.password.expose_secret().as_str()),
+            Some("pass-1")
+        );
 
         let migrated_es_auth = migrated_hosts
             .get("es-prod")
             .expect("migrated es host")
             .get_auth()
             .expect("read migrated es auth");
-        assert!(matches!(migrated_es_auth, Auth::Apikey(key) if key == "apikey-1"));
+        assert!(matches!(migrated_es_auth, Auth::Apikey(key) if key.expose_secret() == "apikey-1"));
 
         let migrated_kb_auth = migrated_hosts
             .get("kb-prod")
             .expect("migrated kb host")
             .get_auth()
             .expect("read migrated kb auth");
-        assert!(matches!(migrated_kb_auth, Auth::Basic(user, pass) if user == "elastic" && pass == "pass-1"));
+        assert!(
+            matches!(migrated_kb_auth, Auth::Basic(user, pass) if user == "elastic" && pass.expose_secret() == "pass-1")
+        );
     }
 
     #[test]
@@ -2261,7 +2310,10 @@ mod tests {
         let merged = host.merge_cli_update(&update, None).expect("merge should succeed");
 
         assert!(merged.accept_invalid_certs, "certificate setting should be preserved");
-        assert_eq!(merged.legacy_apikey.as_deref(), Some("legacy-key"));
+        assert_eq!(
+            merged.legacy_apikey.as_ref().map(|key| key.expose_secret().as_str()),
+            Some("legacy-key")
+        );
         assert_eq!(merged.secret, None);
         assert_eq!(merged.roles, vec![HostRole::Collect, HostRole::Send]);
     }
@@ -2278,13 +2330,16 @@ mod tests {
             None,
         );
         let update = KnownHostCliUpdate {
-            apikey: Some("new-key".to_string()),
+            apikey: Some(Secret::new("new-key".to_string())),
             ..KnownHostCliUpdate::default()
         };
 
         let merged = host.merge_cli_update(&update, None).expect("merge should succeed");
 
-        assert_eq!(merged.legacy_apikey.as_deref(), Some("new-key"));
+        assert_eq!(
+            merged.legacy_apikey.as_ref().map(|key| key.expose_secret().as_str()),
+            Some("new-key")
+        );
         assert!(merged.secret.is_none(), "secret reference should be cleared");
     }
 

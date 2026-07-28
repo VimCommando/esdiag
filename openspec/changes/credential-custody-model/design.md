@@ -51,17 +51,24 @@ requirements on the existing capabilities:
   axis* and is unconstrained by this invariant.
 - **Use without disclosure** (ADR-0012). An unlock is a time-limited grant of credential
   *use*, not *disclosure*: ESDiag performs the credentialed operation; a delegated actor
-  drives ESDiag but never sees the secret. The **load-bearing** property is that reading
-  the unlock file — with or without the keystore file — MUST NOT by itself yield usable
-  credentials. Any change to the unlock/derivation scheme must preserve this. The grant is
-  rate-limited (`KeystoreRateLimit`) against unlock-password brute force, and is
-  channel-agnostic (the same guarantee governs CLI and Web UI unlock).
+  drives ESDiag but never sees the secret. The **load-bearing** property is that no
+  interface returns a plaintext credential, which `redact::Secret` enforces on the types
+  that carry one: its debug and display forms are redaction markers and its serialization
+  is opt-in per field, so the drift risk below cannot land silently. The unlock envelope
+  is context-derived rather than password-derived — unattended use leaves no secret to
+  decrypt with — so its guarantee is that the file holds no plaintext and does not decrypt
+  elsewhere; a local attacker running as the owning user is out of scope and bounded by
+  file permissions instead. The grant is rate-limited (`KeystoreRateLimit`) against
+  unlock-password brute force, and is channel-agnostic (the same guarantee governs CLI and
+  Web UI unlock).
 
 ## Risks
 
 - **Invariant drift.** The non-leakage and disclosure properties are easy to erode via a
   well-meaning debug log, a new event field, or a "convenience" unlock scheme. Mitigated
-  by making both testable scenarios that a regression must break.
+  structurally: credential material lives in `redact::Secret`, so the debug log and the
+  event field cannot print it and a new serialization has to opt in by name. Tests over
+  the debug output of every carrier keep it that way.
 - **Direction ambiguity.** Because the keystore stores both roles, tooling must resolve
   direction from the host/stage, not the store. Mitigated by stating direction as a
   derived property.

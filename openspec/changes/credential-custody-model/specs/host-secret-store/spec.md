@@ -52,7 +52,8 @@ constrain credential persistence on the user's own device, which is a separate a
 An ad-hoc input API key provided at runtime on the shared service SHALL be one-time-use for
 a single execution and MUST NEVER be persisted, written to logs, or included in any event —
 including the broadcast and targeted events defined by ADR-0008. The key MUST NOT survive
-the execution that consumed it.
+the execution that consumed it. The key SHALL be held in a redacting wrapper so that
+formatting the value that carries it, for a log line or an event, cannot disclose it.
 
 #### Scenario: Ad-hoc input key is never persisted or logged
 - **GIVEN** a user supplies an ad-hoc input API key for a single `Collect` execution on the shared service

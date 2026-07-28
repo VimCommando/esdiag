@@ -21,17 +21,25 @@ impl LogstashClient {
     pub fn try_new(url: Url, auth: Auth, ignore_certs: bool) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
 
+        // The transport boundary, where credential material has to become
+        // header bytes and so leaves its `Secret` wrapper.
         match auth {
             Auth::Basic(username, password) => {
-                let credentials =
-                    base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", username, password));
+                let credentials = base64::engine::general_purpose::STANDARD.encode(format!(
+                    "{}:{}",
+                    username,
+                    password.expose_secret()
+                ));
                 headers.append(
                     reqwest::header::AUTHORIZATION,
                     format!("Basic {}", credentials).parse()?,
                 );
             }
             Auth::Apikey(apikey) => {
-                headers.append(reqwest::header::AUTHORIZATION, format!("ApiKey {}", apikey).parse()?);
+                headers.append(
+                    reqwest::header::AUTHORIZATION,
+                    format!("ApiKey {}", apikey.expose_secret()).parse()?,
+                );
             }
             Auth::None => {}
         }
