@@ -39,6 +39,11 @@ refinement in ADR-0016.
 - **THEN** the child MUST be reported as skipped because processing is not yet implemented
 - **AND** this skip MUST be classified as not-yet-implemented, distinct from an out-of-scope-by-design boundary
 
+#### Scenario: A product out of Collect scope may still be pending processing
+- **WHEN** a Loaded diagnostic is an Elastic Agent bundle, a product ESDiag will never API-collect
+- **THEN** the skip MUST still be classified as not-yet-implemented, because the by-design boundary governs collection and not processing
+- **AND** each such application MUST carry its own reason rather than the shared unsupported-bundle reason, so the two classifications cannot merge
+
 #### Scenario: By-design and not-yet-implemented gaps are not conflated
 - **WHEN** the system reports why a diagnostic or child was not fully handled
 - **THEN** an out-of-scope-by-design Collect refusal (Agent/platform API collection) MUST NOT be reported as not-yet-implemented

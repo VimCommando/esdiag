@@ -32,6 +32,13 @@ distinguishes deliberate scope boundaries from unfinished work.
 Both surface today as a skip/unsupported error, but they mean opposite things — see
 the `Skipped` refinement in ADR-0016.
 
+Note that **Agent appears on both lists**, for different stages: collecting Agent over
+its APIs is the by-design boundary, while processing an Agent bundle ESDiag has Loaded
+is unfinished work. Conflating the two is the easy mistake, and reporting the second as
+the first tells a user that the feature they are waiting on is never coming. The
+classification hangs on the error message a stage raises, so a recognized application
+without a processor must carry its own, never the shared unsupported-bundle message.
+
 ## Consequences
 
 - **The `Collect` stage applies only to Elasticsearch/Kibana/Logstash.** Agent and

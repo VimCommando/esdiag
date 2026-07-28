@@ -52,7 +52,11 @@ use std::sync::{
 };
 use tokio::{sync::mpsc, time::Instant};
 
+/// A recognized application whose processor is still being written carries its
+/// own message, because "we have not built this yet" and "we deliberately do not
+/// do this" are opposite answers to the same question (ADR-0019).
 const KIBANA_PROCESSING_NOT_IMPLEMENTED: &str = "Kibana processing is not yet implemented";
+const AGENT_PROCESSING_NOT_IMPLEMENTED: &str = "Elastic Agent processing is not yet implemented";
 const UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE: &str = "Unsupported product or diagnostic bundle";
 /// The license holder Elastic Cloud Hosted issues every deployment license to.
 const ELASTIC_CLOUD_LICENSE_HOLDER: &str = "Elastic Cloud";
@@ -345,9 +349,14 @@ fn failed_child_outcome_with_context(
 
 /// Why an unsupported child is skipped (ADR-0019): platform-only bundles are
 /// out of scope by design; Kibana/Agent processing is work in progress.
+///
+/// The by-design boundary governs *collection* — ESDiag will never pull Agent or
+/// platform APIs — so it must not be borrowed for an application whose processor
+/// is merely unwritten. Reporting one as the other tells a user the feature they
+/// are waiting on is never coming.
 fn skip_kind_for(error: &str) -> Option<SkipKind> {
     match error {
-        KIBANA_PROCESSING_NOT_IMPLEMENTED => Some(SkipKind::NotImplemented),
+        KIBANA_PROCESSING_NOT_IMPLEMENTED | AGENT_PROCESSING_NOT_IMPLEMENTED => Some(SkipKind::NotImplemented),
         UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE => Some(SkipKind::ByDesign),
         _ => None,
     }
@@ -777,7 +786,7 @@ impl Diagnostic {
                 Ok((Self::Logstash(diagnostic), report))
             }
             Some(Application::Kibana) => Err(eyre!(KIBANA_PROCESSING_NOT_IMPLEMENTED)),
-            Some(Application::Agent) => Err(eyre!(UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE)),
+            Some(Application::Agent) => Err(eyre!(AGENT_PROCESSING_NOT_IMPLEMENTED)),
             // A platform-only diagnostic: dispatch on the platform axis.
             None => match manifest.platform() {
                 Platform::ECK => {
@@ -988,6 +997,81 @@ mod tests {
                 .contains("Kibana processing is not yet implemented")
         );
         assert_eq!(completed.state.report.outcome(), DiagnosticOutcome::Complete);
+    }
+
+    /// A child diagnostic ESDiag recognizes but has no processor for. Written as
+    /// a manifest rather than extracted from a fixture archive because dispatch
+    /// happens on the declared application, before any product diagnostic is
+    /// constructed.
+    fn write_child_manifest(dir: &Path, product: &str) {
+        std::fs::create_dir_all(dir).expect("create child diagnostic dir");
+        let manifest = json!({
+            "mode": "support",
+            "product": product,
+            "diagnostic": "esdiag-test",
+            "type": format!("{product}-diagnostics"),
+            "runner": "esdiag",
+            "version": "9.3.3",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "collection_date_millis": 1767225600000u64,
+        });
+        std::fs::write(
+            dir.join(DiagnosticManifest::FILENAME),
+            serde_json::to_vec_pretty(&manifest).expect("serialize child manifest"),
+        )
+        .expect("write child manifest");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn agent_child_is_skipped_as_work_in_progress_not_a_scope_boundary() {
+        let root = tempfile::tempdir().expect("parent dir");
+        write_child_manifest(&root.path().join("agent-child"), "agent");
+        write_parent_manifest(
+            root.path(),
+            vec![diagnostic::DiagPath {
+                diag_type: "diagnostic".to_string(),
+                diag_path: "agent-child".to_string(),
+            }],
+        );
+
+        let completed = process_parent_bundle(root.path()).await;
+
+        let child = &completed.state.included_diagnostics[0];
+        // Elastic Agent is out of scope for `Collect` by design, but its
+        // *processing* is unwritten work (PR293). Reporting the skip as
+        // by-design would say the opposite (ADR-0016/0019).
+        assert_eq!(child.outcome, DiagnosticOutcome::Skipped(SkipKind::NotImplemented));
+        assert_eq!(child.application, Some(Application::Agent));
+        assert!(
+            child
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Elastic Agent processing is not yet implemented")
+        );
+    }
+
+    #[test]
+    fn the_two_gap_kinds_stay_separable() {
+        // Both surface as a skip, and each is one shared error constant away
+        // from being reported as the other (ADR-0019).
+        assert_eq!(
+            skip_kind_for(KIBANA_PROCESSING_NOT_IMPLEMENTED),
+            Some(SkipKind::NotImplemented)
+        );
+        assert_eq!(
+            skip_kind_for(AGENT_PROCESSING_NOT_IMPLEMENTED),
+            Some(SkipKind::NotImplemented)
+        );
+        assert_eq!(
+            skip_kind_for(UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE),
+            Some(SkipKind::ByDesign)
+        );
+        assert_eq!(
+            skip_kind_for("Failed to read the child bundle"),
+            None,
+            "an error that is not a known gap is a failure, not a skip"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

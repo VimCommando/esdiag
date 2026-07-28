@@ -256,8 +256,8 @@ async fn send_asset_with_allowed_statuses(
     let endpoint = match named {
         true => &format!(
             "{}/{}{}",
-            &asset.endpoint,
-            &stem,
+            asset.endpoint,
+            stem,
             asset.suffix.clone().unwrap_or("".to_string()),
         ),
         false => &asset.endpoint,

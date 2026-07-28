@@ -1475,7 +1475,7 @@ where
 }
 
 fn normalize_optional_secret_arg(value: Option<String>) -> Option<String> {
-    value.and_then(|value| if value.trim().is_empty() { None } else { Some(value) })
+    value.filter(|value| !value.trim().is_empty())
 }
 
 fn prompt_missing_secret_value(prompt: &str) -> Result<String> {

@@ -14,6 +14,14 @@
 
 ## 4. Gap-kind distinction
 - [x] 4.1 Classify a recognized-but-unprocessable child skip (Kibana/Agent processing) as *not-yet-implemented*, distinct from the by-design Collect refusal. Coordinate the carrier with the ADR-0016 `Skipped`-subtype change; do not redefine the outcome type here.
+  - Held for Kibana and was inverted for Agent: the Agent arm raised the shared
+    `Unsupported product or diagnostic bundle` error, which classifies as
+    `ByDesign`, so a Loaded Agent diagnostic reported "skipped (by design)" —
+    that ESDiag will never process it — while PR293 is in flight to do exactly
+    that. Agent now carries its own not-implemented message alongside Kibana's.
+    This is the erosion the design's risk section named: the classification hangs
+    on which error string a stage raises, so sharing one between the two kinds is
+    all it takes.
 
 ## 5. Web UI
 - [x] 5.1 Ensure the `Collect` panel's remote-collect option applies only to API-collectable products; product-provided bundles arrive via `Upload` (`Load`).
@@ -23,4 +31,8 @@
 - [x] 6.2 Test that an Agent/platform job begins with `Load` and contains no `Collect` stage.
 - [x] 6.3 Test that an ECE bundle yields no included diagnostics.
 - [x] 6.4 Test that a by-design Collect refusal and a not-yet-implemented child skip are reported distinctly (never conflated).
+  - Covered only the Kibana child, which is why the Agent misclassification
+    survived. Now `agent_child_is_skipped_as_work_in_progress_not_a_scope_boundary`
+    covers the Loaded-Agent path end to end, and `the_two_gap_kinds_stay_separable`
+    pins the classification of every error that carries a gap kind.
 - [x] 6.5 Confirm the delta spec scenarios in `specs/collection-execution/spec.md` and `specs/included-diagnostic-jobs/spec.md` are covered.

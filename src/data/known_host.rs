@@ -1405,7 +1405,7 @@ impl KnownHost {
         let file = File::create(&path)?;
         let writer = BufWriter::new(file);
         serde_yaml::to_writer(writer, &hosts)?;
-        Ok(format!("{}", &path.display()))
+        Ok(format!("{}", path.display()))
     }
 
     fn set_accept_invalid_certs(&mut self, accept_invalid_certs: bool) {
