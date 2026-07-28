@@ -211,22 +211,131 @@ fn metadata_templates_map_new_provenance_fields_and_transitional_aliases() {
     }
 }
 
-#[test]
-fn product_application_alias_resolution_covers_old_and_new_mapping_shapes() {
-    let new_properties = diagnostic_properties(&component_template("esdiag@metadata.json")).clone();
-    assert_eq!(
-        canonical_diagnostic_field(&new_properties, "application"),
-        canonical_diagnostic_field(&new_properties, "product")
-    );
+/// Every provenance name a shipped saved object queries, and the index-pattern
+/// title of the data view it queries through.
+fn saved_object_provenance_usage() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/kibana/esdiag/objects");
+    let mut files = Vec::new();
+    collect_json_files(&root, &mut files);
 
-    let old_properties = serde_json::json!({
-        "product": { "type": "keyword" },
-        "application": { "type": "alias", "path": "diagnostic.product" }
-    });
+    let field_re = regex::Regex::new(r"diagnostic\.(product|application|orchestration|platform)").expect("field regex");
+    let mut usage = Vec::new();
+    for path in files {
+        let content = fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {}", path.display(), err));
+        let label = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        for capture in field_re.captures_iter(&content) {
+            usage.push((label.clone(), capture[1].to_string()));
+        }
+    }
+    usage
+}
+
+fn collect_json_files(root: &Path, files: &mut Vec<std::path::PathBuf>) {
+    for entry in fs::read_dir(root).unwrap_or_else(|err| panic!("read dir {}: {}", root.display(), err)) {
+        let path = entry.expect("read directory entry").path();
+        if path.is_dir() {
+            collect_json_files(&path, files);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            files.push(path);
+        }
+    }
+}
+
+/// The index pattern each shipped data view resolves against.
+fn saved_data_view_patterns() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/kibana/esdiag/objects/index-pattern");
+    let mut patterns = Vec::new();
+    for entry in fs::read_dir(&root).unwrap_or_else(|err| panic!("read dir {}: {}", root.display(), err)) {
+        let path = entry.expect("read directory entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let content = fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {}", path.display(), err));
+        let object: Value =
+            serde_json::from_str(&content).unwrap_or_else(|err| panic!("parse {}: {}", path.display(), err));
+        let title = object["attributes"]["title"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{} missing attributes.title", path.display()))
+            .to_string();
+        patterns.push((
+            path.file_name().expect("file name").to_string_lossy().to_string(),
+            title,
+        ));
+    }
+    patterns
+}
+
+#[test]
+fn new_index_templates_resolve_both_provenance_names() {
+    // The mirrored half of the bridge — the alias a pre-rename index needs — is
+    // installed by `setup`, and covered by
+    // `setup::tests::both_provenance_names_resolve_in_either_index_generation`.
+    let properties = diagnostic_properties(&component_template("esdiag@metadata.json")).clone();
     assert_eq!(
-        canonical_diagnostic_field(&old_properties, "application"),
-        canonical_diagnostic_field(&old_properties, "product")
+        canonical_diagnostic_field(&properties, "application"),
+        canonical_diagnostic_field(&properties, "product")
     );
+    assert_eq!(
+        canonical_diagnostic_field(&properties, "platform"),
+        canonical_diagnostic_field(&properties, "orchestration")
+    );
+}
+
+/// The dashboard layer used to be unverifiable, so ADR-0015 left it to review
+/// discipline. The saved objects now live in the repository, so the convention is
+/// checkable: a title that does not pin `-esdiag` also matches indices ESDiag does
+/// not own.
+#[test]
+fn shipped_data_views_follow_the_stream_naming_contract() {
+    let convention = regex::Regex::new(r"^(metrics|settings|logs|health)-[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*-esdiag\*?$")
+        .expect("data view convention regex");
+
+    let offenders: Vec<String> = saved_data_view_patterns()
+        .into_iter()
+        .filter(|(_, title)| !convention.is_match(title))
+        .map(|(file, title)| format!("{file} queries {title}"))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "data view titles must name a `{{class}}-{{subtype}}-esdiag` stream:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Keeps the transitional aliases and their consumers honest in both directions:
+/// an alias may not be dropped while a shipped saved object still queries the
+/// legacy name, and once none do, this test is what reports that the debt is
+/// collectable (ADR-0014).
+#[test]
+fn shipped_saved_objects_only_query_provenance_names_the_templates_define() {
+    let properties = diagnostic_properties(&component_template("esdiag@metadata.json")).clone();
+    let usage = saved_object_provenance_usage();
+
+    for (object, field) in &usage {
+        assert!(
+            properties.get(field).is_some(),
+            "{object} queries diagnostic.{field}, which no template defines"
+        );
+    }
+
+    let legacy_names = ["product", "orchestration"];
+    let still_legacy: BTreeSet<&str> = usage
+        .iter()
+        .filter(|(_, field)| legacy_names.contains(&field.as_str()))
+        .map(|(_, field)| field.as_str())
+        .collect();
+    for legacy in legacy_names {
+        let alias_installed = properties[legacy]["type"].as_str() == Some("alias");
+        assert!(
+            !still_legacy.contains(legacy) || alias_installed,
+            "saved objects still query diagnostic.{legacy}, so its alias must stay installed"
+        );
+    }
 }
 
 #[test]

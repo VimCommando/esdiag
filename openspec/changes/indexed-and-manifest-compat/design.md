@@ -44,8 +44,11 @@ This change implements the last two rows.
   (`diagnostic.*`, `cluster.*`) sits on top of a source-shaped payload; new fields mirror
   the source API first and borrow ECS conventions only where they don't obscure it.
 - `diagnostic.application` **replaces** `diagnostic.product`, bridged by ES field aliases
-  in **both directions** in the `esdiag@*` templates, so dashboards querying either name
-  work on both old and new indices during the transition.
+  in **both directions** across the index pattern a dashboard queries, so either name
+  works over old and new indices during the transition. Within one index the direction is
+  fixed — an alias must point at a concrete field — so the bridge has two halves: the
+  `esdiag@*` templates alias the legacy name on every new index, and `setup` installs the
+  mirrored alias on indices created before the rename.
 - `diagnostic.platform` **replaces** `diagnostic.orchestration`, with
   `diagnostic.orchestration` kept as a transitional alias to the new platform field
   until dashboards migrate and old indices age out.
@@ -54,18 +57,21 @@ This change implements the last two rows.
 
 - One convention: `{class}-{subtype}[.sub]-esdiag`, class ∈ `metrics | settings | logs |
   health`.
-- The two ESDiag-owned layers — processor-emitted stream names and index templates — are
+- The two code-owned layers — processor-emitted stream names and index templates — are
   reconciled **by test**: every emitted stream must have a matching template and vice
-  versa. Dashboards are the third layer; they are authored against the convention and
-  maintained by review discipline, not derived.
+  versa. Dashboards are the third layer: still authored rather than derived, but they
+  ship as saved objects in `assets/kibana/`, so a test holds their data-view titles to
+  the convention and their provenance fields to what the templates define.
 
 ## Invariants
 
 - **Manifest reads never fail on unknown or missing fields.** A manifest from any
   `support-diagnostics` or prior ESDiag version deserializes successfully.
 - **Additive-only:** no manifest field is ever removed, renamed, or repurposed.
-- **`product`/`application` co-resolution is bidirectional** for the alias lifetime;
-  neither name is authoritative over the other at query time.
+- **`product`/`application` co-resolution is bidirectional** over an index pattern for
+  the alias lifetime; neither name is authoritative over the other at query time. Each
+  individual index resolves both names, one of them through an alias — which direction
+  depends on the generation that created it.
 - **No stored document or manifest is ever rewritten** by this change — compatibility is
   achieved entirely by read tolerance and index-level aliases.
 - **Every emitted output stream name has exactly one matching index template**, and vice
@@ -73,9 +79,11 @@ This change implements the last two rows.
 
 ## Risks
 
-- **Silent dashboard breakage** if an alias is missing or one-directional — mitigated by
-  installing aliases in both directions and by dashboards continuing to query the legacy
-  name until migrated.
+- **Silent dashboard breakage** if an index resolves only one of the two names — this is
+  the failure verification found, and it is silent by nature: a query on the unmapped
+  name returns no error, just no data. Mitigated by installing the mirrored alias on
+  pre-rename indices, and by a test that runs both index generations through the code
+  that produces them rather than through a hand-written mapping.
 - **Tolerant deserialization can mask genuinely malformed manifests** — mitigated by
   inferring/defaulting only the ESDiag-added axes, not core interchange fields.
 - **Naming drift in the unverified (dashboard) layer** — the test covers only the two

@@ -31,7 +31,14 @@ name is treated as a documented *contract*, with the machine-checkable half veri
   vice versa. This catches the most common drift automatically.
 - **Dashboards remain manually maintained** against the naming/field convention; a
   rename is a coordinated change across code, templates, and dashboards, and the
-  dashboard half is a review/authoring discipline, not a derivation.
+  dashboard half is authored, not derived.
+- **Authored is no longer the same as unverifiable.** The dashboards are now shipped as
+  Kibana saved objects in `assets/kibana/`, so the third layer is checkable even though
+  it is not derivable: a test asserts every shipped data view names a
+  `{class}-{subtype}-esdiag` stream, and that the provenance fields the saved objects
+  query are ones the templates define. This closed the loosely-authored titles the
+  convention was supposed to cover — four data views matched on a bare prefix such as
+  `settings-node*`, which also matches indices ESDiag does not own.
 - **Explains the asymmetry with ADR-0005:** the input side is fully ESDiag-owned code
   and config (derivable); the output side terminates in authored Kibana artifacts
   (not derivable) — so the two seams get different treatments by necessity, not

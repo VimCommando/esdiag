@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "ESDiag common cluster and diagnostic metadata mappings",
-    "compatibility_debt": "Remove diagnostic.product/application and diagnostic.orchestration/platform aliases after dashboards migrate and old indices age out."
+    "compatibility_debt": "Remove diagnostic.product/application and diagnostic.orchestration/platform aliases after dashboards migrate and old indices age out. Shipped dashboards are checked by shipped_saved_objects_only_query_provenance_names_the_templates_define; pre-rename indices carry the mirrored alias installed by setup."
   },
   "template": {
     "mappings": {

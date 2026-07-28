@@ -28,6 +28,8 @@ published release notes, maintenance branches, and tagged history.
 - Fixed compilation of every `server`, `setup`, and `keystore` feature combination, including `--no-default-features` (#347).
 - Fixed the file, stream, and directory exporters reporting a fabricated HTTP `200` request status; they now report the reserved `0` that means "no HTTP transport", so a real Elasticsearch response is distinguishable from a local write (#350).
 - Fixed legacy `jobs.yml` migration failing the whole file when one saved job selected a source the current registry no longer knows; such a selection now migrates as authored and is reported when that job runs (#353).
+- Fixed `diagnostic.application` and `diagnostic.platform` matching nothing in indices created before those fields were renamed; `setup` now installs the mirrored field alias on them, so a dashboard resolves either provenance name across old and new indices (#354).
+- Fixed four ESDiag data views matching on a bare `{class}-{subtype}` prefix, which also matched indices ESDiag does not own; they now pin the `-esdiag` stream suffix (#354).
 
 ### Security
 
