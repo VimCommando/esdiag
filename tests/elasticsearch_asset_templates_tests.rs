@@ -211,8 +211,9 @@ fn metadata_templates_map_new_provenance_fields_and_transitional_aliases() {
     }
 }
 
-/// Every provenance name a shipped saved object queries, and the index-pattern
-/// title of the data view it queries through.
+/// Every provenance name a shipped saved object references, paired with the
+/// object's path under the saved-objects directory so a failure names the file
+/// to fix.
 fn saved_object_provenance_usage() -> Vec<(String, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/kibana/esdiag/objects");
     let mut files = Vec::new();

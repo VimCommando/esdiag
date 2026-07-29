@@ -211,7 +211,7 @@ async fn install_provenance_aliases(client: &Client) -> Result<()> {
             .await;
         match result {
             Ok(response) if response.status().is_success() => {
-                tracing::info!("Added the legacy provenance alias to {index}");
+                tracing::info!("Aliased the current provenance names onto {index}");
             }
             Ok(response) => {
                 failures += 1;
@@ -349,8 +349,12 @@ pub async fn assets(client: &Client) -> Result<()> {
     }
     // The templates just installed only shape indices created from here on, so
     // existing ones still answer to whichever provenance names they were created
-    // with (ADR-0014).
-    if let Err(err) = install_provenance_aliases(client).await {
+    // with (ADR-0014). Elasticsearch owns those indices, so the bridge is only
+    // meaningful there — asking any other product for its mappings would warn
+    // about a call that never made sense.
+    if matches!(client, Client::Elasticsearch(_))
+        && let Err(err) = install_provenance_aliases(client).await
+    {
         tracing::warn!("Could not bridge provenance field names on existing ESDiag indices: {err}");
     }
 
