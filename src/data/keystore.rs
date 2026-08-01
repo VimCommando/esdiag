@@ -11,6 +11,7 @@ use aes_gcm_siv::{
 use base64::Engine;
 use eyre::{Result, eyre};
 use pbkdf2::pbkdf2_hmac;
+use redact::{Secret, serde::expose_secret};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 #[cfg(unix)]
@@ -51,24 +52,58 @@ tokio::task_local! {
     static SCOPED_KEYSTORE_PASSWORD: String;
 }
 
+/// Secret-bearing types wrap their credential material in [`Secret`], whose
+/// `Debug` renders a redaction marker (ADR-0011). Serialization is opt-in per
+/// field via `expose_secret`, which is what makes the write path to the
+/// encrypted envelope below the only place these values leave the wrapper.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SecretAuth {
-    ApiKey { apikey: String },
-    Basic { username: String, password: String },
+    ApiKey {
+        #[serde(serialize_with = "expose_secret")]
+        apikey: Secret<String>,
+    },
+    Basic {
+        username: String,
+        #[serde(serialize_with = "expose_secret")]
+        password: Secret<String>,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct BasicSecret {
     pub username: String,
-    pub password: String,
+    #[serde(serialize_with = "expose_secret")]
+    pub password: Secret<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SecretEntry {
-    #[serde(rename = "ApiKey", skip_serializing_if = "Option::is_none")]
-    pub apikey: Option<String>,
+    #[serde(
+        rename = "ApiKey",
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "expose_secret"
+    )]
+    pub apikey: Option<Secret<String>>,
     #[serde(rename = "Basic", skip_serializing_if = "Option::is_none")]
     pub basic: Option<BasicSecret>,
+}
+
+impl SecretAuth {
+    /// Wraps an API key that arrived as plaintext from a CLI flag, a form
+    /// field, or the decrypted keystore.
+    pub fn apikey(apikey: impl Into<String>) -> Self {
+        Self::ApiKey {
+            apikey: Secret::new(apikey.into()),
+        }
+    }
+
+    /// As [`SecretAuth::apikey`], for a username and password pair.
+    pub fn basic(username: impl Into<String>, password: impl Into<String>) -> Self {
+        Self::Basic {
+            username: username.into(),
+            password: Secret::new(password.into()),
+        }
+    }
 }
 
 impl SecretEntry {
@@ -142,7 +177,8 @@ struct EncryptedKeystore {
 struct UnlockLeaseData {
     version: u8,
     expires_at_epoch: i64,
-    password: String,
+    #[serde(serialize_with = "expose_secret")]
+    password: Secret<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -197,10 +233,20 @@ pub struct UnlockStatus {
     pub unlock_path: PathBuf,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UnlockLease {
     pub expires_at_epoch: i64,
-    pub(crate) password: String,
+    password: Secret<String>,
+}
+
+impl UnlockLease {
+    /// The keystore password this grant carries. Every caller hands it straight
+    /// to the keystore's own key derivation, which is the mediated use ADR-0012
+    /// describes: the grant unlocks *use*, and nothing returns it to a caller
+    /// outside this crate.
+    pub(crate) fn password(&self) -> &str {
+        self.password.expose_secret()
+    }
 }
 
 fn current_epoch_seconds() -> i64 {
@@ -364,8 +410,8 @@ pub fn parse_unlock_ttl(input: &str) -> Result<Duration> {
 
 fn parse_secret_auth(username: Option<String>, password: Option<String>, apikey: Option<String>) -> Result<SecretAuth> {
     match (apikey, username, password) {
-        (Some(apikey), None, None) => Ok(SecretAuth::ApiKey { apikey }),
-        (None, Some(username), Some(password)) => Ok(SecretAuth::Basic { username, password }),
+        (Some(apikey), None, None) => Ok(SecretAuth::apikey(apikey)),
+        (None, Some(username), Some(password)) => Ok(SecretAuth::basic(username, password)),
         _ => Err(eyre!(
             "Invalid secret auth: use either --apikey or --user with --password"
         )),
@@ -525,7 +571,7 @@ fn write_unlock_lease_until(keystore_password: &str, expires_at_epoch: i64) -> R
     let data = UnlockLeaseData {
         version: 1,
         expires_at_epoch,
-        password: keystore_password.to_string(),
+        password: Secret::new(keystore_password.to_string()),
     };
     let envelope = encrypt_unlock_lease(&data)?;
     let path = get_unlock_path()?;
@@ -555,7 +601,7 @@ pub fn get_unlock_status() -> Result<UnlockStatus> {
     let keystore_exists = get_keystore_path()?.is_file();
     let lease = if keystore_exists {
         if let Some(lease) = lease {
-            if validate_existing_keystore_password(&lease.password).is_ok() {
+            if validate_existing_keystore_password(lease.password()).is_ok() {
                 Some(lease)
             } else {
                 remove_unlock_file_best_effort(&unlock_path, "stale");
@@ -589,8 +635,8 @@ pub fn get_keystore_password() -> Result<String> {
         let unlock_path = get_unlock_path()?;
         if !keystore_exists()? {
             remove_unlock_file_best_effort(&unlock_path, "absent keystore");
-        } else if validate_existing_keystore_password(&lease.password).is_ok() {
-            return Ok(lease.password);
+        } else if validate_existing_keystore_password(lease.password()).is_ok() {
+            return Ok(lease.password().to_string());
         } else {
             remove_unlock_file_best_effort(&unlock_path, "stale");
         }
@@ -600,8 +646,9 @@ pub fn get_keystore_password() -> Result<String> {
     ))
 }
 
+#[cfg(all(feature = "server", feature = "keystore"))]
 pub(crate) fn get_active_unlock_keystore_password() -> Result<Option<String>> {
-    Ok(read_unlock_lease()?.map(|lease| lease.password))
+    Ok(read_unlock_lease()?.map(|lease| lease.password().to_string()))
 }
 
 pub async fn with_scoped_keystore_password<F>(keystore_password: String, future: F) -> F::Output
@@ -622,8 +669,8 @@ where
         let unlock_path = get_unlock_path()?;
         if !keystore_exists()? {
             remove_unlock_file_best_effort(&unlock_path, "absent keystore");
-        } else if validate_existing_keystore_password(&lease.password).is_ok() {
-            return Ok(lease.password);
+        } else if validate_existing_keystore_password(lease.password()).is_ok() {
+            return Ok(lease.password().to_string());
         } else {
             remove_unlock_file_best_effort(&unlock_path, "stale");
         }
@@ -838,6 +885,7 @@ pub fn list_secret_names(keystore_password: &str) -> Result<Vec<String>> {
     Ok(names)
 }
 
+#[cfg(any(test, all(feature = "server", feature = "keystore")))]
 pub(crate) fn list_secret_entries(keystore_password: &str) -> Result<Vec<(String, SecretEntry)>> {
     let store = read_store(keystore_password)?;
     Ok(store.secrets.into_iter().collect())
@@ -987,7 +1035,10 @@ mod tests {
         let secret = get_secret("api-secret", "new-pw")
             .expect("read secret")
             .expect("secret exists");
-        assert_eq!(secret.apikey.as_deref(), Some("secret-key"));
+        assert_eq!(
+            secret.apikey.as_ref().map(|key| key.expose_secret().as_str()),
+            Some("secret-key")
+        );
         assert_eq!(get_keystore_password().expect("unlock lease password"), "new-pw");
     }
 
@@ -1147,6 +1198,35 @@ mod tests {
         assert_eq!(unlock.kdf, KdfParams::current());
     }
 
+    /// What the unlock envelope's key derivation actually buys (ADR-0012): it is
+    /// bound to the machine context, so the file does not decrypt somewhere
+    /// else. Reading it *on the host, as the owning user* is a different threat,
+    /// and one this backend cannot answer — see the ADR's threat model.
+    #[test]
+    fn unlock_lease_does_not_decrypt_under_a_different_machine_context() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let (_tmp, _keystore_path, unlock_path) = setup_env();
+        let original_user = env::var("USER").ok();
+
+        create_keystore("keystore-password").expect("create keystore");
+        write_unlock_lease("keystore-password", Duration::from_secs(300)).expect("write unlock lease");
+        assert!(read_unlock_lease().expect("read own lease").is_some());
+
+        let stolen = std::fs::read_to_string(&unlock_path).expect("read unlock file");
+        unsafe { env::set_var("USER", "someone-else") };
+        std::fs::write(&unlock_path, &stolen).expect("restore the exfiltrated lease");
+
+        let lease = read_unlock_lease().expect("reading a foreign lease is not an error");
+        unsafe {
+            match original_user {
+                Some(user) => env::set_var("USER", user),
+                None => env::remove_var("USER"),
+            }
+        }
+
+        assert!(lease.is_none(), "a lease from another context must not decrypt");
+    }
+
     #[test]
     fn unlock_file_and_keystore_envelope_do_not_disclose_plaintext_material() {
         let _guard = test_env_lock().lock().expect("env lock");
@@ -1173,6 +1253,51 @@ mod tests {
         }
     }
 
+    /// Every type that carries credential material derives `Debug`, so one
+    /// `{:?}` near any of them would defeat the non-leakage invariant if the
+    /// material were not wrapped (ADR-0011).
+    #[test]
+    fn debug_output_redacts_every_secret_carrier() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let (_tmp, _keystore_path, _unlock_path) = setup_env();
+
+        create_keystore("keystore-password").expect("create keystore");
+        add_secret(
+            "saved",
+            None,
+            None,
+            Some("saved-api-key".to_string()),
+            "keystore-password",
+        )
+        .expect("add saved secret");
+        write_unlock_lease("keystore-password", Duration::from_secs(300)).expect("write unlock lease");
+
+        let rendered = [
+            format!("{:?}", SecretAuth::apikey("an-api-key")),
+            format!("{:?}", SecretAuth::basic("elastic", "a-password")),
+            format!(
+                "{:?}",
+                BasicSecret {
+                    username: "elastic".to_string(),
+                    password: Secret::new("a-password".to_string()),
+                }
+            ),
+            format!(
+                "{:?}",
+                get_secret("saved", "keystore-password")
+                    .expect("read secret")
+                    .expect("saved secret")
+            ),
+            format!("{:?}", read_unlock_lease().expect("read lease").expect("lease")),
+        ]
+        .join("\n");
+
+        for material in ["an-api-key", "a-password", "saved-api-key", "keystore-password"] {
+            assert!(!rendered.contains(material), "{material} leaked into:\n{rendered}");
+        }
+        assert!(rendered.contains("elastic"), "the username is not secret");
+    }
+
     #[test]
     fn saved_secret_entries_are_role_agnostic_without_direction_field() {
         let _guard = test_env_lock().lock().expect("env lock");
@@ -1189,6 +1314,11 @@ mod tests {
         assert!(rendered.contains("output-secret"));
         assert!(!rendered.contains("direction"));
         assert!(!rendered.contains("CredentialDirection"));
+        // Wrapping the value in `Secret` must not change what an existing
+        // keystore looks like inside its envelope: the key stays a plain scalar
+        // under `ApiKey`, so a keystore written by an earlier release still
+        // decrypts and deserializes.
+        assert!(rendered.contains("ApiKey: input-key"), "{rendered}");
     }
 
     #[test]
@@ -1267,10 +1397,7 @@ ciphertext: ""
             .product(Product::Elasticsearch)
             .roles(vec![HostRole::Collect, HostRole::Send])
             .secret(Some(secret_id.to_string()))
-            .build_with_secret_auth(SecretAuth::Basic {
-                username: "elastic".to_string(),
-                password: "pw".to_string(),
-            })
+            .build_with_secret_auth(SecretAuth::basic("elastic", "pw"))
             .expect("build host");
         host.save(host_name).expect("save host");
     }
@@ -1291,10 +1418,7 @@ ciphertext: ""
         authenticate("pw").expect("create keystore");
         upsert_secret_auth(
             "used-secret",
-            SecretAuth::Basic {
-                username: "elastic".to_string(),
-                password: "super-secret-password".to_string(),
-            },
+            SecretAuth::basic("elastic", "super-secret-password"),
             "pw",
         )
         .expect("store secret");
@@ -1313,10 +1437,7 @@ ciphertext: ""
         authenticate("pw").expect("create keystore");
         upsert_secret_auth(
             "used-secret",
-            SecretAuth::Basic {
-                username: "elastic".to_string(),
-                password: "super-secret-password".to_string(),
-            },
+            SecretAuth::basic("elastic", "super-secret-password"),
             "pw",
         )
         .expect("store secret");
@@ -1353,14 +1474,7 @@ ciphertext: ""
         let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, _unlock_path) = setup_env();
         authenticate("pw").expect("create keystore");
-        upsert_secret_auth(
-            "unused-secret",
-            SecretAuth::ApiKey {
-                apikey: "super-secret-api-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("store secret");
+        upsert_secret_auth("unused-secret", SecretAuth::apikey("super-secret-api-key"), "pw").expect("store secret");
 
         remove_secret("unused-secret", None, "pw").expect("remove secret");
 

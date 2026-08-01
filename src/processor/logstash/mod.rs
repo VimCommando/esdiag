@@ -34,32 +34,68 @@ use crate::{
     receiver::{MissingSource, Receiver},
 };
 use eyre::{Result, eyre};
+use futures::future::BoxFuture;
 use node::Node;
 use node_stats::NodeStats;
 use plugins::Plugins;
 use serde::{Serialize, de::DeserializeOwned};
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 use tokio::sync::mpsc;
 
+/// Runs one processable source's typed processor.
+type LsProcessFn = for<'a> fn(&'a LogstashDiagnostic, mpsc::Sender<ProcessorSummary>) -> BoxFuture<'a, Result<()>>;
+
 /// The registry-keyed dispatch table (ADR-0005): each entry binds one
-/// processable source (by its canonical registry key) to its typed processor.
+/// processable source to its typed processor in a single registration — the
+/// canonical registry key, the impl's `DataSource::name()`, and the call that
+/// runs it. [`validate_ls_dispatch_registry`] proves the table and the
+/// `sources.yml` registry agree.
 struct LsDispatchEntry {
     /// Canonical registry key handled by this entry.
     key: &'static str,
+    /// `DataSource::name()` of the typed impl bound to `key`.
+    datasource_name: fn() -> String,
+    /// Invokes that impl.
+    process: LsProcessFn,
+}
+
+/// Binds a source's typed processor as an [`LsProcessFn`]. The type is named
+/// concretely so the resulting future keeps its auto-derived `Send`.
+macro_rules! processes {
+    ($source:ty) => {{
+        fn run<'a>(
+            diagnostic: &'a LogstashDiagnostic,
+            summary_tx: mpsc::Sender<ProcessorSummary>,
+        ) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move { diagnostic.process_datasource::<$source>(summary_tx).await })
+        }
+        run
+    }};
 }
 
 const LS_DISPATCH: &[LsDispatchEntry] = &[
-    LsDispatchEntry { key: "logstash_node" },
+    LsDispatchEntry {
+        key: "logstash_node",
+        datasource_name: datasource_name::<Node>,
+        process: processes!(Node),
+    },
     LsDispatchEntry {
         key: "logstash_node_stats",
+        datasource_name: datasource_name::<NodeStats>,
+        process: processes!(NodeStats),
     },
     LsDispatchEntry {
         key: "logstash_plugins",
+        datasource_name: datasource_name::<Plugins>,
+        process: processes!(Plugins),
     },
 ];
+
+/// `DataSource::name()` as a plain function pointer, so a dispatch entry can
+/// carry the name its key must equal.
+fn datasource_name<T: DataSource>() -> String {
+    T::name()
+}
 
 /// Fail fast if the dispatch keys and the collection registry disagree
 /// (ADR-0005 key alignment). Runs once.
@@ -67,27 +103,13 @@ fn validate_ls_dispatch_registry() -> Result<()> {
     static VALIDATED: std::sync::OnceLock<std::result::Result<(), String>> = std::sync::OnceLock::new();
     VALIDATED
         .get_or_init(|| {
-            let claims = vec![
-                ProcessableClaim {
-                    key: "logstash_node",
-                    datasource_name: Node::name(),
-                },
-                ProcessableClaim {
-                    key: "logstash_node_stats",
-                    datasource_name: NodeStats::name(),
-                },
-                ProcessableClaim {
-                    key: "logstash_plugins",
-                    datasource_name: Plugins::name(),
-                },
-            ];
-            let claim_keys = claims.iter().map(|claim| claim.key).collect::<BTreeSet<_>>();
-            let dispatch_keys = LS_DISPATCH.iter().map(|entry| entry.key).collect::<BTreeSet<_>>();
-            if claim_keys != dispatch_keys {
-                return Err(format!(
-                    "Logstash dispatch keys do not match processable claims: dispatch={dispatch_keys:?}, claims={claim_keys:?}"
-                ));
-            }
+            let claims: Vec<ProcessableClaim> = LS_DISPATCH
+                .iter()
+                .map(|entry| ProcessableClaim {
+                    key: entry.key,
+                    datasource_name: (entry.datasource_name)(),
+                })
+                .collect();
             validate_processable_registry("logstash", &claims).map_err(|err| err.to_string())
         })
         .clone()
@@ -110,15 +132,6 @@ impl LogstashDiagnostic {
         self.selected_processors
             .as_ref()
             .is_none_or(|selected| selected.contains(key))
-    }
-
-    async fn dispatch(&self, key: &'static str, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()> {
-        match key {
-            "logstash_node" => self.process_datasource::<Node>(summary_tx).await,
-            "logstash_node_stats" => self.process_datasource::<NodeStats>(summary_tx).await,
-            "logstash_plugins" => self.process_datasource::<Plugins>(summary_tx).await,
-            other => Err(eyre!("No Logstash processor registered for '{other}'")),
-        }
     }
 
     async fn process_datasource<T>(&self, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()>
@@ -186,7 +199,7 @@ impl DiagnosticProcessor for LogstashDiagnostic {
 
         for entry in LS_DISPATCH {
             if self.should_process(entry.key) {
-                self.dispatch(entry.key, summary_tx.clone()).await?;
+                (entry.process)(&self, summary_tx.clone()).await?;
             }
         }
         Ok(())
@@ -216,8 +229,13 @@ fn is_missing_source_error(err: &eyre::Report) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MissingSource, is_missing_source_error};
+    use super::{MissingSource, is_missing_source_error, validate_ls_dispatch_registry};
     use eyre::eyre;
+
+    #[test]
+    fn dispatch_table_and_registry_agree() {
+        validate_ls_dispatch_registry().expect("Logstash dispatch table matches the collection registry");
+    }
 
     #[test]
     fn missing_source_errors_are_tolerated() {

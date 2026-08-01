@@ -38,6 +38,7 @@ pbkdf2 = "0.12.2"
 pulldown-cmark = "0.13.4"
 rand = "0.10.1"
 rayon = "1.12"
+redact = { version = "0.1.11", features = ["serde"] }
 regex = "1.12"
 reqwest = { version = "0.12.28", features = ["json", "blocking", "multipart"] }
 rpassword = "7.5.4"

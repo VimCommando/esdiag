@@ -42,6 +42,15 @@ persists nothing itself — it delegates all credential custody to the platform.
   persisted, logged, or included in any event (including the broadcast/targeted events
   of ADR-0008). This is the input-side counterpart to ADR-0012's unlock invariant and
   is the crux of multi-user input-secret handling.
+- **Non-leakage is enforced by the type, not by discipline.** Every API key, password,
+  and cached keystore password is held in `redact::Secret`, whose `Debug` and `Display`
+  render a marker instead of the value and which has no blanket `Serialize`: a field
+  that must reach the encrypted keystore opts in with
+  `serialize_with = "expose_secret"`, and reading the plaintext anywhere else takes an
+  explicit `expose_secret()`. So the accidental debug log or new event field the
+  invariant guards against cannot compile into a leak, and the places that legitimately
+  expose credential material — the keystore write path and the transport headers — are
+  a short, greppable list.
 - Credential direction (input/output) maps onto the six-stage model: input =
   `Collect`, output = `Send`/`Export`/`View`.
 

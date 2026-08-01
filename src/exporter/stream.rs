@@ -45,8 +45,9 @@ impl Export for StreamExporter {
     {
         let start_time = tokio::time::Instant::now();
         let doc_count = docs.len() as u32;
+        // No HTTP transport, so the reserved `0` request status stands
+        // (ADR-0016); write failures travel in `errors`, not the status.
         let mut batch = BatchResponse::new(doc_count);
-        batch.status_code = 200;
         tracing::debug!("{} wrote {} docs to stdout", index, doc_count);
         for doc in docs {
             serde_json::to_writer(std::io::stdout(), &doc)?;

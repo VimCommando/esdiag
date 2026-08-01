@@ -1310,15 +1310,12 @@ async fn apply_upsert_secret(state: &Arc<ServerState>, form: SecretUpsertForm) -
     let auth = match form.auth_type.trim().to_ascii_lowercase().as_str() {
         "apikey" => {
             let apikey = to_opt(form.apikey).ok_or("apikey is required for ApiKey type.")?;
-            SecretAuth::ApiKey { apikey }
+            SecretAuth::apikey(apikey)
         }
         "basic" => {
             let username = to_opt(form.username).ok_or("username is required for Basic type.")?;
             let password_value = to_opt(form.password).ok_or("password is required for Basic type.")?;
-            SecretAuth::Basic {
-                username,
-                password: password_value,
-            }
+            SecretAuth::basic(username, password_value)
         }
         _ => return Err("auth_type must be either ApiKey or Basic.".to_string()),
     };
@@ -1812,14 +1809,8 @@ mod tests {
         let mut _tmp = setup_env();
         authenticate("pw").expect("create keystore");
         _tmp.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
-        upsert_secret_auth(
-            "api-secret",
-            SecretAuth::ApiKey {
-                apikey: "super-secret-api-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("save api key secret");
+        upsert_secret_auth("api-secret", SecretAuth::apikey("super-secret-api-key"), "pw")
+            .expect("save api key secret");
 
         let state = test_server_state();
         state.set_keystore_unlocked("pw".to_string()).await;
@@ -1994,10 +1985,7 @@ mod tests {
         authenticate("pw").expect("create keystore");
         upsert_secret_auth(
             "existing-secret",
-            SecretAuth::Basic {
-                username: "elastic".to_string(),
-                password: "super-secret-password".to_string(),
-            },
+            SecretAuth::basic("elastic", "super-secret-password"),
             "pw",
         )
         .expect("store secret");
@@ -2048,14 +2036,7 @@ mod tests {
     async fn persisted_secret_row_delete_requires_secret_id_endpoint() {
         let _tmp = setup_env();
         authenticate("pw").expect("create keystore");
-        upsert_secret_auth(
-            "existing-secret",
-            SecretAuth::ApiKey {
-                apikey: "super-secret-api-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("store secret");
+        upsert_secret_auth("existing-secret", SecretAuth::apikey("super-secret-api-key"), "pw").expect("store secret");
 
         let state = test_server_state();
         state.set_keystore_unlocked("pw".to_string()).await;
@@ -2077,14 +2058,7 @@ mod tests {
     async fn delete_secret_by_id_removes_matching_secret() {
         let _tmp = setup_env();
         authenticate("pw").expect("create keystore");
-        upsert_secret_auth(
-            "existing-secret",
-            SecretAuth::ApiKey {
-                apikey: "super-secret-api-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("store secret");
+        upsert_secret_auth("existing-secret", SecretAuth::apikey("super-secret-api-key"), "pw").expect("store secret");
 
         let state = test_server_state();
         state.set_keystore_unlocked("pw".to_string()).await;
@@ -2100,14 +2074,7 @@ mod tests {
     async fn delete_secret_by_id_returns_reference_error_patch_when_secret_is_in_use() {
         let _tmp = setup_env();
         authenticate("pw").expect("create keystore");
-        upsert_secret_auth(
-            "servermore",
-            SecretAuth::ApiKey {
-                apikey: "super-secret-api-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("store secret");
+        upsert_secret_auth("servermore", SecretAuth::apikey("super-secret-api-key"), "pw").expect("store secret");
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2266,20 +2233,11 @@ mod tests {
         let mut _tmp = setup_env();
         authenticate("pw").expect("create keystore");
         _tmp.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
-        upsert_secret_auth(
-            "api-secret",
-            SecretAuth::ApiKey {
-                apikey: "super-secret-api-key".to_string(),
-            },
-            "pw",
-        )
-        .expect("save api key secret");
+        upsert_secret_auth("api-secret", SecretAuth::apikey("super-secret-api-key"), "pw")
+            .expect("save api key secret");
         upsert_secret_auth(
             "basic-secret",
-            SecretAuth::Basic {
-                username: "elastic".to_string(),
-                password: "super-secret-password".to_string(),
-            },
+            SecretAuth::basic("elastic", "super-secret-password"),
             "pw",
         )
         .expect("save basic secret");

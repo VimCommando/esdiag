@@ -1442,6 +1442,7 @@ dependencies = [
  "pulldown-cmark",
  "rand 0.10.1",
  "rayon",
+ "redact",
  "regex",
  "reqwest 0.12.28",
  "rpassword",
@@ -4061,6 +4062,15 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "redact"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcecefd225c2fb69914585a7a6f8878929feb316a7ecb61c07d79e361d46d8ac"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

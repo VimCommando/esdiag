@@ -37,7 +37,7 @@ use crate::{
 };
 use api::ProcessSelection;
 use elastic_cloud_kubernetes::ElasticCloudKubernetesDiagnostic;
-use elasticsearch::ElasticsearchDiagnostic;
+use elasticsearch::{ElasticsearchDiagnostic, Licenses};
 use eyre::{Result, eyre};
 use futures::{
     FutureExt,
@@ -52,8 +52,14 @@ use std::sync::{
 };
 use tokio::{sync::mpsc, time::Instant};
 
+/// A recognized application whose processor is still being written carries its
+/// own message, because "we have not built this yet" and "we deliberately do not
+/// do this" are opposite answers to the same question (ADR-0019).
 const KIBANA_PROCESSING_NOT_IMPLEMENTED: &str = "Kibana processing is not yet implemented";
+const AGENT_PROCESSING_NOT_IMPLEMENTED: &str = "Elastic Agent processing is not yet implemented";
 const UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE: &str = "Unsupported product or diagnostic bundle";
+/// The license holder Elastic Cloud Hosted issues every deployment license to.
+const ELASTIC_CLOUD_LICENSE_HOLDER: &str = "Elastic Cloud";
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 
 pub struct Processor<S: State> {
@@ -343,9 +349,14 @@ fn failed_child_outcome_with_context(
 
 /// Why an unsupported child is skipped (ADR-0019): platform-only bundles are
 /// out of scope by design; Kibana/Agent processing is work in progress.
+///
+/// The by-design boundary governs *collection* — ESDiag will never pull Agent or
+/// platform APIs — so it must not be borrowed for an application whose processor
+/// is merely unwritten. Reporting one as the other tells a user the feature they
+/// are waiting on is never coming.
 fn skip_kind_for(error: &str) -> Option<SkipKind> {
     match error {
-        KIBANA_PROCESSING_NOT_IMPLEMENTED => Some(SkipKind::NotImplemented),
+        KIBANA_PROCESSING_NOT_IMPLEMENTED | AGENT_PROCESSING_NOT_IMPLEMENTED => Some(SkipKind::NotImplemented),
         UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE => Some(SkipKind::ByDesign),
         _ => None,
     }
@@ -399,8 +410,10 @@ fn send_child_outcome_event(
 /// parent diagnostic propagating its platform to a child) wins; then an
 /// explicit manifest field (esdiag-written bundles); then a receiver hint
 /// (e.g. Elastic Cloud admin API); then manifest indicators; then the
-/// `syscalls` folder, which only self-managed collections produce. Anything
-/// indeterminate is `Unknown` — a first-class, non-failing value.
+/// `syscalls` folder, which only self-managed collections produce; then the
+/// bundle's license holder, which is all an API-only Elastic Cloud Hosted
+/// bundle leaves behind. Anything indeterminate is `Unknown` — a first-class,
+/// non-failing value.
 async fn resolve_platform(manifest: &DiagnosticManifest, receiver: &Receiver, identifiers: &Identifiers) -> Platform {
     if let Some(platform) = identifiers.platform {
         return platform;
@@ -418,7 +431,23 @@ async fn resolve_platform(manifest: &DiagnosticManifest, receiver: &Receiver, id
     if receiver.has_bundle_dir("syscalls").await {
         return Platform::SelfManaged;
     }
+    if bundle_license_implies_cloud(receiver).await {
+        return Platform::ElasticCloudHosted;
+    }
     Platform::Unknown
+}
+
+/// Elastic Cloud Hosted issues every deployment's license to a fixed holder,
+/// which is often the only platform trace left in an API-only bundle: such
+/// bundles carry no `syscalls` folder and no orchestration manifest.
+async fn bundle_license_implies_cloud(receiver: &Receiver) -> bool {
+    if !receiver.is_bundle() {
+        return false;
+    }
+    matches!(
+        receiver.get::<Licenses>().await,
+        Ok(licenses) if licenses.license.issued_to() == ELASTIC_CLOUD_LICENSE_HOLDER
+    )
 }
 
 impl Processor<Ready> {
@@ -757,7 +786,7 @@ impl Diagnostic {
                 Ok((Self::Logstash(diagnostic), report))
             }
             Some(Application::Kibana) => Err(eyre!(KIBANA_PROCESSING_NOT_IMPLEMENTED)),
-            Some(Application::Agent) => Err(eyre!(UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE)),
+            Some(Application::Agent) => Err(eyre!(AGENT_PROCESSING_NOT_IMPLEMENTED)),
             // A platform-only diagnostic: dispatch on the platform axis.
             None => match manifest.platform() {
                 Platform::ECK => {
@@ -834,11 +863,16 @@ pub fn new_job_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{data::Uri, exporter::Exporter, receiver::Receiver};
+    use crate::{
+        data::{KnownHostBuilder, Product, Uri},
+        exporter::Exporter,
+        receiver::Receiver,
+    };
     use serde_json::json;
     use std::collections::HashSet;
     use std::{fs::File, path::Path, sync::Arc};
     use tempfile::TempDir;
+    use url::Url;
     use zip::ZipArchive;
 
     fn archive_path(name: &str) -> String {
@@ -965,6 +999,81 @@ mod tests {
         assert_eq!(completed.state.report.outcome(), DiagnosticOutcome::Complete);
     }
 
+    /// A child diagnostic ESDiag recognizes but has no processor for. Written as
+    /// a manifest rather than extracted from a fixture archive because dispatch
+    /// happens on the declared application, before any product diagnostic is
+    /// constructed.
+    fn write_child_manifest(dir: &Path, product: &str) {
+        std::fs::create_dir_all(dir).expect("create child diagnostic dir");
+        let manifest = json!({
+            "mode": "support",
+            "product": product,
+            "diagnostic": "esdiag-test",
+            "type": format!("{product}-diagnostics"),
+            "runner": "esdiag",
+            "version": "9.3.3",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "collection_date_millis": 1767225600000u64,
+        });
+        std::fs::write(
+            dir.join(DiagnosticManifest::FILENAME),
+            serde_json::to_vec_pretty(&manifest).expect("serialize child manifest"),
+        )
+        .expect("write child manifest");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn agent_child_is_skipped_as_work_in_progress_not_a_scope_boundary() {
+        let root = tempfile::tempdir().expect("parent dir");
+        write_child_manifest(&root.path().join("agent-child"), "agent");
+        write_parent_manifest(
+            root.path(),
+            vec![diagnostic::DiagPath {
+                diag_type: "diagnostic".to_string(),
+                diag_path: "agent-child".to_string(),
+            }],
+        );
+
+        let completed = process_parent_bundle(root.path()).await;
+
+        let child = &completed.state.included_diagnostics[0];
+        // Elastic Agent is out of scope for `Collect` by design, but its
+        // *processing* is unwritten work (PR293). Reporting the skip as
+        // by-design would say the opposite (ADR-0016/0019).
+        assert_eq!(child.outcome, DiagnosticOutcome::Skipped(SkipKind::NotImplemented));
+        assert_eq!(child.application, Some(Application::Agent));
+        assert!(
+            child
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Elastic Agent processing is not yet implemented")
+        );
+    }
+
+    #[test]
+    fn the_two_gap_kinds_stay_separable() {
+        // Both surface as a skip, and each is one shared error constant away
+        // from being reported as the other (ADR-0019).
+        assert_eq!(
+            skip_kind_for(KIBANA_PROCESSING_NOT_IMPLEMENTED),
+            Some(SkipKind::NotImplemented)
+        );
+        assert_eq!(
+            skip_kind_for(AGENT_PROCESSING_NOT_IMPLEMENTED),
+            Some(SkipKind::NotImplemented)
+        );
+        assert_eq!(
+            skip_kind_for(UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE),
+            Some(SkipKind::ByDesign)
+        );
+        assert_eq!(
+            skip_kind_for("Failed to read the child bundle"),
+            None,
+            "an error that is not a known gap is a failure, not a skip"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn unreadable_child_returns_failed_outcome_without_failing_parent() {
         let root = tempfile::tempdir().expect("parent dir");
@@ -1046,6 +1155,80 @@ mod tests {
 
         assert_eq!(processor.state.manifest.platform(), Platform::Unknown);
         assert_eq!(processor.state.identifiers.platform, Some(Platform::Unknown));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cloud_admin_receiver_implies_elastic_cloud_hosted_platform() {
+        let host = KnownHostBuilder::new(Url::parse("https://admin.found.no").expect("url"))
+            .apikey(Some("test-api-key".to_string()))
+            .build()
+            .expect("host");
+        let receiver = Receiver::try_from(host).expect("cloud admin receiver");
+        let manifest = DiagnosticManifest::new(
+            "2026-04-25T20:18:43.610Z".to_string(),
+            Some("esdiag-test".to_string()),
+            None,
+            None,
+            Some("support".to_string()),
+            Product::Unknown,
+            None,
+            None,
+            Some("8.19.3".to_string()),
+        );
+
+        assert_eq!(
+            resolve_platform(&manifest, &receiver, &Identifiers::default()).await,
+            Platform::ElasticCloudHosted
+        );
+    }
+
+    fn write_license(bundle: &Path, issued_to: &str) {
+        let license = json!({
+            "license": {
+                "status": "active",
+                "uid": "90db30a7-19e4-42e6-b1fc-c76567ada0e2",
+                "type": "enterprise",
+                "issue_date_in_millis": 1_677_715_200_000_u64,
+                "expiry_date_in_millis": 1_835_481_599_999_u64,
+                "max_nodes": serde_json::Value::Null,
+                "max_resource_units": 100_000,
+                "issued_to": issued_to,
+                "issuer": "API",
+                "start_date_in_millis": 1_677_628_800_000_i64,
+            }
+        });
+        std::fs::write(bundle.join("licenses.json"), license.to_string()).expect("write licenses.json");
+    }
+
+    async fn platform_for_bundle_licensed_to(issued_to: &str) -> Platform {
+        let root = tempfile::tempdir().expect("bundle dir");
+        extract_archive("elasticsearch-api-diagnostics-9.3.3.zip", root.path());
+        write_license(root.path(), issued_to);
+
+        let receiver = Arc::new(Receiver::try_from(Uri::Directory(root.path().to_path_buf())).expect("receiver"));
+        let output = tempfile::tempdir().expect("output dir");
+        let exporter = Arc::new(Exporter::try_from(Uri::Directory(output.path().to_path_buf())).expect("exporter"));
+        let processor = Processor::try_new(receiver, exporter, Identifiers::default())
+            .await
+            .expect("ready processor");
+
+        processor.state.manifest.platform()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cloud_license_holder_implies_elastic_cloud_hosted_platform() {
+        assert_eq!(
+            platform_for_bundle_licensed_to("Elastic Cloud").await,
+            Platform::ElasticCloudHosted
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn self_issued_license_holder_leaves_platform_unknown() {
+        assert_eq!(
+            platform_for_bundle_licensed_to("acme-production").await,
+            Platform::Unknown
+        );
     }
 
     #[test]

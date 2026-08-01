@@ -80,7 +80,7 @@ impl IndexSettings {
     /// Determines additional field values from previously deserialized data
     pub fn build(mut self) -> Self {
         let source = self.source_mode();
-        let config = format!("{}-{}-{}", &self.mode, source, &self.codec);
+        let config = format!("{}-{}-{}", self.mode, source, self.codec);
         match self.store.as_mut() {
             Some(store) => {
                 store.config = Some(config);

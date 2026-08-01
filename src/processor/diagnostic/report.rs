@@ -373,10 +373,14 @@ pub struct DiagnosticStats {
     pub processing_duration: u128,
     /// All recorded error/warning/success events (source + reason) — the
     /// persisted record failures land in, never only a log line (ADR-0016).
-    pub events: Vec<DiagnosticEvent>,
-    /// The derived verdict; kept equal to `derive_outcome(&events, &docs)` by
-    /// construction (recomputed whenever events/doc counts change).
-    pub outcome: DiagnosticOutcome,
+    ///
+    /// Private with `outcome`: the two are only consistent because every
+    /// mutation here is followed by [`DiagnosticStats::refresh_outcome`], so
+    /// an outcome inconsistent with its events must stay unreachable from
+    /// outside this module.
+    events: Vec<DiagnosticEvent>,
+    /// The derived verdict, always equal to `derive_outcome(&events, &docs)`.
+    outcome: DiagnosticOutcome,
 }
 
 /// Derive the diagnostic outcome from the recorded events and document
@@ -433,6 +437,13 @@ impl DiagnosticReport {
     /// The derived verdict of this diagnostic.
     pub fn outcome(&self) -> DiagnosticOutcome {
         self.diagnostic.outcome
+    }
+
+    /// The recorded events behind [`DiagnosticReport::outcome`]. Read-only:
+    /// events are added through [`DiagnosticReport::record_event`], which
+    /// keeps the derived outcome in sync.
+    pub fn events(&self) -> &[DiagnosticEvent] {
+        &self.diagnostic.events
     }
 
     pub fn add_identifiers(&mut self, identifiers: Identifiers) {

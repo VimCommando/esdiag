@@ -159,7 +159,7 @@ impl Exporter {
     {
         if docs.is_empty() {
             let mut response = crate::processor::BatchResponse::aggregate();
-            response.status_code = 200;
+            response.status_code = self.no_request_status();
             return Ok(response);
         }
         if matches!(self, Exporter::Archive(_)) {
@@ -193,6 +193,18 @@ impl Exporter {
     fn failed_request_status(&self) -> u16 {
         match self {
             Exporter::Elasticsearch(_) => BatchResponse::HTTP_REQUEST_NOT_COMPLETED,
+            _ => 0,
+        }
+    }
+
+    /// The request status recorded when a result is produced without an HTTP
+    /// round trip, such as an empty batch. A non-HTTP exporter keeps the
+    /// reserved `0`; the Elasticsearch exporter never reports `0`, because
+    /// that code means "no HTTP transport" rather than "no request needed"
+    /// (ADR-0016).
+    fn no_request_status(&self) -> u16 {
+        match self {
+            Exporter::Elasticsearch(_) => 200,
             _ => 0,
         }
     }
@@ -487,7 +499,31 @@ mod tests {
         assert_eq!(response.docs, 0);
         assert_eq!(response.errors, 0);
         assert_eq!(response.batch_count, 0);
-        assert_eq!(response.status_code, 200);
+        // Reserved for a non-HTTP exporter: there was no request to report.
+        assert_eq!(response.status_code, 0);
+    }
+
+    #[tokio::test]
+    async fn non_http_exporters_report_the_reserved_request_status() {
+        let tmp = TempDir::new().expect("temp dir");
+        let exporters = [
+            Exporter::try_from(Uri::File(tmp.path().join("documents.ndjson"))).expect("file exporter"),
+            Exporter::try_from(Uri::Directory(tmp.path().to_path_buf())).expect("directory exporter"),
+            Exporter::try_from(Uri::Stream).expect("stream exporter"),
+        ];
+
+        for exporter in exporters {
+            let response = exporter
+                .send("metrics-node-esdiag".to_string(), vec![serde_json::json!({"id": 1})])
+                .await
+                .expect("batch send");
+
+            assert_eq!(response.docs, 1);
+            assert_eq!(response.errors, 0);
+            // `0` denotes "no HTTP transport", so it is what a successful
+            // local write reports too — not just a failed one (ADR-0016).
+            assert_eq!(response.status_code, 0);
+        }
     }
 
     #[tokio::test]

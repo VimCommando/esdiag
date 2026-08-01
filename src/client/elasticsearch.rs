@@ -44,11 +44,13 @@ impl ElasticsearchBuilder {
         Self { headers, ..self }
     }
 
+    /// The transport boundary, where credential material has to become bytes on
+    /// an `Authorization` header and so leaves its [`redact::Secret`] wrapper.
     pub fn auth(self, auth: Auth) -> Self {
         tracing::debug!("Setting client auth to {}", auth);
         match auth {
-            Auth::Apikey(apikey) => self.apikey(apikey),
-            Auth::Basic(username, password) => self.basic_auth(username, password),
+            Auth::Apikey(apikey) => self.apikey(apikey.expose_secret().clone()),
+            Auth::Basic(username, password) => self.basic_auth(username, password.expose_secret().clone()),
             Auth::None => self,
         }
     }

@@ -160,7 +160,7 @@ impl TryFrom<KnownHost> for ElasticCloudAdminReceiver {
     fn try_from(host: KnownHost) -> Result<Self> {
         let url = host.get_url()?;
         match host.get_auth_for_direction(CredentialDirection::Input)? {
-            Auth::Apikey(apikey) => Ok(ElasticCloudAdminReceiver::new(url, apikey)?),
+            Auth::Apikey(apikey) => Ok(ElasticCloudAdminReceiver::new(url, apikey.expose_secret().clone())?),
             _ => Err(eyre::eyre!("Elastic Cloud Admin requires a URL and ApiKey")),
         }
     }

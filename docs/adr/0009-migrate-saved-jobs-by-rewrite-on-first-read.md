@@ -29,6 +29,13 @@ Every legacy saved job is collect-first (old `handle_job_run` required a host), 
 
 - **`schema_version` makes all future reads deterministic** — no shape-sniffing;
   every migration gets the same versioned hook.
+- **Totality is what makes the migration safe to run unattended.** The whole file is
+  loaded or none of it is, so a single entry the mapping cannot handle would cost the
+  user every saved job at once — and only on the upgrade that migrates. Nothing about
+  the *current* state of the codebase may therefore reject a v1 entry: a legacy
+  `selection` naming a product or source the source registry no longer knows is
+  carried through as authored, and `job run` rejects that one job with an actionable
+  error, rather than the loader rejecting the file.
 - **Migrated `Process` jobs without a `save_dir` become streaming** (no `Save`)
   rather than the legacy always-staged behavior. Accepted deliberately — same
   result, strictly better; execution-mode change is fine.

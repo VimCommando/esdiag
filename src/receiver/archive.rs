@@ -119,10 +119,7 @@ pub(crate) fn archive_has_dir<'a>(
 
     file_names.any(|name| {
         let explicit_dir_entry = name.ends_with('/') || name.ends_with('\\');
-        let components: Vec<&str> = name
-            .split(|ch| ch == '/' || ch == '\\')
-            .filter(|c| !c.is_empty())
-            .collect();
+        let components: Vec<&str> = name.split(['/', '\\']).filter(|c| !c.is_empty()).collect();
         // The directory must appear after the subdir components when scoped.
         // A non-terminal component proves a directory through a child path;
         // a terminal component only counts when the zip has an explicit

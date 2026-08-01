@@ -396,6 +396,32 @@ fn string_set(mapping: &Mapping, field: &str) -> Result<BTreeSet<String>> {
 mod tests {
     use super::{Mapping, Product, Value, ensure_default_tags, normalize_semver_range, overlay};
 
+    fn mapping<const N: usize>(fields: [(&str, Value); N]) -> Mapping {
+        Mapping::from_iter(
+            fields
+                .into_iter()
+                .map(|(key, value)| (Value::String(key.to_string()), value)),
+        )
+    }
+
+    fn text(value: &str) -> Value {
+        Value::String(value.to_string())
+    }
+
+    fn versions(range: &str, path: &str) -> Value {
+        Value::Mapping(mapping([(range, text(path))]))
+    }
+
+    fn field<'a>(entry: &'a Mapping, name: &str) -> Option<&'a Value> {
+        entry.get(Value::String(name.to_string()))
+    }
+
+    fn source<'a>(merged: &'a Mapping, key: &str) -> &'a Mapping {
+        field(merged, key)
+            .and_then(Value::as_mapping)
+            .unwrap_or_else(|| panic!("`{key}` must be a source mapping"))
+    }
+
     #[test]
     fn ensure_default_tags_adds_missing_tags_without_clobbering_existing_tags() {
         let mut entry = Mapping::new();
@@ -500,5 +526,128 @@ mod tests {
             .and_then(Value::as_str);
 
         assert_eq!(tags, Some("standard,light,support"));
+    }
+
+    #[test]
+    fn overlay_preserves_esdiag_enrichments_while_refreshing_upstream_fields() {
+        let esdiag = mapping([(
+            "nodes_stats",
+            Value::Mapping(mapping([
+                ("tags", text("standard,support")),
+                ("source_weight", Value::Number(80u64.into())),
+                ("processing_weight", Value::Number(90u64.into())),
+                ("processable", Value::Bool(true)),
+                ("streamable", Value::Bool(true)),
+                ("required", Value::Bool(true)),
+                ("dependencies", text("nodes")),
+                ("versions", versions(">= 8.0.0", "/_nodes/stats?stale")),
+            ])),
+        )]);
+        let upstream = mapping([(
+            "nodes_stats",
+            Value::Mapping(mapping([
+                ("versions", versions(">= 8.0.0", "/_nodes/stats")),
+                ("extension", text(".json")),
+            ])),
+        )]);
+
+        let (merged, changes) =
+            overlay(Product::Elasticsearch, &esdiag, &upstream, &Mapping::new()).expect("overlay succeeds");
+        let entry = source(&merged, "nodes_stats");
+
+        assert_eq!(field(entry, "tags").and_then(Value::as_str), Some("standard,support"));
+        assert_eq!(field(entry, "source_weight").and_then(Value::as_u64), Some(80));
+        assert_eq!(field(entry, "processing_weight").and_then(Value::as_u64), Some(90));
+        assert_eq!(field(entry, "processable").and_then(Value::as_bool), Some(true));
+        assert_eq!(field(entry, "streamable").and_then(Value::as_bool), Some(true));
+        assert_eq!(field(entry, "required").and_then(Value::as_bool), Some(true));
+        assert_eq!(field(entry, "dependencies").and_then(Value::as_str), Some("nodes"));
+        assert_eq!(field(entry, "versions"), Some(&versions(">= 8.0.0", "/_nodes/stats")));
+        assert_eq!(field(entry, "extension").and_then(Value::as_str), Some(".json"));
+        assert_eq!(
+            changes,
+            vec![
+                "nodes_stats: refreshed `versions` from upstream".to_string(),
+                "nodes_stats: refreshed `extension` from upstream".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn overlay_applies_renames_onto_the_esdiag_key() {
+        let esdiag = mapping([(
+            "cluster_pending_tasks",
+            Value::Mapping(mapping([
+                ("tags", text("support")),
+                ("source_weight", Value::Number(10u64.into())),
+                ("versions", versions(">= 8.0.0", "/_cluster/pending_tasks?stale")),
+            ])),
+        )]);
+        let upstream = mapping([(
+            "pending_tasks",
+            Value::Mapping(mapping([("versions", versions(">= 8.0.0", "/_cluster/pending_tasks"))])),
+        )]);
+        let divergences = mapping([(
+            "renames",
+            Value::Mapping(mapping([("pending_tasks", text("cluster_pending_tasks"))])),
+        )]);
+
+        let (merged, changes) =
+            overlay(Product::Elasticsearch, &esdiag, &upstream, &divergences).expect("overlay succeeds");
+        let entry = source(&merged, "cluster_pending_tasks");
+
+        assert!(!merged.contains_key(text("pending_tasks")));
+        assert_eq!(field(entry, "source_weight").and_then(Value::as_u64), Some(10));
+        assert_eq!(
+            field(entry, "versions"),
+            Some(&versions(">= 8.0.0", "/_cluster/pending_tasks"))
+        );
+        assert_eq!(
+            changes,
+            vec!["cluster_pending_tasks: refreshed `versions` from upstream".to_string()]
+        );
+    }
+
+    #[test]
+    fn overlay_skips_upstream_sources_recorded_as_removed() {
+        let upstream = mapping([
+            (
+                "keep",
+                Value::Mapping(mapping([("versions", versions(">= 8.0.0", "/keep"))])),
+            ),
+            (
+                "drop",
+                Value::Mapping(mapping([("versions", versions(">= 8.0.0", "/drop"))])),
+            ),
+        ]);
+        let divergences = mapping([("removed", Value::Sequence(vec![text("drop")]))]);
+
+        let (merged, changes) =
+            overlay(Product::Elasticsearch, &Mapping::new(), &upstream, &divergences).expect("overlay succeeds");
+
+        assert!(merged.contains_key(text("keep")));
+        assert!(!merged.contains_key(text("drop")));
+        assert!(changes.iter().all(|change| !change.contains("drop")));
+    }
+
+    #[test]
+    fn overlay_flags_esdiag_only_sources_that_divergences_do_not_record() {
+        let esdiag = mapping([
+            ("recorded", Value::Mapping(mapping([("tags", text("support"))]))),
+            ("unrecorded", Value::Mapping(mapping([("tags", text("support"))]))),
+        ]);
+        let upstream = mapping([(
+            "shared",
+            Value::Mapping(mapping([("versions", versions(">= 8.0.0", "/shared"))])),
+        )]);
+        let divergences = mapping([("esdiag_only", Value::Sequence(vec![text("recorded")]))]);
+
+        let (_merged, changes) =
+            overlay(Product::Elasticsearch, &esdiag, &upstream, &divergences).expect("overlay succeeds");
+
+        assert!(changes.iter().any(
+            |change| change == "unrecorded: not present upstream (esdiag-only; record in divergences if intended)"
+        ));
+        assert!(changes.iter().all(|change| !change.starts_with("recorded:")));
     }
 }

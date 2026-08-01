@@ -50,7 +50,7 @@ pub use collector::ElasticsearchCollector;
 pub use metadata::ElasticsearchMetadata;
 use tokio::sync::mpsc;
 pub use {
-    licenses::License,
+    licenses::{License, Licenses},
     version::{Cluster, ClusterMetadata, Version},
 };
 
@@ -70,12 +70,9 @@ use crate::{
     receiver::{MissingSource, Receiver},
 };
 use eyre::{Result, eyre};
-use futures::stream::FuturesUnordered;
+use futures::{future::BoxFuture, stream::FuturesUnordered};
 use serde::{Serialize, de::DeserializeOwned};
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 use {
     alias::{Alias, AliasList},
     cluster_settings::{ClusterSettings, ClusterSettingsDefaults},
@@ -84,7 +81,6 @@ use {
     ilm_policies::IlmPolicies,
     indices_settings::{IndexSettings, IndicesSettings},
     indices_stats::IndicesStats,
-    licenses::Licenses,
     mapping_stats::{MappingStats, MappingSummary},
     nodes::{NodeDocument, Nodes},
     nodes_stats::NodesStats,
@@ -107,39 +103,137 @@ pub struct ElasticsearchDiagnostic {
     receiver: Arc<Receiver>,
 }
 
+/// Runs one processable source's typed processor.
+type EsProcessFn = fn(Arc<ElasticsearchDiagnostic>, mpsc::Sender<ProcessorSummary>) -> BoxFuture<'static, Result<()>>;
+
 /// The registry-keyed dispatch table (ADR-0005): each entry binds one
-/// processable source (by its canonical registry key) to its typed processor.
-/// Validated against the registry at process time by [`validate_es_dispatch_registry`].
+/// processable source to its typed processor in a single registration — the
+/// canonical registry key, the impl's `DataSource::name()`, and the call that
+/// runs it. Adding a processable source is this entry plus its `sources.yml`
+/// entry; [`validate_es_dispatch_registry`] proves the two agree.
 struct EsDispatchEntry {
     /// Canonical registry key handled by this entry.
     key: &'static str,
+    /// `DataSource::name()` of the typed impl bound to `key`.
+    datasource_name: fn() -> String,
+    /// Invokes that impl.
+    process: EsProcessFn,
+}
+
+/// `DataSource::name()` as a plain function pointer, so a dispatch entry can
+/// carry the name its key must equal.
+fn datasource_name<T: DataSource>() -> String {
+    T::name()
+}
+
+/// Binds a buffered source's typed processor as an [`EsProcessFn`]. The type
+/// is named concretely so the resulting future keeps its auto-derived `Send`,
+/// which the web server's handlers require.
+macro_rules! buffered {
+    ($source:ty) => {{
+        fn run(
+            diagnostic: Arc<ElasticsearchDiagnostic>,
+            summary_tx: mpsc::Sender<ProcessorSummary>,
+        ) -> BoxFuture<'static, Result<()>> {
+            Box::pin(async move { diagnostic.process_datasource::<$source>(summary_tx).await })
+        }
+        run
+    }};
+}
+
+/// As [`buffered!`], for a source whose `streamable` registry flag selects
+/// between the streaming and buffered paths.
+macro_rules! streamable {
+    ($source:ty) => {{
+        fn run(
+            diagnostic: Arc<ElasticsearchDiagnostic>,
+            summary_tx: mpsc::Sender<ProcessorSummary>,
+        ) -> BoxFuture<'static, Result<()>> {
+            Box::pin(async move { diagnostic.process_maybe_streaming::<$source>(summary_tx).await })
+        }
+        run
+    }};
+}
+
+/// Both cluster-settings keys export the same dataset through one processor.
+fn process_cluster_settings(
+    diagnostic: Arc<ElasticsearchDiagnostic>,
+    summary_tx: mpsc::Sender<ProcessorSummary>,
+) -> BoxFuture<'static, Result<()>> {
+    Box::pin(async move { diagnostic.process_cluster_settings(summary_tx).await })
 }
 
 const ES_DISPATCH: &[EsDispatchEntry] = &[
-    EsDispatchEntry { key: "indices_stats" },
-    EsDispatchEntry { key: "nodes_stats" },
+    EsDispatchEntry {
+        key: "indices_stats",
+        datasource_name: datasource_name::<IndicesStats>,
+        process: streamable!(IndicesStats),
+    },
+    EsDispatchEntry {
+        key: "nodes_stats",
+        datasource_name: datasource_name::<NodesStats>,
+        process: streamable!(NodesStats),
+    },
     EsDispatchEntry {
         key: "cluster_settings",
+        datasource_name: datasource_name::<ClusterSettings>,
+        process: process_cluster_settings,
     },
     EsDispatchEntry {
         key: "cluster_settings_defaults",
+        datasource_name: datasource_name::<ClusterSettingsDefaults>,
+        process: process_cluster_settings,
     },
-    EsDispatchEntry { key: "health_report" },
-    EsDispatchEntry { key: "ilm_policies" },
+    EsDispatchEntry {
+        key: "health_report",
+        datasource_name: datasource_name::<HealthReport>,
+        process: buffered!(HealthReport),
+    },
+    EsDispatchEntry {
+        key: "ilm_policies",
+        datasource_name: datasource_name::<IlmPolicies>,
+        process: buffered!(IlmPolicies),
+    },
     EsDispatchEntry {
         key: "indices_settings",
+        datasource_name: datasource_name::<IndicesSettings>,
+        process: buffered!(IndicesSettings),
     },
-    EsDispatchEntry { key: "nodes" },
+    EsDispatchEntry {
+        key: "nodes",
+        datasource_name: datasource_name::<Nodes>,
+        process: buffered!(Nodes),
+    },
     EsDispatchEntry {
         key: "cluster_pending_tasks",
+        datasource_name: datasource_name::<PendingTasks>,
+        process: buffered!(PendingTasks),
     },
-    EsDispatchEntry { key: "slm_policies" },
-    EsDispatchEntry { key: "repositories" },
+    EsDispatchEntry {
+        key: "slm_policies",
+        datasource_name: datasource_name::<SlmPolicies>,
+        process: buffered!(SlmPolicies),
+    },
+    EsDispatchEntry {
+        key: "repositories",
+        datasource_name: datasource_name::<Repositories>,
+        process: buffered!(Repositories),
+    },
     EsDispatchEntry {
         key: "searchable_snapshots_stats",
+        datasource_name: datasource_name::<SearchableSnapshotsStats>,
+        process: buffered!(SearchableSnapshotsStats),
     },
-    EsDispatchEntry { key: "snapshot" },
-    EsDispatchEntry { key: "tasks" },
+    EsDispatchEntry {
+        key: "snapshot",
+        datasource_name: datasource_name::<Snapshots>,
+        process: streamable!(Snapshots),
+    },
+    EsDispatchEntry {
+        key: "tasks",
+        datasource_name: datasource_name::<Tasks>,
+        process: buffered!(Tasks),
+    },
 ];
 
 /// Fail fast if the dispatch table and the collection registry disagree
@@ -150,71 +244,13 @@ fn validate_es_dispatch_registry() -> Result<()> {
     static VALIDATED: std::sync::OnceLock<std::result::Result<(), String>> = std::sync::OnceLock::new();
     VALIDATED
         .get_or_init(|| {
-            let claims = vec![
-                ProcessableClaim {
-                    key: "indices_stats",
-                    datasource_name: IndicesStats::name(),
-                },
-                ProcessableClaim {
-                    key: "nodes_stats",
-                    datasource_name: NodesStats::name(),
-                },
-                ProcessableClaim {
-                    key: "cluster_settings",
-                    datasource_name: ClusterSettings::name(),
-                },
-                ProcessableClaim {
-                    key: "cluster_settings_defaults",
-                    datasource_name: ClusterSettingsDefaults::name(),
-                },
-                ProcessableClaim {
-                    key: "health_report",
-                    datasource_name: HealthReport::name(),
-                },
-                ProcessableClaim {
-                    key: "ilm_policies",
-                    datasource_name: IlmPolicies::name(),
-                },
-                ProcessableClaim {
-                    key: "indices_settings",
-                    datasource_name: IndicesSettings::name(),
-                },
-                ProcessableClaim {
-                    key: "nodes",
-                    datasource_name: Nodes::name(),
-                },
-                ProcessableClaim {
-                    key: "cluster_pending_tasks",
-                    datasource_name: PendingTasks::name(),
-                },
-                ProcessableClaim {
-                    key: "slm_policies",
-                    datasource_name: SlmPolicies::name(),
-                },
-                ProcessableClaim {
-                    key: "repositories",
-                    datasource_name: Repositories::name(),
-                },
-                ProcessableClaim {
-                    key: "searchable_snapshots_stats",
-                    datasource_name: SearchableSnapshotsStats::name(),
-                },
-                ProcessableClaim {
-                    key: "snapshot",
-                    datasource_name: Snapshots::name(),
-                },
-                ProcessableClaim {
-                    key: "tasks",
-                    datasource_name: Tasks::name(),
-                },
-            ];
-            let claim_keys = claims.iter().map(|claim| claim.key).collect::<BTreeSet<_>>();
-            let dispatch_keys = ES_DISPATCH.iter().map(|entry| entry.key).collect::<BTreeSet<_>>();
-            if claim_keys != dispatch_keys {
-                return Err(format!(
-                    "Elasticsearch dispatch keys do not match processable claims: dispatch={dispatch_keys:?}, claims={claim_keys:?}"
-                ));
-            }
+            let claims: Vec<ProcessableClaim> = ES_DISPATCH
+                .iter()
+                .map(|entry| ProcessableClaim {
+                    key: entry.key,
+                    datasource_name: (entry.datasource_name)(),
+                })
+                .collect();
             validate_processable_registry("elasticsearch", &claims).map_err(|err| err.to_string())
         })
         .clone()
@@ -226,27 +262,6 @@ impl ElasticsearchDiagnostic {
         self.selected_processors
             .as_ref()
             .is_none_or(|selected| selected.contains(key))
-    }
-
-    /// Route one canonical registry key to its typed processor. The
-    /// `streamable` registry flag gates the streaming path (ADR-0005).
-    async fn dispatch(&self, key: &'static str, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()> {
-        match key {
-            "indices_stats" => self.process_maybe_streaming::<IndicesStats>(summary_tx).await,
-            "nodes_stats" => self.process_maybe_streaming::<NodesStats>(summary_tx).await,
-            "cluster_settings" | "cluster_settings_defaults" => self.process_cluster_settings(summary_tx).await,
-            "health_report" => self.process_datasource::<HealthReport>(summary_tx).await,
-            "ilm_policies" => self.process_datasource::<IlmPolicies>(summary_tx).await,
-            "indices_settings" => self.process_datasource::<IndicesSettings>(summary_tx).await,
-            "nodes" => self.process_datasource::<Nodes>(summary_tx).await,
-            "cluster_pending_tasks" => self.process_datasource::<PendingTasks>(summary_tx).await,
-            "slm_policies" => self.process_datasource::<SlmPolicies>(summary_tx).await,
-            "repositories" => self.process_datasource::<Repositories>(summary_tx).await,
-            "searchable_snapshots_stats" => self.process_datasource::<SearchableSnapshotsStats>(summary_tx).await,
-            "snapshot" => self.process_maybe_streaming::<Snapshots>(summary_tx).await,
-            "tasks" => self.process_datasource::<Tasks>(summary_tx).await,
-            other => Err(eyre!("No Elasticsearch processor registered for '{other}'")),
-        }
     }
 
     async fn process_maybe_streaming<T>(&self, summary_tx: mpsc::Sender<ProcessorSummary>) -> Result<()>
@@ -506,16 +521,15 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
             }
             let weight = processing_weight("elasticsearch", entry.key);
             if policy.is_concurrent(weight) {
-                let (diag, tx) = (diag.clone(), summary_tx.clone());
-                concurrent.push(async move { diag.dispatch(entry.key, tx).await });
+                concurrent.push((entry.process)(diag.clone(), summary_tx.clone()));
             } else {
-                sequential.push(entry.key);
+                sequential.push(entry);
             }
         }
 
         let sequential_task = async {
-            for key in sequential {
-                diag.dispatch(key, summary_tx.clone()).await?;
+            for entry in sequential {
+                (entry.process)(diag.clone(), summary_tx.clone()).await?;
             }
             Ok::<(), eyre::Error>(())
         };
@@ -558,4 +572,14 @@ pub struct Lookups {
     pub mapping_stats: Lookup<MappingSummary>,
     pub node: Lookup<NodeDocument>,
     pub shared_cache: Lookup<SharedCacheStats>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_es_dispatch_registry;
+
+    #[test]
+    fn dispatch_table_and_registry_agree() {
+        validate_es_dispatch_registry().expect("Elasticsearch dispatch table matches the collection registry");
+    }
 }

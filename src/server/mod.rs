@@ -35,7 +35,7 @@ use axum::{
     Router,
     extract::{DefaultBodyLimit, Request, State},
     http::{
-        HeaderMap,
+        HeaderMap, StatusCode,
         header::{HeaderName, VARY},
     },
     middleware,
@@ -1749,14 +1749,22 @@ fn broadcast_receiver_stream(
     )
 }
 
-async fn events(
-    axum::extract::State(state): axum::extract::State<Arc<ServerState>>,
-    headers: HeaderMap,
-) -> impl axum::response::IntoResponse {
+/// Subscribe to the shared event bus. The subscriber's resolved identity is
+/// what [`event_visible_to_user`] filters on, so an unresolved identity must
+/// not fall back to [`DEFAULT_OWNER`] while a provider requires one: that
+/// owner is also where any event published without an explicit owner lands
+/// (ADR-0008). The `require_authenticated_user` layer rejects these requests
+/// too; this check keeps the guarantee local to the delivery path.
+async fn events(axum::extract::State(state): axum::extract::State<Arc<ServerState>>, headers: HeaderMap) -> Response {
     tracing::debug!("Started events stream");
-    let (_, request_user) = state
-        .resolve_user_email(&headers)
-        .unwrap_or_else(|_| (false, DEFAULT_OWNER.to_string()));
+    let request_user = match state.resolve_user_email(&headers) {
+        Ok((_, user)) => user,
+        Err(err) if state.server_policy.requires_authentication() => {
+            tracing::warn!("Event stream denied: {}", err);
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        Err(_) => DEFAULT_OWNER.to_string(),
+    };
     let initial_stats = state.get_stats().await;
     let initial = stats_event(format!(r#"{{"stats":{}}}"#, initial_stats));
     Sse::new(broadcast_receiver_stream(
@@ -1765,6 +1773,7 @@ async fn events(
         request_user,
         state.shutdown_receiver(),
     ))
+    .into_response()
 }
 
 fn event_visible_to_user(event: &ServerEvent, user: &str) -> bool {
@@ -1820,8 +1829,8 @@ async fn add_client_hint_headers(mut response: Response) -> Response {
 mod tests {
     use super::{
         ApiKeyFormSignals, JobConcurrencyCaps, JobRunSignals, RuntimeMode, Server, ServerEvent, ServerPolicy,
-        ServerState, Stats, event_visible_to_user, receiver_stream, replace_job_event, signal_event, stats_event,
-        targeted_signal_event, test_server_state,
+        ServerState, Stats, broadcast_receiver_stream, event_visible_to_user, receiver_stream, replace_job_event,
+        signal_event, stats_event, targeted_signal_event, test_server_state,
     };
     use crate::data::{Auth, KnownHostBuilder};
     #[cfg(feature = "keystore")]
@@ -1894,7 +1903,7 @@ mod tests {
         let super::JobInput::FromRemoteHost { host, .. } = first.input else {
             panic!("expected remote host job input");
         };
-        assert!(matches!(host.get_auth(), Ok(Auth::Apikey(key)) if key == ad_hoc_key));
+        assert!(matches!(host.get_auth(), Ok(Auth::Apikey(key)) if key.expose_secret() == ad_hoc_key));
         assert!(
             state.pop_job_request(42).await.is_none(),
             "ad-hoc input key must not survive the execution handoff"
@@ -2144,6 +2153,64 @@ mod tests {
 
         let events: Vec<_> = receiver_stream(rx).collect().await;
         assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn service_mode_event_stream_requires_iap_header() {
+        let mut state = test_server_state();
+        let state_mut = Arc::get_mut(&mut state).expect("unique state");
+        state_mut.runtime_mode = RuntimeMode::Service;
+        state_mut.server_policy = ServerPolicy::defaults(RuntimeMode::Service);
+
+        let denied = super::events(axum::extract::State(Arc::clone(&state)), HeaderMap::new()).await;
+        assert_eq!(denied.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            super::IAP_USER_EMAIL_HEADER,
+            "accounts.google.com:alice@example.com".parse().expect("valid header"),
+        );
+        let allowed = super::events(axum::extract::State(state), headers).await;
+        assert_eq!(allowed.status(), axum::http::StatusCode::OK);
+    }
+
+    /// The gate the predicate feeds: three subscribers on one bus, each with a
+    /// different expected count, so a stream that drops the filter or compares
+    /// the wrong field cannot keep all three right.
+    #[tokio::test]
+    async fn broadcast_stream_delivers_owned_and_broadcast_events_per_subscriber() {
+        let (tx, _) = broadcast::channel(8);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (alice_rx, bob_rx, carol_rx) = (tx.subscribe(), tx.subscribe(), tx.subscribe());
+
+        tx.send(targeted_signal_event(
+            "alice@example.com",
+            r#"{"archive":{"status":"ready"}}"#,
+        ))
+        .expect("send alice's archive event");
+        tx.send(targeted_signal_event(
+            "bob@example.com",
+            r#"{"archive":{"status":"ready"}}"#,
+        ))
+        .expect("send bob's archive event");
+        tx.send(stats_event(r#"{"stats":{"jobs":{"total":1}}}"#))
+            .expect("send the broadcast stats event");
+        tx.send(signal_event(r#"{"loading":false}"#).for_owner("alice@example.com"))
+            .expect("send alice's signal event");
+        // Closes each subscription once the buffered events drain, ending the
+        // streams so they can be collected.
+        drop(tx);
+
+        let subscribed = |rx, user: &str| {
+            broadcast_receiver_stream(rx, None, user.to_string(), shutdown_rx.clone()).collect::<Vec<_>>()
+        };
+        let alice = subscribed(alice_rx, "alice@example.com").await;
+        let bob = subscribed(bob_rx, "bob@example.com").await;
+        let carol = subscribed(carol_rx, "carol@example.com").await;
+
+        assert_eq!(alice.len(), 3, "alice's two events plus the broadcast");
+        assert_eq!(bob.len(), 2, "bob's one event plus the broadcast");
+        assert_eq!(carol.len(), 1, "the broadcast alone");
     }
 
     #[test]
@@ -2435,14 +2502,7 @@ mod tests {
     async fn secret_delete_path_prefers_secret_id_route_over_generic_action_route() {
         let _tmp = setup_keystore_env();
         authenticate("secretpw").expect("create keystore");
-        upsert_secret_auth(
-            "servermore",
-            SecretAuth::ApiKey {
-                apikey: "super-secret-api-key".to_string(),
-            },
-            "secretpw",
-        )
-        .expect("store secret");
+        upsert_secret_auth("servermore", SecretAuth::apikey("super-secret-api-key"), "secretpw").expect("store secret");
 
         let (mut server, bound_addr) =
             Server::start([127, 0, 0, 1], 0, Exporter::default(), String::new(), RuntimeMode::User)

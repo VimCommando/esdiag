@@ -14,6 +14,8 @@ pub(crate) const KIBANA_REQUEST_CONCURRENCY: usize = 5;
 #[derive(Clone, Debug)]
 pub struct KibanaClient {
     inner: kibana_sync::KibanaClient,
+    /// Retained only to seed the space-scoped client used by asset setup.
+    #[cfg(feature = "setup")]
     auth: Auth,
 }
 
@@ -31,7 +33,11 @@ impl KibanaClient {
             .build()
             .wrap_err("Failed to build Kibana client")?;
 
-        Ok(Self { inner, auth })
+        Ok(Self {
+            inner,
+            #[cfg(feature = "setup")]
+            auth,
+        })
     }
 
     /// Send a request to a given path on the Kibana client
@@ -48,6 +54,7 @@ impl KibanaClient {
             .wrap_err("Failed to send request")
     }
 
+    #[cfg(feature = "setup")]
     pub(crate) fn sync_client(
         &self,
         spaces: impl IntoIterator<Item = (String, String)>,
@@ -87,10 +94,12 @@ impl std::fmt::Display for KibanaClient {
     }
 }
 
+/// The transport boundary for Kibana: `kibana-sync` takes plaintext, so this is
+/// where credential material leaves its [`redact::Secret`] wrapper.
 fn to_kibana_sync_auth(auth: Auth) -> kibana_sync::Auth {
     match auth {
-        Auth::Apikey(apikey) => kibana_sync::Auth::Apikey(apikey),
-        Auth::Basic(username, password) => kibana_sync::Auth::Basic(username, password),
+        Auth::Apikey(apikey) => kibana_sync::Auth::Apikey(apikey.expose_secret().clone()),
+        Auth::Basic(username, password) => kibana_sync::Auth::Basic(username, password.expose_secret().clone()),
         Auth::None => kibana_sync::Auth::None,
     }
 }
@@ -114,11 +123,11 @@ mod tests {
     #[test]
     fn auth_mapping_preserves_basic_api_key_and_none_modes() {
         assert!(matches!(
-            to_kibana_sync_auth(Auth::Basic("elastic".to_string(), "secret".to_string())),
+            to_kibana_sync_auth(Auth::basic("elastic", "secret")),
             kibana_sync::Auth::Basic(username, password) if username == "elastic" && password == "secret"
         ));
         assert!(matches!(
-            to_kibana_sync_auth(Auth::Apikey("encoded".to_string())),
+            to_kibana_sync_auth(Auth::apikey("encoded")),
             kibana_sync::Auth::Apikey(key) if key == "encoded"
         ));
         assert!(matches!(to_kibana_sync_auth(Auth::None), kibana_sync::Auth::None));
@@ -143,8 +152,7 @@ mod tests {
     #[tokio::test]
     async fn request_headers_map_basic_api_key_and_none_auth() {
         let basic = capture_single_request(|url| async move {
-            let client =
-                KibanaClient::try_new(url, Auth::Basic("elastic".to_string(), "changeme".to_string())).expect("client");
+            let client = KibanaClient::try_new(url, Auth::basic("elastic", "changeme")).expect("client");
             let _ = client.test_connection().await.expect("response");
         })
         .await;
@@ -155,7 +163,7 @@ mod tests {
         assert!(basic.contains("kbn-xsrf: true"), "unexpected request:\n{basic}");
 
         let api_key = capture_single_request(|url| async move {
-            let client = KibanaClient::try_new(url, Auth::Apikey("key-material".to_string())).expect("client");
+            let client = KibanaClient::try_new(url, Auth::apikey("key-material")).expect("client");
             let _ = client.test_connection().await.expect("response");
         })
         .await;

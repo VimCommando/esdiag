@@ -599,7 +599,12 @@ async fn host_update_rejects_partial_basic_auth_for_existing_basic_host() {
     let hosts = read_hosts(&home);
     let host = hosts.get("basic-es").expect("saved host exists");
     assert_eq!(host.legacy_username.as_deref(), Some("elastic"));
-    assert_eq!(host.legacy_password.as_deref(), Some("old-pass"));
+    assert_eq!(
+        host.legacy_password
+            .as_ref()
+            .map(|password| password.expose_secret().as_str()),
+        Some("old-pass")
+    );
     assert!(host.secret.is_none(), "failed update should not add a secret reference");
 
     let _ = shutdown_tx.send(());

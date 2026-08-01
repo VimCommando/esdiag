@@ -13,6 +13,7 @@ published release notes, maintenance branches, and tagged history.
 ### Changed
 
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
+- Changed platform detection to identify Elastic Cloud Hosted bundles from a cluster license issued to `Elastic Cloud`, so API-only hosted bundles no longer report an unknown platform (#347).
 - Changed collection and processing source selection to use canonical registry keys and added a maintainer reconciliation utility for upstream support-diagnostics sources (#348).
 - Kept manifests and indexed diagnostics compatible across the platform/application split (#354).
 - Changed diagnostic outcome derivation so optional sources absent from imported bundles do not make otherwise successful processing partial (#350).
@@ -22,9 +23,19 @@ published release notes, maintenance branches, and tagged history.
 - Changed saved jobs to rewrite legacy `jobs.yml` definitions into the versioned phase-based schema on first read (#353).
 - Scoped live `Collect` to Elasticsearch, Kibana, and Logstash; Agent and platform diagnostics now direct users to `Load`/`read` product-provided bundles (#355).
 
+### Fixed
+
+- Fixed compilation of every `server`, `setup`, and `keystore` feature combination, including `--no-default-features` (#347).
+- Fixed the file, stream, and directory exporters reporting a fabricated HTTP `200` request status; they now report the reserved `0` that means "no HTTP transport", so a real Elasticsearch response is distinguishable from a local write (#350).
+- Fixed legacy `jobs.yml` migration failing the whole file when one saved job selected a source the current registry no longer knows; such a selection now migrates as authored and is reported when that job runs (#353).
+- Fixed `diagnostic.application` and `diagnostic.platform` matching nothing in indices created before those fields were renamed; `setup` now installs the mirrored field alias on them, so a dashboard resolves either provenance name across old and new indices (#354).
+- Fixed four ESDiag data views matching on a bare `{class}-{subtype}` prefix, which also matched indices ESDiag does not own; they now pin the `-esdiag` stream suffix (#354).
+- Fixed a loaded Elastic Agent diagnostic reporting as skipped by design, which read as "ESDiag will never process this"; it now reports as not yet implemented (#355).
+
 ### Security
 
 - Clarified credential custody so saved credentials are mediated by the user-mode keystore, service-mode outputs use runtime-provided credentials, and ad-hoc input API keys remain transient (#352).
+- Wrapped every API key, password, and cached keystore password in a redacting type, so credential material renders as a marker in debug and log output and can only be serialized where a field opts in (#352).
 
 ## [0.16.0] - 2026-07-11
 

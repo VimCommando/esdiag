@@ -40,6 +40,9 @@ impl SavedJobsDocument {
     }
 }
 
+/// The pre-phase `{collect, action}` shape, read only to migrate an existing
+/// `jobs.yml` (ADR-0009). Nothing live may hold these types: the fused action
+/// is what the phase model replaced.
 #[derive(Clone, Deserialize)]
 struct LegacyJob {
     #[serde(default, skip_serializing_if = "Identifiers::is_empty")]
@@ -89,9 +92,17 @@ pub struct NeedsCollect;
 #[derive(Clone)]
 pub struct NeedsAction;
 
+/// The Phase-1 `Collect` input under construction, with the Phase-2a save
+/// directory the terminal builder methods fold into a [`SaveTarget`].
+struct CollectDraft {
+    host: String,
+    diagnostic_type: String,
+    save_dir: Option<PathBuf>,
+}
+
 pub struct JobBuilder<State> {
     identifiers: Identifiers,
-    collect: Option<LegacyJobCollect>,
+    collect: Option<CollectDraft>,
     _state: PhantomData<State>,
 }
 
@@ -222,6 +233,15 @@ pub enum SendMode {
     Local,
 }
 
+/// The v1 → phase mapping (ADR-0009). It is closed and total over the legacy
+/// `action`: each variant has exactly one target and nothing about the current
+/// registry can reject it, so upgrading never costs a user their saved jobs.
+///
+/// It stays a `TryFrom` because the shared [`Job::try_new`] constructor has the
+/// final word on the phase invariants. Those hold by construction here — `input`
+/// is always `Collect`, `Upload` always leaves a bundle to send — so the only
+/// reachable failure is a legacy entry with no collect host, which ESDiag never
+/// wrote and could never have run.
 impl TryFrom<LegacyJob> for Job {
     type Error = eyre::Report;
 
@@ -249,7 +269,7 @@ impl TryFrom<LegacyJob> for Job {
             LegacyJobAction::Process { output, selection } => (
                 retained_save,
                 Some(Process {
-                    selection: canonicalize_legacy_selection(selection)?,
+                    selection: canonicalize_legacy_selection(selection),
                     export: output,
                 }),
                 None,
@@ -260,17 +280,32 @@ impl TryFrom<LegacyJob> for Job {
     }
 }
 
-fn canonicalize_legacy_selection(selection: Option<LegacyJobProcessSelection>) -> Result<Option<ProcessSelection>> {
-    let Some(selection) = selection else {
-        return Ok(None);
-    };
-    let selected =
-        ApiResolver::resolve_processing_selection(&selection.product, &selection.diagnostic_type, &selection.selected)?;
-    Ok(Some(JobProcessSelection {
+/// Canonicalizes a v1 selection's source keys so a legacy name still resolves
+/// against the current registry (ADR-0005 key alignment).
+///
+/// Deliberately infallible: the migration is total (ADR-0009), and one entry
+/// naming a product or source the current registry no longer knows must not cost
+/// the user the rest of `jobs.yml`. Such a selection is carried through as
+/// authored, which leaves the eventual `job run` to reject it — one job, with an
+/// actionable error, instead of an unreadable file.
+fn canonicalize_legacy_selection(selection: Option<LegacyJobProcessSelection>) -> Option<ProcessSelection> {
+    let selection = selection?;
+    let selected = ApiResolver::resolve_processing_selection(
+        &selection.product,
+        &selection.diagnostic_type,
+        &selection.selected,
+    )
+    .unwrap_or_else(|err| {
+        tracing::warn!(
+            "Migrated saved job keeps its selection as authored; it does not resolve against the current sources: {err}"
+        );
+        selection.selected.clone()
+    });
+    Some(JobProcessSelection {
         product: selection.product,
         diagnostic_type: selection.diagnostic_type,
         selected,
-    }))
+    })
 }
 
 impl Job {
@@ -592,7 +627,7 @@ impl JobBuilder<NeedsCollect> {
         }
         Ok(JobBuilder {
             identifiers: self.identifiers,
-            collect: Some(LegacyJobCollect {
+            collect: Some(CollectDraft {
                 host: host_name.to_string(),
                 diagnostic_type: default_diagnostic_type(),
                 save_dir: None,
@@ -676,7 +711,7 @@ impl JobBuilder<NeedsAction> {
         )
     }
 
-    fn collect_mut(&mut self) -> &mut LegacyJobCollect {
+    fn collect_mut(&mut self) -> &mut CollectDraft {
         self.collect.as_mut().expect("typestate guarantees collect")
     }
 
@@ -749,7 +784,7 @@ fn schema_version(content: &str) -> Result<Option<u32>> {
     let Some(version) = mapping.get(&key) else {
         return Ok(None);
     };
-    let has_jobs_key = mapping.get(&serde_yaml::Value::String("jobs".to_string())).is_some();
+    let has_jobs_key = mapping.get(serde_yaml::Value::String("jobs".to_string())).is_some();
 
     match version {
         serde_yaml::Value::Number(number) => number
@@ -979,6 +1014,74 @@ process-job:
             process_stage.selection.as_ref().expect("selection").diagnostic_type,
             "minimal"
         );
+    }
+
+    #[test]
+    fn legacy_upload_without_save_dir_migrates_to_a_temporary_bundle() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        let path = tmp.path().join("jobs.yml");
+        write_jobs(
+            &path,
+            r#"
+upload-job:
+  collect:
+    host: prod
+  action: upload
+  upload_id: upload-123
+"#,
+        );
+
+        let jobs = load_saved_jobs().expect("load jobs");
+        let job = jobs.get("upload-job").expect("job");
+
+        let save = job
+            .save()
+            .expect("`send` requires a bundle, so the migration stages one");
+        assert!(save.dir.is_none(), "an unspecified bundle directory stays temporary");
+        assert_eq!(job.send().expect("send").upload_id, "upload-123");
+    }
+
+    #[test]
+    fn legacy_selection_the_current_registry_rejects_migrates_as_authored() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        let path = tmp.path().join("jobs.yml");
+        write_jobs(
+            &path,
+            r#"
+collect-job:
+  collect:
+    host: prod
+  action: collect
+  output_dir: /tmp/collect
+stale-selection-job:
+  collect:
+    host: prod
+  action: process
+  output:
+    type: stdout
+  selection:
+    product: kibana
+    diagnostic_type: standard
+    selected:
+      - a_source_the_registry_no_longer_knows
+"#,
+        );
+
+        let jobs = load_saved_jobs().expect("a selection the registry rejects must not fail the whole file");
+
+        assert!(jobs.contains_key("collect-job"), "the other saved jobs survive");
+        let selection = jobs
+            .get("stale-selection-job")
+            .and_then(|job| job.process())
+            .and_then(|process| process.selection.as_ref())
+            .expect("selection");
+        assert_eq!(selection.product, "kibana");
+        assert_eq!(selection.selected, vec!["a_source_the_registry_no_longer_knows"]);
+
+        let migrated = std::fs::read_to_string(&path).expect("read migrated file");
+        assert!(migrated.contains("schema_version: 2"), "the file still converges");
     }
 
     #[test]
