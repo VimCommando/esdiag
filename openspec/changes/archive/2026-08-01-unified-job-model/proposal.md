@@ -28,14 +28,11 @@ and stage-aligned modules).
   transform, and export overlap). One executor derives and drives both.
 - New job shapes fall out for free: `Load`-input jobs, streaming jobs, and
   Save + Process + Export + Send in a single run — none expressible today.
-- Included diagnostics execute as **child `Job`s** under the same executor, each minting a
-  child `JobID`.
-- **BREAKING (internal):** retire `Collector`, `Processor` (as distinct operation types),
-  `JobAction`, the `JobCollect` fusion, and `into_collect_exporter`; converge the duplicate
-  CLI-streaming and job-staged process paths onto the one executor. Realign modules to the
-  stages (`job/`, `receiver/`, `processor/`, `exporter/`, `uploader.rs`).
-- The web form binds the unified `Job` phases directly; `JobSignals` collapses to a thin
-  presentation projection. UI verbs (collect/process/send) remain presentation labels.
+- Retire `JobAction` and the `JobCollect` fusion; `Job`s are constructed from phases.
+
+Per the design's phased strategy the executor lands **behind** the existing surfaces:
+`esdiag job run` drives it, while `collect` / `process` / `read` and the web `job_runner`
+keep their current paths until the follow-up retires them.
 
 ## Capabilities
 
@@ -45,29 +42,20 @@ and stage-aligned modules).
 
 ### Modified Capabilities
 
-- `collection-execution`: replace the one-/two-job boundary with a single `Job` whose
-  execution mode (staged vs streaming) is *derived* from `Save`; add the phase-composed
-  `Job` model and its construction invariants, `Load` input, and concurrent Export + Send;
-  converge collection and processing onto one executor.
-- `diagnostic-workflow`: bind the web workflow to the unified `Job` phases (`JobSignals`
-  becomes a projection); make Phase 3 *and/or* so a processed job MAY also forward its raw
-  bundle in the same run.
-- `included-diagnostic-jobs`: each included diagnostic executes as a child `Job` (a
-  `Load`-input, processing job) under the one executor, minting a child `JobID`.
+- `collection-execution`: add the phase-composed `Job` model and its construction
+  invariants, the derived staged-vs-streaming execution mode driven by one executor,
+  `Load` input, and concurrent Export + Send.
 
 ## Impact
 
-- **Core:** new `job/` module (the `Job` model, phase types, validated construction, and
-  the `executor` that derives staged vs streaming and drives the stages); `receiver/`
-  (`Collect` + `Load` sources); `processor/` (transform only); `exporter/` split by role
-  into `BundleExporter` (`Save`) + `DocumentExporter` (`Export`); `uploader.rs` (`Send`).
-  Retires `Collector`, `Processor` types, `JobAction`, `JobCollect`, `into_collect_exporter`,
-  and the duplicate CLI-streaming / job-staged paths.
-- **CLI:** `collect` / `process` / `read` / `job run` build a `Job` and hand it to the one
-  executor; the `collect --upload` handoff becomes a `Collect` + `save` + `send` job.
-- **Web UI:** the form binds `Job` phases directly; `JobSignals` reduced to a projection;
-  the `Send` panel can enable Export **and** Send together.
+- **Core:** new `job/` module — the `Job` model, phase types, validated construction, and
+  the `executor` that derives staged vs streaming and drives the stages. Retires
+  `JobAction` and the `JobCollect` fusion.
+- **CLI:** `job run` builds a `Job` and hands it to the executor.
 - **Out of scope:** the on-disk `jobs.yml` migration to the phase shape is owned by
   `saved-job-migration` (ADR-0009); this change owns the in-memory model and executor.
+- **Follow-up:** routing the remaining CLI and web surfaces through the executor, the
+  stage-aligned module split, retiring `Collector` / `Processor` / `into_collect_exporter`,
+  and child jobs as literal `model::Job`s are owned by **`executor-convergence`** (#368).
 - **Depends on** `platform-application-split` (ADR-0001) for `Platform` propagation to
   child jobs.

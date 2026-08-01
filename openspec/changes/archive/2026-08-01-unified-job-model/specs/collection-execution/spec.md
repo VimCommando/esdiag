@@ -44,8 +44,9 @@ single executor SHALL drive both modes.
 - **AND** MUST NOT require an intermediate bundle to materialise first
 
 #### Scenario: One executor drives both modes
-- **WHEN** either a staged job or a streaming job is executed
-- **THEN** both MUST run through the same executor, which selects its strategy from the derived mode
+- **WHEN** a `Job` is executed, whether its derived mode is staged or streaming
+- **THEN** it MUST run through the same executor, which selects its strategy from the derived mode
+- **AND** no second executor or mode-specific operation type MUST exist for either mode
 
 ### Requirement: Load Input Jobs
 The system SHALL support jobs whose Phase-1 input is `Load` — reading an existing diagnostic
@@ -89,14 +90,3 @@ job selects a `Send` stage and no `Process` stage. The bundle MAY originate from
 - **WHEN** the job runs
 - **THEN** the system transmits the loaded bundle without creating processed diagnostic documents
 
-## REMOVED Requirements
-
-### Requirement: One-Job and Two-Job Workflow Modes
-**Reason**: The one-/two-job boundary was an artifact of the always-staged legacy path.
-Under the unified model a job is a single `Job` whose execution mode (staged vs streaming) is
-*derived* from whether `Save` is selected — covered by the new "Derived Execution Mode"
-requirement. There is no second job created when saving.
-**Migration**: `Collect -> Process -> Send` without `Save` is now one **streaming** job;
-`Collect -> Save -> Process` (optionally with `Send`) is now one **staged** job. Callers that
-previously created a second job to consume the retained archive instead construct a single
-staged `Job`; the executor materialises the bundle as the serialization barrier internally.

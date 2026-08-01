@@ -32,17 +32,13 @@ Process { selection, export: ExportTarget }   // Export lives inside Process (Mo
 
 - A new `job/` module owns the `Job` type, the phase enums, a **validated constructor**
   (invariants below), and an `executor` that derives staged vs streaming and drives the
-  stages. Both the CLI and the web build a `Job` and hand it to this one executor.
-- `receiver/` resolves Phase-1 input uniformly for both `Collect` (remote, uses a client)
-  and `Load` (local/download, no client).
-- `processor/` is transform-only (per-API processors); it no longer owns collection or
-  orchestration of sinks.
-- `exporter/` is typed by role: `BundleExporter` (`Save`, raw) and `DocumentExporter`
-  (`Export`, processed). Role-typing makes the invalid pairings — processed-docs-to-bundle
-  and raw-to-cluster — unrepresentable.
-- `uploader.rs` is `Send`.
-- Retire `into_collect_exporter` and the `JobAction`/`JobCollect` fusion; the executor
-  selects its strategy from the derived mode rather than from a fused action variant.
+  stages.
+- Retire the `JobAction`/`JobCollect` fusion; the executor selects its strategy from the
+  derived mode rather than from a fused action variant.
+- The executor lands behind the existing surfaces, driven by `job run` first. Routing the
+  other CLI commands and the web runner through it, and the stage-aligned split of
+  `receiver/` / `processor/` / `exporter/` / `uploader.rs` that goes with it, are the
+  follow-up (`executor-convergence`, #368).
 
 ## Invariants (enforced at construction)
 
@@ -63,23 +59,15 @@ Everything the invariants exclude is unrepresentable in the type, not runtime-ch
 - `send` composes with either: a staged or `Load`-input job transmits the materialised or
   loaded bundle; a streaming job never has a bundle to send.
 
-## Child jobs
-
-Included diagnostics spawn as child `Job`s — a `Load` input over the nested diagnostic
-plus a `Process` stage — each minting a child `JobID` and driven by the same executor. The
-parent sets each child's `Platform` as it spawns it (per `platform-application-split`).
-Inclusion stays one level deep (unchanged).
-
 ## Risks
 
 - **Wide blast radius.** Retiring `Collector`/`Processor` touches collect, process, the CLI,
-  and the web surfaces. Mitigate by landing the `job/` executor behind the existing surfaces
-  first, then removing the old paths once both drive the executor.
+  and the web surfaces. Mitigated by landing the `job/` executor behind the existing
+  surfaces here and removing the old paths in `executor-convergence`, once the model has
+  been reviewed.
 - **Streaming/staged convergence.** The one executor must preserve current streaming
   concurrency and backpressure (`document_channel`); a regression would surface as memory or
   throughput change. Cover with the existing streaming tests before retiring the old path.
 - **Persistence coordination.** The in-memory phase shape must match the on-disk shape that
   `saved-job-migration` (ADR-0009) migrates to; land the model definition here and the
   migration there against the same `Job`.
-- **UI projection.** Collapsing `JobSignals` risks web regressions; keep the UI verbs stable
-  as a presentation projection over the phases rather than a parallel model.
