@@ -29,11 +29,11 @@ products — Elasticsearch, Kibana, Logstash. Agent and platform diagnostics are
 _Avoid_: gather, receive, fetch
 
 **Load**:
-Read an *existing* diagnostic from a directory or bundle. Surfaces as CLI `read`
-(a file path), Web UI *upload* (a user-supplied file), or an upload-service
-*download* — and is how *product-provided* diagnostics enter (an Agent-generated
-bundle, or a platform-generated ECE/ECK/K8P bundle), since ESDiag does not API-collect
-those.
+Read an *existing* diagnostic from a directory or bundle. Surfaces as a CLI
+`process` input (a file path, directory, or service link), Web UI *upload* (a
+user-supplied file), or an upload-service *download* — and is how
+*product-provided* diagnostics enter (an Agent-generated bundle, or a
+platform-generated ECE/ECK/K8P bundle), since ESDiag does not API-collect those.
 _Avoid_: collect, receive, read (a surface form, not the canonical stage)
 
 **Save**:

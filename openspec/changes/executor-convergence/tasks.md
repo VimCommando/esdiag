@@ -1,44 +1,106 @@
 # Tasks
 
-Inherited from `unified-job-model` when it was split for archive; the numbering follows
-that change's sections so the tracking issue (#368) and the design's phasing still line up.
+## 1. Stage-aligned interfaces
 
-## 3. Stage-aligned modules
-- [ ] 3.1 `receiver/` — resolve Phase-1 input uniformly for `Collect` (remote, client) and `Load` (local/download, no client).
-- [ ] 3.2 `processor/` — reduce to transform-only per-API processors; remove collection/sink orchestration.
-- [ ] 3.3 `exporter/` — split by role into `BundleExporter` (`Save`, raw) and `DocumentExporter` (`Export`, processed); make processed-to-bundle and raw-to-cluster unrepresentable.
-- [ ] 3.4 `uploader.rs` — the `Send` stage over an existing bundle.
+- [ ] 1.1 Add a Phase-1 input resolver that handles stable and runtime-bound
+  `Collect`/`Load` references, including service-link materialization and nested
+  child inputs.
+- [ ] 1.2 Split `exporter/` by role into `BundleExporter` (`Save`, raw) and
+  `DocumentExporter` (`Export`, processed); make processed-to-bundle and
+  raw-to-cluster unrepresentable.
+- [ ] 1.3 Expose `uploader.rs` as the `Send` adapter over a resolved bundle.
+- [ ] 1.4 Reduce the internal processing interface to transform plus its
+  `DocumentExporter`; keep temporary compatibility adapters until callers move.
 
-## 4. Retire legacy types and paths
-- [ ] 4.1 Remove `Collector` and `Processor` as distinct operation types; route both through the executor.
-- [ ] 4.3 Remove `into_collect_exporter`.
-- [ ] 4.4 Converge the duplicate CLI-streaming and job-staged process paths onto the one executor.
+## 2. Deepen the executor
 
-## 5. CLI and Web surfaces
-- [ ] 5.1 CLI `collect` / `process` / `read` build a `Job` and hand it to the executor; map `collect --upload` to a `Collect` + `save` + `send` job.
-- [ ] 5.2 Bind the web form to the `Job` phases; collapse `JobSignals` to a thin projection.
-- [ ] 5.3 `Send` panel: derive target availability from active phases; allow processed-output and raw-bundle targets to be enabled together when a bundle is retained.
+- [ ] 2.1 Add runtime input/output binding references to ephemeral jobs and
+  reject those references from saved-job persistence.
+- [ ] 2.2 Introduce `ExecutionContext` with input resolution, role-typed
+  adapters, execution ID/owner, observer, retention policy, and child context.
+- [ ] 2.3 Replace the flag-only result with `ExecutionOutcome`: per-stage
+  results, parent report/outcome, child outcomes, retained bundle, and upload
+  result.
+- [ ] 2.4 Publish typed lifecycle/progress events through the context observer
+  so CLI, web, and API callers project one execution.
+- [ ] 2.5 Materialize remote `Load` inputs when processing, raw Send, or retained
+  download requires a bundle; keep `Save` restricted to `Collect`.
+- [ ] 2.6 Attempt Process/Export and raw-bundle Send independently after bundle
+  resolution and aggregate their stage outcomes without hiding either success.
 
-## 6. Child jobs
-- [ ] 6.1 Spawn each included diagnostic as a child `Job` (`Load` input + `Process`) under the one executor, minting a child `JobID`.
-- [ ] 6.2 Set each child job's `Platform` from the parent as it spawns; keep fan-out one level deep.
+## 3. CLI convergence
 
-## 7. Verification
-- [ ] 7.4 Regression: streaming concurrency/backpressure preserved after path convergence.
-- [ ] 7.5 Test child diagnostics execute as child jobs with inherited `Platform`, one level deep.
-- [ ] 7.6 Confirm the delta spec scenarios in `specs/collection-execution`, `specs/diagnostic-workflow`, and `specs/included-diagnostic-jobs` are covered.
+- [ ] 3.1 Route `collect` through the executor, including filters,
+  `--sources`, `--save-job`, metadata, archive naming, and resolved emitted
+  bundle path.
+- [ ] 3.2 Map `collect --upload` to one staged `Collect + Save + Send` job.
+- [ ] 3.3 Route every `process` input (archive, directory, known host, service
+  link) through the executor.
+- [ ] 3.4 Preserve explicit output and `ESDIAG_OUTPUT_*` fallback, process
+  `--save-job`, summaries/events, child links, and outcome-based exit status.
+- [ ] 3.5 Route standalone `upload` through a `Load(File) + Send` Job while
+  preserving custom `--api-url`.
+- [ ] 3.6 Converge the duplicate CLI streaming and staged processing paths.
+
+## 4. Web and synchronous API convergence
+
+- [ ] 4.1 Replace executable `JobSignals` with backend-owned `JobDraft` state
+  that compiles to a validated `Job` plus runtime bindings.
+- [ ] 4.2 Give processed-document Export and raw-bundle Send separate draft
+  targets and round-trip them without overwriting either value.
+- [ ] 4.3 Derive target availability on the backend from the draft, reject
+  invalid combinations before execution, and patch form state/elements over
+  SSE.
+- [ ] 4.4 Route async known-host, ad-hoc API-key, service-link, and uploaded
+  archive jobs through the executor while preserving transient credentials,
+  owner-scoped events, job caps/statistics, and retained downloads.
+- [ ] 4.5 Route synchronous `/api/api_key` and `/api/service_link` through the
+  executor and preserve parent/child multi-result response arrays.
+
+## 5. Included diagnostic child jobs
+
+- [ ] 5.1 Bind each included diagnostic path to a nested runtime Load input and
+  execute a literal child `Job` (`Load + Process/Export`) through the executor.
+- [ ] 5.2 Mint a child `JobID`; inherit owner and parent `Platform`; preserve
+  parent relationship metadata; reuse the parent's `DocumentExporter`.
+- [ ] 5.3 Carry child outcomes through the executor result/observer and enforce
+  a depth-one fan-out limit.
+
+## 6. Verification gates
+
+- [ ] 6.1 Cover every delta-spec scenario in `collection-execution`,
+  `diagnostic-workflow`, `included-diagnostic-jobs`, `saved-jobs`, and
+  `diagnostic-reporting`.
+- [ ] 6.2 Regression-test streaming overlap, bounded `document_channel`
+  backpressure, and staged serialization.
+- [ ] 6.3 Test Process failure, Export failure after a completed report, and
+  every Export/Send success/failure pair, including successful raw Send after
+  Process failure and successful Export before Send failure.
+- [ ] 6.4 Test stable versus runtime bindings, saved-job rejection of runtime
+  bindings, credential redaction, and one-use ad-hoc API keys.
+- [ ] 6.5 Run a CLI parity matrix for collect/process inputs, standalone
+  upload, `collect --upload`, `--sources`, `--save-job`, environment output
+  fallback, custom upload API URL, summaries, child links, and exit status.
+- [ ] 6.6 Run a web/API parity matrix for owner-scoped events, admission caps,
+  statistics, retained downloads, service-mode output policy, synchronous
+  result arrays, and simultaneous Export + Send.
+- [ ] 6.7 Test child jobs for nested input, distinct IDs, inherited owner and
+  `Platform`, shared document export, preserved parent relation, all child
+  outcomes, parent aggregate status, and one-level fan-out.
+
+## 7. Retire compatibility paths
+
+- [ ] 7.1 Prove all verification gates pass and no production CLI, async web,
+  synchronous API, saved-job, or child-processing call site constructs
+  `Collector` or `Processor` directly.
+- [ ] 7.2 Remove `Collector` and `Processor` as operation types.
+- [ ] 7.3 Remove `into_collect_exporter` and temporary executor compatibility
+  adapters.
+- [ ] 7.4 Remove the legacy two-job web handoff and then sync the
+  one-/two-job requirement removal.
 
 ---
 
-## Inherited state (2026-08-01 split)
-
-Task 4.2 (remove `JobAction` and the `JobCollect` fusion; construct `Job`s from phases) is
-**not** listed here — it completed in `unified-job-model` via `saved-job-migration`, which
-made the persisted job the phase model (`data::Job` re-exports `job::model::Job`) so
-`JobBuilder` builds through `Job::try_new`. `LegacyJobAction` and `LegacyJobCollect` survive
-only to migrate an existing `jobs.yml` (ADR-0009) and are not part of this retirement.
-
-The 6.x semantics already hold: included diagnostics run as child executions with their own
-child job IDs and parent `Platform` propagation (`spawn_sub_processors` +
-`platform-application-split`). What remains is restructuring them as literal child
-`model::Job`s driven by the executor.
+`JobAction` and `JobCollect` retirement is already complete through
+`saved-job-migration`; `LegacyJobAction` and `LegacyJobCollect` remain only for
+ADR-0009 `jobs.yml` migration and are outside this change.

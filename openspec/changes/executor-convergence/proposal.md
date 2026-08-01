@@ -1,37 +1,54 @@
 ## Why
 
-`unified-job-model` (ADR-0002, ADR-0003, ADR-0004) landed the phase-structured `Job` and
-the one executor that derives staged versus streaming and drives both. It landed them
-*behind* the existing surfaces, per its own phased strategy: only `esdiag job run` builds a
-`Job` and hands it to `job::executor::execute`. `esdiag collect` / `process` / `read` still
-run through `Collector`/`Processor`, and the web `job_runner` still has its own
-`execute_remote_collection_job` / `run_processor_job` / `run_forward_job` paths with
-`JobSignals` as an independent model rather than a projection of `Job`.
+`unified-job-model` (ADR-0002, ADR-0003, ADR-0004) landed the phase-structured
+`Job` and the first executor behind the existing surfaces. Only `esdiag job run`
+uses that executor today. `esdiag collect` and `process`, the asynchronous web
+runner, and the synchronous `/api/api_key` and `/api/service_link` handlers still
+construct `Collector` or `Processor` directly.
 
-This change is the second half: retire the legacy operation types and route every surface
-through the one executor. It is the work tracked by #368, split out of `unified-job-model`
-so that change can archive describing only the model and executor it actually shipped.
+The first executor also resolves saved hosts and exporters itself and returns
+only bundle/upload flags. That interface is sufficient for saved jobs, but not
+for transient web credentials, service-mode exporters, owner-scoped events,
+CLI reports, synchronous API result arrays, or included diagnostics nested
+inside a parent bundle.
+
+This change completes #368 by deepening the executor interface and then routing
+every execution surface through it. The serializable `Job` remains the
+phase-structured description of work; execution-only resources and reporting
+move through an `ExecutionContext` and `ExecutionOutcome`.
 
 ## What Changes
 
-- Realign the modules to the stages: `receiver/` resolves Phase-1 input uniformly for
-  `Collect` (remote, client) and `Load` (local/download, no client); `processor/` reduces to
-  transform-only per-API processors; `exporter/` splits by role into `BundleExporter`
-  (`Save`, raw) and `DocumentExporter` (`Export`, processed); `uploader.rs` is `Send`.
-- **BREAKING (internal):** retire `Collector` and `Processor` as distinct operation types
-  and `into_collect_exporter`; converge the duplicate CLI-streaming and job-staged process
-  paths onto the one executor.
-- CLI `collect` / `process` / `read` build a `Job` and hand it to the executor; the
-  `collect --upload` handoff becomes a `Collect` + `save` + `send` job.
-- The web form binds the `Job` phases directly and `JobSignals` collapses to a thin
-  presentation projection. The `Send` panel derives target availability from the active
-  phases, so a processed-output target and a raw-bundle target may be enabled together when
-  a bundle is retained.
-- Included diagnostics become literal child `Job`s (`Load` input plus `Process`) under the
-  same executor, each minting a child `JobID`, with the parent setting each child's
-  `Platform` as it spawns it. Fan-out stays one level deep.
-- With the web runner converged, the one-/two-job workflow boundary disappears and its
-  requirement is removed.
+- Realign modules to the stages: `receiver/` resolves Phase-1 `Collect` and
+  `Load` inputs; `processor/` becomes transform-only; `exporter/` splits into
+  role-typed `BundleExporter` (`Save`, raw) and `DocumentExporter` (`Export`,
+  processed); `uploader.rs` remains `Send`.
+- Deepen the executor to accept an `ExecutionContext` that resolves stable job
+  references and supplies transient inputs/outputs, owner, progress observer,
+  bundle retention, and child-execution context without persisting credentials
+  or server state.
+- Return a structured `ExecutionOutcome` containing stage results, the parent
+  diagnostic report, child outcomes, retained bundle information, and upload
+  result. Callers render CLI summaries, web events, statistics, and synchronous
+  API responses from that one result/event stream.
+- Treat Export and raw-bundle Send as independent selected outputs once a bundle
+  exists. Attempt both even when one fails and aggregate their stage outcomes;
+  an input failure still prevents downstream stages.
+- Route CLI `collect`, `process`, and standalone `upload`, the asynchronous web
+  runner, and synchronous API handlers through the executor.
+  `collect --upload` becomes a
+  `Collect + Save + Send` job using the actual emitted archive path.
+- Replace executable `JobSignals` state with an editable `JobDraft`. The draft
+  mirrors phase choices, keeps processed-output and raw-bundle targets
+  separately, and compiles on the backend into a validated `Job` plus execution
+  context. Incomplete form state is never treated as an executable `Job`.
+- Execute included diagnostics as literal child `Job`s. A child context binds
+  its nested path to the parent resolved bundle and carries child ID, owner,
+  inherited platform, shared document exporter, and depth. Fan-out remains one
+  level deep.
+- Retire `Collector`, `Processor` as operation types, `into_collect_exporter`,
+  and the duplicate CLI/web execution paths only after every caller converges.
+- Remove the legacy one-/two-job web workflow requirement after web convergence.
 
 ## Capabilities
 
@@ -41,24 +58,34 @@ so that change can archive describing only the model and executor it actually sh
 
 ### Modified Capabilities
 
-- `collection-execution`: remove the one-/two-job boundary, now an artifact of the legacy
-  always-staged web path.
-- `diagnostic-workflow`: bind the web workflow to the unified `Job` phases (`JobSignals`
-  becomes a projection); make Phase 3 *and/or* so a processed job MAY also forward its raw
-  bundle in the same run.
-- `included-diagnostic-jobs`: each included diagnostic executes as a child `Job` (a
-  `Load`-input, processing job) under the one executor, minting a child `JobID`.
+- `collection-execution`: define runtime resolution and structured executor
+  results, independent Export/Send completion, surface convergence, and removal
+  of the one-/two-job boundary.
+- `diagnostic-workflow`: compile a backend-owned editable draft into the unified
+  phases and support independent processed-output and raw-bundle targets.
+- `included-diagnostic-jobs`: execute each included diagnostic as a nested-input
+  child `Job` under the same executor with inherited execution context.
+- `saved-jobs`: distinguish the stable-reference subset that may be persisted
+  from ephemeral Jobs containing runtime bindings, and project saved jobs into
+  `JobDraft` for editing.
+- `diagnostic-reporting`: keep `DiagnosticOutcome` authoritative for the
+  diagnostic verdict while `ExecutionOutcome` is authoritative for whole-job
+  terminal status.
 
 ## Impact
 
-- **Core:** retires `Collector`, `Processor` as operation types, and
-  `into_collect_exporter`; restructures `receiver/`, `processor/`, `exporter/`, and
-  `uploader.rs` around the stages. The `job/` module and its executor are already in place
-  from `unified-job-model` and are not redesigned here.
-- **CLI:** `main.rs` routes `collect` / `process` / `read` through the executor.
-- **Web UI:** `job_runner` constructs `Job`s; `JobSignals` reduced to a projection; the
-  `Send` panel can enable Export **and** Send together.
-- **Risk:** wide and regression-prone — a 99KB `main.rs` and the web runner. Streaming
-  concurrency and backpressure (`document_channel`) must be preserved across the
-  convergence, which is why the model landed and was reviewed first.
-- **Depends on** `unified-job-model` (archived) for the `Job` model and executor.
+- **Core:** changes the executor interface and result contract; restructures
+  `receiver/`, `processor/`, `exporter/`, and `uploader.rs`; then removes the
+  legacy operation types.
+- **CLI:** `main.rs` routes `collect`, `process`, and `upload` through the
+  executor while preserving `--sources`, `--save-job`, environment output
+  fallback, custom upload API URL, summaries, child links, and exit behavior.
+- **Web/API:** the asynchronous runner and synchronous APIs use the same
+  executor while preserving transient credential custody, service-mode output
+  policy, owner-scoped events, retained downloads, statistics, and result
+  arrays.
+- **Risk:** wide and regression-prone. Streaming concurrency/backpressure,
+  credential non-persistence, event ownership, and partial-output reporting
+  require explicit parity coverage before legacy retirement.
+- **Depends on:** the archived `unified-job-model` implementation on the
+  `architecture-review` branch.
