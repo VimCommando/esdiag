@@ -18,7 +18,46 @@ extern crate elasticsearch as es;
 use crate::data::{Product, Uri};
 use eyre::{Result, eyre};
 use reqwest::Method;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
+
+/// A response from an Elastic Stack client.
+pub enum ClientResponse {
+    Elasticsearch(es::http::response::Response),
+    Http(reqwest::Response),
+}
+
+impl ClientResponse {
+    pub fn status(&self) -> reqwest::StatusCode {
+        match self {
+            Self::Elasticsearch(response) => {
+                reqwest::StatusCode::from_u16(response.status_code().as_u16()).expect("valid HTTP status code")
+            }
+            Self::Http(response) => response.status(),
+        }
+    }
+
+    pub async fn text(self) -> Result<String> {
+        match self {
+            Self::Elasticsearch(response) => Ok(response.text().await?),
+            Self::Http(response) => Ok(response.text().await?),
+        }
+    }
+
+    pub async fn bytes(self) -> Result<bytes::Bytes> {
+        match self {
+            Self::Elasticsearch(response) => Ok(response.bytes().await?),
+            Self::Http(response) => Ok(response.bytes().await?),
+        }
+    }
+
+    pub async fn json<T: DeserializeOwned>(self) -> Result<T> {
+        match self {
+            Self::Elasticsearch(response) => Ok(response.json().await?),
+            Self::Http(response) => Ok(response.json().await?),
+        }
+    }
+}
 
 /// A standardized client for interacting with Elastic Stack APIs
 pub enum Client {
@@ -35,7 +74,7 @@ impl Client {
         headers: &HashMap<String, String>,
         path: &str,
         body: Option<&[u8]>,
-    ) -> Result<reqwest::Response> {
+    ) -> Result<ClientResponse> {
         tracing::debug!("Request: {method} {path}");
         match self {
             Client::Elasticsearch(client) => {
@@ -63,10 +102,16 @@ impl Client {
                 let response = client
                     .send(method, path, header_map, Option::<&serde_json::Value>::None, body, None)
                     .await?;
-                Ok(response.into())
+                Ok(ClientResponse::Elasticsearch(response))
             }
-            Client::Kibana(client) => client.request(method, headers, path, body).await,
-            Client::Logstash(client) => client.request(method, headers, path, body).await,
+            Client::Kibana(client) => client
+                .request(method, headers, path, body)
+                .await
+                .map(ClientResponse::Http),
+            Client::Logstash(client) => client
+                .request(method, headers, path, body)
+                .await
+                .map(ClientResponse::Http),
         }
     }
 
@@ -234,5 +279,42 @@ impl TryFrom<Uri> for Client {
             },
             _ => Err(eyre!("Unsupported URI")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Json, Router, http::StatusCode, routing::get};
+    use serde_json::json;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn elasticsearch_request_uses_compatibility_response() {
+        let app = Router::new().route(
+            "/_compatibility",
+            get(|| async { (StatusCode::CREATED, Json(json!({ "created": true }))) }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("local address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test application");
+        });
+
+        let client = Client::Elasticsearch(
+            ElasticsearchBuilder::new(format!("http://{address}").parse().expect("server URL"))
+                .build()
+                .expect("Elasticsearch client"),
+        );
+        let response = client
+            .request(Method::GET, &HashMap::new(), "_compatibility", None)
+            .await
+            .expect("Elasticsearch request");
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            response.json::<serde_json::Value>().await.expect("JSON response"),
+            json!({ "created": true })
+        );
     }
 }
