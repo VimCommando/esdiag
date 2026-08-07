@@ -10,6 +10,13 @@ published release notes, maintenance branches, and tagged history.
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-08-07
+
+### Changed
+
+- Changed container builds to use `Cargo.lock` for reproducible dependency resolution.
+- Updated bundled dependencies and third-party notices.
+
 ## [0.16.2] - 2026-08-07
 
 ### Changed
@@ -217,7 +224,8 @@ published release notes, maintenance branches, and tagged history.
   fail on invalid zip paths (#177).
 - Fixed ECK diagnostic path handling for correctly structured archives (#179).
 
-[Unreleased]: https://github.com/elastic/esdiag/compare/0.16.2...0.16
+[Unreleased]: https://github.com/elastic/esdiag/compare/0.16.3...0.16
+[0.16.3]: https://github.com/elastic/esdiag/compare/0.16.2...0.16.3
 [0.16.2]: https://github.com/elastic/esdiag/compare/0.16.1...0.16.2
 [0.16.1]: https://github.com/elastic/esdiag/compare/0.16.0...0.16.1
 [0.16.0]: https://github.com/elastic/esdiag/compare/0.15.0...0.16.0
