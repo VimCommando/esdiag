@@ -12,13 +12,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          previous_tag="$(git tag --merged HEAD --sort=-v:refname | sed -n '2p')"
+          test -n "$previous_tag"
           gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
             gh release create "${{ github.ref_name }}" --draft --verify-tag --generate-notes \
-              --notes-start-tag 0.15.0
+              --notes-start-tag "$previous_tag"
           test "$(gh release view "${{ github.ref_name }}" --json isDraft --jq .isDraft)" = true
       - name: Verify published image manifests
         env:
