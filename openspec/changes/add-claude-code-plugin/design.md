@@ -216,6 +216,8 @@ The stale branch was confirmed separately: the same lookup with a one-minute win
 
 This is a first pass. Intent boundaries are a judgment surface and will need real user phrasings to tune; these three only establish that each branch is reachable and that collection happens in exactly one of them.
 
+The first-job flow was exercised the same way, by running it for real against a cluster with no saved job. Prerequisites were established in the specified order — keystore access, then a collect-role host validated live by `host add`, then an output target — and `--save-job` persisted the job before execution in both the collect-only and process-form shapes, so no separate configuration pass was needed. The declined path, where the user refuses the offer and gets a one-off collection with no job persisted and no repeat prompt, is prompt behavior that was not exercised and is likewise deferred to real user feedback.
+
 ### Saved jobs come in two shapes, and only one leaves something to analyze
 
 Verified against 0.16.4. `--save-job` records whichever invocation it was attached to:
