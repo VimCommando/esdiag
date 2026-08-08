@@ -70,6 +70,21 @@ test_generated_functions() {
   assert_contains "$requests" '/_settings?human&expand_wildcards=all:settings.json'
 }
 
+test_generated_collection_failures() {
+  requests=
+  get_api() {
+    requests="$requests|$1:$2"
+    [[ $1 != '/_alias?human' ]]
+  }
+  skip_api() { :; }
+  CLUSTER_VERSION=7.10.0
+  ES_MAJOR=7
+  ES_MINOR=10
+  ES_PATCH=0
+  ! collect_lite_apis || fail 'generated collection should report failed API requests'
+  assert_contains "$requests" '/_tasks?human&detailed=true:tasks.json'
+}
+
 make_mock_path() {
   mock_bin="$tmp/mock-bin"
   mkdir -p "$mock_bin"
@@ -171,6 +186,7 @@ test_archives_and_validation() {
 
 test_version_predicates
 test_generated_functions
+test_generated_collection_failures
 test_collection_authentication_and_none_output
 test_archives_and_validation
 printf 'esdiag-lite shell tests passed\n'

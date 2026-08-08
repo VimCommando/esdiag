@@ -429,20 +429,22 @@ get_api_version() {
 }
 
 collect_lite_apis() {
-  get_api_alias
-  get_api_cluster_pending_tasks
-  get_api_cluster_settings_defaults
-  get_api_data_stream
-  get_api_ilm_explain
-  get_api_ilm_policies
-  get_api_indices_stats
-  get_api_licenses
-  get_api_nodes
-  get_api_nodes_stats
-  get_api_searchable_snapshots_cache_stats
-  get_api_settings
-  get_api_slm_policies
-  get_api_tasks
+  local status=0
+  get_api_alias || status=1
+  get_api_cluster_pending_tasks || status=1
+  get_api_cluster_settings_defaults || status=1
+  get_api_data_stream || status=1
+  get_api_ilm_explain || status=1
+  get_api_ilm_policies || status=1
+  get_api_indices_stats || status=1
+  get_api_licenses || status=1
+  get_api_nodes || status=1
+  get_api_nodes_stats || status=1
+  get_api_searchable_snapshots_cache_stats || status=1
+  get_api_settings || status=1
+  get_api_slm_policies || status=1
+  get_api_tasks || status=1
+  return "$status"
 }
 # END GENERATED LITE APIS
 
@@ -483,7 +485,10 @@ collect_diag() {
     return 1
   fi
 
-  collect_lite_apis
+  if ! collect_lite_apis; then
+    log_error 'one or more Elasticsearch API requests failed'
+    return 1
+  fi
   save_manifest
   archive_diagnostic
 }

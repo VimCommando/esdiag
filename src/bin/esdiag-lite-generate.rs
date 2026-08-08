@@ -330,9 +330,11 @@ fn render() -> Result<String> {
     writeln!(output, "}}")?;
     writeln!(output)?;
     writeln!(output, "collect_lite_apis() {{")?;
+    writeln!(output, "  local status=0")?;
     for name in names.iter().filter(|name| name.as_str() != "version") {
-        writeln!(output, "  get_api_{}", name)?;
+        writeln!(output, "  get_api_{} || status=1", name)?;
     }
+    writeln!(output, "  return \"$status\"")?;
     writeln!(output, "}}")?;
     Ok(output)
 }
