@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 # ESDiag Lite is a collection-only Elasticsearch diagnostic utility. It saves
-# raw API responses for later processing with `esdiag process`; it does not
-# process, analyze, transform, export, send, upload, or visualize diagnostics.
+# raw API responses for later processing with `esdiag process`. It can
+# optionally upload the generated ZIP archive to Elastic Upload Service; it
+# does not process, analyze, transform, export, or visualize diagnostics.
 #
 # Runtime requirements: Bash 3.2+, curl, and standard POSIX utilities. ZIP
 # output (the default) additionally requires zip. Generated API functions are
@@ -17,6 +18,10 @@ ARCHIVE_FORMAT=zip
 COMMAND=
 AUTH_MODE=
 DIR=
+UPLOAD_HOST=${UPLOAD_HOST:-https://upload.elastic.co}
+UPLOAD_ID=${UPLOAD_ID:-}
+UPLOAD_FILE=
+UPLOAD_REQUESTED=false
 CLUSTER_VERSION=
 ES_MAJOR=
 ES_MINOR=
@@ -69,16 +74,18 @@ log_debug() {
 }
 
 help() {
-  white "Usage: $(green "$0") <COMMAND> [--archive=zip|none]"
+  white "Usage: $(green "$0") <COMMAND> [OPTIONS]"
   printf '\n'
   white 'Commands:'
   printf '\n'
   printf '  %s - Collect diagnostics periodically based on WAIT_SECONDS and COLLECTION_COUNT.\n' "$(green watch)"
   printf '  %s - Collect a single diagnostic immediately.\n' "$(green collect)"
+  printf '  %s - Upload an existing ZIP archive; uses UPLOAD_ID when id is omitted.\n' "$(green 'upload <filename> [id]')"
   printf '\n'
   white 'Options:'
   printf '\n'
   printf '  %s - Output format; zip is the default and none preserves the directory.\n' "$(green --archive=zip\|none)"
+  printf '  %s - Upload the generated ZIP archive to an Elastic Upload Service id.\n' "$(green --upload=UPLOAD_ID)"
   printf '\n'
   white 'Environment:'
   printf '\n'
@@ -86,8 +93,10 @@ help() {
   printf '  %s - Encoded Elasticsearch API key; takes precedence over basic authentication.\n' "$(green ELASTIC_ES_API_KEY)"
   printf '  %s - Username for HTTP basic authentication.\n' "$(green ELASTIC_ES_USERNAME)"
   printf '  %s - Password for HTTP basic authentication.\n' "$(green ELASTIC_ES_PASSWORD)"
+  printf '  %s - Elastic Upload Service base URL; defaults to https://upload.elastic.co.\n' "$(green UPLOAD_HOST)"
+  printf '  %s - Elastic Upload Service id used by upload when [id] is omitted.\n' "$(green UPLOAD_ID)"
   printf '\n'
-  white 'ESDiag Lite only collects raw diagnostic API responses. Process its ZIP or directory output with esdiag process.'
+  white 'ESDiag Lite collects raw diagnostic API responses and can forward its ZIP output. Process its ZIP or directory output with esdiag process.'
   printf '\n'
 }
 
@@ -100,6 +109,21 @@ parse_arguments() {
     collect | watch)
       COMMAND=$1
       shift
+      ;;
+    upload)
+      COMMAND=upload
+      shift
+      if [[ $# -lt 1 || $# -gt 2 ]]; then
+        log_error 'upload requires a filename and accepts an optional upload id'
+        help
+        return 1
+      fi
+      UPLOAD_FILE=$1
+      UPLOAD_REQUESTED=true
+      if [[ $# -eq 2 ]]; then
+        UPLOAD_ID=$2
+      fi
+      return 0
       ;;
     *)
       log_error 'missing or unknown command'
@@ -120,6 +144,14 @@ parse_arguments() {
         log_error 'archive must be zip or none'
         help
         return 1
+        ;;
+      --upload=*)
+        UPLOAD_ID=${1#--upload=}
+        if [[ -z $UPLOAD_ID ]]; then
+          log_error 'upload id must not be empty'
+          return 1
+        fi
+        UPLOAD_REQUESTED=true
         ;;
       *)
         log_error "unknown argument: $1"
@@ -157,11 +189,115 @@ validate_dependencies() {
     return 1
   fi
 
-  if [[ $ARCHIVE_FORMAT == zip ]] && ! command -v zip >/dev/null 2>&1; then
+  if [[ $COMMAND != upload && $ARCHIVE_FORMAT == zip ]] && ! command -v zip >/dev/null 2>&1; then
     printf '%s\n' 'No zip executable found, run with --archive=none to skip archive creation' >&2
     return 1
   fi
+
+  if [[ $UPLOAD_REQUESTED == true ]]; then
+    if ! command -v shasum >/dev/null 2>&1; then
+      log_error 'missing required command shasum for uploads'
+      return 1
+    fi
+    if ! command -v split >/dev/null 2>&1; then
+      log_error 'missing required command split for uploads'
+      return 1
+    fi
+    if ! command -v mktemp >/dev/null 2>&1; then
+      log_error 'missing required command mktemp for uploads'
+      return 1
+    fi
+  fi
 }
+
+validate_upload_configuration() {
+  if [[ -z $UPLOAD_ID ]]; then
+    log_error 'upload id must be provided as [id] or UPLOAD_ID'
+    return 1
+  fi
+  if [[ ! -f $UPLOAD_FILE ]]; then
+    log_error "upload file does not exist: $UPLOAD_FILE"
+    return 1
+  fi
+}
+
+normalize_upload_id() {
+  local id=${1%/}
+  printf '%s\n' "${id##*/}"
+}
+
+file_digest() {
+  local digest
+  digest=$(shasum -a 256 "$1") || return 1
+  printf '%s\n' "${digest%% *}"
+}
+
+upload_diagnostic() (
+  local upload_id
+  local upload_host
+  local temp_dir
+  local file_name
+  local file_size
+  local file_digest_value
+  local part
+  local part_digest
+  local part_number=1
+
+  if ! validate_upload_configuration; then
+    return 1
+  fi
+  upload_id=$(normalize_upload_id "$UPLOAD_ID")
+  upload_host=${UPLOAD_HOST%/}
+  file_name=$(basename "$UPLOAD_FILE")
+  file_size=$(wc -c <"$UPLOAD_FILE") || return 1
+  file_size=${file_size//[[:space:]]/}
+  file_digest_value=$(file_digest "$UPLOAD_FILE") || {
+    log_error "failed to calculate SHA-256 for $UPLOAD_FILE"
+    return 1
+  }
+  temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/esdiag-lite-upload.XXXXXX") || {
+    log_error 'failed to create temporary upload directory'
+    return 1
+  }
+  trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
+
+  if [[ $file_size -lt 50000000 ]]; then
+    cp "$UPLOAD_FILE" "$temp_dir/part-000001" || return 1
+  else
+    split -b 50000000 "$UPLOAD_FILE" "$temp_dir/part-" || {
+      log_error "failed to split $UPLOAD_FILE for upload"
+      return 1
+    }
+  fi
+
+  log_info "$(green uploading) $(gray "$UPLOAD_FILE") to $(blue "$upload_host")"
+  for part in "$temp_dir"/part-*; do
+    part_digest=$(file_digest "$part") || {
+      log_error "failed to calculate SHA-256 for $part"
+      return 1
+    }
+    if curl --fail --silent --show-error --output /dev/null --head \
+      "$upload_host/api/uploads/$upload_id/$file_digest_value/$part_digest"; then
+      log_info "$(yellow skipping) uploaded part $(cyan "$part_number")"
+    elif curl --fail --silent --show-error --request PUT \
+      "$upload_host/api/uploads/$upload_id?part_number=$part_number&part_digest=$part_digest&file_digest=$file_digest_value&filename=$file_name" \
+      --data-binary "@$part"; then
+      log_info "$(green uploaded) part $(cyan "$part_number")"
+    else
+      log_error "failed to upload part $part_number"
+      return 1
+    fi
+    part_number=$((part_number + 1))
+  done
+
+  if curl --fail --silent --show-error --request POST \
+    "$upload_host/api/uploads/$upload_id/$file_digest_value/_finalize"; then
+    log_info "$(green uploaded) $(gray "$UPLOAD_FILE")"
+    return 0
+  fi
+  log_error "failed to finalize upload for $UPLOAD_FILE"
+  return 1
+)
 
 # Compares the validated Elasticsearch version numerically. The generator uses
 # these helpers to lower sources.yml predicates without relying on sort -V or
@@ -458,6 +594,7 @@ archive_diagnostic() {
 
   if (cd "$DIR" && zip -rq "../$archive_path" .); then
     rm -rf "$DIR"
+    UPLOAD_FILE=$archive_path
     log_info "$(green completed) archive $(gray "$archive_path")"
     return 0
   fi
@@ -490,7 +627,12 @@ collect_diag() {
     return 1
   fi
   save_manifest
-  archive_diagnostic
+  if ! archive_diagnostic; then
+    return 1
+  fi
+  if [[ $UPLOAD_REQUESTED == true ]]; then
+    upload_diagnostic
+  fi
 }
 
 watch() {
@@ -529,6 +671,17 @@ main() {
   if [[ $COMMAND == help ]]; then
     help
     return 0
+  fi
+  if [[ $COMMAND == upload ]]; then
+    if ! validate_upload_configuration || ! validate_dependencies; then
+      return 1
+    fi
+    upload_diagnostic
+    return $?
+  fi
+  if [[ $UPLOAD_REQUESTED == true && $ARCHIVE_FORMAT != zip ]]; then
+    log_error 'uploads require --archive=zip'
+    return 1
   fi
   if ! validate_configuration || ! validate_dependencies; then
     return 1

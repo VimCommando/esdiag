@@ -148,6 +148,10 @@ test_collection_authentication_and_none_output() {
   run_collection "$run_dir" env ELASTIC_ES_API_KEY=key ELASTIC_ES_USERNAME=user ELASTIC_ES_PASSWORD=pass "$script" collect --archive=none
   assert_contains "$(<"$run_dir/curl.log")" 'Authorization: ApiKey key'
   assert_not_contains "$(<"$run_dir/curl.log")" user:pass
+
+  run_dir="$tmp/no-implicit-upload"
+  run_collection "$run_dir" env ELASTIC_ES_API_KEY=key UPLOAD_ID=environment-id "$script" collect
+  assert_not_contains "$(<"$run_dir/curl.log")" '/api/uploads/'
 }
 
 test_archives_and_validation() {
@@ -184,9 +188,57 @@ test_archives_and_validation() {
   assert_not_contains "$output" user
 }
 
+test_uploads() {
+  make_mock_path
+  run_dir="$tmp/upload-after-collect"
+  run_collection "$run_dir" env ELASTIC_ES_API_KEY=key "$script" collect --upload=immediate-id
+  archive=$(archive_path "$run_dir") || fail 'immediate upload should retain archive'
+  log=$(<"$run_dir/curl.log")
+  assert_contains "$log" 'https://upload.elastic.co/api/uploads/immediate-id'
+  assert_contains "$log" --head
+  assert_contains "$log" --request
+  assert_contains "$log" _finalize
+
+  run_dir="$tmp/upload-existing"
+  mkdir -p "$run_dir"
+  printf 'existing archive' >"$run_dir/existing.zip"
+  (
+    cd "$run_dir"
+    PATH="$mock_bin:$PATH" MOCK_CURL_LOG="$run_dir/curl.log" UPLOAD_ID=environment-id "$script" upload existing.zip
+  ) || fail 'upload should use UPLOAD_ID when no argument is provided'
+  assert_contains "$(<"$run_dir/curl.log")" 'https://upload.elastic.co/api/uploads/environment-id'
+
+  run_dir="$tmp/upload-argument"
+  mkdir -p "$run_dir"
+  printf 'existing archive' >"$run_dir/existing.zip"
+  (
+    cd "$run_dir"
+    PATH="$mock_bin:$PATH" MOCK_CURL_LOG="$run_dir/curl.log" UPLOAD_ID=environment-id "$script" upload existing.zip argument-id
+  ) || fail 'upload should accept an explicit id'
+  assert_contains "$(<"$run_dir/curl.log")" 'https://upload.elastic.co/api/uploads/argument-id'
+  assert_not_contains "$(<"$run_dir/curl.log")" environment-id
+
+  run_dir="$tmp/upload-resume"
+  mkdir -p "$run_dir"
+  printf 'existing archive' >"$run_dir/existing.zip"
+  (
+    cd "$run_dir"
+    PATH="$mock_bin:$PATH" MOCK_CURL_LOG="$run_dir/curl.log" MOCK_UPLOAD_PART_EXISTS=true UPLOAD_ID=environment-id "$script" upload existing.zip
+  ) || fail 'upload should skip an existing part'
+  assert_not_contains "$(<"$run_dir/curl.log")" PUT
+
+  if PATH="$mock_bin:$PATH" MOCK_CURL_LOG="$tmp/missing-upload-id.log" "$script" upload "$run_dir/existing.zip" >/dev/null 2>&1; then
+    fail 'upload without an id should fail'
+  fi
+  if run_collection "$tmp/upload-none" env ELASTIC_ES_API_KEY=key "$script" collect --archive=none --upload=id; then
+    fail 'immediate upload with directory output should fail'
+  fi
+}
+
 test_version_predicates
 test_generated_functions
 test_generated_collection_failures
 test_collection_authentication_and_none_output
 test_archives_and_validation
+test_uploads
 printf 'esdiag-lite shell tests passed\n'
