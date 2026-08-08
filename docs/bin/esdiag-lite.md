@@ -55,10 +55,10 @@ export UPLOAD_ID='a4f434d4-1fb5-440d-a8ec-bbb4fc522210'
 export UPLOAD_HOST='https://upload.elastic.co'
 ```
 
-The script requires `shasum`, `split`, and `mktemp` only when uploading. It
-calculates SHA-256 digests, splits the archive into 50 MB parts, skips parts
-the service already has, and finalizes the upload. Re-running a failed upload
-is safe because existing parts are skipped.
+Uploads require one SHA-256 command: `shasum`, `sha256sum`, or `openssl`.
+The script otherwise uses standard POSIX utilities to calculate digests, create
+50 MB parts, skip parts the service already has, and finalize the upload.
+Re-running a failed upload is safe because existing parts are skipped.
 
 Collect diagnostics
 -------------------

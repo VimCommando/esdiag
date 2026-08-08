@@ -22,6 +22,7 @@ UPLOAD_HOST=${UPLOAD_HOST:-https://upload.elastic.co}
 UPLOAD_ID=${UPLOAD_ID:-}
 UPLOAD_FILE=
 UPLOAD_REQUESTED=false
+SHA256_PROVIDER=
 CLUSTER_VERSION=
 ES_MAJOR=
 ES_MINOR=
@@ -195,16 +196,12 @@ validate_dependencies() {
   fi
 
   if [[ $UPLOAD_REQUESTED == true ]]; then
-    if ! command -v shasum >/dev/null 2>&1; then
-      log_error 'missing required command shasum for uploads'
+    if ! select_sha256_provider; then
+      log_error 'missing SHA-256 command; install shasum, sha256sum, or openssl'
       return 1
     fi
-    if ! command -v split >/dev/null 2>&1; then
-      log_error 'missing required command split for uploads'
-      return 1
-    fi
-    if ! command -v mktemp >/dev/null 2>&1; then
-      log_error 'missing required command mktemp for uploads'
+    if ! command -v dd >/dev/null 2>&1; then
+      log_error 'missing required command dd for uploads'
       return 1
     fi
   fi
@@ -226,10 +223,60 @@ normalize_upload_id() {
   printf '%s\n' "${id##*/}"
 }
 
+select_sha256_provider() {
+  if command -v shasum >/dev/null 2>&1; then
+    SHA256_PROVIDER=shasum
+  elif command -v sha256sum >/dev/null 2>&1; then
+    SHA256_PROVIDER=sha256sum
+  elif command -v openssl >/dev/null 2>&1; then
+    SHA256_PROVIDER=openssl
+  else
+    return 1
+  fi
+}
+
 file_digest() {
+  local output
   local digest
-  digest=$(shasum -a 256 "$1") || return 1
-  printf '%s\n' "${digest%% *}"
+
+  case $SHA256_PROVIDER in
+    shasum)
+      output=$(shasum -a 256 "$1") || return 1
+      digest=${output%% *}
+      ;;
+    sha256sum)
+      output=$(sha256sum "$1") || return 1
+      digest=${output%% *}
+      ;;
+    openssl)
+      output=$(openssl dgst -sha256 "$1") || return 1
+      digest=${output##* }
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  if [[ ! $digest =~ ^[0-9A-Fa-f]{64}$ ]]; then
+    return 1
+  fi
+  printf '%s\n' "$digest"
+}
+
+create_upload_temp_dir() {
+  local base_dir=${TMPDIR:-/tmp}
+  local attempt=0
+  local temp_dir
+
+  while [[ $attempt -lt 100 ]]; do
+    temp_dir="$base_dir/esdiag-lite-upload-$$-$attempt"
+    if (umask 077 && mkdir "$temp_dir") >/dev/null 2>&1; then
+      printf '%s\n' "$temp_dir"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
 }
 
 upload_diagnostic() (
@@ -242,6 +289,9 @@ upload_diagnostic() (
   local part
   local part_digest
   local part_number=1
+  local part_index=0
+  local part_count
+  local part_size=50000000
 
   if ! validate_upload_configuration; then
     return 1
@@ -255,23 +305,25 @@ upload_diagnostic() (
     log_error "failed to calculate SHA-256 for $UPLOAD_FILE"
     return 1
   }
-  temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/esdiag-lite-upload.XXXXXX") || {
+  temp_dir=$(create_upload_temp_dir) || {
     log_error 'failed to create temporary upload directory'
     return 1
   }
   trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
 
-  if [[ $file_size -lt 50000000 ]]; then
-    cp "$UPLOAD_FILE" "$temp_dir/part-000001" || return 1
+  if [[ $file_size -lt $part_size ]]; then
+    part_count=1
   else
-    split -b 50000000 "$UPLOAD_FILE" "$temp_dir/part-" || {
-      log_error "failed to split $UPLOAD_FILE for upload"
-      return 1
-    }
+    part_count=$(((file_size + part_size - 1) / part_size))
   fi
 
   log_info "$(green uploading) $(gray "$UPLOAD_FILE") to $(blue "$upload_host")"
-  for part in "$temp_dir"/part-*; do
+  while [[ $part_number -le $part_count ]]; do
+    part="$temp_dir/part-$part_number"
+    if ! dd if="$UPLOAD_FILE" of="$part" bs="$part_size" count=1 skip="$part_index" 2>/dev/null; then
+      log_error "failed to create upload part $part_number"
+      return 1
+    fi
     part_digest=$(file_digest "$part") || {
       log_error "failed to calculate SHA-256 for $part"
       return 1
@@ -288,6 +340,7 @@ upload_diagnostic() (
       return 1
     fi
     part_number=$((part_number + 1))
+    part_index=$((part_index + 1))
   done
 
   if curl --fail --silent --show-error --request POST \

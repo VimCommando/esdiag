@@ -51,6 +51,12 @@ test_version_predicates() {
   ! parse_cluster_version || fail 'malformed version should fail'
 }
 
+test_sha256_provider() {
+  select_sha256_provider || fail 'a supported SHA-256 provider should be available'
+  digest=$(file_digest "$script") || fail 'SHA-256 digest should be calculated'
+  [[ $digest =~ ^[0-9A-Fa-f]{64}$ ]] || fail 'SHA-256 digest should be hexadecimal'
+}
+
 test_generated_functions() {
   requests=
   skipped=
@@ -236,6 +242,7 @@ test_uploads() {
 }
 
 test_version_predicates
+test_sha256_provider
 test_generated_functions
 test_generated_collection_failures
 test_collection_authentication_and_none_output
