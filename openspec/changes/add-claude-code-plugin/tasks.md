@@ -69,7 +69,7 @@
 - [x] 8.4 Add coverage for `diagnostic.id` and `Kibana Link` extraction from `esdiag` command output.
 - [ ] 8.5 Add coverage for intent classification across reference, collection, ambiguous-fresh, ambiguous-stale, and follow-up cases, asserting that collection occurs only where intended and that ambiguous-stale asks before collecting.
 - [ ] 8.6 Add coverage for the first-job flow: offer made when no job exists, job persisted during the first run when accepted, one-off collection when declined, and prerequisite ordering when hosts or keystore access are missing.
-- [ ] 8.7 Verify end to end against a provisioned deployment: keystore gate, job run, streamed progress, relayed analysis, and a follow-up reusing the conversation identifier.
+- [x] 8.7 Verify end to end against a provisioned deployment: keystore gate, job run, streamed progress, relayed analysis, and a follow-up reusing the conversation identifier.
 - [x] 8.8 Confirm the freshness lookup returns `model_usage: null` and that analysis token consumption is attributed to the cluster connector.
 - [x] 8.9 Exercise the documented privilege set with a minimally scoped API key to confirm chat authorization and diagnostic data access both succeed.
 - [x] 8.10 Run `cargo clippy` and `cargo test` to confirm the change introduces no Rust regressions.

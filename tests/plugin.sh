@@ -298,6 +298,53 @@ test_analyze_requires_diagnostic_and_question() {
         "$scripts/analyze.sh" --question q
 }
 
+# -------------------------------------------------------- freshness parsing --
+
+# ES|QL omits columns for fields that do not exist, so a column named in KEEP
+# may be absent from the response. diagnostic.user is absent whenever no user
+# metadata was attached at process time, which is the common case.
+freshness_jq() {
+    jq -c --arg window "24h" --argjson scoped "null" '
+        def colval($cols; $row; $name):
+            ($cols | index($name)) as $i
+            | if $i == null then null else $row[$i] end;
+        [.results[]? | select(.type == "esql_results") | .data] as $r
+        | if ($r | length) == 0 or (($r[0].values // []) | length) == 0 then
+            {found: false, window: $window, scoped_to: $scoped}
+          else
+            ($r[0].columns | map(.name)) as $cols
+            | ($r[0].values[0]) as $row
+            | colval($cols; $row; "diagnostic.id") as $id
+            | if $id == null then {found: false, window: $window, scoped_to: $scoped}
+              else {found: true, window: $window, scoped_to: $scoped,
+                    diagnostic_id: $id,
+                    ingested: colval($cols; $row; "event.ingested"),
+                    user: colval($cols; $row; "diagnostic.user"),
+                    age_minutes: colval($cols; $row; "age_minutes")}
+              end
+          end'
+}
+
+test_freshness_tolerates_missing_user_column() {
+    local out
+    out="$(printf '%s' '{"results":[{"type":"esql_results","data":{"columns":[{"name":"diagnostic.id"},{"name":"event.ingested"},{"name":"age_minutes"}],"values":[["d@1~1","2026-08-08T16:56:44.895Z",0]]}}]}' | freshness_jq)"
+    assert_eq "$(printf '%s' "$out" | jq -r .found)" "true"
+    assert_eq "$(printf '%s' "$out" | jq -r .diagnostic_id)" "d@1~1"
+    assert_eq "$(printf '%s' "$out" | jq -r .user)" "null"
+}
+
+test_freshness_reports_not_found_for_empty_values() {
+    local out
+    out="$(printf '%s' '{"results":[{"type":"esql_results","data":{"columns":[{"name":"diagnostic.id"}],"values":[]}}]}' | freshness_jq)"
+    assert_eq "$(printf '%s' "$out" | jq -r .found)" "false"
+}
+
+test_freshness_reports_not_found_when_id_column_absent() {
+    local out
+    out="$(printf '%s' '{"results":[{"type":"esql_results","data":{"columns":[{"name":"age_minutes"}],"values":[[0]]}}]}' | freshness_jq)"
+    assert_eq "$(printf '%s' "$out" | jq -r .found)" "false"
+}
+
 # ------------------------------------------------------- command contracts --
 
 # Intent classification and the confirm-before-collecting rule live in the

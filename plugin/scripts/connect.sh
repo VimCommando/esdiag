@@ -17,6 +17,21 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 failures=0
 warnings=0
+model_check=true
+
+# The model probe issues one real request, which costs a small number of tokens
+# on the deployment. Allow skipping it for a zero-cost run.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-model-check) model_check=false; shift ;;
+        --help|-h)
+            printf 'Usage: connect.sh [--no-model-check]\n\n'
+            printf '  --no-model-check  Skip the model availability probe (costs no tokens)\n'
+            exit 0
+            ;;
+        *) printf 'connect.sh: unknown option: %s\n' "$1" >&2; exit 1 ;;
+    esac
+done
 
 ok()   { printf '  ok    %s\n' "$1"; }
 bad()  { printf '  FAIL  %s\n' "$1"; failures=$((failures + 1)); }
@@ -64,6 +79,13 @@ ok "agent ${ESDIAG_CFG_AGENT_ID}"
 
 # ---- Reachability and authorization ---------------------------------------
 head_ 'Deployment'
+# Version is worth reporting because Agent Builder surface area moves between
+# releases, so a support conversation starts from a known version.
+api 'api/stats'
+if [ "$api_status" = "200" ]; then
+    ok "Kibana $(jq -r '.kibana.version // "unknown"' "$api_body_file" 2>/dev/null) ($(jq -r '.kibana.status // "unknown"' "$api_body_file" 2>/dev/null))"
+fi
+
 api 'api/agent_builder/agents'
 agents_reachable=false
 case "$api_status" in
@@ -97,21 +119,35 @@ if [ "$agents_reachable" = true ]; then
 fi
 
 # ---- Model availability (deployment prerequisite) -------------------------
-if [ "$agents_reachable" = true ]; then
-    api 'api/actions/connectors'
-    if [ "$api_status" = "200" ]; then
-        genai_count="$(jq '[.[]?|select(.connector_type_id|test("^\\.(inference|gen-ai|bedrock|gemini)$"))]|length' "$api_body_file" 2>/dev/null || printf '0')"
-        if [ "${genai_count:-0}" -gt 0 ]; then
-            ok "${genai_count} model connector(s) available"
-        else
-            bad 'no model connector available to this deployment'
-            note 'This is a deployment prerequisite, not an ESDiag or client problem.'
-            note 'Activate the Elastic Inference Service through Cloud Connect, or configure'
-            note 'an LLM provider and connector. No esdiag command provisions this.'
-        fi
+# Enumerating models does not work from a Kibana URL alone. Elastic Inference
+# Service models are Elasticsearch inference endpoints, not Kibana action
+# connectors, and no Kibana route exposes them. So probe the actual capability
+# with one minimal request instead of inferring it from a listing.
+if [ "$agents_reachable" = true ] && [ "$model_check" = true ]; then
+    url="$(esdiag_config_url 'api/agent_builder/converse')"
+    probe_status="$(curl -sS -m 120 -o "$api_body_file" -w '%{http_code}' -X POST "$url" \
+        -H "Authorization: ApiKey ${ESDIAG_CFG_APIKEY}" \
+        -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+        -d "$(jq -n --arg a "$ESDIAG_CFG_AGENT_ID" '{agent_id:$a,input:"Reply with exactly: OK"}')" 2>/dev/null)" || probe_status="000"
+
+    probe_error="$(jq -r '(.message // .error.message // .error // "") | tostring' "$api_body_file" 2>/dev/null)"
+    if [ "$probe_status" = "200" ] && [ "$(jq -r '.status // ""' "$api_body_file" 2>/dev/null)" = "completed" ]; then
+        ok "model reachable ($(jq -r '.model_usage.model // "unknown"' "$api_body_file" 2>/dev/null))"
+        note "probe cost $(jq -r '.model_usage.input_tokens // 0' "$api_body_file" 2>/dev/null) input tokens on the deployment"
     else
-        warn "could not list connectors (HTTP ${api_status}); model availability unverified"
-        note 'Needs feature_actions.read on this space.'
+        case "$probe_error" in
+            *onnector*|*odel*|*nference*|*LLM*)
+                bad 'the agent has no usable model'
+                note "${probe_error}"
+                note 'This is a deployment prerequisite, not an ESDiag or client problem.'
+                note 'Activate the Elastic Inference Service through Cloud Connect, or configure'
+                note 'an LLM provider and connector. No esdiag command provisions this.'
+                ;;
+            *)
+                bad "model probe failed (HTTP ${probe_status})"
+                [ -n "$probe_error" ] && note "${probe_error}"
+                ;;
+        esac
     fi
 fi
 

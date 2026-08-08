@@ -113,16 +113,29 @@ fi
 
 # A query that returns no rows means nothing within the window, which is the
 # stale branch. It is reported as found:false, never as an error.
+# ES|QL silently drops columns for fields that do not exist, so a column named
+# in KEEP is not guaranteed to come back. diagnostic.user in particular is
+# absent whenever no user metadata was attached at process time. Look columns up
+# by name and yield null when missing rather than indexing by a null position.
 jq -c --arg window "$window" --argjson scoped "$scoped_to" '
+    def colval($cols; $row; $name):
+        ($cols | index($name)) as $i
+        | if $i == null then null else $row[$i] end;
+
     [.results[]? | select(.type == "esql_results") | .data] as $r
     | if ($r | length) == 0 or (($r[0].values // []) | length) == 0 then
         {found: false, window: $window, scoped_to: $scoped}
       else
         ($r[0].columns | map(.name)) as $cols
         | ($r[0].values[0]) as $row
-        | {found: true, window: $window, scoped_to: $scoped,
-           diagnostic_id: $row[$cols | index("diagnostic.id")],
-           ingested: $row[$cols | index("event.ingested")],
-           user: $row[$cols | index("diagnostic.user")],
-           age_minutes: $row[$cols | index("age_minutes")]}
+        | colval($cols; $row; "diagnostic.id") as $id
+        | if $id == null then
+            {found: false, window: $window, scoped_to: $scoped}
+          else
+            {found: true, window: $window, scoped_to: $scoped,
+             diagnostic_id: $id,
+             ingested: colval($cols; $row; "event.ingested"),
+             user: colval($cols; $row; "diagnostic.user"),
+             age_minutes: colval($cols; $row; "age_minutes")}
+          end
       end' "$body_file"

@@ -111,6 +111,18 @@ API keys use the `feature_agentBuilder.*` privilege names shown above. Some publ
 
 Verified with minimally scoped keys against a local stack. A key holding exactly the four privileges above reaches both `agent_builder/agents` and `actions/connectors` and can query the diagnostic data. A key holding only the two Kibana application privileges, with no index privileges, is accepted for chat and fails only on data access — confirming the predicted failure shape, and confirming that binding must check data access separately rather than treating chat authorization as sufficient.
 
+### Model availability cannot be enumerated from a Kibana URL
+
+Checking whether a deployment has a usable model looks like a listing problem and is not one.
+
+`GET /api/actions/connectors` returns Kibana action connectors. On a deployment whose models come from the Elastic Inference Service through Cloud Connect, that list is **empty even for a superuser**, while the agent works perfectly: EIS models are Elasticsearch inference endpoints, visible at `GET _inference` with service `elastic` and task type `chat_completion`, not Kibana connectors. Verified against a local 9.4.2 stack with EIS connected — `_inference` listed the Anthropic model family while the connector list stayed empty.
+
+No Kibana route exposes those endpoints. `api/inference/_inference`, `internal/inference/_inference`, `api/ml/inference_endpoints`, `internal/ml/inference_endpoints`, `api/agent_builder/models`, and `internal/agent_builder/models` all return 404 on 9.4.2. Since the client holds a Kibana URL and not an Elasticsearch one, enumeration cannot be made reliable.
+
+Consequence: the binding command probes the capability instead of inferring it, by issuing one minimal `converse` request and reading the outcome. This is authoritative — it exercises the same path analysis uses — and it reports which model actually answered. It costs roughly 8,500 input tokens on the deployment per run, which is why it can be skipped with `--no-model-check`.
+
+A listing-based check would have passed on the deployment where connectors happen to exist and failed on the EIS deployment that works, which is the wrong answer in both directions.
+
 ### Measured token attribution
 
 | Request | Cluster input | Cluster output | LLM calls | Wall clock | Returned to client |
