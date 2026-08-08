@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Plugin Package Installable Into Claude Code
-The project SHALL distribute an ESDiag Claude Code plugin conforming to the Claude plugin specification, installable into a user's local Claude Code instance without a source checkout of this repository. The package MUST declare its identity and version in a plugin manifest and MUST NOT require a container runtime, an Elastic deployment, or repository files to install.
+The project SHALL distribute an ESDiag Claude Code plugin conforming to the Claude plugin specification, installable into a user's local Claude Code instance without a source checkout of this repository. The package MUST declare its identity, semver version, and metadata in a plugin manifest; its version MUST match the repository package version with any development suffix removed. Installation MUST NOT require a container runtime, an Elastic deployment, or repository files.
 
 #### Scenario: Installing without a repository checkout
 - **GIVEN** a user has Claude Code and no ESDiag source checkout
@@ -17,7 +17,7 @@ The project SHALL distribute an ESDiag Claude Code plugin conforming to the Clau
 - **AND** identifies which of the two is missing
 
 ### Requirement: Bundled Operations Skill Is Single-Sourced
-The plugin SHALL bundle the ESDiag operations skill as its source of `esdiag` command guidance, and that skill's content MUST be sourced from `.agents/skills/esdiag/` rather than maintained as an independent copy. Packaging MUST fail or regenerate when the bundled content diverges from the repository skill.
+The plugin SHALL bundle the portable parts of the ESDiag operations skill as its source of `esdiag` command guidance, and those files MUST be sourced from `.agents/skills/esdiag/` rather than maintained as an independent copy. Packaging MUST fail or regenerate when the selected bundled content diverges from the repository skill, and MUST exclude provider-specific metadata that Claude Code does not consume.
 
 #### Scenario: Packaging with divergent skill content
 - **GIVEN** the bundled skill content in the plugin package differs from `.agents/skills/esdiag/`
@@ -31,7 +31,7 @@ The plugin SHALL bundle the ESDiag operations skill as its source of `esdiag` co
 - **THEN** the bundled operations skill provides the command routing and required checks defined in `.agents/skills/esdiag/`
 
 ### Requirement: Client Configuration Settings
-The plugin SHALL resolve client configuration from plugin settings, and MUST support a Kibana base URL, a Kibana space identifier, a Kibana API key reference, a target agent identifier, an optional inference endpoint identifier, and an optional saved job name. The target agent identifier SHALL default to `elastic-ai-agent`. The inference endpoint identifier, when unset, SHALL cause the request to omit model routing so the agent uses its own configured model.
+The plugin SHALL resolve client configuration from environment-backed plugin settings, and MUST support Kibana and Elasticsearch base URLs, a Kibana space identifier, an API key or API-key file reference, a target agent identifier, an optional inference endpoint identifier, and an optional saved job name. The Elasticsearch URL MAY fall back to the existing `ESDIAG_OUTPUT_URL`. The target agent identifier SHALL default to `elastic-ai-agent`. The inference endpoint identifier, when unset, SHALL cause the request to omit model routing so the agent uses its own configured model.
 
 #### Scenario: Default agent applied when unset
 - **GIVEN** no target agent identifier is configured
@@ -54,7 +54,7 @@ The plugin SHALL resolve client configuration from plugin settings, and MUST sup
 - **THEN** the request path is scoped to that space
 
 ### Requirement: Client Binding Command
-The plugin SHALL provide a client-binding command that verifies a workstation can reach and use a already-provisioned ESDiag deployment. The command MUST verify Kibana reachability and API key acceptance, MUST verify that the configured target agent exists, and MUST report `esdiag` keystore state. The command MUST NOT create, start, or modify any Elastic deployment, and MUST NOT require a container runtime.
+The plugin SHALL provide a client-binding capability that verifies a workstation can reach and use an already-provisioned ESDiag deployment. It MUST verify Kibana reachability and API key acceptance, MUST verify that the configured target agent exists, MUST query diagnostic data directly through Elasticsearch `POST /_query`, and MUST report local `esdiag` state when the CLI is available. It MUST NOT create an Agent Builder conversation, invoke a model, create, start, or modify any Elastic deployment, or require a container runtime.
 
 #### Scenario: Binding against a reachable configured cluster
 - **GIVEN** a provisioned ESDiag deployment is reachable
@@ -93,6 +93,12 @@ Because Agent Builder tools execute queries as the calling identity, the client-
 - **AND** the key can read the ESDiag diagnostic data streams
 - **WHEN** the user runs the client-binding command
 - **THEN** the command reports both chat authorization and data access as usable
+
+#### Scenario: Binding creates no conversation
+- **GIVEN** valid client configuration
+- **WHEN** the user runs the client-binding capability
+- **THEN** diagnostic access checks use Elasticsearch `POST /_query` directly
+- **AND** no Agent Builder conversation or model call is created
 
 ### Requirement: Client Binding Separate From Cluster Provisioning
 The plugin SHALL treat binding a workstation and provisioning a cluster as distinct operations with distinct prerequisites. Plugin guidance MUST reference cluster provisioning rather than implement it, and MUST NOT present container runtime, license, asset setup, or LLM connector configuration as prerequisites of client binding.
@@ -149,10 +155,10 @@ The plugin SHALL decide between reusing an existing diagnostic and collecting a 
 
 #### Scenario: Ambiguous request with a stale diagnostic asks first
 - **GIVEN** the user asks a general question such as how the cluster is looking today
-- **AND** the most recent diagnostic is older than the configured freshness window, or none exists within it
+- **AND** the most recent diagnostic is older than the configured freshness window, or no diagnostic exists
 - **WHEN** the plugin resolves which diagnostic to analyze
 - **THEN** the plugin asks the user whether to collect a new diagnostic
-- **AND** states the age of the most recent diagnostic or that none was found in the window
+- **AND** states the age of the most recent diagnostic or that no diagnostic was found
 - **AND** names the host it would collect from
 - **AND** does not collect before the user answers
 
@@ -169,7 +175,7 @@ The plugin SHALL decide between reusing an existing diagnostic and collecting a 
 - **AND** does not collect a new diagnostic
 
 ### Requirement: Diagnostic Freshness Lookup Costs No Model Call
-The plugin SHALL determine the age of the most recent diagnostic through a direct query that invokes no agent and consumes no inference tokens. The query MUST state its time window explicitly rather than relying on a default applied by the execution endpoint, and MUST reference only fields confirmed to exist. An empty result SHALL be interpreted as no diagnostic within the window, not as an absence of diagnostics.
+The plugin SHALL determine the age of the most recent diagnostic through Elasticsearch `POST /_query` without invoking an agent or consuming inference tokens. The query MUST evaluate age against an explicit parameter rather than relying on an endpoint time default, and MUST reference only required fields confirmed to exist. It MUST return the latest diagnostic even when stale. Partial, malformed, or structurally incomplete results SHALL make freshness unknown rather than imply that no diagnostic exists.
 
 #### Scenario: Freshness check does not invoke an agent
 - **GIVEN** the plugin needs the age of the most recent diagnostic
@@ -180,14 +186,25 @@ The plugin SHALL determine the age of the most recent diagnostic through a direc
 #### Scenario: Window stated explicitly
 - **GIVEN** a configured freshness window
 - **WHEN** the plugin builds the freshness query
-- **THEN** the query constrains `event.ingested` to that window explicitly
-- **AND** does not depend on a default time range applied by the execution endpoint
+- **THEN** the query compares the diagnostic age with that threshold explicitly
+- **AND** does not depend on a default time range applied by an execution endpoint
 
-#### Scenario: Empty result treated as stale
+#### Scenario: Stale result retains useful metadata
+- **GIVEN** the latest diagnostic is older than the configured threshold
+- **WHEN** the plugin interprets the result
+- **THEN** it reports the diagnostic identifier and age with `fresh: false`
+- **AND** does not collapse the result into an empty response
+
+#### Scenario: Invalid result treated as unknown
+- **GIVEN** the freshness response is partial or omits the diagnostic identifier from a populated row
+- **WHEN** the plugin interprets the result
+- **THEN** it reports that freshness is unknown
+- **AND** does not infer that collection is needed
+
+#### Scenario: Empty result means no diagnostic
 - **GIVEN** the freshness query returns no rows
 - **WHEN** the plugin interprets the result
-- **THEN** it treats the condition as no diagnostic within the window
-- **AND** does not report that the deployment contains no diagnostics
+- **THEN** it reports that no diagnostic was found in the queried data stream
 
 ### Requirement: First Saved Job Is Offered, Not Assumed
 When a diagnostic must be collected and no saved job is configured, the plugin SHALL offer to help the user configure their first job rather than failing or silently substituting an ad-hoc collect and process pair. The plugin SHALL establish missing prerequisites in order — keystore access, a collect-role host, then an output target with the `send` role — reporting each step and why it is required. The plugin SHALL persist the job as part of the first run rather than requiring a separate configuration-only pass. Declining the offer SHALL remain supported and SHALL proceed with a one-off collect and process.
@@ -222,8 +239,8 @@ When a diagnostic must be collected and no saved job is configured, the plugin S
 - **AND** does not persist a job
 - **AND** does not repeat the offer within the same session
 
-### Requirement: Diagnostic Review Command Orchestration
-The plugin SHALL provide a command that produces a cluster review end to end: verify keystore state, resolve which diagnostic to analyze, obtain one when collection is required, extract the resulting `diagnostic.id`, and request analysis for it. The command MUST use the identifier reported by `esdiag` rather than asking the agent to infer which diagnostic is current.
+### Requirement: Diagnostic Review Skill Orchestration
+The plugin SHALL provide a skill that produces a cluster review end to end: verify keystore state when collection is needed, resolve which diagnostic to analyze, obtain one when collection is required, extract the resulting `diagnostic.id`, and request analysis for it. The skill MUST use the identifier reported by `esdiag` rather than asking the agent to infer which diagnostic is current. First-job onboarding SHALL be part of this workflow rather than a separate command.
 
 #### Scenario: Saved job produces an analyzed review
 - **GIVEN** the keystore is unlocked and a saved job name is configured

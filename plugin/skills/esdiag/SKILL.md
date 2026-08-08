@@ -3,8 +3,6 @@ name: esdiag
 description: Collect or process Elasticsearch, Kibana, and Logstash diagnostics with `esdiag`. Use for collecting live API diagnostics from a cluster, processing support bundle archives or Elastic upload links, sending results to an output cluster, managing saved hosts and encrypted credentials, running saved diagnostic jobs, or hosting the web user interface.
 ---
 
-<!-- Generated from .agents/skills/esdiag/ by bin/sync-plugin-skill.sh. Do not edit. -->
-
 # ESDiag
 
 Use this skill to choose and run the right `esdiag` command sequence safely.
@@ -71,13 +69,6 @@ esdiag keystore status
 
 ## Setup Output Cluster
 
-Two separate concerns share the word "setup". Keep them apart:
-
-- **Provisioning a cluster** — standing up or preparing an Elastic deployment: container runtime, license, `esdiag setup` asset installation, and model access. This is a one-time, per-cluster task, often already done by someone else. Defer to the cluster provisioning guidance rather than performing it here.
-- **Binding a client** — configuring this machine against an already-provisioned deployment: saved hosts, keystore credentials, and output targets. This is the common case and requires no container runtime.
-
-Model access for agent-driven analysis is a deployment prerequisite, not an `esdiag` responsibility. It is satisfied by activating the Elastic Inference Service through Cloud Connect, or by configuring a third-party LLM provider and connector. No `esdiag` command provisions it.
-
 - Run `esdiag setup [HOST]` before first ingestion into a cluster.
 - If `[HOST]` is omitted, rely on:
   - `ESDIAG_OUTPUT_URL`
@@ -141,22 +132,6 @@ Saved jobs persist named diagnostic configurations to `~/.esdiag/jobs.yml` so th
 - Default port is `2501`; override with `--port`.
 - Pass `--kibana <URL>` (or set `ESDIAG_KIBANA_URL`) to show direct links in UI flows.
 - Use output resolution rules from `process`.
-
-## Workflow Notes
-
-- Configure an output host or `ESDIAG_OUTPUT_*` before processing into Elasticsearch.
-- Run `esdiag setup [HOST]` before first ingestion into a cluster.
-- Use `--sources <path/to/sources.yml>` for custom or version-specific API endpoint definitions.
-- For `process`, resolve output as stdout (`-`), saved host, filesystem target, or `ESDIAG_OUTPUT_*` when omitted. Do not use raw HTTP URLs as output targets unless saved as hosts.
-- For `collect`, `<HOST>` must be a saved host with the `collect` role and `<OUTPUT>` must be an existing directory.
-- Use metadata flags (`--account`, `--case`, `--opportunity`, `--user`) when reports need context.
-- If `process` prints a `Kibana Link: <url>`, present it as a clickable markdown link.
-
-## Saved Jobs
-
-- Use `--save-job <NAME>` on compatible `collect` or `process` invocations to persist the job before execution. Requires a saved known-host collection input; `process` also requires an explicit output. See `references/cli.md` for command-specific details.
-- Use `esdiag job list`, `esdiag job run <NAME>`, and `esdiag job delete <NAME>` to manage saved jobs.
-- Saved jobs require persisted known hosts and the keystore feature.
 
 ## Troubleshooting Rules
 - If command behavior looks inconsistent with docs, trust live help output first.

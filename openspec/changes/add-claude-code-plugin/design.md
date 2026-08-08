@@ -111,15 +111,15 @@ API keys use the `feature_agentBuilder.*` privilege names shown above. Some publ
 
 Verified with minimally scoped keys against a local stack. A key holding exactly the four privileges above reaches both `agent_builder/agents` and `actions/connectors` and can query the diagnostic data. A key holding only the two Kibana application privileges, with no index privileges, is accepted for chat and fails only on data access — confirming the predicted failure shape, and confirming that binding must check data access separately rather than treating chat authorization as sufficient.
 
-### Model availability cannot be enumerated from a Kibana URL
+### Model availability is verified by the first real analysis
 
 Checking whether a deployment has a usable model looks like a listing problem and is not one.
 
 `GET /api/actions/connectors` returns Kibana action connectors. On a deployment whose models come from the Elastic Inference Service through Cloud Connect, that list is **empty even for a superuser**, while the agent works perfectly: EIS models are Elasticsearch inference endpoints, visible at `GET _inference` with service `elastic` and task type `chat_completion`, not Kibana connectors. Verified against a local 9.4.2 stack with EIS connected — `_inference` listed the Anthropic model family while the connector list stayed empty.
 
-No Kibana route exposes those endpoints. `api/inference/_inference`, `internal/inference/_inference`, `api/ml/inference_endpoints`, `internal/ml/inference_endpoints`, `api/agent_builder/models`, and `internal/agent_builder/models` all return 404 on 9.4.2. Since the client holds a Kibana URL and not an Elasticsearch one, enumeration cannot be made reliable.
+No Kibana route exposes those endpoints. `api/inference/_inference`, `internal/inference/_inference`, `api/ml/inference_endpoints`, `internal/ml/inference_endpoints`, `api/agent_builder/models`, and `internal/agent_builder/models` all return 404 on 9.4.2. Listing Elasticsearch inference endpoints is not sufficient either: it does not prove which model the selected agent can use, and it does not cover Kibana connectors.
 
-Consequence: the binding command probes the capability instead of inferring it, by issuing one minimal `converse` request and reading the outcome. This is authoritative — it exercises the same path analysis uses — and it reports which model actually answered. It costs roughly 8,500 input tokens on the deployment per run, which is why it can be skipped with `--no-model-check`.
+Consequence: the binding check does not claim to validate model availability and does not issue a throwaway `converse` request. The first real analysis is the authoritative capability check because it exercises the selected agent and routing. A missing-model response is attributed to the deployment prerequisite at that point. This avoids spending roughly 8,500 input tokens and leaving a meaningless conversation in Kibana whenever a user binds a machine.
 
 A listing-based check would have passed on the deployment where connectors happen to exist and failed on the EIS deployment that works, which is the wrong answer in both directions.
 
@@ -151,6 +151,12 @@ This is the decision that makes the change small. No workflow assets, no tool as
 
 The client presents the agent's markdown as the analysis. It does not re-run the underlying ES|QL, recompute metrics, or substitute its own thresholds. Dashboard links are relative by ADA's own rules and are resolved against the configured Kibana URL for presentation. Relaying rather than re-deriving is what keeps the analysis faithful to the cluster's installed assets and keeps local cost at ~1,100 tokens.
 
+### Real analysis remains a Kibana conversation
+
+Every analysis request uses the persisted Agent Builder chat API. The returned conversation identifier is retained locally and follow-ups send it back, so the complete thread remains visible in Kibana Agent Builder history and can be continued there. Local reuse is keyed by Kibana deployment, space, agent, and diagnostic; a matching diagnostic identifier on another deployment can never inherit the wrong conversation.
+
+This boundary is intentional. Diagnostic discovery, freshness, and binding access checks are metadata operations and call Elasticsearch directly, creating no conversation. Questions that ask the diagnostic agent to reason always use Agent Builder and therefore retain the Kibana handoff UX.
+
 ### Diagnostic identity comes from `esdiag`, not from the agent
 
 `format_process_summary` in `src/main.rs` already emits the identifier:
@@ -176,21 +182,22 @@ The freshness window is configurable and defaults to 24 hours, which matches the
 
 Collection is only ever automatic when the user asked for it. Explicit collection intent proceeds without a prompt, because the user already said what they wanted. An ambiguous request that finds no recent diagnostic stops and asks, because inferring collection from a question like "how is my cluster looking today?" would issue unrequested API calls against a live production cluster on the strength of a phrasing guess. The confirmation states the age of the most recent diagnostic, or that none was found in the window, and names the host that would be collected from, so the user can approve, redirect to the older diagnostic, or decline.
 
-The age lookup is a metadata query, not analysis, and must not cost an LLM call. Confirmed against the deployment, `POST /s/{space}/api/agent_builder/tools/_execute` with `platform.core.execute_esql` returns `model_usage: null` — the query executes directly with no agent involvement:
+The age lookup is a metadata query, not analysis, and must not cost an LLM call. It calls Elasticsearch `POST /_query` directly using the same API key whose index privileges Agent Builder tools use:
 
 ```esql
 FROM metrics-diagnostic-esdiag*
-| WHERE event.ingested >= NOW() - <window>
-| KEEP diagnostic.id, event.ingested, diagnostic.user
+| KEEP diagnostic.id, event.ingested
 | SORT event.ingested DESC
 | LIMIT 1
+| EVAL age_minutes = DATE_DIFF("minutes", event.ingested, NOW())
+| EVAL fresh = age_minutes <= ?max_age_minutes
 ```
 
-Two verified traps constrain this query. First, the `_execute` wrapper applies its own default time range of `now-24h`, so the window must be stated explicitly in the query rather than inherited, or the result silently depends on an undocumented default that happens to equal the intended window. Second, an unknown field name yields an empty result rather than an error — a query naming a field that does not exist returns no rows and reads exactly like "no recent diagnostic," which would trigger a spurious collection. Only `diagnostic.id`, `event.ingested`, and `diagnostic.user` are confirmed present.
+Two traps constrain this query. First, a tool-execution wrapper adds an unnecessary Kibana boundary and may apply its own time defaults. Querying `/_query` directly makes the threshold an explicit named parameter and returns Elasticsearch's native column/value response. Second, an unknown field name can yield an empty result that looks exactly like "no diagnostic." The lookup therefore references only the required `diagnostic.id` and `event.ingested` fields, returns the latest diagnostic regardless of age, and computes `fresh` separately. Malformed, partial, or structurally incomplete responses are "freshness unknown," never "not found."
 
-An empty result means "no diagnostic within the window," which is the stale branch. It does not mean no diagnostics exist, and must not be reported that way.
+An empty result now means no diagnostic exists in the queried data stream. A stale result remains a populated result with `fresh: false` and an age, so the user can make an informed collection decision.
 
-`user_diagnostic_id_fetcher` is not used for this. It scopes to `diagnostic.user` matching the authenticated username and its `format_output` step emits only identifiers, discarding the `event.ingested` values the freshness decision needs. Scoping by user is still preferable where `diagnostic.user` is populated, since "my last diagnostic" means the user's own, but that field is set from `esdiag` metadata flags and is not guaranteed present.
+`user_diagnostic_id_fetcher` is not used for this. It discards the `event.ingested` values the freshness decision needs and depends on optional `diagnostic.user` metadata. The direct lookup is intentionally deployment-wide because that field is not guaranteed to exist; adding it could turn an absent optional field into a false "no diagnostic" result.
 
 ### A missing saved job is an onboarding moment, not an error
 
@@ -212,7 +219,7 @@ Three prompts were run against a local stack to check the classification behaves
 | "Evaluate" | reference | no (2 archives before and after) | reused `…~39c2` |
 | "What's going on in my cluster?" | ambiguous | no (age 1 min, inside the 24h window) | reused, age reported |
 
-The stale branch was confirmed separately: the same lookup with a one-minute window returns `found: false`, which is the condition that triggers asking before collecting.
+The stale branch was confirmed separately: the same lookup with a one-minute threshold returns `found: true, fresh: false`, which is the condition that triggers asking before collecting while preserving the diagnostic identifier and age.
 
 This is a first pass. Intent boundaries are a judgment surface and will need real user phrasings to tune; these three only establish that each branch is reachable and that collection happens in exactly one of them.
 
@@ -241,11 +248,11 @@ The plugin still keeps the freshness-lookup fallback, since it ships to users wh
 
 ### Client binding and cluster provisioning are separate
 
-Binding a workstation needs an `esdiag` binary, a Kibana API key, host and keystore configuration, and plugin settings. Provisioning a cluster needs a container runtime or an existing deployment, a trial or enterprise license, `esdiag setup`, and an LLM connector. These share no failure modes, and the common case — a support engineer pointed at a shared team cluster — involves only the former. Combining them would make the common case appear to require Docker.
+Binding a workstation needs Kibana and Elasticsearch URLs, an API key, and plugin settings. The `esdiag` binary, host definitions, and an unlocked keystore are needed only when that workstation will collect new diagnostics. Provisioning a cluster needs a container runtime or an existing deployment, a suitable license, `esdiag setup`, and model access. These share no failure modes, and the common case — a support engineer pointed at a shared team cluster — involves only binding. Combining them would make the common case appear to require Docker.
 
 ## Risks / Trade-offs
 
-- **Model availability is an environment prerequisite, not an ESDiag responsibility.** Delegated analysis requires the deployment to have a usable model, reached either by activating the Elastic Inference Service through Cloud Connect with an Elastic Cloud account, or by configuring a third-party LLM provider and connector. Neither is a reasonable automation target: they span account provisioning, billing, and third-party credentials. This change's obligation is therefore narrow and diagnostic only — detect that no usable model is configured, report it as a deployment prerequisite with a pointer to model setup guidance, and never present it as an ESDiag defect or attempt to configure it.
+- **Model availability is an environment prerequisite, not an ESDiag responsibility.** Delegated analysis requires the deployment to have a usable model, reached either by activating the Elastic Inference Service through Cloud Connect with an Elastic Cloud account, or by configuring a third-party LLM provider and connector. Neither is a reasonable automation target: they span account provisioning, billing, and third-party credentials. The binding check avoids a token-consuming model probe; the first real analysis detects and attributes the missing prerequisite without attempting to configure it.
 - **Prose output has no contract.** Without a schema, the response shape is whatever ADA's instructions produce. Presentation must tolerate variation and must not parse prose into decisions. Accepted as the cost of runtime-configurable agent selection.
 - **Cluster spend is real and grows with conversation depth.** ~110k input tokens for one analysis, rising per follow-up. Local savings are not free, they are transferred. Documentation should say so plainly.
 - **Analysis latency is ~60s.** SSE progress events mitigate the experience but do not shorten it. Requests must not be retried on timeout without first checking whether a conversation was created, or the cluster pays twice.

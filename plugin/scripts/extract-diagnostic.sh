@@ -35,7 +35,7 @@ input="$(cat)"
 # "process complete in 4.212 seconds: 18432 documents for <id>"
 # Included diagnostics repeat the pattern with a trailing "(<product>)".
 primary="$(printf '%s\n' "$input" \
-    | grep -E '^(process|collect) complete .*documents for ' \
+    | grep -E '^process complete .*documents for ' \
     | head -1 \
     | sed -E 's/.*documents for ([^ ]+).*/\1/')"
 

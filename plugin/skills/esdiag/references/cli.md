@@ -1,5 +1,3 @@
-<!-- Generated from .agents/skills/esdiag/ by bin/sync-plugin-skill.sh. Do not edit. -->
-
 # ESDiag CLI Behavior Notes
 
 Use this file for command behavior that is easy to misremember. For complete and version-accurate syntax, run `esdiag --help` and `esdiag <command> --help`.

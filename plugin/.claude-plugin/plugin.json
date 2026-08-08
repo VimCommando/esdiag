@@ -1,6 +1,7 @@
 {
   "name": "esdiag",
-  "description": "Collect, process, and analyze Elasticsearch, Kibana, and Logstash diagnostics with esdiag. Runs diagnostic analysis on your own Elastic deployment through Agent Builder, so the cluster's installed assets and inference budget do the work.",
+  "displayName": "ESDiag",
+  "description": "Collect, process, and analyze Elasticsearch, Kibana, and Logstash diagnostics with esdiag. Analysis is saved in your deployment's Kibana Agent Builder conversation history.",
   "version": "0.17.0",
   "author": {
     "name": "Elastic"

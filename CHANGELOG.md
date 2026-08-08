@@ -12,11 +12,10 @@ published release notes, maintenance branches, and tagged history.
 
 ### Added
 
-- Added a Claude Code plugin that collects, processes, and analyzes diagnostics from the terminal. Analysis is delegated to the diagnostic skill installed on your own Elastic deployment, so findings reflect that cluster's installed assets and the token cost is billed to its inference connector rather than the local assistant.
-- Added `/esdiag:connect` to verify a workstation can reach and use an already-provisioned deployment. It checks reachability, API key acceptance, that the configured agent exists, that a model is available, and that the key can read diagnostic data, attributing each failure to client configuration, a deployment prerequisite, or cluster provisioning.
-- Added `/esdiag:check` to review cluster health, streaming the agent's progress while it works and reporting which diagnostic the analysis covered and whether it was reused or freshly collected.
-- Added `/esdiag:first-job` to help configure a reusable saved job the first time a diagnostic must be collected.
-- Added `ESDIAG_KIBANA_APIKEY`, `ESDIAG_KIBANA_APIKEY_FILE`, `ESDIAG_AGENT_ID`, `ESDIAG_INFERENCE_ID`, `ESDIAG_JOB`, and `ESDIAG_DIAGNOSTIC_MAX_AGE` for configuring analysis against a deployment.
+- Added a Claude Code plugin that collects, processes, and analyzes diagnostics from the terminal. Analysis runs through the diagnostic skill installed on the Elastic deployment and remains available in Kibana Agent Builder conversation history for continued investigation.
+- Added `/esdiag:connect` to validate Kibana Agent Builder access and direct Elasticsearch diagnostic-data access without creating a model call or throwaway conversation.
+- Added `/esdiag:check` to select or collect a diagnostic, guide first-job setup when needed, stream the cluster agent's progress, and report which diagnostic was analyzed.
+- Added `ESDIAG_KIBANA_URL`, `ESDIAG_ELASTICSEARCH_URL`, `ESDIAG_KIBANA_APIKEY`, `ESDIAG_KIBANA_APIKEY_FILE`, `ESDIAG_AGENT_ID`, `ESDIAG_INFERENCE_ID`, `ESDIAG_JOB`, and `ESDIAG_DIAGNOSTIC_MAX_AGE` for configuring analysis against a deployment.
 
 ### Changed
 

@@ -52,11 +52,11 @@ The plugin SHALL pass an explicit `diagnostic.id` obtained from `esdiag` command
 #### Scenario: No identifier known
 - **GIVEN** no diagnostic identifier is known to the plugin
 - **WHEN** the user requests analysis
-- **THEN** the plugin either obtains an identifier before requesting analysis or states that the agent will select one
-- **AND** reports which diagnostic identifier the analysis covered
+- **THEN** the plugin obtains an identifier before requesting analysis
+- **AND** does not ask the agent to guess which diagnostic is current
 
 ### Requirement: Conversation Continuation For Follow-Up Questions
-The plugin SHALL retain the conversation identifier returned by an analysis request and SHALL reuse it for follow-up questions about the same diagnostic, so prior context is not resent by the client.
+The plugin SHALL retain the conversation identifier returned by an analysis request and SHALL reuse it for follow-up questions about the same diagnostic, so prior context is not resent by the client. Conversation reuse MUST be scoped by Kibana deployment, space, agent, and diagnostic identifier. Every analysis conversation SHALL remain in Kibana Agent Builder history so the user can continue it from Kibana.
 
 #### Scenario: Follow-up reuses the conversation
 - **GIVEN** a completed analysis returned a conversation identifier
@@ -68,6 +68,18 @@ The plugin SHALL retain the conversation identifier returned by an analysis requ
 - **GIVEN** a conversation identifier exists for a previous diagnostic
 - **WHEN** the user requests analysis of a different diagnostic
 - **THEN** the plugin does not reuse the previous conversation identifier
+
+#### Scenario: Same diagnostic on another deployment is isolated
+- **GIVEN** a conversation identifier exists for a diagnostic on one Kibana deployment
+- **WHEN** the user analyzes the same diagnostic identifier on a different deployment, space, or agent
+- **THEN** the plugin starts a separate conversation
+- **AND** does not send the identifier from the first deployment
+
+#### Scenario: Conversation remains available in Kibana
+- **GIVEN** an analysis or follow-up completes through Agent Builder
+- **WHEN** the plugin reports the result
+- **THEN** that exchange is present in Kibana Agent Builder conversation history
+- **AND** the plugin reports the conversation identifier for handoff and troubleshooting
 
 ### Requirement: Unstructured Response Handling
 The plugin SHALL treat the agent response as unstructured markdown. The plugin MUST NOT depend on a response schema, and MUST NOT parse the response into control-flow decisions such as retrying, escalating, or suppressing findings.
@@ -104,14 +116,6 @@ The plugin SHALL distinguish client configuration failures from cluster provisio
 - **WHEN** an analysis request is rejected
 - **THEN** the plugin reports the missing authorization
 - **AND** identifies this as client configuration
-
-#### Scenario: Analysis degraded by missing data access
-- **GIVEN** the configured API key is authorized for the chat API
-- **AND** the key cannot read the diagnostic data streams the agent queries
-- **WHEN** an analysis returns without the expected findings
-- **THEN** the plugin reports that the configured key may lack diagnostic data access
-- **AND** identifies this as client configuration
-- **AND** does not present the degraded result as a complete analysis
 
 #### Scenario: Unknown diagnostic identifier
 - **GIVEN** the supplied `diagnostic.id` does not exist in the deployment

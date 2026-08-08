@@ -14,8 +14,8 @@ This change packages ESDiag as a Claude Code plugin that delegates analysis to t
 - Make the inference endpoint optionally overridable per request so analysis spend can be routed to a designated billed endpoint.
 - Relay the agent's markdown response, including its relative dashboard links, without re-analyzing the underlying metrics locally.
 - Support follow-up drill-down by reusing the returned `conversation_id`, which keeps local cost near zero for subsequent turns.
-- Add a client binding command that validates the Kibana endpoint, API key, configured agent id, and `esdiag` keystore state, and that explicitly does not provision a cluster.
-- Add a daily-driver command that gates on keystore state, runs a saved job or an explicit collect/process pair to obtain a `diagnostic.id`, then requests analysis.
+- Add a client-binding skill that validates Kibana, direct Elasticsearch data access, the API key, the configured agent id, and local `esdiag` state without provisioning a cluster, creating a conversation, or invoking a model.
+- Add a daily-driver skill that selects an existing diagnostic or, when authorized, gates collection on keystore state, runs a saved job or an explicit process operation to obtain a `diagnostic.id`, then requests analysis.
 - Treat cluster provisioning as a separate concern referenced by the operations skill rather than implemented here.
 
 ## Capabilities
@@ -36,7 +36,7 @@ This change packages ESDiag as a Claude Code plugin that delegates analysis to t
 - **Kibana assets:** No new workflow or tool assets are required. The change depends only on assets `esdiag setup` already installs.
 - **Deployment prerequisites:** Requires the deployment to have a usable model, via the Elastic Inference Service through Cloud Connect or a user-configured LLM provider and connector. Configuring model access is out of scope; the plugin detects its absence and reports it as a prerequisite.
 - **New repository surface:** A plugin package directory and its packaging or release step. The bundled operations skill must remain sourced from `.agents/skills/esdiag/` rather than copied, so the two consumers cannot drift.
-- **Credentials:** Introduces a client-held Kibana API key distinct from the `esdiag` keystore, used only for Agent Builder requests.
+- **Credentials:** Introduces a client-held API key distinct from the `esdiag` keystore, used for Agent Builder requests and direct Elasticsearch metadata queries.
 - **Cost attribution:** Moves diagnostic analysis token spend from the user's local model to the cluster's inference connector. Cluster input tokens grow per conversation turn as history replays; local cost stays approximately flat.
 - **Documentation:** Adds client-binding guidance and makes deployment prerequisites explicit, including that a usable model must already be available to the deployment.
 - **Tests:** Adds plugin manifest and configuration-resolution coverage, plus non-networked coverage of the conversation request construction and event handling.
