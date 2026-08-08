@@ -5,6 +5,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use clap::{ArgAction, Args, Parser, Subcommand, builder::BoolishValueParser, builder::styling};
+use esdiag::job::JobOutcome;
 #[cfg(feature = "server")]
 use esdiag::server::{AuthProvider, RuntimeMode, Server, ServerStartOptions};
 #[cfg(feature = "setup")]
@@ -553,6 +554,27 @@ fn emit_completion_summary(summary: &str) -> Result<()> {
     write_completion_summary(&mut stderr, summary)?;
     stderr.flush()?;
     Ok(())
+}
+
+/// Report what a saved job produced.
+fn format_job_summary(outcome: &JobOutcome) -> String {
+    let mut summary = String::from("job run complete");
+    if outcome.bundle_retained {
+        if let Some(archive) = &outcome.bundle_path {
+            summary.push_str(&format!("\nretained archive: {}", archive.display()));
+        }
+    }
+    if outcome.processed {
+        if let Some(execution) = outcome.execution.as_ref() {
+            if let Ok(process) = format_execution_process_summary(execution) {
+                summary.push_str(&format!("\n{process}"));
+            }
+        }
+    }
+    if let Some(slug) = &outcome.upload_slug {
+        summary.push_str(&format!("\nuploaded to https://upload.elastic.co/g/{slug}"));
+    }
+    summary
 }
 
 #[cfg(test)]
@@ -1207,8 +1229,8 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     Ok(CommandResult::named("job list"))
                 }
                 JobCommands::Run { name } => {
-                    esdiag::job::handle_job_run(&name).await?;
-                    Ok(CommandResult::named("job run"))
+                    let outcome = esdiag::job::handle_job_run(&name).await?;
+                    Ok(CommandResult::with_summary("job run", format_job_summary(&outcome)))
                 }
                 JobCommands::Delete { name } => {
                     esdiag::job::handle_job_delete(&name)?;
@@ -1837,7 +1859,7 @@ fn resolve_serve_exporter(output: Option<String>) -> Result<Exporter> {
 mod tests {
     use super::{
         Cli, CommandResult, Commands, HostCommands, KeystoreCommands, colorize_keystore_lock_status,
-        format_collect_summary, format_keystore_lock_status, format_keystore_lock_status_at,
+        format_collect_summary, format_job_summary, format_keystore_lock_status, format_keystore_lock_status_at,
         format_keystore_migrate_summary, format_keystore_password_summary, format_keystore_secret_summary,
         format_process_summary, format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode,
         resolve_host_secret_auth, resolve_secret_input_with_prompt, resolve_tracing_filter,

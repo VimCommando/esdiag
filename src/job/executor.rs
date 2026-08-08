@@ -31,7 +31,7 @@ use futures::{StreamExt, stream::FuturesUnordered};
 use std::{path::PathBuf, sync::Arc};
 
 /// What one job execution produced.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct JobOutcome {
     /// A retained local bundle archive path available after execution.
     ///
@@ -45,6 +45,8 @@ pub struct JobOutcome {
     pub upload_slug: Option<String>,
     /// Whether a `Process` stage ran to completion.
     pub processed: bool,
+    /// The complete execution outcome used to report saved-job results.
+    pub execution: Option<ExecutionOutcome>,
 }
 
 /// Execute one job: resolve the Phase-1 input, honor the derived mode
@@ -52,6 +54,7 @@ pub struct JobOutcome {
 /// `Export` (inside `Process`) and `Send` may both run in one job.
 pub async fn execute(job: Job) -> Result<JobOutcome> {
     let outcome = execute_with_context(job, ExecutionContext::default()).await;
+    let succeeded = outcome.succeeded();
     if !outcome.succeeded() {
         let failures = outcome
             .stages
@@ -64,12 +67,15 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
             .join("; ");
         return Err(eyre!("Job execution failed: {failures}"));
     }
-    Ok(JobOutcome {
-        bundle_path: outcome.retained_bundle,
-        bundle_retained: true,
-        upload_slug: outcome.upload.map(|upload| upload.slug),
+    let result = JobOutcome {
+        bundle_path: outcome.retained_bundle.clone(),
+        bundle_retained: outcome.retained_bundle.is_some(),
+        upload_slug: outcome.upload.as_ref().map(|upload| upload.slug.clone()),
         processed: outcome.report.is_some(),
-    })
+        execution: Some(outcome),
+    };
+    debug_assert!(succeeded);
+    Ok(result)
 }
 
 pub async fn execute_with_context(job: Job, context: ExecutionContext) -> ExecutionOutcome {

@@ -25,7 +25,7 @@ This change packages ESDiag as a Claude Code plugin that delegates analysis to t
 - `agent-builder-analysis`: Delegated diagnostic analysis against a Kibana Agent Builder agent over the chat API, covering agent selection, progress reporting, diagnostic identifier handoff, conversation continuation, and failure handling.
 
 ### Modified Capabilities
-- None.
+- `saved-jobs`: `esdiag job run` reports what the job produced — the diagnostic identifier for a processing job, the archive path for a collect-only job, the destination for an upload job. A saved job conceals which commands ran, so without this neither the plugin nor a CLI user can reference the result afterwards.
 
 ## Impact
 
