@@ -291,7 +291,7 @@ pub fn get_source_keys_with_tag(product: &str, tag: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn convert_npm_semver_to_cargo(req: &str) -> String {
+fn convert_npm_semver_to_cargo(req: &str) -> String {
     let parts: Vec<&str> = req.split_whitespace().collect();
     let mut out = String::new();
     for i in 0..parts.len() {
