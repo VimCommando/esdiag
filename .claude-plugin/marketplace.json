@@ -10,7 +10,7 @@
     {
       "name": "esdiag",
       "source": "./plugin",
-      "description": "Collect, process, and analyze Elastic Stack diagnostics with esdiag, delegating analysis to your deployment's Agent Builder agent."
+      "description": "Load the portable ESDiag Agent Skill and delegate diagnostic analysis to your deployment's Agent Builder agent."
     }
   ]
 }

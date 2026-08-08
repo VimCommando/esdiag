@@ -12,9 +12,9 @@ published release notes, maintenance branches, and tagged history.
 
 ### Added
 
-- Added a Claude Code plugin that collects, processes, and analyzes diagnostics from the terminal. Analysis runs through the diagnostic skill installed on the Elastic deployment and remains available in Kibana Agent Builder conversation history for continued investigation.
-- Added `/esdiag:connect` to validate Kibana Agent Builder access and direct Elasticsearch diagnostic-data access without creating a model call or throwaway conversation.
-- Added `/esdiag:check` to select or collect a diagnostic, guide first-job setup when needed, stream the cluster agent's progress, and report which diagnostic was analyzed.
+- Added a portable ESDiag Agent Skill for Claude Code, Codex, and OpenCode that owns its executable helpers and references. Analysis runs through the diagnostic skill installed on the Elastic deployment and remains available in Kibana Agent Builder conversation history for continued investigation.
+- Added a read-only binding workflow that validates Kibana Agent Builder access and direct Elasticsearch diagnostic-data access without creating a model call or throwaway conversation.
+- Added a cluster-review workflow that selects or collects a diagnostic, guides first-job setup when needed, streams the cluster agent's progress, and reports which diagnostic was analyzed.
 - Added `ESDIAG_KIBANA_URL`, `ESDIAG_ELASTICSEARCH_URL`, `ESDIAG_KIBANA_APIKEY`, `ESDIAG_KIBANA_APIKEY_FILE`, `ESDIAG_AGENT_ID`, `ESDIAG_INFERENCE_ID`, `ESDIAG_JOB`, and `ESDIAG_DIAGNOSTIC_MAX_AGE` for configuring analysis against a deployment.
 
 ### Changed

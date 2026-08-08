@@ -1,11 +1,15 @@
 ---
 name: esdiag
-description: Collect or process Elasticsearch, Kibana, and Logstash diagnostics with `esdiag`. Use for collecting live API diagnostics from a cluster, processing support bundle archives or Elastic upload links, sending results to an output cluster, managing saved hosts and encrypted credentials, running saved diagnostic jobs, or hosting the web user interface.
+description: Collect, process, or analyze Elasticsearch, Kibana, and Logstash diagnostics with `esdiag`. Use for binding to an ESDiag deployment, reviewing cluster health through a persisted Kibana Agent Builder conversation, collecting live API diagnostics, processing support bundles or Elastic upload links, sending results to an output cluster, managing saved hosts and encrypted credentials, running saved jobs, or hosting the web UI.
 ---
 
 # ESDiag
 
-Use this skill to choose and run the right `esdiag` command sequence safely.
+Use this skill to choose and run the right ESDiag workflow safely.
+
+## Portable Resource Paths
+
+Resolve every `scripts/...` and `references/...` path relative to the directory containing this `SKILL.md`, never relative to the user's working directory. Before executing a helper, substitute its absolute skill-directory path. The helpers and references are part of this skill and must travel with it.
 
 Prefer live help output over memory when behavior is unclear:
 
@@ -36,6 +40,102 @@ esdiag keystore status
 
 - `Keystore: unlocked until <date> (duration)` — proceed normally.
 - `Keystore: locked` — stop and tell the user to unlock it via the web UI or with `esdiag keystore unlock` before continuing.
+
+## Bind to an Analysis Deployment
+
+Run the read-only, conversation-free binding check:
+
+```sh
+scripts/connect.sh
+```
+
+Required configuration:
+
+- `ESDIAG_KIBANA_URL`
+- `ESDIAG_ELASTICSEARCH_URL` or existing `ESDIAG_OUTPUT_URL`
+- `ESDIAG_KIBANA_APIKEY` or `ESDIAG_KIBANA_APIKEY_FILE`
+
+Report failures using these boundaries:
+
+- **Client configuration**: invalid URLs, rejected API key, missing configured agent, or unreadable ESDiag data streams.
+- **Cluster provisioning**: Agent Builder or the ESDiag assets are absent.
+- **Deployment model prerequisite**: reported by the first real analysis if the agent has no usable model. The binding check deliberately avoids creating a throwaway conversation to probe it.
+
+A missing `esdiag` binary, locked keystore, or absent saved hosts affects collection and processing only. Existing diagnostics can still be analyzed.
+
+## Review Cluster Health
+
+Have the deployment's diagnostic agent perform the analysis. Do not reproduce its metrics or thresholds locally. Every real analysis must use `scripts/analyze.sh` so it is saved in Kibana Agent Builder history; direct Elasticsearch queries are metadata lookups only.
+
+### Select a diagnostic
+
+Classify the request before collecting anything:
+
+- **Reference**: an explicit ID, “my last diagnostic,” “that diagnostic,” or a follow-up. Reuse; never collect.
+- **Collection**: an explicit request to collect, get, or run a new diagnostic. Collect without another confirmation.
+- **Ambiguous**: a general question such as “How is my cluster looking today?” Check freshness first.
+
+For reference requests without an explicit ID, and for ambiguous requests, run:
+
+```sh
+scripts/latest-diagnostic.sh
+```
+
+Interpret its JSON:
+
+- `found:true, fresh:true`: reuse it and report its age.
+- `found:true, fresh:false`: for an ambiguous request, state its age and the collection host, then ask before collecting. For reference intent, reuse it despite its age.
+- `found:false`: no diagnostic was found. Ask before collecting unless collection was explicit.
+- Exit `2`: freshness is unknown. Report the query failure and do not infer collection.
+
+If collection is declined, offer the most recent existing diagnostic and do not ask again in this session.
+
+### Collect when required
+
+Run `esdiag keystore status` before using saved hosts or jobs. If locked, stop and ask the user to run `esdiag keystore unlock`.
+
+When `ESDIAG_JOB` is configured:
+
+```sh
+esdiag job run "$ESDIAG_JOB" 2>&1 | scripts/extract-diagnostic.sh
+```
+
+When no job is configured, offer to create one. Establish prerequisites in this order:
+
+1. An unlocked keystore.
+2. A saved host with the `collect` role.
+3. A saved output host with the `send` role.
+
+Create the reusable process job as part of its first run:
+
+```sh
+esdiag process <COLLECT_HOST> <OUTPUT_HOST> --save-job <NAME> 2>&1 \
+  | scripts/extract-diagnostic.sh
+```
+
+Use the existing `{host}-{action}-{destination}` naming convention and let the user override it. Do not use `collect --save-job` for analysis: that creates a local archive but sends no diagnostic to the analysis cluster.
+
+If the user declines job setup, perform a one-off `esdiag process <COLLECT_HOST> <OUTPUT_HOST>` and do not persist a job or repeat the offer this session.
+
+If an older `esdiag` does not report an identifier, resolve it with `scripts/latest-diagnostic.sh --window 15m` and confirm it is newer than the job start. Never ask the cluster agent to guess the identifier.
+
+### Analyze in Kibana Agent Builder
+
+```sh
+scripts/analyze.sh \
+  --diagnostic "<diagnostic.id>" \
+  --question "<the user's question>"
+```
+
+Relay streamed progress and then the returned markdown. Follow-ups automatically reuse the conversation associated with this deployment, space, agent, and diagnostic. Tell the user that the thread is available in Kibana Agent Builder history, and present any `Kibana Link` from processing as a clickable link.
+
+Handle exits as follows:
+
+- `0`: present the analysis, diagnostic ID, age, and whether it was reused or newly collected.
+- `2`: report the attributed configuration, authorization, deployment-model, or connectivity failure.
+- `3`: report the retained Kibana conversation ID. Do not re-run without direction because the original work may already be billed.
+
+Treat the response as unstructured markdown. You may summarize an explicit not-found statement for the user, but do not parse prose to trigger retries, remediation, or other automated action.
 
 ## Detailed Workflow
 

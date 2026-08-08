@@ -10,7 +10,7 @@
 set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=plugin/scripts/config.sh
+# shellcheck source-path=SCRIPTDIR
 . "${script_dir}/config.sh"
 
 command_name="${0##*/}"
@@ -178,7 +178,7 @@ if [ "$http_status" != "200" ]; then
             printf '%s: Agent Builder authorization rejected (HTTP %s). Check feature_agentBuilder.read, feature_actions.read, and API key scope.\n' "$command_name" "$http_status" >&2
             ;;
         404)
-            printf '%s: Agent Builder endpoint or configured agent is unavailable (HTTP 404). Run /esdiag:connect.\n' "$command_name" >&2
+            printf '%s: Agent Builder endpoint or configured agent is unavailable (HTTP 404). Run scripts/connect.sh from the ESDiag skill directory.\n' "$command_name" >&2
             ;;
         400)
             case "$response_message" in
@@ -186,7 +186,7 @@ if [ "$http_status" != "200" ]; then
                     printf '%s: the deployment has no usable model for this agent. Configure Elastic Inference Service or an LLM connector.\n' "$command_name" >&2
                     ;;
                 *agent*not*found*|*Agent*not*found*)
-                    printf '%s: configured agent is missing. Run /esdiag:connect and set ESDIAG_AGENT_ID.\n' "$command_name" >&2
+                    printf '%s: configured agent is missing. Run scripts/connect.sh from the ESDiag skill directory and set ESDIAG_AGENT_ID.\n' "$command_name" >&2
                     ;;
                 *) printf '%s: analysis request rejected (HTTP 400).\n' "$command_name" >&2 ;;
             esac

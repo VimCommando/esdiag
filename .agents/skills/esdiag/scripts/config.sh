@@ -3,8 +3,8 @@
 # Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
 # or more contributor license agreements. Licensed under the Elastic License 2.0.
 
-# Shared configuration for the ESDiag Claude Code plugin. Source this file from
-# another plugin script, or run it with --json to inspect the resolved settings.
+# Shared configuration for the portable ESDiag Agent Skill. Source this file
+# from another skill script, or run it with --json to inspect resolved settings.
 
 ESDIAG_AGENT_ID_DEFAULT="elastic-ai-agent"
 ESDIAG_KIBANA_SPACE_DEFAULT="esdiag"
@@ -58,7 +58,7 @@ esdiag_config_resolve() {
     local require_key="${1:-require-key}"
 
     if [ -z "${ESDIAG_KIBANA_URL:-}" ]; then
-        esdiag_config_error "ESDIAG_KIBANA_URL is not set. Run /esdiag:connect to bind this machine."
+        esdiag_config_error "ESDIAG_KIBANA_URL is not set. Run scripts/connect.sh from the ESDiag skill directory to bind this machine."
         return 1
     fi
 

@@ -94,3 +94,13 @@
 - [x] 10.7 Exercise production scripts through recorded HTTP/SSE fixtures rather than duplicated parsers, and describe prompt-contract checks accurately as structural coverage.
 - [x] 10.8 Correct installation, configuration, versioning, conversation-history, and changelog guidance.
 - [x] 10.9 Run plugin, marketplace, shell, OpenSpec, and relevant Rust validation before archive. Rust tests pass serially; Clippy completes with pre-existing warnings outside the plugin changes.
+
+## 11. Portable Agent Skill Packaging
+
+- [x] 11.1 Consolidate client binding, diagnostic review, and general CLI operations into the canonical `.agents/skills/esdiag/` skill.
+- [x] 11.2 Move executable helpers under the canonical skill's `scripts/` directory and make every skill reference relative to its own directory without host-specific root variables.
+- [x] 11.3 Package the complete portable skill — instructions, references, and scripts — while excluding only provider-specific metadata.
+- [x] 11.4 Keep Claude Code and Codex manifests as thin host adapters, and document direct `.agents/skills/` discovery for OpenCode.
+- [x] 11.5 Remove the separate Claude-only `check` and `connect` skills and the plugin-level scripts directory.
+- [x] 11.6 Update tests, documentation, specifications, and changelog for the portable layout.
+- [x] 11.7 Validate the canonical skill, Claude and Codex manifests, synchronization, shell scripts, plugin tests, and OpenSpec change.

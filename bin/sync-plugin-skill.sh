@@ -3,9 +3,9 @@
 # Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
 # or more contributor license agreements. Licensed under the Elastic License 2.0.
 
-# Synchronize the portable ESDiag skill content into the Claude Code plugin.
+# Synchronize the portable ESDiag skill content into the distributable plugin.
 # Provider-specific agents/*.yaml metadata stays with the source skill because
-# Claude Code neither consumes nor needs it.
+# package manifests supply their own host metadata.
 
 set -euo pipefail
 
@@ -14,11 +14,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_dir="${repo_root}/.agents/skills/esdiag"
 target_dir="${repo_root}/plugin/skills/esdiag"
 check_only=false
-files=(SKILL.md references/cli.md references/env-vars.md)
+entries=(SKILL.md references scripts)
 
 usage() {
     cat <<EOF
-Synchronize the portable ESDiag skill into the Claude Code plugin.
+Synchronize the portable ESDiag skill into the distributable plugin.
 
 Usage: ${command_name} [--check]
 
@@ -37,22 +37,22 @@ done
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 
-for relative in "${files[@]}"; do
-    [ -f "${source_dir}/${relative}" ] || {
-        printf '%s: source file missing: %s\n' "$command_name" "$relative" >&2
+for relative in "${entries[@]}"; do
+    [ -e "${source_dir}/${relative}" ] || {
+        printf '%s: source entry missing: %s\n' "$command_name" "$relative" >&2
         exit 1
     }
-    mkdir -p "${staging}/esdiag/$(dirname "$relative")"
-    cp "${source_dir}/${relative}" "${staging}/esdiag/${relative}"
+    mkdir -p "${staging}/esdiag"
+    cp -R "${source_dir}/${relative}" "${staging}/esdiag/${relative}"
 done
 
 if [ "$check_only" = true ]; then
     if [ ! -d "$target_dir" ] || ! diff -r -q "${staging}/esdiag" "$target_dir" >/dev/null 2>&1; then
-        printf '%s: bundled Claude skill differs from .agents/skills/esdiag\n' "$command_name" >&2
+        printf '%s: bundled skill differs from .agents/skills/esdiag\n' "$command_name" >&2
         diff -r -u "$target_dir" "${staging}/esdiag" >&2 || true
         exit 1
     fi
-    printf 'Bundled Claude skill matches the portable ESDiag skill files.\n'
+    printf 'Bundled skill matches the portable ESDiag skill files.\n'
     exit 0
 fi
 

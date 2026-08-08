@@ -1,7 +1,7 @@
 {
   "name": "esdiag",
   "displayName": "ESDiag",
-  "description": "Collect, process, and analyze Elasticsearch, Kibana, and Logstash diagnostics with esdiag. Analysis is saved in your deployment's Kibana Agent Builder conversation history.",
+  "description": "Load the portable ESDiag Agent Skill for Elastic diagnostics. Analysis is saved in your deployment's Kibana Agent Builder conversation history.",
   "version": "0.17.0",
   "author": {
     "name": "Elastic"

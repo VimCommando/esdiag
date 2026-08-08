@@ -19,11 +19,12 @@ The missing piece is a client that can ask that agent a question from the termin
 ## Goals / Non-Goals
 
 **Goals:**
-- Let a user ask "how is my cluster looking today?" in Claude Code and receive ADA's analysis without opening Kibana.
+- Let a user ask "how is my cluster looking today?" from Claude Code, Codex, or OpenCode and receive ADA's analysis without opening Kibana.
 - Keep the analytical knowledge single-sourced on the cluster, so the answer always reflects the cluster's installed assets.
 - Place analysis token spend on the cluster's inference connector rather than the user's local model quota.
 - Keep the user informed during a multi-second analysis instead of blocking silently.
 - Keep client binding independent of cluster provisioning.
+- Keep all portable behavior in one Open Agent Skill whose scripts and references travel with it; host manifests only provide discovery metadata.
 
 **Non-Goals:**
 - Adding an `esdiag` CLI subcommand that speaks to an LLM. Explicitly out of scope; it would put a conversation client inside a diagnostics tool and create a dependency on Kibana's agent runtime rather than just its saved objects.

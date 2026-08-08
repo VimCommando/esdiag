@@ -17,7 +17,7 @@ The project SHALL distribute an ESDiag Claude Code plugin conforming to the Clau
 - **AND** identifies which of the two is missing
 
 ### Requirement: Bundled Operations Skill Is Single-Sourced
-The plugin SHALL bundle the portable parts of the ESDiag operations skill as its source of `esdiag` command guidance, and those files MUST be sourced from `.agents/skills/esdiag/` rather than maintained as an independent copy. Packaging MUST fail or regenerate when the selected bundled content diverges from the repository skill, and MUST exclude provider-specific metadata that Claude Code does not consume.
+The plugin SHALL bundle the ESDiag Agent Skill as its source of `esdiag` command guidance, client binding, and diagnostic review. The skill's `SKILL.md`, `references/`, and `scripts/` MUST be sourced from `.agents/skills/esdiag/` rather than maintained as independent copies. Packaging MUST fail or regenerate when bundled content diverges from the repository skill, and MUST exclude only provider-specific metadata that the target package does not consume.
 
 #### Scenario: Packaging with divergent skill content
 - **GIVEN** the bundled skill content in the plugin package differs from `.agents/skills/esdiag/`
@@ -29,6 +29,27 @@ The plugin SHALL bundle the portable parts of the ESDiag operations skill as its
 - **GIVEN** the plugin is installed
 - **WHEN** the user asks for help running an `esdiag` command
 - **THEN** the bundled operations skill provides the command routing and required checks defined in `.agents/skills/esdiag/`
+
+#### Scenario: Skill helpers are portable
+- **GIVEN** the ESDiag skill is loaded by Claude Code, Codex, or OpenCode
+- **WHEN** the skill invokes a bundled helper
+- **THEN** it resolves the helper from the skill's own `scripts/` directory
+- **AND** it does not depend on a Claude-specific plugin-root environment variable
+
+### Requirement: Host Packaging Is A Thin Adapter
+The project SHALL keep the portable ESDiag behavior in one Agent Skill and SHALL limit host-specific packaging to discovery metadata. Claude Code and Codex packages MUST point to the same generated `skills/` content, while OpenCode MUST be able to discover the canonical `.agents/skills/esdiag/` directory directly from a repository checkout.
+
+#### Scenario: Loading from supported terminal agents
+- **GIVEN** a user opens the repository with Codex or OpenCode
+- **WHEN** the host discovers project Agent Skills
+- **THEN** it discovers `.agents/skills/esdiag/`
+- **AND** receives the same workflows and helper scripts shipped in the Claude Code plugin
+
+#### Scenario: Packaged hosts do not fork behavior
+- **GIVEN** Claude Code and Codex package metadata exist
+- **WHEN** either package is validated
+- **THEN** its manifest points at the shared generated `skills/` directory
+- **AND** no host-specific copy of the binding or review workflow exists
 
 ### Requirement: Client Configuration Settings
 The plugin SHALL resolve client configuration from environment-backed plugin settings, and MUST support Kibana and Elasticsearch base URLs, a Kibana space identifier, an API key or API-key file reference, a target agent identifier, an optional inference endpoint identifier, and an optional saved job name. The Elasticsearch URL MAY fall back to the existing `ESDIAG_OUTPUT_URL`. The target agent identifier SHALL default to `elastic-ai-agent`. The inference endpoint identifier, when unset, SHALL cause the request to omit model routing so the agent uses its own configured model.

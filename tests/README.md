@@ -75,14 +75,15 @@ processing once that processor is implemented. By default the suite still
 collects from Kibana but skips processing that collected Kibana diagnostic so
 the release gate only covers supported workflows.
 
-## Claude Code Plugin Suite
+## Agent Skill Plugin Suite
 
-`tests/plugin.sh` is a non-networked suite for the Claude Code plugin under
+`tests/plugin.sh` is a non-networked suite for the portable Agent Skill and host manifests under
 `plugin/`. It needs no deployment, no credentials, and no container runtime, and
 covers:
 
-- packaging: the bundled skill matches `.agents/skills/esdiag/`, drift is
-  detected, and the plugin and marketplace manifests agree
+- packaging: the bundled skill, scripts, and references match
+  `.agents/skills/esdiag/`, drift is detected, and the Claude, Codex, and
+  marketplace manifests agree
 - client configuration resolution: agent and space defaults, overrides, space
   scoping, the already-suffixed URL case, and omitted model routing
 - API key handling: file references resolve and key values never appear in
@@ -91,7 +92,7 @@ covers:
 - streaming behavior against recorded event fixtures, including progress
   reporting, dashboard link resolution, conversation persistence, and the
   interrupted-stream path that must not re-run a paid analysis
-- structural guards that the load-bearing rules in the command prompts, such as
+- structural guards that the load-bearing rules in the skill instructions, such as
   intent classification and confirm-before-collecting, have not been dropped
 
 Run it from the repository root:

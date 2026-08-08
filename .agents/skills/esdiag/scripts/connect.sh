@@ -9,7 +9,7 @@
 set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=plugin/scripts/config.sh
+# shellcheck source-path=SCRIPTDIR
 . "${script_dir}/config.sh"
 
 failures=0

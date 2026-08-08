@@ -3,7 +3,7 @@
 # Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
 # or more contributor license agreements. Licensed under the Elastic License 2.0.
 
-# Non-networked tests for the ESDiag Claude Code plugin: packaging, client
+# Non-networked tests for the portable ESDiag Agent Skill: packaging, client
 # configuration resolution, esdiag output parsing, and streaming event handling.
 #
 # Run from the repository root:
@@ -13,7 +13,7 @@
 set -uo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-scripts="${root}/plugin/scripts"
+scripts="${root}/plugin/skills/esdiag/scripts"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -65,18 +65,32 @@ test_bundled_skill_excludes_provider_metadata() {
     [[ ! -e "${root}/plugin/skills/esdiag/agents" ]] || fail "provider-specific agents metadata was bundled"
 }
 
-test_plugin_manifest_is_valid_json() {
+test_bundled_skill_owns_scripts_and_references() {
+    [[ -x "${scripts}/analyze.sh" ]] || fail "bundled analysis helper is missing or not executable"
+    [[ -f "${root}/plugin/skills/esdiag/references/cli.md" ]] || fail "bundled CLI reference is missing"
+    [[ ! -e "${root}/plugin/scripts" ]] || fail "plugin-level scripts directory still exists"
+    [[ ! -e "${root}/plugin/skills/check" ]] || fail "separate check skill still exists"
+    [[ ! -e "${root}/plugin/skills/connect" ]] || fail "separate connect skill still exists"
+    ! grep -R -q 'CLAUDE_PLUGIN_ROOT' "${root}/plugin/skills/esdiag" \
+        || fail "portable skill still depends on CLAUDE_PLUGIN_ROOT"
+}
+
+test_host_manifests_are_valid_json() {
     jq -e . "${root}/plugin/.claude-plugin/plugin.json" >/dev/null || fail "plugin.json is not valid JSON"
+    jq -e . "${root}/plugin/.codex-plugin/plugin.json" >/dev/null || fail "Codex plugin.json is not valid JSON"
     jq -e . "${root}/.claude-plugin/marketplace.json" >/dev/null || fail "marketplace.json is not valid JSON"
     assert_eq "$(jq -r '.displayName' "${root}/plugin/.claude-plugin/plugin.json")" "ESDiag"
+    assert_eq "$(jq -r '.skills' "${root}/plugin/.codex-plugin/plugin.json")" "./skills/"
 }
 
 test_plugin_version_matches_package_version() {
-    local package_version plugin_version
+    local package_version claude_version codex_version
     package_version="$(awk -F '"' '/^version = / {print $2; exit}' "${root}/Cargo.toml")"
     package_version="${package_version%-SNAPSHOT}"
-    plugin_version="$(jq -r '.version' "${root}/plugin/.claude-plugin/plugin.json")"
-    assert_eq "$plugin_version" "$package_version"
+    claude_version="$(jq -r '.version' "${root}/plugin/.claude-plugin/plugin.json")"
+    codex_version="$(jq -r '.version' "${root}/plugin/.codex-plugin/plugin.json")"
+    assert_eq "$claude_version" "$package_version"
+    assert_eq "$codex_version" "$package_version"
 }
 
 test_marketplace_entry_matches_plugin_name() {
@@ -511,68 +525,68 @@ test_freshness_surfaces_http_failure() {
 # that the load-bearing rules have not been dropped; they do not evaluate
 # behavior. Behavioral evaluation needs the eval harness.
 
-check_skill() { assert_contains "$(cat "${root}/plugin/skills/$1/SKILL.md")" "$2"; }
+check_skill() { assert_contains "$(cat "${root}/plugin/skills/esdiag/SKILL.md")" "$1"; }
 
 test_check_skill_states_all_three_intents() {
-    check_skill check '**Reference**'
-    check_skill check '**Collection**'
-    check_skill check '**Ambiguous**'
+    check_skill '**Reference**'
+    check_skill '**Collection**'
+    check_skill '**Ambiguous**'
 }
 
 test_check_skill_requires_asking_before_inferred_collection() {
-    check_skill check 'ask before collecting'
+    check_skill 'ask before collecting'
 }
 
 test_check_skill_treats_followups_as_reference() {
-    check_skill check 'or a follow-up'
+    check_skill 'or a follow-up'
 }
 
 test_check_skill_forbids_collecting_on_unknown_freshness() {
-    check_skill check "Exit \`2\`"
-    check_skill check 'do not infer collection'
+    check_skill "Exit \`2\`"
+    check_skill 'do not infer collection'
 }
 
 test_check_skill_forbids_local_reanalysis() {
-    check_skill check 'Do not reproduce its metrics or thresholds locally'
+    check_skill 'Do not reproduce its metrics or thresholds locally'
 }
 
 test_check_skill_forbids_rerun_after_interruption() {
-    check_skill check 'Do not re-run'
+    check_skill 'Do not re-run'
 }
 
 test_check_skill_states_keystore_is_terminal() {
-    check_skill check 'esdiag keystore unlock'
+    check_skill 'esdiag keystore unlock'
 }
 
 test_first_job_guidance_offers_rather_than_falling_back() {
-    check_skill check 'offer to create one'
+    check_skill 'offer to create one'
 }
 
 test_first_job_guidance_persists_during_first_run() {
-    check_skill check '--save-job'
-    check_skill check 'as part of its first run'
+    check_skill '--save-job'
+    check_skill 'as part of its first run'
 }
 
 test_first_job_guidance_orders_prerequisites() {
-    check_skill check '1. An unlocked keystore'
-    check_skill check "2. A saved host with the \`collect\` role"
-    check_skill check "3. A saved output host with the \`send\` role"
+    check_skill '1. An unlocked keystore'
+    check_skill "2. A saved host with the \`collect\` role"
+    check_skill "3. A saved output host with the \`send\` role"
 }
 
 test_first_job_guidance_supports_declining() {
-    check_skill check 'do not persist a job or repeat the offer this session'
+    check_skill 'do not persist a job or repeat the offer this session'
 }
 
 test_connect_skill_separates_failure_classes() {
-    check_skill connect '**Client configuration**'
-    check_skill connect '**Deployment model prerequisite**'
-    check_skill connect '**Cluster provisioning**'
+    check_skill '**Client configuration**'
+    check_skill '**Deployment model prerequisite**'
+    check_skill '**Cluster provisioning**'
 }
 
 test_analysis_contract_preserves_kibana_history() {
-    check_skill check 'saved in Kibana Agent Builder history'
-    check_skill check 'automatically reuse the conversation associated with this deployment, space, agent, and diagnostic'
-    check_skill connect 'conversation-free binding check'
+    check_skill 'saved in Kibana Agent Builder history'
+    check_skill 'automatically reuse the conversation associated with this deployment, space, agent, and diagnostic'
+    check_skill 'conversation-free binding check'
 }
 
 # ------------------------------------------------------------------- driver --

@@ -4,11 +4,11 @@ ESDiag already publishes two halves of an agent-driven diagnostic workflow that 
 
 Closing that gap in the obvious way — teaching Claude to analyze diagnostics itself — is the wrong trade. It duplicates ADA's knowledge outside the cluster where it will drift, and it spends the user's local model quota on work the cluster is already provisioned and separately billed to do. A measured end-to-end ADA analysis consumes ~109,600 input and ~3,600 output tokens on the cluster's inference connector while returning ~1,100 tokens of markdown, a ratio near 100:1. In organizations where per-user assistant quota is constrained but cluster inference is billed separately, that ratio is the entire point.
 
-This change packages ESDiag as a Claude Code plugin that delegates analysis to the cluster's own agent over the Agent Builder chat API, so Claude orchestrates and presents while the cluster reasons and pays.
+This change packages ESDiag as a portable Agent Skill, with thin Claude Code and Codex adapters and direct OpenCode discovery, that delegates analysis to the cluster's own agent over the Agent Builder chat API. The local agent orchestrates and presents while the cluster reasons and pays.
 
 ## What Changes
 
-- Add a Claude Code plugin package that installs into a user's local Claude Code instance and bundles the existing `.agents/skills/esdiag/` operations skill as its single source of CLI guidance.
+- Add a portable ESDiag Agent Skill whose instructions, references, and executable helpers are single-sourced from `.agents/skills/esdiag/`, plus thin Claude Code and Codex package metadata.
 - Add a client-side analysis path that sends a verified `diagnostic.id` and the user's question to the cluster's Agent Builder agent via `POST /s/{space}/api/agent_builder/converse/async`, consuming the Server-Sent Events stream so the user sees real progress instead of a silent wait.
 - Make the target agent configurable through plugin settings, defaulting to `elastic-ai-agent`, because the agent carrying the ADA skill is a per-cluster deployment decision and no single agent id is safe to hard-code.
 - Make the inference endpoint optionally overridable per request so analysis spend can be routed to a designated billed endpoint.
