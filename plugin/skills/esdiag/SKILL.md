@@ -3,6 +3,8 @@ name: esdiag
 description: Collect or process Elasticsearch, Kibana, and Logstash diagnostics with `esdiag`. Use for collecting live API diagnostics from a cluster, processing support bundle archives or Elastic upload links, sending results to an output cluster, managing saved hosts and encrypted credentials, running saved diagnostic jobs, or hosting the web user interface.
 ---
 
+<!-- Generated from .agents/skills/esdiag/ by bin/sync-plugin-skill.sh. Do not edit. -->
+
 # ESDiag
 
 Use this skill to choose and run the right `esdiag` command sequence safely.

@@ -1,26 +1,26 @@
 ## 1. Plugin Package Foundation
 
-- [ ] 1.1 Add the plugin package directory with a Claude plugin manifest declaring plugin identity, version, and description.
-- [ ] 1.2 Bundle the ESDiag operations skill from `.agents/skills/esdiag/` including `references/cli.md` and `references/env-vars.md`, sourced rather than hand-copied.
-- [ ] 1.3 Add a packaging step that regenerates bundled skill content from `.agents/skills/esdiag/` and fails when the packaged content would diverge.
-- [ ] 1.4 Add a reference from the operations skill to cluster provisioning, keeping provisioning steps out of the plugin itself.
-- [ ] 1.5 Verify the plugin installs into a Claude Code instance with no source checkout, no container runtime, and no reachable deployment.
+- [x] 1.1 Add the plugin package directory with a Claude plugin manifest declaring plugin identity, version, and description.
+- [x] 1.2 Bundle the ESDiag operations skill from `.agents/skills/esdiag/` including `references/cli.md` and `references/env-vars.md`, sourced rather than hand-copied.
+- [x] 1.3 Add a packaging step that regenerates bundled skill content from `.agents/skills/esdiag/` and fails when the packaged content would diverge.
+- [x] 1.4 Add a reference from the operations skill to cluster provisioning, keeping provisioning steps out of the plugin itself.
+- [x] 1.5 Verify the plugin installs into a Claude Code instance with no source checkout, no container runtime, and no reachable deployment.
 
 ## 2. Client Configuration
 
-- [ ] 2.1 Define plugin settings for Kibana base URL, space identifier, API key reference, target agent identifier, optional inference endpoint identifier, and optional saved job name.
-- [ ] 2.2 Implement configuration resolution with `elastic-ai-agent` as the target agent default and omission of model routing when no inference endpoint is configured.
-- [ ] 2.3 Scope all Agent Builder request paths to the configured space.
-- [ ] 2.4 Avoid persisting the Kibana API key in plaintext within the plugin package or its settings output.
+- [x] 2.1 Define plugin settings for Kibana base URL, space identifier, API key reference, target agent identifier, optional inference endpoint identifier, and optional saved job name.
+- [x] 2.2 Implement configuration resolution with `elastic-ai-agent` as the target agent default and omission of model routing when no inference endpoint is configured.
+- [x] 2.3 Scope all Agent Builder request paths to the configured space.
+- [x] 2.4 Avoid persisting the Kibana API key in plaintext within the plugin package or its settings output.
 
 ## 3. Client Binding Command
 
-- [ ] 3.1 Implement the binding command to verify Kibana reachability and API key acceptance without modifying any deployment.
-- [ ] 3.2 Validate the configured target agent against `GET /api/agent_builder/agents` and list available agents when the configured identifier is absent.
-- [ ] 3.3 Report `esdiag keystore status` and saved host availability as part of binding output.
-- [ ] 3.4 Detect a reachable deployment with no usable model and report it as a deployment prerequisite, pointing to Elastic Inference Service activation or third-party connector setup without attempting configuration.
-- [ ] 3.5 Verify the configured API key can read `metrics-*-esdiag*` and `settings-*-esdiag*`, since Agent Builder tools query as the calling identity, and fail binding when data is unreadable.
-- [ ] 3.6 Ensure the binding command never starts, creates, or reconfigures a deployment and never requires a container runtime.
+- [x] 3.1 Implement the binding command to verify Kibana reachability and API key acceptance without modifying any deployment.
+- [x] 3.2 Validate the configured target agent against `GET /api/agent_builder/agents` and list available agents when the configured identifier is absent.
+- [x] 3.3 Report `esdiag keystore status` and saved host availability as part of binding output.
+- [x] 3.4 Detect a reachable deployment with no usable model and report it as a deployment prerequisite, pointing to Elastic Inference Service activation or third-party connector setup without attempting configuration.
+- [x] 3.5 Verify the configured API key can read `metrics-*-esdiag*` and `settings-*-esdiag*`, since Agent Builder tools query as the calling identity, and fail binding when data is unreadable.
+- [x] 3.6 Ensure the binding command never starts, creates, or reconfigures a deployment and never requires a container runtime.
 
 ## 4. Delegated Analysis
 

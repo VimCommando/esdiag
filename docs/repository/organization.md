@@ -24,6 +24,7 @@ Top-Level Layout
 ├── docker/
 ├── docs/
 ├── openspec/
+├── plugin/
 ├── src/
 ├── templates/
 └── tests/
@@ -39,6 +40,7 @@ Top-Level Layout
 - `docker/`: Container and Compose definitions for local and packaging-related workflows.
 - `docs/`: User-facing and maintainer-facing documentation.
 - `openspec/`: OpenSpec change proposals, archived changes, and repository specification artifacts.
+- `plugin/`: Distributable Claude Code plugin. Its bundled skill under `plugin/skills/` is generated from `.agents/skills/esdiag/` by `bin/sync-plugin-skill.sh` and must not be edited directly. The repository-root `.claude-plugin/marketplace.json` publishes it.
 - `src/`: Rust application and library source code.
 - `templates/`: Askama HTML templates that power the web UI.
 - `tests/`: Integration-style tests, CLI tests, runtime tests, and test fixtures.

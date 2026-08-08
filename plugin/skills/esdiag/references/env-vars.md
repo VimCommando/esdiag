@@ -1,3 +1,5 @@
+<!-- Generated from .agents/skills/esdiag/ by bin/sync-plugin-skill.sh. Do not edit. -->
+
 # ESDiag Environment Variables
 
 Use these variables when configuring `esdiag` without saved hosts, or to supply credentials and settings non-interactively.
