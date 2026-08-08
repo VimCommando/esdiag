@@ -200,8 +200,8 @@ validate_dependencies() {
       log_error 'missing SHA-256 command; install shasum, sha256sum, or openssl'
       return 1
     fi
-    if ! command -v dd >/dev/null 2>&1; then
-      log_error 'missing required command dd for uploads'
+    if ! command -v split >/dev/null 2>&1; then
+      log_error 'missing required command split for uploads'
       return 1
     fi
   fi
@@ -289,8 +289,6 @@ upload_diagnostic() (
   local part
   local part_digest
   local part_number=1
-  local part_index=0
-  local part_count
   local part_size=50000000
 
   if ! validate_upload_configuration; then
@@ -312,18 +310,19 @@ upload_diagnostic() (
   trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
 
   if [[ $file_size -lt $part_size ]]; then
-    part_count=1
+    cp "$UPLOAD_FILE" "$temp_dir/part-aa" || {
+      log_error "failed to create upload part"
+      return 1
+    }
   else
-    part_count=$(((file_size + part_size - 1) / part_size))
+    split -b "$part_size" "$UPLOAD_FILE" "$temp_dir/part-" || {
+      log_error "failed to split $UPLOAD_FILE for upload"
+      return 1
+    }
   fi
 
   log_info "$(green uploading) $(gray "$UPLOAD_FILE") to $(blue "$upload_host")"
-  while [[ $part_number -le $part_count ]]; do
-    part="$temp_dir/part-$part_number"
-    if ! dd if="$UPLOAD_FILE" of="$part" bs="$part_size" count=1 skip="$part_index" 2>/dev/null; then
-      log_error "failed to create upload part $part_number"
-      return 1
-    fi
+  for part in "$temp_dir"/part-*; do
     part_digest=$(file_digest "$part") || {
       log_error "failed to calculate SHA-256 for $part"
       return 1
@@ -340,7 +339,6 @@ upload_diagnostic() (
       return 1
     fi
     part_number=$((part_number + 1))
-    part_index=$((part_index + 1))
   done
 
   if curl --fail --silent --show-error --request POST \
