@@ -50,3 +50,15 @@
 - [x] 6.3 Review the final diff to confirm `zip` is required only for ZIP mode and no runtime dependency on `jq`, `yq`, Python, Rust, the ESDiag binary, or a container was introduced into `bin/esdiag-lite.sh`.
 - [x] 6.4 Review `bin/esdiag-lite.sh` and its tests to confirm connection or credential values are never embedded, logged, or written to diagnostic output.
 - [x] 6.5 Re-run Bash syntax validation, ShellCheck, and `shfmt -d -i 2 -ci -bn` against the final generated script.
+
+## 7. Windows PowerShell ESDiag Lite
+
+- [x] 7.1 Add `bin/esdiag-lite.ps1` for Windows PowerShell 5.1+ with `collect`, `watch`, and help interfaces equivalent to ESDiag Lite.
+- [x] 7.2 Implement environment-based Elasticsearch authentication using `ELASTIC_ES_URL`, API-key precedence, and username/password fallback without logging credentials.
+- [x] 7.3 Implement bootstrap version detection, numeric version predicates, manifest creation, and named generated API functions from the shared `lite` source catalog.
+- [x] 7.4 Extend the generator and drift check to render and validate marked PowerShell generated regions alongside Bash output.
+- [x] 7.5 Implement `--archive=zip|none` with ZIP default and safe directory preservation on archive failure, using PowerShell and .NET facilities only.
+- [x] 7.6 Implement optional Elastic Upload Service forwarding through `--upload=<id>` and `upload <filename> [id]`, including SHA-256, 50,000,000-byte parts, resume checks, and finalization.
+- [x] 7.7 Add mocked PowerShell behavior tests for authentication, version-dependent collection, archive modes, upload/resume behavior, output compatibility, and generation drift.
+- [x] 7.8 Document Windows invocation, prerequisites, configuration, output handoff to `esdiag`, and the collection-only boundary; add a user-visible changelog entry.
+- [x] 7.9 Run the configured PowerShell syntax/style/static checks and the relevant generator, Bash, Rust, and PowerShell test suites.
