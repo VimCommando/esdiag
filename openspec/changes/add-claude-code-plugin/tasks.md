@@ -63,22 +63,22 @@
 
 ## 8. Verification
 
-- [ ] 8.1 Add coverage for configuration resolution: agent default, agent override, space scoping, and omitted model routing.
-- [ ] 8.2 Add coverage for packaging: bundled skill content matches `.agents/skills/esdiag/`, and divergence fails the build.
-- [ ] 8.3 Add non-networked coverage for analysis request construction and SSE event handling, including interrupted streams.
-- [ ] 8.4 Add coverage for `diagnostic.id` and `Kibana Link` extraction from `esdiag` command output.
+- [x] 8.1 Add coverage for configuration resolution: agent default, agent override, space scoping, and omitted model routing.
+- [x] 8.2 Add coverage for packaging: bundled skill content matches `.agents/skills/esdiag/`, and divergence fails the build.
+- [x] 8.3 Add non-networked coverage for analysis request construction and SSE event handling, including interrupted streams.
+- [x] 8.4 Add coverage for `diagnostic.id` and `Kibana Link` extraction from `esdiag` command output.
 - [ ] 8.5 Add coverage for intent classification across reference, collection, ambiguous-fresh, ambiguous-stale, and follow-up cases, asserting that collection occurs only where intended and that ambiguous-stale asks before collecting.
 - [ ] 8.6 Add coverage for the first-job flow: offer made when no job exists, job persisted during the first run when accepted, one-off collection when declined, and prerequisite ordering when hosts or keystore access are missing.
 - [ ] 8.7 Verify end to end against a provisioned deployment: keystore gate, job run, streamed progress, relayed analysis, and a follow-up reusing the conversation identifier.
-- [ ] 8.8 Confirm the freshness lookup returns `model_usage: null` and that analysis token consumption is attributed to the cluster connector.
+- [x] 8.8 Confirm the freshness lookup returns `model_usage: null` and that analysis token consumption is attributed to the cluster connector.
 - [ ] 8.9 Exercise the documented privilege set with a minimally scoped API key to confirm chat authorization and diagnostic data access both succeed.
-- [ ] 8.10 Run `cargo clippy` and `cargo test` to confirm the change introduces no Rust regressions.
+- [x] 8.10 Run `cargo clippy` and `cargo test` to confirm the change introduces no Rust regressions.
 
 ## 9. Documentation
 
-- [ ] 9.1 Document client binding as distinct from cluster provisioning, with separate prerequisite lists and failure modes, and state model availability as a deployment prerequisite satisfied through Elastic Inference Service activation or a user-configured LLM provider and connector.
-- [ ] 9.2 Document the required API key privileges: `feature_agentBuilder.read` and `feature_actions.read` scoped to the ESDiag space, cluster `monitor_inference` when the connector uses the Elasticsearch Inference API, and `read` plus `view_index_metadata` on `metrics-*-esdiag*` and `settings-*-esdiag*`.
-- [ ] 9.3 Use only `feature_agentBuilder.*` privilege names in guidance and examples, and do not copy deprecated legacy privilege names that still appear in older documentation.
-- [ ] 9.4 Document cost attribution: analysis spend moves to the cluster's inference connector, and cluster input tokens grow with conversation depth.
-- [ ] 9.5 Document the intent classification and the freshness window setting, including which phrasings reuse an existing diagnostic, which collect a new one, and when the plugin asks first.
-- [ ] 9.6 Update `CHANGELOG.md` for the user-visible plugin addition using `.agents/skills/changelog/SKILL.md`.
+- [x] 9.1 Document client binding as distinct from cluster provisioning, with separate prerequisite lists and failure modes, and state model availability as a deployment prerequisite satisfied through Elastic Inference Service activation or a user-configured LLM provider and connector.
+- [x] 9.2 Document the required API key privileges: `feature_agentBuilder.read` and `feature_actions.read` scoped to the ESDiag space, cluster `monitor_inference` when the connector uses the Elasticsearch Inference API, and `read` plus `view_index_metadata` on `metrics-*-esdiag*` and `settings-*-esdiag*`.
+- [x] 9.3 Use only `feature_agentBuilder.*` privilege names in guidance and examples, and do not copy deprecated legacy privilege names that still appear in older documentation.
+- [x] 9.4 Document cost attribution: analysis spend moves to the cluster's inference connector, and cluster input tokens grow with conversation depth.
+- [x] 9.5 Document the intent classification and the freshness window setting, including which phrasings reuse an existing diagnostic, which collect a new one, and when the plugin asks first.
+- [x] 9.6 Update `CHANGELOG.md` for the user-visible plugin addition using `.agents/skills/changelog/SKILL.md`.
