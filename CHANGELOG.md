@@ -10,6 +10,10 @@ published release notes, maintenance branches, and tagged history.
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced `min-diag.sh` with the collection-only, version-aware `esdiag-lite.sh`, using environment-based Elasticsearch authentication, optional ZIP output, and no `jq` runtime dependency.
+
 ## [0.16.0] - 2026-07-11
 
 ### Added
