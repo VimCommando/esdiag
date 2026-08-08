@@ -24,42 +24,42 @@
 
 ## 4. Delegated Analysis
 
-- [ ] 4.1 Implement analysis requests against `POST /s/{space}/api/agent_builder/converse/async` using the configured agent and optional inference routing.
-- [ ] 4.2 Consume the SSE event stream and report progress from `reasoning`, `tool_call`, and `tool_result` events while the request runs.
-- [ ] 4.3 Present the completed message as the analysis, preserving markdown structure and resolving relative dashboard links against the configured Kibana base URL.
-- [ ] 4.4 Pass the `diagnostic.id` reported by `esdiag` output rather than letting the agent infer the current diagnostic.
-- [ ] 4.5 Retain the returned `conversation_id` and reuse it for follow-up questions about the same diagnostic; start a new conversation for a different diagnostic.
-- [ ] 4.6 Treat the response as unstructured markdown and do not derive control flow from its content.
-- [ ] 4.7 Handle stream interruption without issuing a duplicate analysis request, retaining the conversation identifier for inspection.
+- [x] 4.1 Implement analysis requests against `POST /s/{space}/api/agent_builder/converse/async` using the configured agent and optional inference routing.
+- [x] 4.2 Consume the SSE event stream and report progress from `reasoning`, `tool_call`, and `tool_result` events while the request runs.
+- [x] 4.3 Present the completed message as the analysis, preserving markdown structure and resolving relative dashboard links against the configured Kibana base URL.
+- [x] 4.4 Pass the `diagnostic.id` reported by `esdiag` output rather than letting the agent infer the current diagnostic.
+- [x] 4.5 Retain the returned `conversation_id` and reuse it for follow-up questions about the same diagnostic; start a new conversation for a different diagnostic.
+- [x] 4.6 Treat the response as unstructured markdown and do not derive control flow from its content.
+- [x] 4.7 Handle stream interruption without issuing a duplicate analysis request, retaining the conversation identifier for inspection.
 
 ## 5. Diagnostic Selection
 
-- [ ] 5.1 Classify request intent as reference, collection, or ambiguous, and route to reuse or collection accordingly.
-- [ ] 5.2 Treat any follow-up within an established analysis conversation as reference intent.
-- [ ] 5.3 Add a configurable freshness window setting defaulting to 24 hours.
-- [ ] 5.4 Implement the freshness lookup via `platform.core.execute_esql` through the tool execution endpoint, with an explicit `event.ingested` window and only the confirmed `diagnostic.id`, `event.ingested`, and `diagnostic.user` fields.
-- [ ] 5.5 Interpret an empty freshness result as no diagnostic within the window rather than as an absence of diagnostics.
-- [ ] 5.6 Prefer scoping the freshness lookup to the current user via `diagnostic.user`, falling back to unscoped when that field is absent.
-- [ ] 5.7 Collect without confirmation only on explicit collection intent; when collection is inferred from an ambiguous request, ask first, stating the age of the most recent diagnostic and the host that would be collected from.
-- [ ] 5.8 Handle a declined collection by offering the most recent existing diagnostic rather than proceeding to collect.
-- [ ] 5.9 Report the selected diagnostic, its age, and whether it was reused or newly collected.
+- [x] 5.1 Classify request intent as reference, collection, or ambiguous, and route to reuse or collection accordingly.
+- [x] 5.2 Treat any follow-up within an established analysis conversation as reference intent.
+- [x] 5.3 Add a configurable freshness window setting defaulting to 24 hours.
+- [x] 5.4 Implement the freshness lookup via `platform.core.execute_esql` through the tool execution endpoint, with an explicit `event.ingested` window and only the confirmed `diagnostic.id`, `event.ingested`, and `diagnostic.user` fields.
+- [x] 5.5 Interpret an empty freshness result as no diagnostic within the window rather than as an absence of diagnostics.
+- [x] 5.6 Prefer scoping the freshness lookup to the current user via `diagnostic.user`, falling back to unscoped when that field is absent.
+- [x] 5.7 Collect without confirmation only on explicit collection intent; when collection is inferred from an ambiguous request, ask first, stating the age of the most recent diagnostic and the host that would be collected from.
+- [x] 5.8 Handle a declined collection by offering the most recent existing diagnostic rather than proceeding to collect.
+- [x] 5.9 Report the selected diagnostic, its age, and whether it was reused or newly collected.
 
 ## 6. Review Command Orchestration
 
-- [ ] 6.1 Gate the review command on `esdiag keystore status` and stop with an unlock request when locked.
-- [ ] 6.2 Run the configured saved job when one exists and extract the resulting `diagnostic.id`.
-- [ ] 6.3 When no saved job is configured and collection is required, offer to help configure the user's first job instead of failing or silently collecting.
-- [ ] 6.4 Detect and establish job prerequisites in order — keystore access, a collect-role host, then a send-role output target — reporting each step and why it is required.
-- [ ] 6.5 Persist the job with `--save-job` during the first run so configuration and the first collection happen together, deriving the default name from the existing `{host}-{action}-{destination}` convention.
-- [ ] 6.6 Support declining the offer by performing a one-off collect and process without persisting a job, and do not repeat the offer within the session.
-- [ ] 6.7 Request analysis for the resolved identifier and present the result together with the `Kibana Link` as a clickable markdown link.
+- [x] 6.1 Gate the review command on `esdiag keystore status` and stop with an unlock request when locked.
+- [x] 6.2 Run the configured saved job when one exists and extract the resulting `diagnostic.id`.
+- [x] 6.3 When no saved job is configured and collection is required, offer to help configure the user's first job instead of failing or silently collecting.
+- [x] 6.4 Detect and establish job prerequisites in order — keystore access, a collect-role host, then a send-role output target — reporting each step and why it is required.
+- [x] 6.5 Persist the job with `--save-job` during the first run so configuration and the first collection happen together, deriving the default name from the existing `{host}-{action}-{destination}` convention.
+- [x] 6.6 Support declining the offer by performing a one-off collect and process without persisting a job, and do not repeat the offer within the session.
+- [x] 6.7 Request analysis for the resolved identifier and present the result together with the `Kibana Link` as a clickable markdown link.
 
 ## 7. Failure Attribution
 
-- [ ] 7.1 Map missing configured agent, rejected authorization, and unreachable endpoint to client configuration failures with actionable guidance.
-- [ ] 7.2 Map missing Agent Builder license and missing ESDiag assets to cluster provisioning failures with a pointer to the provisioning skill, and map an absent usable model to a deployment prerequisite with a pointer to model setup guidance.
-- [ ] 7.3 Report an unverifiable `diagnostic.id` as a not-found result without presenting an analysis.
-- [ ] 7.4 Distinguish a stale-diagnostic condition from an empty freshness result caused by an unknown field or a missing time window in the query.
+- [x] 7.1 Map missing configured agent, rejected authorization, and unreachable endpoint to client configuration failures with actionable guidance.
+- [x] 7.2 Map missing Agent Builder license and missing ESDiag assets to cluster provisioning failures with a pointer to the provisioning skill, and map an absent usable model to a deployment prerequisite with a pointer to model setup guidance.
+- [x] 7.3 Report an unverifiable `diagnostic.id` as a not-found result without presenting an analysis.
+- [x] 7.4 Distinguish a stale-diagnostic condition from an empty freshness result caused by an unknown field or a missing time window in the query.
 
 ## 8. Verification
 
