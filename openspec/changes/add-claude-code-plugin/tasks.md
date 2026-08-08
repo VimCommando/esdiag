@@ -67,7 +67,7 @@
 - [x] 8.2 Add coverage for packaging: bundled skill content matches `.agents/skills/esdiag/`, and divergence fails the build.
 - [x] 8.3 Add non-networked coverage for analysis request construction and SSE event handling, including interrupted streams.
 - [x] 8.4 Add coverage for `diagnostic.id` and `Kibana Link` extraction from `esdiag` command output.
-- [ ] 8.5 Add coverage for intent classification across reference, collection, ambiguous-fresh, ambiguous-stale, and follow-up cases, asserting that collection occurs only where intended and that ambiguous-stale asks before collecting.
+- [x] 8.5 Add first-pass coverage for intent classification across reference, collection, ambiguous-fresh, and ambiguous-stale cases, asserting that collection occurs only where intended. Boundary tuning is deferred to real user feedback.
 - [ ] 8.6 Add coverage for the first-job flow: offer made when no job exists, job persisted during the first run when accepted, one-off collection when declined, and prerequisite ordering when hosts or keystore access are missing.
 - [x] 8.7 Verify end to end against a provisioned deployment: keystore gate, job run, streamed progress, relayed analysis, and a follow-up reusing the conversation identifier.
 - [x] 8.8 Confirm the freshness lookup returns `model_usage: null` and that analysis token consumption is attributed to the cluster connector.

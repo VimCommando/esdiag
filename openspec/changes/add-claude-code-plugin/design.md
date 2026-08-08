@@ -202,6 +202,20 @@ The first run doubles as the configuration. `--save-job <NAME>` persists a job b
 
 Declining the offer is a supported path. A user who wants a one-off answer gets an ad-hoc collect and process, and the offer is not repeated within that session. What the plugin must not do is treat the absence of a job as a hard failure, since the user asked a reasonable question and the tooling can satisfy it either way.
 
+### First-pass intent validation
+
+Three prompts were run against a local stack to check the classification behaves as specified. Whether a collection occurred was measured by counting collected archives before and after, rather than taken from the narration.
+
+| Prompt | Classified | Collected? | Outcome |
+|---|---|---|---|
+| "Collect" | collection | yes, no confirmation | new diagnostic `…~39c2` |
+| "Evaluate" | reference | no (2 archives before and after) | reused `…~39c2` |
+| "What's going on in my cluster?" | ambiguous | no (age 1 min, inside the 24h window) | reused, age reported |
+
+The stale branch was confirmed separately: the same lookup with a one-minute window returns `found: false`, which is the condition that triggers asking before collecting.
+
+This is a first pass. Intent boundaries are a judgment surface and will need real user phrasings to tune; these three only establish that each branch is reachable and that collection happens in exactly one of them.
+
 ### The keystore gate is a first-class outcome
 
 `esdiag keystore status` returning `Keystore: locked` cannot be resolved non-interactively. The daily-driver command treats this as an expected terminal state that stops and asks the user, not as an error to retry or work around.
