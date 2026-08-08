@@ -109,7 +109,7 @@ The index patterns follow from the ADA references, which query `metrics-diagnost
 
 API keys use the `feature_agentBuilder.*` privilege names shown above. Some published documentation still shows legacy privilege names carried over from the feature's earlier internal naming; those are deprecated and must not be copied into guidance or examples.
 
-One caveat remains: the privilege set is documented and the index patterns are confirmed against the live deployment, but the set has not been exercised with a minimally scoped key, since all verification here used an elevated key. Confirming it end to end is a verification task rather than an open design question.
+Verified with minimally scoped keys against a local stack. A key holding exactly the four privileges above reaches both `agent_builder/agents` and `actions/connectors` and can query the diagnostic data. A key holding only the two Kibana application privileges, with no index privileges, is accepted for chat and fails only on data access — confirming the predicted failure shape, and confirming that binding must check data access separately rather than treating chat authorization as sufficient.
 
 ### Measured token attribution
 

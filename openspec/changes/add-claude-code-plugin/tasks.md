@@ -71,7 +71,7 @@
 - [ ] 8.6 Add coverage for the first-job flow: offer made when no job exists, job persisted during the first run when accepted, one-off collection when declined, and prerequisite ordering when hosts or keystore access are missing.
 - [ ] 8.7 Verify end to end against a provisioned deployment: keystore gate, job run, streamed progress, relayed analysis, and a follow-up reusing the conversation identifier.
 - [x] 8.8 Confirm the freshness lookup returns `model_usage: null` and that analysis token consumption is attributed to the cluster connector.
-- [ ] 8.9 Exercise the documented privilege set with a minimally scoped API key to confirm chat authorization and diagnostic data access both succeed.
+- [x] 8.9 Exercise the documented privilege set with a minimally scoped API key to confirm chat authorization and diagnostic data access both succeed.
 - [x] 8.10 Run `cargo clippy` and `cargo test` to confirm the change introduces no Rust regressions.
 
 ## 9. Documentation
