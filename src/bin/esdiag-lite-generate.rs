@@ -2,7 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-//! Maintainer utility for the generated region in `bin/esdiag-lite.sh`.
+//! Maintainer utility for generated regions in the ESDiag Lite scripts.
 
 use esdiag::processor::diagnostic::data_source::{VersionSource, get_product_sources, parse_npm_version_requirement};
 use eyre::{Result, bail, eyre};
@@ -12,6 +12,12 @@ use std::path::PathBuf;
 
 const BEGIN_MARKER: &str = "# BEGIN GENERATED LITE APIS";
 const END_MARKER: &str = "# END GENERATED LITE APIS";
+
+#[derive(Clone, Copy)]
+enum ScriptLanguage {
+    Bash,
+    PowerShell,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct VersionParts {
@@ -237,9 +243,9 @@ fn rules_overlap(left: &Rule, right: &Rule) -> bool {
     lower.0 < upper.0 || (lower.0 == upper.0 && lower.1 && upper.1)
 }
 
-fn render_source(name: &str, output_path: &str, rules: &[Rule]) -> Result<String> {
+fn validate_source_rules(name: &str, rules: &[Rule]) -> Result<()> {
     if !bash_identifier(name) {
-        bail!("lite source '{}' is not a valid Bash function identifier", name);
+        bail!("lite source '{}' is not a valid script function identifier", name);
     }
     if rules.is_empty() {
         bail!("lite source '{}' has no version rules", name);
@@ -256,6 +262,12 @@ fn render_source(name: &str, output_path: &str, rules: &[Rule]) -> Result<String
             }
         }
     }
+
+    Ok(())
+}
+
+fn render_bash_source(name: &str, output_path: &str, rules: &[Rule]) -> Result<String> {
+    validate_source_rules(name, rules)?;
 
     let output_path = bash_string(output_path, &format!("lite source '{}' output path", name))?;
     let mut result = String::new();
@@ -277,9 +289,89 @@ fn render_source(name: &str, output_path: &str, rules: &[Rule]) -> Result<String
     Ok(result)
 }
 
-fn render() -> Result<String> {
-    let sources =
-        get_product_sources("elasticsearch").ok_or_else(|| eyre!("embedded Elasticsearch sources are unavailable"))?;
+fn powershell_string(value: &str, context: &str) -> Result<String> {
+    if value.chars().any(|character| character.is_control()) {
+        bail!(
+            "{} contains a control character that cannot be rendered in PowerShell",
+            context
+        );
+    }
+    Ok(value.replace('\'', "''"))
+}
+
+fn powershell_function_name(name: &str) -> Result<String> {
+    if !bash_identifier(name) {
+        bail!("lite source '{}' is not a valid PowerShell function identifier", name);
+    }
+    let suffix = name
+        .split('_')
+        .map(|part| {
+            let mut characters = part.chars();
+            let first = characters.next().expect("non-empty source name component");
+            format!("{}{}", first.to_ascii_uppercase(), characters.as_str())
+        })
+        .collect::<String>();
+    Ok(format!("Get-Api{}", suffix))
+}
+
+fn powershell_condition(rule: &Rule) -> String {
+    let mut conditions = Vec::new();
+    if let Some(bound) = rule.lower {
+        let (function, version) = match bound {
+            Bound::Inclusive(version) => ("Test-VersionAtLeast", version),
+            Bound::Exclusive(version) => ("Test-VersionGreaterThan", version),
+        };
+        conditions.push(format!(
+            "({function} {} {} {})",
+            version.major, version.minor, version.patch
+        ));
+    }
+    if let Some(bound) = rule.upper {
+        let (function, version) = match bound {
+            Bound::Inclusive(version) => ("Test-VersionAtMost", version),
+            Bound::Exclusive(version) => ("Test-VersionLessThan", version),
+        };
+        conditions.push(format!(
+            "({function} {} {} {})",
+            version.major, version.minor, version.patch
+        ));
+    }
+    conditions.join(" -and ")
+}
+
+fn render_powershell_source(name: &str, output_path: &str, rules: &[Rule]) -> Result<String> {
+    validate_source_rules(name, rules)?;
+
+    let output_path = powershell_string(output_path, &format!("lite source '{}' output path", name))?;
+    let function_name = powershell_function_name(name)?;
+    let mut result = String::new();
+    writeln!(result, "function {function_name} {{")?;
+    for (index, rule) in rules.iter().enumerate() {
+        let prefix = if index == 0 { "if" } else { "elseif" };
+        writeln!(result, "  {prefix} ({}) {{", powershell_condition(rule))?;
+        writeln!(
+            result,
+            "    return Invoke-Api '{}' '{}'",
+            powershell_string(&rule.url, &format!("lite source '{}' URL", name))?,
+            output_path
+        )?;
+        writeln!(result, "  }}")?;
+    }
+    writeln!(result, "  else {{")?;
+    writeln!(
+        result,
+        "    Skip-Api '{}'",
+        powershell_string(name, "lite source name")?
+    )?;
+    writeln!(result, "    return $true")?;
+    writeln!(result, "  }}")?;
+    writeln!(result, "}}")?;
+    Ok(result)
+}
+
+fn lite_source_names<'a>(
+    sources: &'a std::collections::HashMap<String, esdiag::processor::diagnostic::data_source::Source>,
+) -> Result<Vec<&'a String>> {
     let mut names: Vec<&String> = sources
         .iter()
         .filter_map(|(name, source)| source.has_tag("lite").then_some(name))
@@ -289,6 +381,27 @@ fn render() -> Result<String> {
     if !names.iter().any(|name| name.as_str() == "version") {
         bail!("lite source catalog must include the version bootstrap source");
     }
+    Ok(names)
+}
+
+fn source_rules(name: &str, source: &esdiag::processor::diagnostic::data_source::Source) -> Result<Vec<Rule>> {
+    source
+        .versions
+        .iter()
+        .map(|(expression, source)| match source {
+            VersionSource::Url(url) => parse_rule(name, expression, url),
+            VersionSource::Structured(_) => bail!(
+                "lite source '{}' uses structured request details unsupported by esdiag-lite",
+                name
+            ),
+        })
+        .collect()
+}
+
+fn render_bash() -> Result<String> {
+    let sources =
+        get_product_sources("elasticsearch").ok_or_else(|| eyre!("embedded Elasticsearch sources are unavailable"))?;
+    let names = lite_source_names(&sources)?;
 
     let mut output = String::new();
     writeln!(
@@ -298,18 +411,8 @@ fn render() -> Result<String> {
     writeln!(output)?;
     for name in names.iter().filter(|name| name.as_str() != "version") {
         let source = sources.get(name.as_str()).expect("source key from map");
-        let rules = source
-            .versions
-            .iter()
-            .map(|(expression, source)| match source {
-                VersionSource::Url(url) => parse_rule(name, expression, url),
-                VersionSource::Structured(_) => bail!(
-                    "lite source '{}' uses structured request details unsupported by esdiag-lite",
-                    name
-                ),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        output.push_str(&render_source(name, &source.get_file_path(name), &rules)?);
+        let rules = source_rules(name, source)?;
+        output.push_str(&render_bash_source(name, &source.get_file_path(name), &rules)?);
         writeln!(output)?;
     }
 
@@ -339,17 +442,64 @@ fn render() -> Result<String> {
     Ok(output)
 }
 
-fn replace_generated_region(script: &str, generated: &str) -> Result<String> {
+fn render_powershell() -> Result<String> {
+    let sources =
+        get_product_sources("elasticsearch").ok_or_else(|| eyre!("embedded Elasticsearch sources are unavailable"))?;
+    let names = lite_source_names(&sources)?;
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# This region is generated by `cargo run --bin esdiag-lite-generate`. Do not edit."
+    )?;
+    writeln!(output)?;
+    for name in names.iter().filter(|name| name.as_str() != "version") {
+        let source = sources.get(name.as_str()).expect("source key from map");
+        let rules = source_rules(name, source)?;
+        output.push_str(&render_powershell_source(name, &source.get_file_path(name), &rules)?);
+        writeln!(output)?;
+    }
+
+    let version = sources.get("version").expect("validated version source");
+    let bootstrap_urls: Vec<&str> = version
+        .versions
+        .values()
+        .map(|source| match source {
+            VersionSource::Url(url) => Ok(url.as_str()),
+            VersionSource::Structured(_) => bail!("lite version source must use a URL"),
+        })
+        .collect::<Result<_>>()?;
+    if bootstrap_urls.len() != 1 || bootstrap_urls[0] != "/" {
+        bail!("lite version source must contain exactly one root (/) request");
+    }
+    writeln!(output, "function Get-ApiVersion {{")?;
+    writeln!(output, "  return Invoke-Api '/' 'version.json'")?;
+    writeln!(output, "}}")?;
+    writeln!(output)?;
+    writeln!(output, "function Invoke-LiteApis {{")?;
+    writeln!(output, "  $failed = $false")?;
+    for name in names.iter().filter(|name| name.as_str() != "version") {
+        writeln!(
+            output,
+            "  if (-not ({})) {{ $failed = $true }}",
+            powershell_function_name(name)?
+        )?;
+    }
+    writeln!(output, "  return (-not $failed)")?;
+    writeln!(output, "}}")?;
+    Ok(output)
+}
+
+fn replace_generated_region(path: &std::path::Path, script: &str, generated: &str) -> Result<String> {
     let begin = script
         .find(BEGIN_MARKER)
-        .ok_or_else(|| eyre!("{} is missing from bin/esdiag-lite.sh", BEGIN_MARKER))?;
+        .ok_or_else(|| eyre!("{} is missing from {}", BEGIN_MARKER, path.display()))?;
     let generated_start = begin + BEGIN_MARKER.len();
     let end = script[generated_start..]
         .find(END_MARKER)
         .map(|offset| generated_start + offset)
-        .ok_or_else(|| eyre!("{} is missing from bin/esdiag-lite.sh", END_MARKER))?;
+        .ok_or_else(|| eyre!("{} is missing from {}", END_MARKER, path.display()))?;
     if script[generated_start..end].contains(BEGIN_MARKER) {
-        bail!("bin/esdiag-lite.sh has nested generated-region markers");
+        bail!("{} has nested generated-region markers", path.display());
     }
     Ok(format!(
         "{}\n{}\n{}",
@@ -359,8 +509,12 @@ fn replace_generated_region(script: &str, generated: &str) -> Result<String> {
     ))
 }
 
-fn script_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/esdiag-lite.sh")
+fn script_path(language: ScriptLanguage) -> PathBuf {
+    let filename = match language {
+        ScriptLanguage::Bash => "esdiag-lite.sh",
+        ScriptLanguage::PowerShell => "esdiag-lite.ps1",
+    };
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin").join(filename)
 }
 
 fn main() -> Result<()> {
@@ -369,23 +523,32 @@ fn main() -> Result<()> {
         Some("--check") => true,
         Some(argument) => bail!("usage: esdiag-lite-generate [--write|--check]; unknown argument {argument}"),
     };
-    let path = script_path();
-    let script =
-        std::fs::read_to_string(&path).map_err(|error| eyre!("failed to read {}: {}", path.display(), error))?;
-    let updated = replace_generated_region(&script, &render()?)?;
-    if check {
-        if script != updated {
-            bail!("{} is stale; run cargo run --bin esdiag-lite-generate", path.display());
+    for language in [ScriptLanguage::Bash, ScriptLanguage::PowerShell] {
+        let path = script_path(language);
+        let script =
+            std::fs::read_to_string(&path).map_err(|error| eyre!("failed to read {}: {}", path.display(), error))?;
+        let generated = match language {
+            ScriptLanguage::Bash => render_bash()?,
+            ScriptLanguage::PowerShell => render_powershell()?,
+        };
+        let updated = replace_generated_region(&path, &script, &generated)?;
+        if check {
+            if script != updated {
+                bail!("{} is stale; run cargo run --bin esdiag-lite-generate", path.display());
+            }
+        } else if script != updated {
+            std::fs::write(&path, updated).map_err(|error| eyre!("failed to write {}: {}", path.display(), error))?;
         }
-    } else if script != updated {
-        std::fs::write(&path, updated).map_err(|error| eyre!("failed to write {}: {}", path.display(), error))?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{VersionParts, parse_rule, render, replace_generated_region, rules_overlap, script_path};
+    use super::{
+        ScriptLanguage, VersionParts, parse_rule, render_bash, render_powershell, replace_generated_region,
+        rules_overlap, script_path,
+    };
     use esdiag::processor::diagnostic::data_source::{VersionSource, get_product_sources};
     use semver::Version;
 
@@ -457,8 +620,16 @@ mod tests {
 
     #[test]
     fn checked_in_generated_region_is_current() {
-        let path = script_path();
-        let script = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(script, replace_generated_region(&script, &render().unwrap()).unwrap());
+        for (language, render) in [
+            (ScriptLanguage::Bash, render_bash()),
+            (ScriptLanguage::PowerShell, render_powershell()),
+        ] {
+            let path = script_path(language);
+            let script = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(
+                script,
+                replace_generated_region(&path, &script, &render.unwrap()).unwrap()
+            );
+        }
     }
 }

@@ -1,12 +1,12 @@
 ---
 type: Guide
-title: esdiag-lite.sh
+title: esdiag-lite
 description: Guide to collecting portable, version-aware Elasticsearch diagnostic bundles with ESDiag Lite.
 tags: [bin, collection, diagnostics]
 ---
 
-esdiag-lite.sh
---------------
+esdiag-lite
+-----------
 
 `bin/esdiag-lite.sh` is a collection-only Elasticsearch diagnostic utility for
 restricted environments where the ESDiag binary or container cannot be
@@ -17,6 +17,28 @@ optionally forward a generated ZIP archive to Elastic Upload Service.
 The script requires Bash 3.2 or newer, `curl`, and standard POSIX utilities.
 The default ZIP output also requires `zip`. It does not require `jq`, `yq`,
 Python, Rust, the ESDiag binary, or a container runtime.
+
+Windows PowerShell
+------------------
+
+`bin/esdiag-lite.ps1` provides the same version-aware collection, archive, and
+optional upload workflow for Windows PowerShell 5.1 or newer. It requires only
+PowerShell and its built-in .NET runtime; it does not require Bash, `curl`,
+`zip`, `split`, or a Unix compatibility layer.
+
+Run it from a PowerShell prompt with the same environment variable names and
+options as the Bash utility:
+
+```powershell
+powershell -File bin/esdiag-lite.ps1 collect
+powershell -File bin/esdiag-lite.ps1 collect --archive=none
+powershell -File bin/esdiag-lite.ps1 upload api-diagnostics-<timestamp>.zip
+```
+
+ZIP output uses PowerShell's `Compress-Archive`. If that command is not
+available, use `--archive=none` to retain the diagnostic directory. The
+PowerShell utility is collection-only: pass its ZIP or directory output to
+`esdiag process` for analysis and export.
 
 Configuration and authentication
 --------------------------------
@@ -131,6 +153,9 @@ generated region or verify it has not drifted with:
 cargo run --bin esdiag-lite-generate
 cargo run --bin esdiag-lite-generate --check
 ```
+
+The generator refreshes and checks the marked API regions in both
+`esdiag-lite.sh` and `esdiag-lite.ps1`.
 
 Process collected output with ESDiag
 ------------------------------------
