@@ -216,6 +216,21 @@ The stale branch was confirmed separately: the same lookup with a one-minute win
 
 This is a first pass. Intent boundaries are a judgment surface and will need real user phrasings to tune; these three only establish that each branch is reachable and that collection happens in exactly one of them.
 
+### Saved jobs come in two shapes, and only one leaves something to analyze
+
+Verified against 0.16.4. `--save-job` records whichever invocation it was attached to:
+
+| Saved from | Recorded | `job list` shows | Lands in the cluster? |
+|---|---|---|---|
+| `esdiag collect --save-job N <HOST> <DIR>` | `action: collect`, `output_dir` | `Processing: skipped` | no, archive on disk only |
+| `esdiag process <HOST> <OUTPUT_HOST> --save-job N` | `action: process`, `output: known-host` | `Processing: standard` | yes |
+
+A known-host input makes `process` collect, process, and send in one step, so the second form is the one the review flow needs. The first produces an archive and nothing to analyze.
+
+Separately, **`esdiag job run` does not print the diagnostic identifier.** It reports only `job run complete`, unlike `esdiag process`, which prints `process complete … documents for <id>` plus the Kibana link. So the identifier cannot be parsed from the job path.
+
+Consequence: after running a job, the identifier is resolved with the freshness lookup over a short window rather than by parsing output, and the result is checked to be newer than the job start. A `found: false` there means the job did not land a diagnostic — usually a collect-only job — and must be reported as such rather than silently analyzing an older diagnostic. Output parsing remains correct for the explicit `process` path.
+
 ### The keystore gate is a first-class outcome
 
 `esdiag keystore status` returning `Keystore: locked` cannot be resolved non-interactively. The daily-driver command treats this as an expected terminal state that stops and asks the user, not as an error to retry or work around.
