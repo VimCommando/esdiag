@@ -115,7 +115,7 @@ The skill hands uninitialized users to onboarding and never asks for credentials
 
 ### Preserve saved-job terminal facts
 
-Saved jobs can collect an archive, upload it, or process it into Elasticsearch. `JobRunOutcome` exposes the corresponding archive path, upload destination, or diagnostic identifier and Kibana link. This is a CLI contract useful beyond the plugin and is not worked around in skill code.
+Saved jobs compose `Collect` or `Load` input with optional `Save`, `Process { export }`, and `Send` stages. The unified executor outcome exposes every durable result that survives the run: a retained archive, processed diagnostic identifier and Kibana link, and/or upload destination. These facts may coexist and none is reduced to a mutually exclusive primary variant. This is a CLI contract useful beyond the plugin and is not worked around in skill code.
 
 ## Risks / Trade-offs
 

@@ -7,8 +7,8 @@
 
 ## 2. Saved Job Terminal Facts
 
-- [x] 2.1 Return a typed `JobRunOutcome` from saved-job execution for collected, uploaded, and processed terminal variants.
-- [x] 2.2 Report the diagnostic identifier and Kibana link for processed jobs, archive path for collect-only jobs, and destination for upload jobs.
+- [x] 2.1 Return the unified executor's composite `JobOutcome` from saved-job execution so retained save, process, and send results can coexist.
+- [x] 2.2 Report every durable diagnostic identifier and Kibana link, retained archive path, and upload destination produced by a phase-composed job without treating them as mutually exclusive variants.
 - [x] 2.3 Add unit and CLI coverage for every job outcome without exposing credentials.
 
 ## 3. Agent Builder Validation Findings

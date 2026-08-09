@@ -11,7 +11,7 @@ ESDiag already publishes two halves of an agent-driven diagnostic workflow that 
 - Keep host packaging independent of ESDiag application configuration, credential storage, first-run onboarding, and cluster provisioning.
 - Route newly installed or unconfigured users to an ESDiag-owned onboarding workflow rather than teaching the skill to collect credentials or construct persistent state.
 - Treat the Agent Builder transport as an ESDiag CLI responsibility rather than a host-plugin-specific HTTP, SSE, or query implementation.
-- Update saved-job reporting so a job run identifies the diagnostic, archive, or upload destination it produced.
+- Update saved-job reporting so a phase-composed run identifies every durable diagnostic, retained archive, and upload destination it produced.
 
 ## Capabilities
 
@@ -22,7 +22,7 @@ ESDiag already publishes two halves of an agent-driven diagnostic workflow that 
 
 ### Modified Capabilities
 
-- `saved-jobs`: `esdiag job run` reports the diagnostic identifier for processing, archive path for collection, or upload destination so callers can consume the terminal result.
+- `saved-jobs`: `esdiag job run` reports every durable diagnostic identifier, retained archive path, and upload destination produced by its selected stages so callers can consume the terminal result.
 
 ## Impact
 

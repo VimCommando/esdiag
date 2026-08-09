@@ -28,12 +28,13 @@ The CLI SHALL define explicit compact outcomes for successful collect, process, 
 - **THEN** the result contains the resolved archive or diagnostic path and successful and total file counts
 - **AND** it contains upload destination metadata when the invocation also uploaded the archive
 
-#### Scenario: Job run preserves its terminal variant
+#### Scenario: Job run preserves every completed stage result
 - **WHEN** `esdiag job run <name>` completes
-- **THEN** the result distinguishes collected, uploaded, and processed job outcomes
-- **AND** a collected outcome includes its archive path
-- **AND** an uploaded outcome includes its retained archive path and upload destination
-- **AND** a processed outcome includes its diagnostic result
+- **THEN** the result identifies the completed job
+- **AND** includes a save result when the job retained a newly collected archive
+- **AND** includes a process result when the job processed a diagnostic
+- **AND** includes a send result when the job uploaded a bundle
+- **AND** may contain all three results when the selected stages produced them in one run
 
 #### Scenario: Keystore status exposes facts without prose parsing
 - **WHEN** the user runs `esdiag keystore status`
@@ -73,7 +74,7 @@ For finite commands, stdout SHALL contain only the structured terminal outcome. 
 - **AND** agent mode changes only the default stderr log level
 
 ### Requirement: Finite Command Failures Are Structured
-After a finite command begins execution, a terminal failure SHALL emit one structured failure value to stdout in the selected format and exit non-zero. The failure SHALL contain a stable category and safe human-readable message, MAY include allowlisted command context, and MUST NOT expose credentials or an unrestricted internal error chain.
+After a finite command begins execution, a terminal failure SHALL emit one structured failure value to stdout in the selected format and exit non-zero. The failure SHALL contain a stable category and safe human-readable message, MAY include allowlisted command context, and MUST NOT expose credentials or an unrestricted internal error chain. When a phase-composed job created durable results before a later stage failed, the failure SHALL retain those allowlisted completed-stage facts, identify the failed stage, and communicate whole-job retry safety without claiming overall success.
 
 #### Scenario: Unknown saved job returns structured failure
 - **WHEN** the user runs `esdiag job run unknown-name`
@@ -85,6 +86,13 @@ After a finite command begins execution, a terminal failure SHALL emit one struc
 - **WHEN** processing fails after command execution begins
 - **THEN** stdout contains a failure value rather than a success outcome
 - **AND** no fabricated diagnostic identifier or Kibana URL is present
+
+#### Scenario: Job failure retains real earlier results
+- **GIVEN** a finite saved job retained an archive and processed a diagnostic
+- **WHEN** its later `Send` stage fails
+- **THEN** stdout contains one non-zero failure identifying `send` as the failed stage
+- **AND** includes the real retained archive and diagnostic facts under completed-stage context
+- **AND** does not emit a `job_completed` result
 
 #### Scenario: Usage output remains human-oriented
 - **WHEN** Clap handles `--help`, `--version`, or an argument-parse failure before command execution
@@ -104,6 +112,12 @@ When a command intentionally assigns stdout to processed-document streaming, std
 - **WHEN** the command fails
 - **THEN** it exits non-zero without injecting a structured failure value into the NDJSON stream
 - **AND** the operational error is reported on stderr
+
+#### Scenario: Saved job exports processed documents to stdout
+- **GIVEN** a saved job's `Process` stage uses the stdout export target
+- **WHEN** the user runs `esdiag job run <name>`
+- **THEN** every stdout record remains an NDJSON processed-document record
+- **AND** no job-completion YAML, JSON, or prose value is appended
 
 ### Requirement: Long-Running Server Emits Structured Readiness
 When stdout is not assigned to processed-document streaming, the `serve` command SHALL emit one structured readiness result after successfully binding its listener. The result SHALL identify the bound address, port, runtime mode, and configured output category without exposing credentials. It MUST NOT emit a second terminal result on ordinary shutdown.

@@ -25,7 +25,7 @@
 - [ ] 4.3 Implement hidden controlling-terminal prompts for keystore passwords and host credentials using existing keystore APIs, including non-TTY failure behavior and redaction tests.
 - [ ] 4.4 Implement output deployment creation/selection as a send-role Elasticsearch host linked to a view-role Kibana host, with shared-secret default and existing distinct-secret selection.
 - [ ] 4.5 Validate both output clients, inspect required ESDiag assets, and offer the existing setup operation only after explicit approval.
-- [ ] 4.6 Implement the repeatable collect-host loop and first saved-job creation, defaulting to collect-process-send while retaining explicit collect-only selection.
+- [ ] 4.6 Implement the repeatable collect-host loop and first saved-job creation, defaulting to `Collect` plus `Process` with the configured send-role Elasticsearch host as its export target while retaining explicit collect-and-save-only selection.
 - [ ] 4.7 Emit the standard safe initialization outcome when structured CLI output is available and add interrupted/resumed end-to-end wizard tests.
 - [ ] 4.8 Compose the embedded skill installer in process, present detected and explicit target choices, keep decline/failure non-gating, and include per-target results plus standalone recovery guidance.
 
