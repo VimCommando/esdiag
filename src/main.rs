@@ -2359,6 +2359,73 @@ mod tests {
         );
     }
 
+    fn execution_for_summary_tests() -> esdiag::job::outcome::ExecutionOutcome {
+        let manifest = DiagnosticManifest::new(
+            "2026-08-08T00:00:00Z".to_string(),
+            Some("esdiag-test".to_string()),
+            None,
+            None,
+            Some("standard".to_string()),
+            Some(Application::Elasticsearch),
+            Some("api-diagnostics".to_string()),
+            Some("esdiag".to_string()),
+            Some("9.4.2".to_string()),
+        );
+        let mut report = DiagnosticReportBuilder::try_from(manifest)
+            .expect("report builder")
+            .receiver("Elasticsearch http://localhost:9200".to_string())
+            .build()
+            .expect("report");
+        report.add_kibana_link("https://kb.example/app/dashboards#/view/report".to_string());
+        let mut outcome = esdiag::job::outcome::ExecutionOutcome::new(
+            esdiag::job::context::ExecutionIdentity::new(1, "test"),
+        );
+        outcome.report = Some(report);
+        outcome
+    }
+
+    #[test]
+    fn job_run_summary_reports_diagnostic_identifier_for_processing_jobs() {
+        // A saved job hides which commands ran, so the identifier must still
+        // reach the user or they cannot reference the result afterwards.
+        let execution = execution_for_summary_tests();
+        let expected_id = execution.report.as_ref().expect("report").diagnostic.metadata.id.clone();
+        let summary = format_job_summary(&JobOutcome {
+            processed: true,
+            execution: Some(execution),
+            ..Default::default()
+        });
+
+        assert!(summary.contains("job run complete"));
+        assert!(summary.contains(&format!("documents for {expected_id}")));
+        assert!(summary.contains("Kibana Link: https://kb.example/app/dashboards#/view/report"));
+    }
+
+    #[test]
+    fn job_run_summary_reports_archive_path_for_collect_only_jobs() {
+        let summary = format_job_summary(&JobOutcome {
+            bundle_path: Some(std::path::PathBuf::from("/tmp/out/api-diagnostics-20260808-165632.zip")),
+            bundle_retained: true,
+            ..Default::default()
+        });
+
+        assert!(summary.contains("job run complete"));
+        assert!(summary.contains("/tmp/out/api-diagnostics-20260808-165632.zip"));
+        // A collect-only job sends nothing, so it must not imply a diagnostic exists.
+        assert!(!summary.contains("documents for"));
+    }
+
+    #[test]
+    fn job_run_summary_reports_upload_destination_for_upload_jobs() {
+        let summary = format_job_summary(&JobOutcome {
+            upload_slug: Some("abc123".to_string()),
+            ..Default::default()
+        });
+
+        assert!(summary.contains("job run complete"));
+        assert!(summary.contains("https://upload.elastic.co/g/abc123"));
+    }
+
     #[test]
     fn process_summary_includes_kibana_link_for_stderr_output() {
         let manifest = DiagnosticManifest::new(
