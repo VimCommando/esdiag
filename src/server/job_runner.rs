@@ -534,12 +534,12 @@ async fn render_child_diagnostic_events(
                         template::JobCompleted {
                             job_id,
                             status_class: if execution_error.is_some() {
-                                "error"
+                                "status-error"
                             } else {
                                 completed_status_class(&outcome)
                             },
                             heading: if execution_error.is_some() {
-                                "Processing failed"
+                                "⚠️ Diagnostic completed with output failures"
                             } else {
                                 completed_heading(&outcome)
                             },

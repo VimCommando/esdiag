@@ -123,10 +123,10 @@ impl InputResolver {
                 let bytes = UploadServiceDownloader::try_from(url.clone())?.download_bytes()?;
                 let temp_dir =
                     std::env::temp_dir().join(format!("esdiag-input-{}", uuid::Uuid::new_v4().as_u64_pair().0));
-                std::fs::create_dir_all(&temp_dir)?;
+                tokio::fs::create_dir_all(&temp_dir).await?;
                 let bundle_path = temp_dir.join("diagnostic.zip");
-                if let Err(error) = std::fs::write(&bundle_path, bytes) {
-                    let _ = std::fs::remove_dir_all(&temp_dir);
+                if let Err(error) = tokio::fs::write(&bundle_path, bytes).await {
+                    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
                     return Err(error.into());
                 }
                 let receiver = Receiver::try_from(Uri::File(bundle_path.clone()))?;

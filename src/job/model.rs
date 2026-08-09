@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Opaque reference to an execution-only resource supplied by
-/// [`ExecutionContext`](crate::job::executor::ExecutionContext).
+/// [`ExecutionContext`](crate::job::context::ExecutionContext).
 ///
 /// The key is safe to serialize, but the credential, receiver, or adapter it
 /// names is deliberately absent from the Job payload.
