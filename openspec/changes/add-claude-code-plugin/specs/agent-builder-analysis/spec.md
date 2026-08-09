@@ -1,124 +1,72 @@
 ## ADDED Requirements
 
 ### Requirement: Analysis Delegated To The Cluster Agent
-The plugin SHALL obtain diagnostic analysis by sending the user's question and a `diagnostic.id` to a Kibana Agent Builder agent through the space-scoped chat API, and SHALL present the agent's response as the analysis. The plugin MUST NOT reproduce the analysis locally by querying diagnostic indices, recomputing metrics, or substituting its own thresholds for those the agent applied.
+Diagnostic reasoning SHALL be performed by the configured Kibana Agent Builder agent in the output deployment. The local skill MUST NOT reimplement the agent's ES|QL, metrics, thresholds, or recommendations.
 
-#### Scenario: Analysis performed by the cluster
-- **GIVEN** a verified `diagnostic.id` and a configured target agent
-- **WHEN** the user asks how the cluster is performing
-- **THEN** the plugin sends one analysis request to the configured agent
-- **AND** presents the agent's response as the analysis
-- **AND** does not issue its own diagnostic index queries to derive findings
+#### Scenario: Diagnostic question is submitted
+- **WHEN** the skill submits a diagnostic question through ESDiag's native Agent Builder command
+- **THEN** the configured cluster-side agent performs the analysis
+- **AND** the local agent relays the completed markdown without re-deriving it
 
-#### Scenario: Agent findings are not re-derived
-- **GIVEN** the agent has returned findings with observed values
-- **WHEN** the plugin presents results
-- **THEN** the reported values are those the agent returned
-- **AND** the plugin does not recompute or override them
+### Requirement: Real Analysis Is Persisted In Kibana History
+Every real analysis and follow-up SHALL use the Agent Builder conversation API so the resulting thread remains visible and resumable in Kibana. The client SHALL return the conversation identifier and a Kibana handoff link and MUST NOT require a second local conversation-history store.
 
-#### Scenario: Dashboard links preserved
-- **GIVEN** the agent response contains relative dashboard links
-- **WHEN** the plugin presents results
-- **THEN** the links are preserved and resolved against the configured Kibana base URL
+#### Scenario: First question creates a conversation
+- **WHEN** a new analysis completes
+- **THEN** the response identifies the persisted Kibana conversation
+- **AND** the user can follow its Kibana link to continue the thread
 
-### Requirement: Streaming Progress Reporting
-The plugin SHALL use the streaming chat endpoint and report progress from its event stream while analysis runs. The user MUST receive indication of ongoing activity, including which tool the agent is invoking, rather than an unreported wait. The plugin MUST NOT block silently for the duration of the request.
+#### Scenario: Explicit follow-up continues a conversation
+- **GIVEN** a prior response returned a conversation identifier
+- **WHEN** the caller supplies that identifier with a follow-up question
+- **THEN** Agent Builder appends the turn to the same Kibana conversation
 
-#### Scenario: Progress reported during a long analysis
-- **GIVEN** an analysis request that takes tens of seconds
-- **WHEN** the agent emits reasoning and tool call events
-- **THEN** the plugin reports activity as those events arrive
-- **AND** reports the tool being invoked
+### Requirement: Streaming Progress Is Presented Safely
+The ESDiag Agent Builder client SHALL consume Kibana's asynchronous SSE response internally and present reasoning and tool progress as operational status while reserving the structured terminal outcome for the completed response.
 
-#### Scenario: Final message presented on completion
-- **GIVEN** the event stream reaches message completion
-- **WHEN** the plugin presents results
-- **THEN** the completed message is presented as the analysis
+#### Scenario: Long analysis emits progress
+- **WHEN** Agent Builder emits reasoning and tool events before completion
+- **THEN** the user sees incremental progress
+- **AND** progress does not contaminate the structured completed response
 
-#### Scenario: Interrupted stream does not silently discard work
-- **GIVEN** an analysis request whose stream is interrupted after a conversation identifier was assigned
-- **WHEN** the plugin handles the interruption
-- **THEN** the plugin reports the interruption and retains the conversation identifier
-- **AND** does not issue a duplicate analysis request without user direction
+### Requirement: Exact New Diagnostic Identifier Is Supplied
+When ESDiag has just processed a diagnostic, the skill SHALL include the exact `diagnostic.id` from the native structured outcome in the Agent Builder prompt. It MUST NOT infer the identifier from timestamps, prose, or a separate latest-diagnostic query.
 
-### Requirement: Diagnostic Identifier Supplied By The Client
-The plugin SHALL pass an explicit `diagnostic.id` obtained from `esdiag` command output when one is known, rather than relying on the agent to determine which diagnostic is current.
+#### Scenario: Processing returns an identifier
+- **WHEN** a process or saved-job outcome contains a diagnostic identifier
+- **THEN** the subsequent Agent Builder prompt includes that identifier
+- **AND** no discovery query is needed to identify the newly created diagnostic
 
-#### Scenario: Identifier taken from process output
-- **GIVEN** an `esdiag process` or `esdiag job run` invocation reported a diagnostic identifier
-- **WHEN** the plugin requests analysis for that run
-- **THEN** the request includes that identifier
+### Requirement: Existing Diagnostic Discovery Stays In Agent Builder
+When no newly created or explicitly supplied diagnostic identifier exists, the skill SHALL allow the configured Agent Builder agent to discover appropriate existing diagnostic data with its installed tools. ESDiag and the plugin MUST NOT maintain a second freshness query or diagnostic-selection policy.
 
-#### Scenario: No identifier known
-- **GIVEN** no diagnostic identifier is known to the plugin
-- **WHEN** the user requests analysis
-- **THEN** the plugin obtains an identifier before requesting analysis
-- **AND** does not ask the agent to guess which diagnostic is current
-
-### Requirement: Conversation Continuation For Follow-Up Questions
-The plugin SHALL retain the conversation identifier returned by an analysis request and SHALL reuse it for follow-up questions about the same diagnostic, so prior context is not resent by the client. Conversation reuse MUST be scoped by Kibana deployment, space, agent, and diagnostic identifier. Every analysis conversation SHALL remain in Kibana Agent Builder history so the user can continue it from Kibana.
-
-#### Scenario: Follow-up reuses the conversation
-- **GIVEN** a completed analysis returned a conversation identifier
-- **WHEN** the user asks a follow-up question about the same diagnostic
-- **THEN** the request includes that conversation identifier
-- **AND** the plugin does not restate the prior analysis in the request
-
-#### Scenario: New diagnostic starts a new conversation
-- **GIVEN** a conversation identifier exists for a previous diagnostic
-- **WHEN** the user requests analysis of a different diagnostic
-- **THEN** the plugin does not reuse the previous conversation identifier
-
-#### Scenario: Same diagnostic on another deployment is isolated
-- **GIVEN** a conversation identifier exists for a diagnostic on one Kibana deployment
-- **WHEN** the user analyzes the same diagnostic identifier on a different deployment, space, or agent
-- **THEN** the plugin starts a separate conversation
-- **AND** does not send the identifier from the first deployment
-
-#### Scenario: Conversation remains available in Kibana
-- **GIVEN** an analysis or follow-up completes through Agent Builder
-- **WHEN** the plugin reports the result
-- **THEN** that exchange is present in Kibana Agent Builder conversation history
-- **AND** the plugin reports the conversation identifier for handoff and troubleshooting
+#### Scenario: General review of existing data
+- **WHEN** the user asks for a review without requesting fresh collection and without supplying an identifier
+- **THEN** the Agent Builder agent performs diagnostic discovery and analysis
+- **AND** the local client does not query Elasticsearch directly for freshness
 
 ### Requirement: Unstructured Response Handling
-The plugin SHALL treat the agent response as unstructured markdown. The plugin MUST NOT depend on a response schema, and MUST NOT parse the response into control-flow decisions such as retrying, escalating, or suppressing findings.
+The completed Agent Builder message SHALL be treated as unstructured markdown for presentation. The local skill MUST NOT parse findings into automated remediation, collection, retry, or severity decisions.
 
-#### Scenario: Response shape varies
-- **GIVEN** two analyses return differently structured markdown
-- **WHEN** the plugin presents each result
-- **THEN** both are presented without requiring a fixed field layout
-- **AND** neither triggers a parse failure
-
-#### Scenario: Response content does not drive control flow
-- **GIVEN** an analysis response describing a critical finding
-- **WHEN** the plugin presents results
-- **THEN** the plugin does not take automated remediation or retry action based on parsing that content
+#### Scenario: Critical finding is returned
+- **WHEN** Agent Builder describes a critical finding
+- **THEN** the skill presents that finding to the user
+- **AND** does not take remediation or issue another paid request based on parsing the prose
 
 ### Requirement: Analysis Failure Attribution
-The plugin SHALL distinguish client configuration failures from cluster provisioning failures when an analysis request fails, and SHALL report which side requires attention.
+The client SHALL distinguish missing local/output configuration, Agent Builder authorization, unavailable configured agent, missing deployment model, unknown diagnostic, and interrupted-conversation failures without exposing credentials.
 
-#### Scenario: Configured agent missing
-- **GIVEN** the configured target agent does not exist in the configured space
-- **WHEN** an analysis request fails
-- **THEN** the plugin reports the configured agent as missing
-- **AND** identifies this as client configuration
+#### Scenario: Local output configuration is missing
+- **WHEN** the Agent Builder command cannot resolve the output deployment's Kibana viewer
+- **THEN** the failure directs the user to first-run onboarding
+- **AND** does not describe the problem as cluster provisioning
 
-#### Scenario: No model available to the agent
-- **GIVEN** the target agent exists but the deployment has no usable model
-- **WHEN** an analysis request fails
-- **THEN** the plugin reports that the deployment lacks a configured model
-- **AND** identifies this as a deployment prerequisite the user must satisfy
-- **AND** does not attempt to configure model access
+#### Scenario: Deployment has no usable model
+- **WHEN** Agent Builder rejects the first real question because no model is available
+- **THEN** the failure identifies a deployment prerequisite
+- **AND** does not retry or attempt connector configuration
 
-#### Scenario: Authorization rejected
-- **GIVEN** the configured API key lacks the privileges required for the chat API
-- **WHEN** an analysis request is rejected
-- **THEN** the plugin reports the missing authorization
-- **AND** identifies this as client configuration
-
-#### Scenario: Unknown diagnostic identifier
-- **GIVEN** the supplied `diagnostic.id` does not exist in the deployment
-- **WHEN** the agent reports it cannot verify the identifier
-- **THEN** the plugin reports that the diagnostic was not found
-- **AND** does not present an analysis
+#### Scenario: Stream interrupts after conversation creation
+- **WHEN** a conversation identifier is received but the response ends before completion
+- **THEN** the failure identifies the existing Kibana conversation as the recovery location
+- **AND** marks automatic retry unsafe

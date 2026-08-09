@@ -1,42 +1,36 @@
 ## Why
 
-ESDiag already publishes two halves of an agent-driven diagnostic workflow that never meet. The `.agents/skills/esdiag/` skill teaches an agent to drive the `esdiag` CLI, and `esdiag setup` installs the `agentic-diagnostic-assistant` (ADA) skill into a Kibana space where it is attached to the `elastic-ai-agent` default agent. A user in Claude Code can collect and process a diagnostic, but must then leave the terminal and open Kibana chat to have it analyzed.
-
-Closing that gap in the obvious way — teaching Claude to analyze diagnostics itself — is the wrong trade. It duplicates ADA's knowledge outside the cluster where it will drift, and it spends the user's local model quota on work the cluster is already provisioned and separately billed to do. A measured end-to-end ADA analysis consumes ~109,600 input and ~3,600 output tokens on the cluster's inference connector while returning ~1,100 tokens of markdown, a ratio near 100:1. In organizations where per-user assistant quota is constrained but cluster inference is billed separately, that ratio is the entire point.
-
-This change packages ESDiag as a portable Agent Skill, with thin Claude Code and Codex adapters and direct OpenCode discovery, that delegates analysis to the cluster's own agent over the Agent Builder chat API. The local agent orchestrates and presents while the cluster reasons and pays.
+ESDiag already publishes two halves of an agent-driven diagnostic workflow that do not meet: a portable operations skill drives the CLI, while `esdiag setup` installs diagnostic expertise into a Kibana Agent Builder agent. Packaging the operations skill for common coding agents lets the local agent orchestrate collection and present cluster-side analysis without copying analytical knowledge or inference cost into every host integration.
 
 ## What Changes
 
-- Add a portable ESDiag Agent Skill whose instructions, references, and executable helpers are single-sourced from `.agents/skills/esdiag/`, plus thin Claude Code and Codex package metadata.
-- Add a client-side analysis path that sends a verified `diagnostic.id` and the user's question to the cluster's Agent Builder agent via `POST /s/{space}/api/agent_builder/converse/async`, consuming the Server-Sent Events stream so the user sees real progress instead of a silent wait.
-- Make the target agent configurable through plugin settings, defaulting to `elastic-ai-agent`, because the agent carrying the ADA skill is a per-cluster deployment decision and no single agent id is safe to hard-code.
-- Make the inference endpoint optionally overridable per request so analysis spend can be routed to a designated billed endpoint.
-- Relay the agent's markdown response, including its relative dashboard links, without re-analyzing the underlying metrics locally.
-- Support follow-up drill-down by reusing the returned `conversation_id`, which keeps local cost near zero for subsequent turns.
-- Add a client-binding skill that validates Kibana, direct Elasticsearch data access, the API key, the configured agent id, and local `esdiag` state without provisioning a cluster, creating a conversation, or invoking a model.
-- Add a daily-driver skill that selects an existing diagnostic or, when authorized, gates collection on keystore state, runs a saved job or an explicit process operation to obtain a `diagnostic.id`, then requests analysis.
-- Treat cluster provisioning as a separate concern referenced by the operations skill rather than implemented here.
+- Add one portable ESDiag Agent Skill single-sourced from `.agents/skills/esdiag/`, with thin Claude Code and Codex package metadata and direct OpenCode discovery.
+- Make that same canonical skill available through the version-matched, binary-embedded `esdiag agent skills` installer owned by the successor `add-agent-cli` change, so plugin or marketplace installation is optional for binary users.
+- Teach the skill to obtain exact diagnostic identifiers from ESDiag command results and delegate diagnostic reasoning to the output deployment's Agent Builder agent.
+- Preserve real Kibana Agent Builder conversations and return links so users can continue analysis in Kibana.
+- Keep host packaging independent of ESDiag application configuration, credential storage, first-run onboarding, and cluster provisioning.
+- Route newly installed or unconfigured users to an ESDiag-owned onboarding workflow rather than teaching the skill to collect credentials or construct persistent state.
+- Treat the Agent Builder transport as an ESDiag CLI responsibility rather than a host-plugin-specific HTTP, SSE, or query implementation.
+- Update saved-job reporting so a job run identifies the diagnostic, archive, or upload destination it produced.
 
 ## Capabilities
 
 ### New Capabilities
-- `claude-code-plugin`: Distribution, installation, configuration resolution, and client-binding behavior for the ESDiag Claude Code plugin, including its separation from cluster provisioning.
-- `agent-builder-analysis`: Delegated diagnostic analysis against a Kibana Agent Builder agent over the chat API, covering agent selection, progress reporting, diagnostic identifier handoff, conversation continuation, and failure handling.
+
+- `claude-code-plugin`: Portable skill distribution, installation, single-sourcing, thin host adapters, and separation from application onboarding and cluster provisioning.
+- `agent-builder-analysis`: Delegated cluster-side analysis, progress presentation, exact diagnostic handoff, Kibana conversation continuity, and safe failure handling.
 
 ### Modified Capabilities
-- `saved-jobs`: `esdiag job run` reports what the job produced — the diagnostic identifier for a processing job, the archive path for a collect-only job, the destination for an upload job. A saved job conceals which commands ran, so without this neither the plugin nor a CLI user can reference the result afterwards.
+
+- `saved-jobs`: `esdiag job run` reports the diagnostic identifier for processing, archive path for collection, or upload destination so callers can consume the terminal result.
 
 ## Impact
 
-- **Target Elastic products:** Kibana Agent Builder (chat API, agents, skills) in the ESDiag-configured space, and the Elasticsearch diagnostics cluster holding `metrics-*-esdiag*` data. Elasticsearch, Logstash, and Kibana diagnostics remain the analyzed subject matter, unchanged.
-- **Rust CLI:** No behavioral changes. The plugin composes existing `esdiag keystore`, `esdiag job`, `esdiag collect`, and `esdiag process` commands. No new subcommand is added; an `esdiag`-native conversation client is explicitly out of scope.
-- **Web UI:** No changes.
-- **Core processing logic:** No changes.
-- **Kibana assets:** No new workflow or tool assets are required. The change depends only on assets `esdiag setup` already installs.
-- **Deployment prerequisites:** Requires the deployment to have a usable model, via the Elastic Inference Service through Cloud Connect or a user-configured LLM provider and connector. Configuring model access is out of scope; the plugin detects its absence and reports it as a prerequisite.
-- **New repository surface:** A plugin package directory and its packaging or release step. The bundled operations skill must remain sourced from `.agents/skills/esdiag/` rather than copied, so the two consumers cannot drift.
-- **Credentials:** Introduces a client-held API key distinct from the `esdiag` keystore, used for Agent Builder requests and direct Elasticsearch metadata queries.
-- **Cost attribution:** Moves diagnostic analysis token spend from the user's local model to the cluster's inference connector. Cluster input tokens grow per conversation turn as history replays; local cost stays approximately flat.
-- **Documentation:** Adds client-binding guidance and makes deployment prerequisites explicit, including that a usable model must already be available to the deployment.
-- **Tests:** Adds plugin manifest and configuration-resolution coverage, plus non-networked coverage of the conversation request construction and event handling.
+- **Target Elastic products:** Kibana Agent Builder in the Kibana instance attached to the processed-diagnostic Elasticsearch output deployment. Elasticsearch, Logstash, and Kibana diagnostics remain unchanged as analyzed subject matter.
+- **Rust CLI:** Saved-job result reporting changes here. General structured outcomes, first-run configuration, native Agent Builder transport, and binary-embedded skill installation are defined by the successor `standardize-cli-output`, `add-first-run-onboarding`, and `add-agent-cli` changes.
+- **Web UI/Core processing:** No behavioral changes beyond shared saved-job terminal facts.
+- **Kibana assets:** No new workflow or tool assets. The skill uses the diagnostic assets installed by `esdiag setup` and does not configure model access.
+- **Repository surface:** Adds portable skill assets plus Claude Code and Codex adapters generated from the canonical source for Claude Code, Codex, and OpenCode.
+- **Configuration and credentials:** The plugin defines no independent URLs, API keys, inference routing, saved-job defaults, or conversation state. ESDiag owns persistent preferences, hosts, and encrypted credentials.
+- **Cost attribution:** Diagnostic reasoning remains on the cluster inference connector; local agents orchestrate and present results.
+- **Documentation:** Separates routine skill use, secure local onboarding, and cluster provisioning.

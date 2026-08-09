@@ -1,265 +1,141 @@
 ## Context
 
-ESDiag's agent-facing assets currently terminate at two disconnected endpoints.
+ESDiag has two agent-facing surfaces. `.agents/skills/esdiag/` teaches a local coding agent to collect and process diagnostics, while `esdiag setup` installs dashboards, tools, workflows, and the `agentic-diagnostic-assistant` skill into Kibana and attaches it to `elastic-ai-agent`. The analytical knowledge belongs in the cluster; copying it into every host integration would drift and would move substantial inference cost to the user's local model quota.
 
-On the client side, `.agents/skills/esdiag/` teaches an agent to drive the CLI: manage hosts, unlock the keystore, run `collect` and `process`, and surface the `Kibana Link` that `process` prints. On the cluster side, `esdiag setup` (`src/setup.rs`) installs a space, dashboards, tools, workflows, and the `agentic-diagnostic-assistant` skill, then attaches that skill to the space's `elastic-ai-agent` via `attach_skills_to_default_agent`.
+Production verification shows the configured Agent Builder agent carries the diagnostic skill and generic tools such as `platform.core.execute_esql` and `user_diagnostic_id_fetcher`. A full analysis measured roughly 109,600 cluster input tokens and 3,600 output tokens while returning about 1,100 tokens of markdown. The portable skill should therefore orchestrate ESDiag and relay the cluster agent's response, not reimplement analysis.
 
-Verified against the production cluster, the default agent in the `esdiag` space carries:
+The first implementation proved the user experience with shell helpers, but also exposed the wrong architectural boundaries: plugin-specific URLs and credentials duplicate the processed-diagnostic output deployment; direct freshness ES|QL duplicates diagnostic discovery already available to Agent Builder; local conversation mapping duplicates Kibana history; and first-job setup in the normal skill conflates daily use with new-user onboarding.
 
-```json
-"skill_ids": ["agentic-diagnostic-assistant","office_hours_skill","autoops_triage"],
-"tools": [{"tool_ids": ["platform.core.execute_esql","user_diagnostic_id_fetcher",
-                        "platform.core.product_documentation","platform.core.generate_esql"]}]
-```
-
-That is the live production configuration and it matches the repository's design intent: the skill supplies the analytical knowledge and its `references/`, while a small set of generic tools performs retrieval. A separate `ada_orchestrator_agent` exists in the same space using pinned per-domain workflow tools instead of the skill; it is a parallel variant and not the target of this change.
-
-The missing piece is a client that can ask that agent a question from the terminal and render the answer.
+This design records the durable plugin contract. Structured results, general onboarding/configuration, and native Agent Builder transport are implemented by the successor `standardize-cli-output`, `add-first-run-onboarding`, and `add-agent-cli` changes before this change is archived.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Let a user ask "how is my cluster looking today?" from Claude Code, Codex, or OpenCode and receive ADA's analysis without opening Kibana.
-- Keep the analytical knowledge single-sourced on the cluster, so the answer always reflects the cluster's installed assets.
-- Place analysis token spend on the cluster's inference connector rather than the user's local model quota.
-- Keep the user informed during a multi-second analysis instead of blocking silently.
-- Keep client binding independent of cluster provisioning.
-- Keep all portable behavior in one Open Agent Skill whose scripts and references travel with it; host manifests only provide discovery metadata.
+
+- Distribute one portable ESDiag skill to Claude Code, Codex, and OpenCode through thin host adapters.
+- Keep analytical knowledge and inference spend on the configured Kibana Agent Builder deployment.
+- Preserve progressive status during long analyses and preserve every real request in Kibana conversation history.
+- Use exact diagnostic identifiers from ESDiag outcomes when new diagnostics are created.
+- Keep normal skill use, local first-run onboarding, and cluster provisioning as distinct workflows.
+- Keep plugin packaging independent of application URLs, credentials, job preferences, and conversation persistence.
 
 **Non-Goals:**
-- Adding an `esdiag` CLI subcommand that speaks to an LLM. Explicitly out of scope; it would put a conversation client inside a diagnostics tool and create a dependency on Kibana's agent runtime rather than just its saved objects.
-- Provisioning clusters or licenses. A separate provisioning skill owns this; the operations skill references it.
-- Configuring model access. Activating the Elastic Inference Service through Cloud Connect, or standing up a third-party LLM provider and connector, is a deployment prerequisite the user satisfies before binding. It is out of scope for this change and is not owned by the provisioning skill either.
-- Adding Kibana workflow or tool assets. The chosen transport requires none.
-- Reproducing ADA's analysis locally, in whole or in part.
-- Structured or schema-constrained analysis output. Not available on the chosen transport; see below.
+
+- Reproducing Agent Builder analysis, ES|QL thresholds, or recommendations locally.
+- A host-plugin-specific HTTP client, direct Elasticsearch freshness query, or configuration file.
+- An `esdiag agent converse` command, raw event proxy, or interactive terminal chat.
+- Configuring licenses, Agent Builder assets, inference services, connectors, or model credentials during plugin installation.
+- Treating unstructured agent prose as a local control protocol.
 
 ## Verified Constraints
 
-Every decision below rests on behavior confirmed against a live Kibana 9.4.2 deployment. These findings are recorded because each one invalidates an approach that appears correct from the documentation alone.
+### Agent Builder MCP exposes tools, not agents or skills
 
-### The Agent Builder MCP server exposes tools, not skills or agents
+`/api/agent_builder/mcp` exposes the tool registry; it does not expose an `invoke_skill` or `ask_agent` operation. An MCP-only integration would require copying diagnostic knowledge locally, defeating the design.
 
-The MCP endpoint `/api/agent_builder/mcp` surfaces the tool registry. There is no `invoke_skill` or `ask_agent` tool. Skills are injected server-side into an agent's reasoning loop and are not addressable over MCP.
+### Workflow agent selection is not runtime-templatable
 
-Consequence: an MCP-only integration cannot use the cluster's ADA skill. It would give Claude `platform.core.execute_esql` and require a local copy of the analytical knowledge — the exact drift and local-token outcome this change exists to avoid. MCP remains useful for cheap non-agent lookups but nothing in this change depends on it.
+Kibana Workflows can invoke an agent with `ai.agent`, but the top-level `agent-id` and `inference-id` fields are not template-expanded. A workflow tool cannot support caller-selected agents without provisioning one workflow per choice.
 
-### `ai.agent`'s `agent-id` is not templatable
+### The chat endpoint returns prose
 
-Kibana Workflows offer an `ai.agent` step that invokes an agent, which would place analysis behind an MCP-visible workflow tool. Its `agent-id` is a top-level step key, and top-level keys are not template-expanded. A dry run with `agent-id: "{{ inputs.agent_id }}"` failed with:
+The Agent Builder chat endpoint rejects a response `schema`. The completed message is unstructured markdown. ADA already supplies presentation rules, so clients relay it and do not parse it into actions.
 
-```
-Agent "{{ inputs.agent_id }}" not found or not available
-```
+### The asynchronous chat endpoint provides useful progress
 
-Consequence: a workflow-tool transport cannot satisfy runtime-configurable agent selection. The agent id would have to be rendered into the workflow YAML at `esdiag setup` time, moving configuration to the cluster and out of plugin settings. `inference-id` is likewise a top-level key and inherits the same limitation.
+`POST /s/{space}/api/agent_builder/converse/async` emits conversation, reasoning, tool, completion, and usage events. A native client can consume these internally and render progress without exposing a public raw-event command.
 
-### `/converse` rejects a `schema` parameter
+### Tools execute with the caller's privileges
 
-Structured output is available on the `ai.agent` workflow step (verified: a schema-constrained step validates and completes). It is not available on the chat API:
+Agent Builder route authorization alone is insufficient. The diagnostic tools query Elasticsearch as the current user, so the resolved output credential needs Kibana Agent Builder access plus read and view-index-metadata access to ESDiag data streams. The same output deployment credential should be validated against both Elasticsearch and Kibana rather than creating a second plugin credential.
 
-```
-400 [request body.schema]: Additional properties are not allowed ('schema' was unexpected)
-```
+### Model availability is proven only by a real request
 
-Consequence: choosing the chat API for configurability forfeits structured output. Analysis is relayed as prose. This is acceptable because ADA's own response rules already mandate a leading verdict, grouped findings, comparison tables, human-readable units, and one relative dashboard link per reference used.
+Kibana connectors do not enumerate Elastic Inference Service models, and Elasticsearch inference listings do not prove what a selected Agent Builder agent can use. The first real question is the authoritative model check. A missing model is attributed to deployment provisioning without issuing a throwaway conversation.
 
-### `/converse/async` streams progress events
+### Cluster inference cost grows with conversation depth
 
-The streaming variant emits a usable event sequence:
-
-```
-conversation_id_set → reasoning → tool_call → tool_result → reasoning → …
-→ thinking_complete → message_chunk × N → message_complete → round_complete
-```
-
-Consequence: the client can report which tool the agent is running as it happens. This resolves the blocking-UX objection without the workflow-based start/poll design that would otherwise have been required. Elastic's A2A server was considered and rejected here: it does not support streaming, and it offers no advantage while Claude Code is the only client.
-
-### Asynchronous workflow execution is already builtin
-
-`platform.core.get_workflow_execution_status` is a builtin tool, and `POST /api/workflows/workflow/{id}/run` returns a `workflowExecutionId` immediately with step-level status available during execution. Recorded because it means a future workflow-based variant would need no custom polling assets — not because this change uses it.
-
-`POST /api/workflows/test` accepts `{workflowYaml, inputs}`, executes with `isTestRun: true`, and persists nothing. Recorded as a viable CI hook should workflow assets be added later.
-
-### Required API key privileges, and the identity tools run as
-
-The chat API route itself requires only `agentBuilder:read`, confirmed both from the route documentation for `/converse` and `/converse/async` and from the deployment's own feature definition:
-
-```json
-"agentBuilder": {"privileges": {"read": {"api": ["agentBuilder:read"], "ui": ["show"]}}}
-```
-
-Route authorization is not the whole requirement. Agent Builder documents privileges at three levels, and the decisive sentence is about index access:
-
-> "Tools execute queries against Elasticsearch indices **as the current user**."
-
-Consequence: a key holding only `feature_agentBuilder.read` authenticates successfully and the agent runs, but its `platform.core.execute_esql` calls execute as that key and fail or return nothing. The failure surfaces as a degraded or empty analysis rather than an authorization error, which is the worst possible failure shape. The key must carry read access to the diagnostic data itself.
-
-The minimum working privilege set for this plugin, which only uses an existing agent and creates no assets:
-
-| Level | Privilege | Why |
-|---|---|---|
-| Kibana application, scoped to the ESDiag space | `feature_agentBuilder.read` | Use agents, send chat messages, view skills and tools, access conversations |
-| Kibana application, scoped to the ESDiag space | `feature_actions.read` | Required when the agent uses an AI connector |
-| Elasticsearch cluster | `monitor_inference` | Required only when the connector calls the Elasticsearch Inference API; not required for other Kibana GenAI connectors |
-| Elasticsearch indices | `read`, `view_index_metadata` on `metrics-*-esdiag*` and `settings-*-esdiag*` | Tools query diagnostic data as the caller |
-
-`feature_agentBuilder.all` is not required. Skills, tools, and agents are installed by `esdiag setup`, not by the plugin.
-
-The index patterns follow from the ADA references, which query `metrics-diagnostic-esdiag*`, `metrics-index-esdiag*`, `metrics-node-esdiag*`, `metrics-shard-esdiag*`, `metrics-ingest.pipeline-*`, `metrics-ingest.processor-esdiag*`, `metrics-task-*`, and `settings-node*`. Confirmed against the deployment, every ESDiag data stream carries an `-esdiag` suffix, so the two patterns above cover all eight reference patterns as they resolve while excluding unrelated `metrics-*` data such as Fleet Server metrics.
-
-API keys use the `feature_agentBuilder.*` privilege names shown above. Some published documentation still shows legacy privilege names carried over from the feature's earlier internal naming; those are deprecated and must not be copied into guidance or examples.
-
-Verified with minimally scoped keys against a local stack. A key holding exactly the four privileges above reaches both `agent_builder/agents` and `actions/connectors` and can query the diagnostic data. A key holding only the two Kibana application privileges, with no index privileges, is accepted for chat and fails only on data access — confirming the predicted failure shape, and confirming that binding must check data access separately rather than treating chat authorization as sufficient.
-
-### Model availability is verified by the first real analysis
-
-Checking whether a deployment has a usable model looks like a listing problem and is not one.
-
-`GET /api/actions/connectors` returns Kibana action connectors. On a deployment whose models come from the Elastic Inference Service through Cloud Connect, that list is **empty even for a superuser**, while the agent works perfectly: EIS models are Elasticsearch inference endpoints, visible at `GET _inference` with service `elastic` and task type `chat_completion`, not Kibana connectors. Verified against a local 9.4.2 stack with EIS connected — `_inference` listed the Anthropic model family while the connector list stayed empty.
-
-No Kibana route exposes those endpoints. `api/inference/_inference`, `internal/inference/_inference`, `api/ml/inference_endpoints`, `internal/ml/inference_endpoints`, `api/agent_builder/models`, and `internal/agent_builder/models` all return 404 on 9.4.2. Listing Elasticsearch inference endpoints is not sufficient either: it does not prove which model the selected agent can use, and it does not cover Kibana connectors.
-
-Consequence: the binding check does not claim to validate model availability and does not issue a throwaway `converse` request. The first real analysis is the authoritative capability check because it exercises the selected agent and routing. A missing-model response is attributed to the deployment prerequisite at that point. This avoids spending roughly 8,500 input tokens and leaving a meaningless conversation in Kibana whenever a user binds a machine.
-
-A listing-based check would have passed on the deployment where connectors happen to exist and failed on the EIS deployment that works, which is the wrong answer in both directions.
-
-### Measured token attribution
-
-| Request | Cluster input | Cluster output | LLM calls | Wall clock | Returned to client |
-|---|---:|---:|---:|---:|---:|
-| Trivial prompt, no tools | 8,507 | 103 | 2 | ~7s | ~10 tokens |
-| Full ADA analysis of one diagnostic | 109,622 | 3,589 | 6 | 62s | ~1,100 tokens |
-| Follow-up on same conversation | 147,483 | 2,916 | 6 | — | ~80 tokens |
-
-The step trace for the full analysis confirms the skill firing as designed: four `filestore.read` calls pulling its own `references/`, then seven `platform.core.execute_esql` calls.
-
-Two implications. First, the ~8.5k input-token floor is the agent's system prompt and tool definitions, re-sent every request; short questions are not cheap on the cluster. Second, conversation history replays on each turn, so cluster input grows with depth while client cost stays approximately flat. Deep sessions are inexpensive locally and progressively more expensive on the cluster.
+Measured requests showed an approximately 8,500-token input floor and about 109,600 input tokens for a full diagnostic analysis. Follow-ups replay history and increase cluster cost. Clients surface safe usage data when available and never retry paid requests automatically after conversation creation.
 
 ## Decisions
 
-### Transport: Agent Builder chat API over HTTPS, not MCP and not A2A
+### Package one canonical Open Agent Skill
 
-The client issues `POST /s/{space}/api/agent_builder/converse/async` and consumes the SSE stream. Given that an `esdiag` conversation subcommand is out of scope and Claude Code speaks MCP but not A2A or arbitrary REST, the remaining options were a bundled MCP shim process or direct HTTPS from the skill. Direct HTTPS wins: it needs no additional runtime, no second place for credentials to live, and no duplication of host resolution.
+`.agents/skills/esdiag/` is the source of truth. Claude Code and Codex add only package metadata; OpenCode discovers the same portable skill. A deterministic sync step generates package contents and drift checks fail release validation when a host package diverges. The successor `add-agent-cli` change also embeds this script-free canonical source in the binary and exposes it through `esdiag agent skills`, giving `cargo install`, Homebrew, and other binary users an offline version-matched installation path without making the standalone plugin package mandatory.
 
-This is the decision that makes the change small. No workflow assets, no tool assets, no new Rust, no shim process.
+Alternative considered: maintain host-specific skills. That would multiply documentation, workflow, and security review surfaces without adding capability.
 
-### Agent selection is configuration, not a constant
+### Put Agent Builder transport behind native ESDiag commands
 
-`ESDIAG_AGENT_ID` defaults to `elastic-ai-agent` because that is where `esdiag setup` attaches the ADA skill. It must remain overridable: the production cluster demonstrates both a renamed default agent and a second diagnostic agent in the same space, and nothing prevents an operator from attaching ADA elsewhere. A misconfigured agent id produces a plausible-looking but materially worse answer rather than an error, so the binding command validates the configured id against `GET /api/agent_builder/agents` at bind time rather than deferring the failure to first use.
+The durable transport is `esdiag agent ask`, defined by `add-agent-cli`. It reuses `KibanaClient` and the canonical output deployment, consumes the Agent Builder asynchronous response internally, writes progress to stderr, and returns one structured terminal outcome. The plugin calls that command instead of owning `curl`, SSE parsing, configuration, or local state.
 
-### Analysis output is relayed, not re-derived
+This is intentionally an `ask` operation only. An `agent converse` subcommand, public SSE/NDJSON event proxy, and interactive chat loop are excluded.
 
-The client presents the agent's markdown as the analysis. It does not re-run the underlying ES|QL, recompute metrics, or substitute its own thresholds. Dashboard links are relative by ADA's own rules and are resolved against the configured Kibana URL for presentation. Relaying rather than re-deriving is what keeps the analysis faithful to the cluster's installed assets and keeps local cost at ~1,100 tokens.
+Alternative considered: keep shell transport in the skill. It adds runtime dependencies, duplicates authentication behavior, and makes protocol correctness part of prompt packaging.
 
-### Real analysis remains a Kibana conversation
+### Resolve one output deployment
 
-Every analysis request uses the persisted Agent Builder chat API. The returned conversation identifier is retained locally and follow-ups send it back, so the complete thread remains visible in Kibana Agent Builder history and can be continued there. Local reuse is keyed by Kibana deployment, space, agent, and diagnostic; a matching diagnostic identifier on another deployment can never inherit the wrong conversation.
+`ESDIAG_OUTPUT_*` and `ESDIAG_KIBANA_URL` identify the Elasticsearch destination and its attached Kibana instance. For persistent local use, `esdiag.yml` selects a send-role Elasticsearch host whose `viewer` selects its view-role Kibana host; both may reference the same encrypted secret.
 
-This boundary is intentional. Diagnostic discovery, freshness, and binding access checks are metadata operations and call Elasticsearch directly, creating no conversation. Questions that ask the diagnostic agent to reason always use Agent Builder and therefore retain the Kibana handoff UX.
+The plugin introduces no `ESDIAG_ELASTICSEARCH_URL`, Kibana-only API key, API-key file, inference route, freshness window, saved-job default, or separate configuration resolver. Agent Builder runs where the processed data lands.
 
-### Diagnostic identity comes from `esdiag`, not from the agent
+Alternative considered: retain plugin settings. That permits analysis to target a different deployment from processing and produces two credential stores for one logical destination.
 
-`format_process_summary` in `src/main.rs` already emits the identifier:
+### Make agent selection an explicit command concern
 
-```
-process complete in 4.212 seconds: 18432 documents for <diagnostic.id>
-Kibana Link: <url>
-```
+`elastic-ai-agent` remains the default because `esdiag setup` attaches the diagnostic skill there. Operators may select another agent explicitly with the native command option. Inference selection is not exposed; the configured Agent Builder agent owns its model routing.
 
-That value is passed to the agent. ADA gates on `diagnostic.id` verification and will otherwise call `user_diagnostic_id_fetcher` to disambiguate, which costs a round trip and risks selecting a different diagnostic than the one just processed. Passing the known identifier avoids both.
+### Relay analysis without re-deriving it
 
-### Collecting a new diagnostic is driven by intent, not by default
+The client presents the completed Agent Builder markdown, resolving relative Kibana links against the configured viewer. It does not rerun ES|QL, recompute metrics, infer severity, trigger remediation, or decide whether to collect based on parsing prose.
 
-Collection is the expensive, outward-facing half of the workflow: it issues API calls against a live production cluster. Reuse is nearly free. The request itself carries enough signal to choose between them in most cases, so the plugin classifies intent first and only falls back to a freshness check when the request is genuinely ambiguous.
+### Keep Kibana as the conversation store
 
-| Intent | Signal | Behavior |
-|---|---|---|
-| Reference | "my last", "my recent", "that diagnostic", an explicit `diagnostic.id`, or any follow-up in an existing conversation | Reuse the existing diagnostic. Never collect. |
-| Collection | "collect", "get", or "run" a new diagnostic | Collect fresh. Never silently reuse. |
-| Ambiguous | "how is my cluster looking today?" | Check the age of the most recent diagnostic. Reuse when within the freshness window. When older or absent, ask before collecting. |
+Every real question uses the Agent Builder chat API. The result contains the conversation identifier and Kibana handoff link. Follow-ups explicitly pass the identifier; ESDiag and the plugin persist no second diagnostic-to-conversation map, prompt history, or response history.
 
-The freshness window is configurable and defaults to 24 hours, which matches the daily cadence the ambiguous phrasing implies. Whichever branch is taken, the plugin reports the diagnostic it selected and why, so a reused diagnostic is never mistaken for a fresh one.
+If a request is interrupted after conversation creation, the client returns the safe identifier and marks retry unsafe. The user resumes from Kibana or explicitly continues the same conversation.
 
-Collection is only ever automatic when the user asked for it. Explicit collection intent proceeds without a prompt, because the user already said what they wanted. An ambiguous request that finds no recent diagnostic stops and asks, because inferring collection from a question like "how is my cluster looking today?" would issue unrequested API calls against a live production cluster on the strength of a phrasing guess. The confirmation states the age of the most recent diagnostic, or that none was found in the window, and names the host that would be collected from, so the user can approve, redirect to the older diagnostic, or decline.
+### Use exact structured identity for newly processed diagnostics
 
-The age lookup is a metadata query, not analysis, and must not cost an LLM call. It calls Elasticsearch `POST /_query` directly using the same API key whose index privileges Agent Builder tools use:
+Structured collect, process, and saved-job outcomes expose terminal facts directly. When processing returns `diagnostic.id`, the skill includes that exact value in its Agent Builder prompt. It never scrapes completion prose or runs a latest-diagnostic query to rediscover work it just created.
 
-```esql
-FROM metrics-diagnostic-esdiag*
-| KEEP diagnostic.id, event.ingested
-| SORT event.ingested DESC
-| LIMIT 1
-| EVAL age_minutes = DATE_DIFF("minutes", event.ingested, NOW())
-| EVAL fresh = age_minutes <= ?max_age_minutes
-```
+When no new or explicit identifier exists, the configured Agent Builder agent uses its own installed tools to discover appropriate existing diagnostics. ESDiag does not own a freshness threshold or duplicate selection ES|QL.
 
-Two traps constrain this query. First, a tool-execution wrapper adds an unnecessary Kibana boundary and may apply its own time defaults. Querying `/_query` directly makes the threshold an explicit named parameter and returns Elasticsearch's native column/value response. Second, an unknown field name can yield an empty result that looks exactly like "no diagnostic." The lookup therefore references only the required `diagnostic.id` and `event.ingested` fields, returns the latest diagnostic regardless of age, and computes `fresh` separately. Malformed, partial, or structurally incomplete responses are "freshness unknown," never "not found."
+### Separate collection authorization from discovery
 
-An empty result now means no diagnostic exists in the queried data stream. A stale result remains a populated result with `fresh: false` and an age, so the user can make an informed collection decision.
+Explicit requests to collect or run a new diagnostic authorize the configured saved workflow. References to an explicit or just-created diagnostic never collect. A general health question first goes to Agent Builder for existing-data discovery; live collection still requires an explicit request or subsequent approval.
 
-`user_diagnostic_id_fetcher` is not used for this. It discards the `event.ingested` values the freshness decision needs and depends on optional `diagnostic.user` metadata. The direct lookup is intentionally deployment-wide because that field is not guaranteed to exist; adding it could turn an absent optional field into a false "no diagnostic" result.
+This preserves the safety boundary around production API calls without maintaining a local intent classifier plus freshness query.
 
-### A missing saved job is an onboarding moment, not an error
+### Move first-run setup to `esdiag init`
 
-The first time a user asks for a cluster review with no saved job configured, the plugin offers to help configure one rather than failing or silently falling back to an ad-hoc collect and process pair. The silent fallback is the tempting option and the wrong one: it works, so the user never learns they have no repeatable setup, and every subsequent review re-derives the same host, output, and metadata arguments from scratch.
+Keystore password selection, default identity, output Elasticsearch/Kibana pairing, collection hosts, and the first saved job form a general new-user workflow. They belong to the terminal-native `esdiag init` state machine and `references/onboarding.md`, not routine skill orchestration.
 
-Saved jobs have real prerequisites, and they cascade. A job needs a saved host carrying the `collect` role, an output target carrying the `send` role, and an unlocked keystore holding their credentials. A first-time user may have none of these. The guided flow therefore establishes what is missing in order — keystore, collect host, output host, then the job itself — and reports at each step what it is doing and why, rather than presenting one opaque configuration prompt.
+The skill hands uninitialized users to onboarding and never asks for credentials in conversation. A configured user goes directly to native commands without repeated setup offers.
 
-The first run doubles as the configuration. `--save-job <NAME>` persists a job before executing it, so the initial review both produces a diagnostic and leaves behind the reusable job. There is no configure-then-run round trip and no wasted collection. Job naming follows the existing `{host}-{action}-{destination}` convention already used by the web UI's save form, so CLI-created and UI-created jobs remain consistent.
+### Preserve saved-job terminal facts
 
-Declining the offer is a supported path. A user who wants a one-off answer gets an ad-hoc collect and process, and the offer is not repeated within that session. What the plugin must not do is treat the absence of a job as a hard failure, since the user asked a reasonable question and the tooling can satisfy it either way.
-
-### First-pass intent validation
-
-Three prompts were run against a local stack to check the classification behaves as specified. Whether a collection occurred was measured by counting collected archives before and after, rather than taken from the narration.
-
-| Prompt | Classified | Collected? | Outcome |
-|---|---|---|---|
-| "Collect" | collection | yes, no confirmation | new diagnostic `…~39c2` |
-| "Evaluate" | reference | no (2 archives before and after) | reused `…~39c2` |
-| "What's going on in my cluster?" | ambiguous | no (age 1 min, inside the 24h window) | reused, age reported |
-
-The stale branch was confirmed separately: the same lookup with a one-minute threshold returns `found: true, fresh: false`, which is the condition that triggers asking before collecting while preserving the diagnostic identifier and age.
-
-This is a first pass. Intent boundaries are a judgment surface and will need real user phrasings to tune; these three only establish that each branch is reachable and that collection happens in exactly one of them.
-
-The first-job flow was exercised the same way, by running it for real against a cluster with no saved job. Prerequisites were established in the specified order — keystore access, then a collect-role host validated live by `host add`, then an output target — and `--save-job` persisted the job before execution in both the collect-only and process-form shapes, so no separate configuration pass was needed. The declined path, where the user refuses the offer and gets a one-off collection with no job persisted and no repeat prompt, is prompt behavior that was not exercised and is likewise deferred to real user feedback.
-
-### Saved jobs come in two shapes, and only one leaves something to analyze
-
-Verified against 0.16.4. `--save-job` records whichever invocation it was attached to:
-
-| Saved from | Recorded | `job list` shows | Lands in the cluster? |
-|---|---|---|---|
-| `esdiag collect --save-job N <HOST> <DIR>` | `action: collect`, `output_dir` | `Processing: skipped` | no, archive on disk only |
-| `esdiag process <HOST> <OUTPUT_HOST> --save-job N` | `action: process`, `output: known-host` | `Processing: standard` | yes |
-
-A known-host input makes `process` collect, process, and send in one step, so the second form is the one the review flow needs. The first produces an archive and nothing to analyze.
-
-Separately, **`esdiag job run` did not print the diagnostic identifier.** It reported only `job run complete`, unlike `esdiag process`, which prints `process complete … documents for <id>` plus the Kibana link. The identifier was therefore unrecoverable from the job path.
-
-This is fixed in the CLI rather than worked around in the plugin, because it is not a plugin problem: a saved job conceals which commands ran, so a CLI user running `job run` had no way to reference what it produced either. `run_job` now returns a `JobRunOutcome` and the CLI reports the diagnostic identifier and Kibana link for a processing job, the archive path for a collect-only job, and the destination for an upload job. A collect-only summary deliberately omits any identifier, so it cannot be mistaken for one that landed data.
-
-The plugin still keeps the freshness-lookup fallback, since it ships to users whose installed `esdiag` may predate this change.
-
-### The keystore gate is a first-class outcome
-
-`esdiag keystore status` returning `Keystore: locked` cannot be resolved non-interactively. The daily-driver command treats this as an expected terminal state that stops and asks the user, not as an error to retry or work around.
-
-### Client binding and cluster provisioning are separate
-
-Binding a workstation needs Kibana and Elasticsearch URLs, an API key, and plugin settings. The `esdiag` binary, host definitions, and an unlocked keystore are needed only when that workstation will collect new diagnostics. Provisioning a cluster needs a container runtime or an existing deployment, a suitable license, `esdiag setup`, and model access. These share no failure modes, and the common case — a support engineer pointed at a shared team cluster — involves only binding. Combining them would make the common case appear to require Docker.
+Saved jobs can collect an archive, upload it, or process it into Elasticsearch. `JobRunOutcome` exposes the corresponding archive path, upload destination, or diagnostic identifier and Kibana link. This is a CLI contract useful beyond the plugin and is not worked around in skill code.
 
 ## Risks / Trade-offs
 
-- **Model availability is an environment prerequisite, not an ESDiag responsibility.** Delegated analysis requires the deployment to have a usable model, reached either by activating the Elastic Inference Service through Cloud Connect with an Elastic Cloud account, or by configuring a third-party LLM provider and connector. Neither is a reasonable automation target: they span account provisioning, billing, and third-party credentials. The binding check avoids a token-consuming model probe; the first real analysis detects and attributes the missing prerequisite without attempting to configure it.
-- **Prose output has no contract.** Without a schema, the response shape is whatever ADA's instructions produce. Presentation must tolerate variation and must not parse prose into decisions. Accepted as the cost of runtime-configurable agent selection.
-- **Cluster spend is real and grows with conversation depth.** ~110k input tokens for one analysis, rising per follow-up. Local savings are not free, they are transferred. Documentation should say so plainly.
-- **Analysis latency is ~60s.** SSE progress events mitigate the experience but do not shorten it. Requests must not be retried on timeout without first checking whether a conversation was created, or the cluster pays twice.
-- **A second credential appears.** The Kibana API key sits outside the `esdiag` keystore, which is a deliberate scope decision but does mean two credential stores. The binding command should avoid persisting the key in plaintext where the keystore pattern already exists.
-- **Bundled-skill drift.** If the operations skill is copied into the plugin rather than sourced from `.agents/skills/esdiag/`, the two will diverge. Packaging must make copying impossible or automatic.
+- **Model availability remains a deployment prerequisite** → Attribute failure on the first real request; never automate billing, connectors, or inference credentials.
+- **Agent responses remain unstructured prose** → Relay markdown and treat only the transport envelope as typed data.
+- **Cluster spend grows with conversation depth** → Surface usage when available, document cost, and prohibit automatic retry after conversation creation.
+- **Agent discovery of existing diagnostics costs inference** → Accept the cost to keep discovery policy with the configured agent and avoid duplicate ES|QL behavior.
+- **No automatic local follow-up mapping** → Return conversation identifiers and Kibana links prominently; callers explicitly continue them.
+- **Bundled-skill drift** → Generate packages from the canonical directory and validate exact synchronization.
+- **Successor changes must land before archive** → Keep this change open until structured output, onboarding, native `agent ask`, and script removal satisfy the revised contract.
+
+## Migration Plan
+
+1. Retain the portable package and saved-job result work already completed by this change.
+2. Implement `standardize-cli-output` and remove completion-prose parsing.
+3. Implement `add-first-run-onboarding`, migrate application settings, and add the onboarding reference.
+4. Implement `add-agent-cli`, replace shell transport with `esdiag agent ask`, embed the canonical skill for `esdiag agent skills`, and delete skill script directories.
+5. Regenerate Claude Code, Codex, and OpenCode packages and verify the same native workflow in each.
+6. Revalidate this change against its revised specs before archive.
 
 ## Open Questions
 
-None outstanding. The remaining unknowns are verification items rather than design questions: the documented privilege set has not yet been exercised with a minimally scoped key, and the intent classification boundaries will need tuning against real phrasings once in use.
+None. `converse` and every public Agent Builder event-stream command are explicitly excluded.
