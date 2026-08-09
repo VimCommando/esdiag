@@ -10,8 +10,11 @@ use axum::{
     http::{HeaderMap, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
-use datastar::{axum::ReadSignals, consts::ElementPatchMode, patch_elements::PatchElements};
+use datastar::{
+    axum::ReadSignals, consts::ElementPatchMode, patch_elements::PatchElements, patch_signals::PatchSignals,
+};
 use serde::Deserialize;
+use serde_json::json;
 use std::sync::Arc;
 
 #[derive(Template)]
@@ -31,6 +34,26 @@ struct SavedJobListItem {
 pub(crate) struct ListSavedJobsSignals {
     #[serde(default)]
     loaded_job_name: String,
+}
+
+#[derive(Default, Deserialize)]
+pub struct NormalizeDraftSignals {
+    #[serde(default)]
+    job: JobSignals,
+}
+
+pub async fn normalize_draft(ReadSignals(mut signals): ReadSignals<NormalizeDraftSignals>) -> Response {
+    let availability = signals.job.normalize_targets();
+    let event = PatchSignals::new(
+        json!({
+            "job": signals.job,
+            "targetAvailability": availability,
+        })
+        .to_string(),
+    )
+    .as_datastar_event()
+    .to_string();
+    sse_response(vec![event])
 }
 
 fn render_saved_jobs_list(jobs: &[String], current_job_name: Option<&str>) -> String {
@@ -99,7 +122,7 @@ pub async fn list_saved_jobs(signals: Option<ReadSignals<ListSavedJobsSignals>>)
     sse_response(vec![patch_saved_jobs_list(&names, current_job_name)])
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct SaveJobSignals {
     pub job_name: String,
     pub metadata: Identifiers,
@@ -214,7 +237,9 @@ pub async fn delete_saved_job(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HostRole, Product};
+    use crate::data::{HostRole, Product, load_saved_jobs};
+    use crate::job::model::Input;
+    use axum::body::to_bytes;
     use std::collections::BTreeMap;
     use url::Url;
 
@@ -226,6 +251,9 @@ mod tests {
         let mut job = JobSignals::default();
         job.collect.source = collect_source;
         job.collect.known_host = known_host.to_string();
+        job.collect.save = true;
+        job.collect.download_dir = "/tmp/esdiag-saved-job-test".to_string();
+        job.process.enabled = false;
 
         SaveJobSignals {
             job_name: "test-job".to_string(),
@@ -321,5 +349,57 @@ mod tests {
     #[test]
     fn validate_saved_job_name_allows_spaces() {
         assert!(validate_saved_job_name("daily prod collect").is_ok());
+    }
+
+    #[tokio::test]
+    async fn save_handler_creates_overwrites_and_rejects_empty_names_without_writing() {
+        let _tmp = setup_env();
+        let mut hosts = BTreeMap::new();
+        hosts.insert(
+            "elasticsearch-local".to_string(),
+            KnownHost::new_no_auth(
+                Product::Elasticsearch,
+                Url::parse("http://localhost:9200").expect("url"),
+                vec![HostRole::Collect],
+                None,
+                false,
+            ),
+        );
+        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
+
+        let mut signals = save_signals(CollectSource::KnownHost, "elasticsearch-local");
+        signals.job_name = "daily".to_string();
+        let response = save_job(ReadSignals(signals.clone())).await;
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("save response body");
+        let body = String::from_utf8(body.to_vec()).expect("SSE body");
+        assert!(
+            body.contains("daily"),
+            "saved job list must be patched immediately: {body}"
+        );
+
+        let jobs_path = std::path::PathBuf::from(std::env::var("HOME").expect("test HOME")).join(".esdiag/jobs.yml");
+        let first = std::fs::read_to_string(&jobs_path).expect("saved jobs file");
+        assert!(first.contains("schema_version:"));
+        assert!(first.contains("daily:"));
+
+        signals.job.collect.diagnostic_type = "support".to_string();
+        save_job(ReadSignals(signals)).await;
+        let jobs = load_saved_jobs().expect("load overwritten jobs");
+        assert_eq!(jobs.len(), 1);
+        assert!(matches!(
+            jobs["daily"].input(),
+            Input::Collect { diagnostic_type, .. } if diagnostic_type == "support"
+        ));
+
+        let before_rejection = std::fs::read(&jobs_path).expect("saved jobs bytes");
+        let mut empty = save_signals(CollectSource::KnownHost, "elasticsearch-local");
+        empty.job_name = "   ".to_string();
+        save_job(ReadSignals(empty)).await;
+        assert_eq!(
+            std::fs::read(&jobs_path).expect("saved jobs after rejection"),
+            before_rejection
+        );
     }
 }

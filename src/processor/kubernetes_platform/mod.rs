@@ -67,6 +67,7 @@ impl DiagnosticProcessor for KubernetesPlatformDiagnostic {
 }
 
 impl KubernetesPlatformDiagnostic {
+    #[cfg(test)]
     pub fn uuid(&self) -> &str {
         &self.metadata.uuid
     }

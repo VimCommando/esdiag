@@ -553,6 +553,7 @@ impl Server {
                 )
                 .route("/docs/{*path}", get(docs::handler))
                 .route("/docs", get(docs::handler_index))
+                .route("/jobs/draft", post(saved_jobs::normalize_draft))
                 .route("/upload/process", post(file_upload::process))
                 .route("/upload/submit", post(file_upload::submit))
                 .route("/events", patch(events));

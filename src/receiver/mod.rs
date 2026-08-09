@@ -14,6 +14,8 @@ mod elasticsearch;
 mod kibana;
 /// Request API calls from Logstash
 mod logstash;
+/// Resolve stable and runtime-bound Phase-1 inputs.
+mod resolver;
 /// Get file from https://upload.elastic.co/
 mod upload_service;
 
@@ -21,6 +23,7 @@ pub use elastic_cloud_admin::{ElasticCloudAdminReceiver, ElasticCloudAdminReques
 pub use elasticsearch::{ElasticsearchReceiver, ElasticsearchRequestError};
 pub use kibana::{KibanaReceiver, KibanaRequestError};
 pub use logstash::{LogstashReceiver, LogstashRequestError};
+pub use resolver::{InputResolver, ResolvedInput};
 
 use super::{
     data::{KnownHost, Product, Uri, collect_product},
@@ -522,7 +525,8 @@ mod tests {
         let err = Receiver::try_from(host).err().expect("agent collect should be refused");
 
         assert!(err.to_string().contains("out of scope by design for Elastic Agent"));
-        assert!(err.to_string().contains("`read`/`Load`"));
+        assert!(err.to_string().contains("CLI `process` input"));
+        assert!(err.to_string().contains("Web UI `Upload`"));
     }
 
     #[test]
@@ -536,10 +540,8 @@ mod tests {
             .err()
             .expect("platform collect should be refused");
 
-        assert!(
-            err.to_string()
-                .contains("out of scope by design without an application")
-        );
-        assert!(err.to_string().contains("product-provided diagnostic bundle"));
+        assert!(err.to_string().contains("out of scope by design for platform targets"));
+        assert!(err.to_string().contains("CLI `process` input"));
+        assert!(err.to_string().contains("Web UI `Upload`"));
     }
 }

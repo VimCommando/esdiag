@@ -558,6 +558,7 @@ impl DiagnosticProcessor for ElasticsearchDiagnostic {
 }
 
 impl ElasticsearchDiagnostic {
+    #[cfg(test)]
     pub fn uuid(&self) -> &str {
         &self.metadata.diagnostic.uuid
     }

@@ -20,20 +20,15 @@ use esdiag::{
     },
     env::LOG_LEVEL,
     exporter::Exporter,
-    processor::{
-        CollectionResult, Collector, Completed, DiagnosticOutcome, Identifiers, Processor, default_collect_archive_name,
-    },
+    processor::{CollectionResult, DiagnosticOutcome, Identifiers, default_collect_archive_name},
     receiver::Receiver,
     uploader,
 };
 use eyre::{Result, eyre};
 use redact::Secret;
 use std::{
-    future::Future,
     io::{IsTerminal, Write},
-    path::PathBuf,
     str::FromStr,
-    sync::Arc,
     time::Duration,
 };
 use tracing_subscriber::{EnvFilter, fmt};
@@ -560,12 +555,71 @@ fn emit_completion_summary(summary: &str) -> Result<()> {
     Ok(())
 }
 
-fn format_process_summary(completed: &Completed) -> String {
-    let report = &completed.report;
+#[cfg(test)]
+fn format_process_summary(completed: &esdiag::processor::Completed) -> String {
+    format_process_result_summary(&completed.report, completed.runtime, &completed.included_diagnostics)
+}
+
+fn format_execution_process_summary(outcome: &esdiag::job::outcome::ExecutionOutcome) -> Result<String> {
+    let report = outcome
+        .report
+        .as_ref()
+        .ok_or_else(|| eyre!("Process completed without a diagnostic report"))?;
+    let mut summary = format_process_result_summary(report, report.diagnostic.processing_duration, &[]);
+    format_execution_child_outcomes(&mut summary, &outcome.children);
+    Ok(summary)
+}
+
+fn format_execution_child_outcomes(summary: &mut String, children: &[esdiag::job::outcome::ChildExecutionOutcome]) {
+    for child in children {
+        match (&child.diagnostic_outcome, child.report()) {
+            (DiagnosticOutcome::Skipped(_), _) => {
+                let product = esdiag::processor::display_label(child.application(), child.platform());
+                summary.push_str(&format!(
+                    "\n\nincluded diagnostic {}: {} ({product})\nReason: {}",
+                    child.diagnostic_outcome,
+                    child.path,
+                    child.execution_error().unwrap_or_default()
+                ));
+            }
+            (_, Some(report)) => {
+                summary.push_str(&format!(
+                    "\n\nincluded diagnostic {} in {:.3} seconds: {} documents for {} ({})",
+                    child.diagnostic_outcome,
+                    child.runtime.unwrap_or_default() as f64 / 1000.0,
+                    report.diagnostic.docs.created,
+                    report.diagnostic.metadata.id,
+                    report.diagnostic.display_label()
+                ));
+                summary.push_str(&format!("\nSource: {}", child.path));
+                if let Some(kibana_link) = report.diagnostic.kibana_link.as_deref() {
+                    summary.push_str(&format!("\nKibana Link: {kibana_link}"));
+                }
+                summary.push_str(&format_report_events(report));
+                if let Some(error) = child.export_error() {
+                    summary.push_str(&format!("\nExecution error: {error}"));
+                }
+            }
+            (_, None) => {
+                summary.push_str(&format!(
+                    "\n\nincluded diagnostic failed: {}\nError: {}",
+                    child.path,
+                    child.execution_error().unwrap_or_default()
+                ));
+            }
+        }
+    }
+}
+
+fn format_process_result_summary(
+    report: &esdiag::processor::DiagnosticReport,
+    runtime: u128,
+    children: &[esdiag::processor::IncludedDiagnosticOutcome],
+) -> String {
     let mut summary = format!(
         "process {} in {:.3} seconds: {} documents for {}",
         report.outcome(),
-        completed.runtime as f64 / 1000.0,
+        runtime as f64 / 1000.0,
         report.diagnostic.docs.created,
         report.diagnostic.metadata.id
     );
@@ -573,7 +627,7 @@ fn format_process_summary(completed: &Completed) -> String {
         summary.push_str(&format!("\nKibana Link: {kibana_link}"));
     }
     summary.push_str(&format_report_events(report));
-    for child in &completed.included_diagnostics {
+    for child in children {
         match (&child.outcome, &child.report) {
             (DiagnosticOutcome::Skipped(_), _) => {
                 let product = esdiag::processor::display_label(child.application, child.platform);
@@ -598,6 +652,9 @@ fn format_process_summary(completed: &Completed) -> String {
                     summary.push_str(&format!("\nKibana Link: {kibana_link}"));
                 }
                 summary.push_str(&format_report_events(report));
+                if let Some(error) = child.export_error.as_deref() {
+                    summary.push_str(&format!("\nExecution error: {error}"));
+                }
             }
             (_, None) => {
                 summary.push_str(&format!(
@@ -632,6 +689,23 @@ fn format_collect_summary(result: &CollectionResult) -> String {
         "Collected {} of {} files into {}",
         result.success, result.total, result.path
     )
+}
+
+fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) -> String {
+    let failures = outcome
+        .stages
+        .iter()
+        .filter_map(|stage| match &stage.status {
+            esdiag::job::outcome::StageStatus::Failed(error) => Some(format!("{:?} failed: {error}", stage.stage)),
+            esdiag::job::outcome::StageStatus::Blocked(reason) => Some(format!("{:?} blocked: {reason}", stage.stage)),
+            esdiag::job::outcome::StageStatus::Succeeded | esdiag::job::outcome::StageStatus::Skipped(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        "Job did not complete successfully".to_string()
+    } else {
+        failures.join("\n")
+    }
 }
 
 #[tracing::instrument(skip_all)]
@@ -716,32 +790,50 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         if let Some(sources) = sources {
                             esdiag::processor::init_sources(sources_product_key(&product)?, sources)?;
                         }
-                        let known_host = Uri::try_from(host)?;
-                        tracing::info!("Collecting diagnostic from {known_host}");
+                        tracing::info!("Collecting diagnostic from {host}");
                         tracing::info!("Saving diagnostic to {output}");
-                        let receiver = Receiver::try_from(known_host)?;
                         let output_dir = match output {
                             Uri::Directory(path) | Uri::File(path) => path,
                             _ => {
                                 return Err(eyre!("Collect output must be a local directory path"));
                             }
                         };
-                        let exporter = Exporter::for_collect_archive(output_dir)?;
-
                         let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
                         let filename = format!("{}.zip", default_collect_archive_name(&product, &timestamp));
                         let identifiers = Identifiers::new(account, case, Some(filename), opportunity, user);
-
-                        let collector =
-                            Collector::try_new(receiver, exporter, product, r#type, include, exclude, identifiers)
-                                .await?;
-                        collect_with_optional_upload(
-                            collector.collect(),
-                            upload_id.as_deref(),
-                            upload_collected_archive,
-                        )
-                        .await
-                        .map(|result| CommandResult::with_summary("collect", format_collect_summary(&result)))
+                        let binding = esdiag::job::model::BindingKey::try_new("cli-collect-input")?;
+                        let mut context = esdiag::job::context::ExecutionContext::default();
+                        context
+                            .inputs
+                            .bind_receiver(binding.clone(), Receiver::try_from(host)?, Some(product));
+                        let job = esdiag::job::model::Job::try_new(
+                            identifiers,
+                            esdiag::job::model::Input::CollectBinding {
+                                binding,
+                                diagnostic_type: r#type,
+                                include,
+                                exclude,
+                            },
+                            Some(esdiag::job::model::SaveTarget::retained(output_dir)),
+                            None,
+                            upload_id.map(|upload_id| esdiag::job::model::SendTarget { upload_id }),
+                        )?;
+                        let outcome = esdiag::job::executor::execute_with_context(job, context).await;
+                        let mut summary = outcome
+                            .collection
+                            .as_ref()
+                            .map(format_collect_summary)
+                            .unwrap_or_else(|| format_execution_failure(&outcome));
+                        if let Some(upload) = outcome.upload.as_ref() {
+                            summary.push_str(&format!("\nRaw bundle: https://upload.elastic.co/g/{}", upload.slug));
+                        }
+                        if !outcome.succeeded() {
+                            if outcome.collection.is_some() {
+                                summary.push_str(&format!("\n{}", format_execution_failure(&outcome)));
+                            }
+                            return Err(eyre!("{summary}"));
+                        }
+                        Ok(CommandResult::with_summary("collect", summary))
                     }
                     Uri::ElasticCloud(_) => Err(eyre!("Elastic Cloud API collection not yet implemented")),
                     _ => Err(eyre!("Collect requires a known host")),
@@ -982,7 +1074,7 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     esdiag::job::save_job(name, job)?;
                 }
                 let input_uri = Uri::try_from(input)?;
-                let output_uri = Uri::try_from(output)?;
+                let output_uri = Uri::try_from(output.clone())?;
                 ensure_uri_role(&input_uri, HostRole::Collect, "process input")?;
                 if has_explicit_output {
                     ensure_uri_role(&output_uri, HostRole::Send, "process output")?;
@@ -995,36 +1087,65 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     let product = detect_sources_product_for_process(&input_uri, &receiver).await?;
                     esdiag::processor::init_sources(sources_product_key(&product)?, sources)?;
                 }
-                let receiver = Arc::new(receiver);
-                let exporter = Arc::new(Exporter::try_from(output_uri)?);
-
                 let identifiers = Identifiers::new(account, case, receiver.filename(), opportunity, user);
-                let processor = Processor::try_new(receiver, exporter, identifiers).await?;
-                let processor = match processor.start().await {
-                    Ok(processor) => processor,
-                    Err(processor) => {
-                        return Err(eyre!("{}", processor));
+                let mut context = esdiag::job::context::ExecutionContext::default();
+                let job_input = match &input_uri {
+                    Uri::File(_) | Uri::Directory(_) => esdiag::job::model::Input::Load { uri: input_uri.clone() },
+                    _ => {
+                        let binding = esdiag::job::model::BindingKey::try_new("cli-process-input")?;
+                        let product = match &input_uri {
+                            Uri::KnownHost(host) | Uri::ElasticCloudAdmin(host) | Uri::ElasticGovCloudAdmin(host) => {
+                                host.app().map(Product::from)
+                            }
+                            _ => None,
+                        };
+                        context.inputs.bind_receiver(binding.clone(), receiver, product);
+                        esdiag::job::model::Input::LoadBinding { binding }
                     }
                 };
-
-                match processor.process().await {
-                    Ok(processor) => {
-                        let summary = format_process_summary(&processor.state);
-                        // The exit code reads the single derived outcome
-                        // (ADR-0016): a Failed report is a failed command.
-                        if processor.state.report.outcome() == DiagnosticOutcome::Failed {
-                            return Err(eyre!("{summary}"));
-                        }
-                        Ok(CommandResult::with_summary("process", summary))
+                let export_target = match (&output, &output_uri) {
+                    (Some(name), Uri::KnownHost(_)) => {
+                        esdiag::job::model::ExportTarget::KnownHost { name: name.clone() }
                     }
-                    Err(processor) => {
-                        tracing::info!(
-                            "Process failed in {:.3} seconds",
-                            processor.state.runtime as f64 / 1000.0
+                    (_, Uri::File(path)) => esdiag::job::model::ExportTarget::File { path: path.clone() },
+                    (_, Uri::Directory(output_dir)) => esdiag::job::model::ExportTarget::Directory {
+                        output_dir: output_dir.clone(),
+                    },
+                    (_, Uri::Stream) => esdiag::job::model::ExportTarget::Stdout,
+                    _ => {
+                        let binding = esdiag::job::model::BindingKey::try_new("cli-process-output")?;
+                        context.bind_document_exporter(
+                            binding.clone(),
+                            esdiag::exporter::DocumentExporter::try_from(output_uri)?,
                         );
-                        Err(eyre!("{}", processor))
+                        esdiag::job::model::ExportTarget::Binding { binding }
                     }
+                };
+                let job = esdiag::job::model::Job::try_new(
+                    identifiers,
+                    job_input,
+                    None,
+                    Some(esdiag::job::model::Process {
+                        selection: None,
+                        export: export_target,
+                    }),
+                    None,
+                )?;
+                let outcome = esdiag::job::executor::execute_with_context(job, context).await;
+                let mut summary = match format_execution_process_summary(&outcome) {
+                    Ok(summary) => summary,
+                    Err(_) => format_execution_failure(&outcome),
+                };
+                if !outcome.succeeded() {
+                    if outcome.report.is_some() {
+                        summary.push_str(&format!("\n{}", format_execution_failure(&outcome)));
+                    }
+                    return Err(eyre!("{summary}"));
                 }
+                if outcome.diagnostic_outcome() == Some(DiagnosticOutcome::Failed) {
+                    return Err(eyre!("{summary}"));
+                }
+                Ok(CommandResult::with_summary("process", summary))
             }
             Commands::Upload {
                 file_name,
@@ -1037,8 +1158,24 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     file_path.display(),
                     upload_id
                 );
-                let response = uploader::upload_file(&file_path, &upload_id, &api_url).await?;
-                tracing::info!("Upload complete for slug {}", response.slug);
+                let job = esdiag::job::model::Job::try_new(
+                    Identifiers::default(),
+                    esdiag::job::model::Input::Load {
+                        uri: Uri::File(file_path),
+                    },
+                    None,
+                    None,
+                    Some(esdiag::job::model::SendTarget { upload_id }),
+                )?;
+                let context =
+                    esdiag::job::context::ExecutionContext::default().with_sender(uploader::BundleSender::new(api_url));
+                let outcome = esdiag::job::executor::execute_with_context(job, context).await;
+                if !outcome.succeeded() {
+                    return Err(eyre!("{}", format_execution_failure(&outcome)));
+                }
+                if let Some(upload) = outcome.upload {
+                    tracing::info!("Upload complete for slug {}", upload.slug);
+                }
                 Ok(CommandResult::named("upload"))
             }
             #[cfg(feature = "setup")]
@@ -1179,23 +1316,6 @@ async fn run(cli: Cli) -> Result<CommandResult> {
     }
 }
 
-async fn collect_with_optional_upload<CollectFut, UploadFn, UploadFut>(
-    collect_future: CollectFut,
-    upload_id: Option<&str>,
-    mut upload_fn: UploadFn,
-) -> Result<CollectionResult>
-where
-    CollectFut: Future<Output = Result<CollectionResult>>,
-    UploadFn: FnMut(PathBuf, String) -> UploadFut,
-    UploadFut: Future<Output = Result<()>>,
-{
-    let result = collect_future.await?;
-    if let Some(upload_id) = upload_id {
-        upload_fn(PathBuf::from(&result.path), upload_id.to_string()).await?;
-    }
-    Ok(result)
-}
-
 #[cfg(feature = "keystore")]
 fn derive_collect_job(
     host: &str,
@@ -1225,23 +1345,6 @@ fn derive_process_job(input: &str, output: Option<&str>, identifiers: Identifier
         .identifiers(identifiers)
         .collect_from(input)?
         .process_to(output)
-}
-
-async fn upload_collected_archive(file_path: PathBuf, upload_id: String) -> Result<()> {
-    if !file_path.exists() {
-        return Err(eyre!("Collected archive not found at {}", file_path.display()));
-    }
-    tracing::info!("Uploading collected archive {} to {}", file_path.display(), upload_id);
-    let response = uploader::upload_file(&file_path, &upload_id, uploader::DEFAULT_UPLOAD_API_URL)
-        .await
-        .inspect_err(|_| {
-            tracing::warn!(
-                "Upload failed; collected archive remains available at {}",
-                file_path.display()
-            );
-        })?;
-    tracing::info!("Upload complete for slug {}", response.slug);
-    Ok(())
 }
 
 fn sources_product_key(product: &Product) -> Result<&'static str> {
@@ -1730,13 +1833,12 @@ fn resolve_serve_exporter(output: Option<String>) -> Result<Exporter> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CommandResult, Commands, HostCommands, KeystoreCommands, collect_with_optional_upload,
-        colorize_keystore_lock_status, format_collect_summary, format_keystore_lock_status,
-        format_keystore_lock_status_at, format_keystore_migrate_summary, format_keystore_password_summary,
-        format_keystore_secret_summary, format_process_summary, format_remaining_duration_from,
-        host_connection_uses_receiver, is_agent_mode, resolve_host_secret_auth, resolve_secret_input_with_prompt,
-        resolve_tracing_filter, should_error_for_missing_subcommand, upload_collected_archive,
-        write_completion_summary,
+        Cli, CommandResult, Commands, HostCommands, KeystoreCommands, colorize_keystore_lock_status,
+        format_collect_summary, format_keystore_lock_status, format_keystore_lock_status_at,
+        format_keystore_migrate_summary, format_keystore_password_summary, format_keystore_secret_summary,
+        format_process_summary, format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode,
+        resolve_host_secret_auth, resolve_secret_input_with_prompt, resolve_tracing_filter,
+        should_error_for_missing_subcommand, write_completion_summary,
     };
     #[cfg(feature = "keystore")]
     use super::{derive_collect_job, derive_process_job};
@@ -1752,10 +1854,7 @@ mod tests {
     };
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::Mutex;
     use tempfile::TempDir;
     use url::Url;
 
@@ -2100,123 +2199,6 @@ mod tests {
         assert_eq!(err.to_string(), "Saved jobs require an explicit process output target");
     }
 
-    #[tokio::test]
-    async fn collect_with_optional_upload_uses_resolved_runtime_archive_path() {
-        let upload_calls = AtomicUsize::new(0);
-        let result = collect_with_optional_upload(
-            std::future::ready(Ok(CollectionResult {
-                path: "/tmp/runtime-generated-esdiag.zip".to_string(),
-                success: 1,
-                total: 1,
-            })),
-            Some("https://upload.elastic.co/g/abc123"),
-            |path, upload_id| {
-                upload_calls.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(path, std::path::PathBuf::from("/tmp/runtime-generated-esdiag.zip"));
-                assert_eq!(upload_id, "https://upload.elastic.co/g/abc123".to_string());
-                std::future::ready(Ok(()))
-            },
-        )
-        .await
-        .expect("collect with upload succeeds");
-
-        assert_eq!(result.path, "/tmp/runtime-generated-esdiag.zip");
-        assert_eq!(upload_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn collect_with_optional_upload_skips_upload_when_collect_fails() {
-        let upload_calls = AtomicUsize::new(0);
-        let result = collect_with_optional_upload(
-            std::future::ready(Err(eyre::eyre!("collect failed"))),
-            Some("abc123"),
-            |_path, _upload_id| {
-                upload_calls.fetch_add(1, Ordering::SeqCst);
-                std::future::ready(Ok(()))
-            },
-        )
-        .await;
-
-        let err = match result {
-            Ok(_) => panic!("collect failure should be returned"),
-            Err(err) => err,
-        };
-        assert!(err.to_string().contains("collect failed"));
-        assert_eq!(upload_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn collect_with_optional_upload_skips_upload_when_no_upload_id_is_provided() {
-        let upload_calls = AtomicUsize::new(0);
-        let result = collect_with_optional_upload(
-            std::future::ready(Ok(CollectionResult {
-                path: "/tmp/collect-only-esdiag.zip".to_string(),
-                success: 1,
-                total: 1,
-            })),
-            None,
-            |_path, _upload_id| {
-                upload_calls.fetch_add(1, Ordering::SeqCst);
-                std::future::ready(Ok(()))
-            },
-        )
-        .await
-        .expect("collect without upload id succeeds");
-
-        assert_eq!(result.path, "/tmp/collect-only-esdiag.zip");
-        assert_eq!(upload_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn collect_with_optional_upload_returns_upload_error_and_keeps_archive() {
-        let file = tempfile::Builder::new()
-            .prefix("diag-")
-            .suffix(".zip")
-            .tempfile()
-            .expect("temp file");
-        let path = file.path().to_path_buf();
-        let upload_calls = AtomicUsize::new(0);
-
-        let result = collect_with_optional_upload(
-            std::future::ready(Ok(CollectionResult {
-                path: path.display().to_string(),
-                success: 1,
-                total: 1,
-            })),
-            Some("abc123"),
-            |upload_path, upload_id| {
-                upload_calls.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(upload_path, path);
-                assert_eq!(upload_id, "abc123".to_string());
-                assert!(upload_path.exists(), "collected archive should still exist");
-                std::future::ready(Err(eyre::eyre!("upload failed")))
-            },
-        )
-        .await;
-
-        let err = match result {
-            Ok(_) => panic!("upload failure should be returned"),
-            Err(err) => err,
-        };
-        assert!(err.to_string().contains("upload failed"));
-        assert_eq!(upload_calls.load(Ordering::SeqCst), 1);
-        assert!(path.exists(), "upload failure should preserve collected archive");
-    }
-
-    #[tokio::test]
-    async fn upload_collected_archive_returns_clear_error_when_file_is_missing() {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let missing_path = temp_dir.path().join("missing-diag.zip");
-
-        let err = upload_collected_archive(missing_path.clone(), "abc123".to_string())
-            .await
-            .expect_err("missing archive should fail");
-
-        assert!(
-            err.to_string()
-                .contains(&format!("Collected archive not found at {}", missing_path.display()))
-        );
-    }
     #[test]
     fn upload_command_parses_file_and_upload_id() {
         let cli = Cli::parse_from(["esdiag", "upload", "diag.zip", "abc123"]);
@@ -2437,6 +2419,7 @@ mod tests {
                     report: Some(Box::new(child_report)),
                     reason: None,
                     runtime: Some(500),
+                    export_error: None,
                 },
                 IncludedDiagnosticOutcome {
                     job_id: 2,
@@ -2447,6 +2430,7 @@ mod tests {
                     platform: esdiag::data::Platform::ECK,
                     reason: Some("Kibana processing is not yet implemented".to_string()),
                     runtime: None,
+                    export_error: None,
                 },
                 IncludedDiagnosticOutcome {
                     job_id: 3,
@@ -2457,6 +2441,7 @@ mod tests {
                     platform: esdiag::data::Platform::Unknown,
                     reason: Some("manifest missing".to_string()),
                     runtime: None,
+                    export_error: None,
                 },
             ],
         };

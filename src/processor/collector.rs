@@ -5,7 +5,7 @@
 use super::{elasticsearch::ElasticsearchCollector, kibana::KibanaCollector, logstash::LogstashCollector};
 use crate::{
     data::Product,
-    exporter::Exporter,
+    exporter::BundleExporter,
     processor::{Identifiers, RequestedApi},
     receiver::Receiver,
 };
@@ -20,16 +20,35 @@ pub struct CollectOptions {
     pub identifiers: Identifiers,
 }
 
-pub enum Collector {
+enum Collector {
     Elasticsearch(ElasticsearchCollector),
     Logstash(LogstashCollector),
     Kibana(KibanaCollector),
 }
 
+pub(crate) async fn collect_bundle(
+    receiver: Receiver,
+    exporter: BundleExporter,
+    options: CollectOptions,
+) -> Result<CollectionResult> {
+    Collector::try_new(
+        receiver,
+        exporter,
+        options.product,
+        options.r#type,
+        options.include,
+        options.exclude,
+        options.identifiers,
+    )
+    .await?
+    .collect()
+    .await
+}
+
 impl Collector {
-    pub async fn try_new(
+    async fn try_new(
         receiver: Receiver,
-        exporter: Exporter,
+        exporter: BundleExporter,
         product: Product,
         r#type: String,
         include: Option<Vec<String>>,
@@ -46,17 +65,17 @@ impl Collector {
 
         match (options.product.clone(), receiver) {
             (Product::Elasticsearch, receiver @ (Receiver::Elasticsearch(_) | Receiver::ElasticCloudAdmin(_))) => {
-                let collect_exporter = exporter.into_collect_exporter()?;
+                let collect_exporter = exporter.into_archive();
                 let collector = ElasticsearchCollector::new(receiver, collect_exporter, options).await?;
                 Ok(Self::Elasticsearch(collector))
             }
             (Product::Logstash, receiver @ Receiver::Logstash(_)) => {
-                let collect_exporter = exporter.into_collect_exporter()?;
+                let collect_exporter = exporter.into_archive();
                 let collector = LogstashCollector::new(receiver, collect_exporter, options).await?;
                 Ok(Self::Logstash(collector))
             }
             (Product::Kibana, receiver @ Receiver::Kibana(_)) => {
-                let collect_exporter = exporter.into_collect_exporter()?;
+                let collect_exporter = exporter.into_archive();
                 let collector = KibanaCollector::new(receiver, collect_exporter, options).await?;
                 Ok(Self::Kibana(collector))
             }
@@ -68,7 +87,7 @@ impl Collector {
         }
     }
 
-    pub async fn collect(&self) -> Result<CollectionResult> {
+    async fn collect(&self) -> Result<CollectionResult> {
         let result = match self {
             Self::Elasticsearch(collector) => collector.collect().await?,
             Self::Logstash(collector) => collector.collect().await?,

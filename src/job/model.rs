@@ -23,6 +23,33 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Opaque reference to an execution-only resource supplied by
+/// [`ExecutionContext`](crate::job::executor::ExecutionContext).
+///
+/// The key is safe to serialize, but the credential, receiver, or adapter it
+/// names is deliberately absent from the Job payload.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub struct BindingKey(String);
+
+impl BindingKey {
+    pub fn try_new(value: impl Into<String>) -> Result<Self, JobValidationError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(JobValidationError::EmptyRuntimeBinding);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.trim().is_empty()
+    }
+}
+
 /// Phase 1: where the diagnostic comes from — exactly one of a *new*
 /// collection from live product APIs, or an *existing* bundle.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -37,17 +64,37 @@ pub enum Input {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exclude: Option<Vec<String>>,
     },
+    /// Collect through a transient receiver held only by the execution context.
+    CollectBinding {
+        binding: BindingKey,
+        diagnostic_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exclude: Option<Vec<String>>,
+    },
     /// Read an existing diagnostic from a directory, bundle, or download.
     Load { uri: Uri },
+    /// Load a transient upload or a nested path in a parent bundle.
+    LoadBinding { binding: BindingKey },
 }
 
 impl Input {
     pub fn is_collect(&self) -> bool {
-        matches!(self, Input::Collect { .. })
+        matches!(self, Input::Collect { .. } | Input::CollectBinding { .. })
     }
 
     pub fn is_sendable_bundle(&self) -> bool {
-        matches!(self, Input::Load { uri: Uri::File(_) })
+        matches!(
+            self,
+            Input::Load {
+                uri: Uri::File(_) | Uri::ServiceLink(_)
+            } | Input::LoadBinding { .. }
+        )
+    }
+
+    pub fn uses_runtime_binding(&self) -> bool {
+        matches!(self, Input::CollectBinding { .. } | Input::LoadBinding { .. })
     }
 }
 
@@ -97,6 +144,8 @@ pub enum ExportTarget {
     Directory { output_dir: PathBuf },
     /// Standard output.
     Stdout,
+    /// A transient document exporter held only by the execution context.
+    Binding { binding: BindingKey },
 }
 
 /// Phase 3: transmit an existing bundle to the Elastic Uploader service.
@@ -136,6 +185,10 @@ pub enum JobValidationError {
     EmptyCollectHost,
     /// Persisted load inputs must keep their wire semantics across a YAML round trip.
     ResolvedLoadUriNotPersistable,
+    /// Runtime binding keys must be non-empty.
+    EmptyRuntimeBinding,
+    /// Saved jobs must contain only stable, repeatable references.
+    RuntimeBindingNotPersistable,
 }
 
 impl std::fmt::Display for JobValidationError {
@@ -163,6 +216,13 @@ impl std::fmt::Display for JobValidationError {
                 f,
                 "`Load` input cannot persist resolved host URIs; use a file, directory, URL, or stream reference"
             ),
+            Self::EmptyRuntimeBinding => write!(f, "runtime binding key cannot be empty"),
+            Self::RuntimeBindingNotPersistable => {
+                write!(
+                    f,
+                    "only stable known-host Collect inputs and stable outputs can be persisted as saved jobs"
+                )
+            }
         }
     }
 }
@@ -225,6 +285,18 @@ impl Job {
         {
             return Err(JobValidationError::EmptyCollectHost);
         }
+        if match &input {
+            Input::CollectBinding { binding, .. } | Input::LoadBinding { binding } => binding.is_empty(),
+            Input::Collect { .. } | Input::Load { .. } => false,
+        } {
+            return Err(JobValidationError::EmptyRuntimeBinding);
+        }
+        if process
+            .as_ref()
+            .is_some_and(|process| matches!(&process.export, ExportTarget::Binding { binding } if binding.is_empty()))
+        {
+            return Err(JobValidationError::EmptyRuntimeBinding);
+        }
         if let Input::Load {
             uri: Uri::KnownHost(_) | Uri::ElasticCloud(_) | Uri::ElasticCloudAdmin(_) | Uri::ElasticGovCloudAdmin(_),
         } = &input
@@ -237,7 +309,7 @@ impl Job {
         if send.is_some() && save.is_none() && !input.is_sendable_bundle() {
             return Err(JobValidationError::SendRequiresArchiveFile);
         }
-        if save.is_none() && process.is_none() && send.is_none() {
+        if input.is_collect() && save.is_none() && process.is_none() && send.is_none() {
             return Err(JobValidationError::NoWork);
         }
         if matches!(&save, Some(SaveTarget { dir: None })) && process.is_none() && send.is_none() {
@@ -273,8 +345,26 @@ impl Job {
     /// staged over a materialised (or loaded) bundle.
     pub fn execution_mode(&self) -> ExecutionMode {
         match (&self.input, &self.save) {
-            (Input::Collect { .. }, None) if self.process.is_some() => ExecutionMode::Streaming,
+            (Input::Collect { .. } | Input::CollectBinding { .. }, None) if self.process.is_some() => {
+                ExecutionMode::Streaming
+            }
             _ => ExecutionMode::Staged,
+        }
+    }
+
+    pub fn uses_runtime_bindings(&self) -> bool {
+        self.input.uses_runtime_binding()
+            || self
+                .process
+                .as_ref()
+                .is_some_and(|process| matches!(process.export, ExportTarget::Binding { .. }))
+    }
+
+    pub fn validate_for_persistence(&self) -> Result<(), JobValidationError> {
+        if self.uses_runtime_bindings() || !matches!(self.input, Input::Collect { .. }) {
+            Err(JobValidationError::RuntimeBindingNotPersistable)
+        } else {
+            Ok(())
         }
     }
 }
@@ -361,6 +451,17 @@ mod tests {
         let err = Job::try_new(Identifiers::default(), collect_input(), None, None, None)
             .expect_err("no-op job must be rejected");
         assert_eq!(err, JobValidationError::NoWork);
+    }
+
+    #[test]
+    fn load_may_exist_only_for_runtime_retention_policy() {
+        let job = Job::try_new(Identifiers::default(), load_input(), None, None, None)
+            .expect("Load can be retained by execution policy");
+
+        assert_eq!(
+            job.validate_for_persistence(),
+            Err(JobValidationError::RuntimeBindingNotPersistable)
+        );
     }
 
     #[test]
@@ -484,5 +585,60 @@ send:
         assert_eq!(job.execution_mode(), ExecutionMode::Staged);
         assert!(job.process().is_some());
         assert!(job.send().is_some());
+    }
+
+    #[test]
+    fn ephemeral_runtime_bindings_are_valid_but_not_persistable() {
+        let job = Job::try_new(
+            Identifiers::default(),
+            Input::CollectBinding {
+                binding: BindingKey::try_new("request-host").expect("binding key"),
+                diagnostic_type: "standard".to_string(),
+                include: None,
+                exclude: None,
+            },
+            None,
+            Some(Process {
+                selection: None,
+                export: ExportTarget::Binding {
+                    binding: BindingKey::try_new("service-exporter").expect("binding key"),
+                },
+            }),
+            None,
+        )
+        .expect("runtime-bound ephemeral job");
+
+        assert!(job.uses_runtime_bindings());
+        assert_eq!(
+            job.validate_for_persistence(),
+            Err(JobValidationError::RuntimeBindingNotPersistable)
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_empty_runtime_binding_key() {
+        let error = serde_yaml::from_str::<Job>(
+            r#"
+input:
+  type: load-binding
+  binding: ""
+process:
+  export:
+    type: stdout
+"#,
+        )
+        .expect_err("empty binding must be rejected");
+
+        assert!(error.to_string().contains("runtime binding key cannot be empty"));
+    }
+
+    #[test]
+    fn service_link_load_can_select_raw_send_for_runtime_materialization() {
+        let uri =
+            Uri::try_from("https://token:secret@upload.elastic.co/download/file".to_string()).expect("service link");
+        assert!(matches!(uri, Uri::ServiceLink(_)));
+
+        Job::try_new(Identifiers::default(), Input::Load { uri }, None, None, Some(send()))
+            .expect("service-link bundle can be materialized for send");
     }
 }

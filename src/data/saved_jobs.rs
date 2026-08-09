@@ -108,14 +108,14 @@ pub struct JobBuilder<State> {
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
-pub struct JobSignals {
-    pub collect: JobSignalsCollect,
-    pub process: JobSignalsProcess,
-    pub send: JobSignalsSend,
+pub struct JobDraft {
+    pub collect: JobDraftCollect,
+    pub process: JobDraftProcess,
+    pub send: JobDraftSend,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct JobSignalsCollect {
+pub struct JobDraftCollect {
     pub mode: CollectMode,
     pub source: CollectSource,
     #[serde(default)]
@@ -128,7 +128,7 @@ pub struct JobSignalsCollect {
     pub download_dir: String,
 }
 
-impl Default for JobSignalsCollect {
+impl Default for JobDraftCollect {
     fn default() -> Self {
         Self {
             mode: CollectMode::Collect,
@@ -142,7 +142,7 @@ impl Default for JobSignalsCollect {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct JobSignalsProcess {
+pub struct JobDraftProcess {
     pub mode: ProcessMode,
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -156,7 +156,7 @@ pub struct JobSignalsProcess {
     pub selected: String,
 }
 
-impl Default for JobSignalsProcess {
+impl Default for JobDraftProcess {
     fn default() -> Self {
         Self {
             mode: ProcessMode::Process,
@@ -170,7 +170,7 @@ impl Default for JobSignalsProcess {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct JobSignalsSend {
+pub struct JobDraftSend {
     pub mode: SendMode,
     #[serde(default)]
     pub remote_target: Option<String>,
@@ -178,16 +178,85 @@ pub struct JobSignalsSend {
     pub local_target: String,
     #[serde(default)]
     pub local_directory: String,
+    /// Raw-bundle upload target. This is independent from the processed
+    /// document target represented by the legacy send controls above.
+    #[serde(default)]
+    pub raw_remote_target: Option<String>,
+    /// Retain the raw bundle locally (Save for Collect, retained input policy
+    /// for Load) without introducing a second filesystem target.
+    #[serde(default)]
+    pub raw_local: bool,
 }
 
-impl Default for JobSignalsSend {
+impl Default for JobDraftSend {
     fn default() -> Self {
         Self {
             mode: SendMode::Remote,
             remote_target: None,
             local_target: String::new(),
             local_directory: String::new(),
+            raw_remote_target: None,
+            raw_local: false,
         }
+    }
+}
+
+/// Compatibility names for Datastar payloads while callers migrate to the
+/// backend-owned draft terminology.
+pub type JobSignals = JobDraft;
+pub type JobSignalsCollect = JobDraftCollect;
+pub type JobSignalsProcess = JobDraftProcess;
+pub type JobSignalsSend = JobDraftSend;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftTargetAvailability {
+    pub processed_documents: bool,
+    pub raw_bundle: bool,
+}
+
+impl JobDraft {
+    pub fn target_availability(&self) -> DraftTargetAvailability {
+        DraftTargetAvailability {
+            processed_documents: self.process.enabled && self.process.mode == ProcessMode::Process,
+            raw_bundle: self.collect.mode == CollectMode::Upload || self.collect.save,
+        }
+    }
+
+    /// Apply backend-owned target invariants before the draft is patched back
+    /// to the browser or compiled.
+    pub fn normalize_targets(&mut self) -> DraftTargetAvailability {
+        self.send.raw_remote_target = self
+            .send
+            .raw_remote_target
+            .take()
+            .filter(|target| !target.trim().is_empty());
+        if !self.process.enabled
+            && self.process.mode == ProcessMode::Forward
+            && self.send.mode == SendMode::Remote
+            && self.send.raw_remote_target.is_none()
+        {
+            self.send.raw_remote_target = self
+                .send
+                .remote_target
+                .as_ref()
+                .filter(|target| !target.trim().is_empty())
+                .cloned();
+        }
+        if self.send.raw_local && self.collect.mode == CollectMode::Collect {
+            self.collect.save = true;
+        }
+        let availability = self.target_availability();
+        if !availability.processed_documents {
+            self.send.remote_target = None;
+            self.send.local_target.clear();
+            self.send.local_directory.clear();
+        }
+        if !availability.raw_bundle {
+            self.send.raw_remote_target = None;
+            self.send.raw_local = false;
+        }
+        availability
     }
 }
 
@@ -316,7 +385,7 @@ impl Job {
     pub fn collect_host(&self) -> &str {
         match self.input() {
             Input::Collect { host, .. } => host,
-            Input::Load { .. } => "",
+            Input::CollectBinding { .. } | Input::Load { .. } | Input::LoadBinding { .. } => "",
         }
     }
 
@@ -402,8 +471,13 @@ impl Job {
             signals.send.local_directory = signals.collect.download_dir.clone();
         }
         if let Some(send) = self.send() {
-            signals.send.mode = SendMode::Remote;
-            signals.send.remote_target = Some(send.upload_id.clone());
+            signals.send.raw_remote_target = Some(send.upload_id.clone());
+            if self.process().is_none() {
+                // Keep the current forward-only form controls working while
+                // the UI migrates to the explicit raw target field.
+                signals.send.mode = SendMode::Remote;
+                signals.send.remote_target = Some(send.upload_id.clone());
+            }
         }
 
         signals
@@ -449,6 +523,7 @@ impl JobOutput {
             Self::File { path } => path.display().to_string(),
             Self::Directory { output_dir } => output_dir.display().to_string(),
             Self::Stdout => "-".to_string(),
+            Self::Binding { binding } => format!("binding:{}", binding.as_str()),
         }
     }
 
@@ -458,6 +533,7 @@ impl JobOutput {
             Self::File { path } => path.display().to_string(),
             Self::Directory { output_dir } => format!("dir:{}", output_dir.display()),
             Self::Stdout => "stdout".to_string(),
+            Self::Binding { binding } => format!("runtime:{}", binding.as_str()),
         }
     }
 
@@ -523,6 +599,13 @@ impl JobOutput {
                 signals.send.mode = SendMode::Local;
                 signals.send.local_target = "-".to_string();
             }
+            Self::Binding { .. } => {
+                // Runtime targets are execution-only and cannot be projected
+                // into the persisted saved-job form.
+                signals.send.remote_target = None;
+                signals.send.local_target.clear();
+                signals.send.local_directory.clear();
+            }
         }
     }
 }
@@ -574,7 +657,8 @@ impl JobBuilder<NeedsCollect> {
         self
     }
 
-    pub fn from_signals(self, signals: JobSignals) -> Result<Job> {
+    pub fn from_signals(self, mut signals: JobSignals) -> Result<Job> {
+        signals.normalize_targets();
         if signals.collect.mode != CollectMode::Collect {
             return Err(eyre!("Jobs require collect mode"));
         }
@@ -592,7 +676,10 @@ impl JobBuilder<NeedsCollect> {
             }
             let output = JobOutput::from_signals_send(&signals)?;
             let selection = explicit_process_selection(&signals)?;
-            builder.process_to_with_selection(output, selection)
+            match signals.send.raw_remote_target {
+                Some(upload_id) => builder.process_and_upload_to(output, selection, upload_id),
+                None => builder.process_to_with_selection(output, selection),
+            }
         } else if signals.process.mode == ProcessMode::Forward && signals.send.mode == SendMode::Remote {
             if let Some(download_dir) = intermediate_download_dir(&signals) {
                 builder = builder.save_collected_bundle_to(download_dir);
@@ -600,7 +687,8 @@ impl JobBuilder<NeedsCollect> {
             builder.upload_to(
                 signals
                     .send
-                    .remote_target
+                    .raw_remote_target
+                    .or(signals.send.remote_target)
                     .ok_or_else(|| eyre!("Upload jobs require a remote target"))?,
             )
         } else {
@@ -711,6 +799,32 @@ impl JobBuilder<NeedsAction> {
         )
     }
 
+    pub fn process_and_upload_to(
+        self,
+        output: JobOutput,
+        selection: Option<ProcessSelection>,
+        upload_id: impl Into<String>,
+    ) -> Result<Job> {
+        let upload_id = upload_id.into();
+        if upload_id.trim().is_empty() {
+            return Err(eyre!("Upload jobs require an Elastic Upload Service upload id or URL"));
+        }
+        let save = self
+            .collect
+            .as_ref()
+            .and_then(|collect| collect.save_dir.clone())
+            .map(SaveTarget::retained)
+            .unwrap_or_else(SaveTarget::temporary);
+        self.build(
+            Some(save),
+            Some(Process {
+                selection,
+                export: output,
+            }),
+            Some(SendTarget { upload_id }),
+        )
+    }
+
     fn collect_mut(&mut self) -> &mut CollectDraft {
         self.collect.as_mut().expect("typestate guarantees collect")
     }
@@ -813,6 +927,10 @@ fn save_saved_jobs_unlocked(jobs: &SavedJobs) -> Result<()> {
 }
 
 fn write_saved_jobs_document(path: &Path, jobs: &SavedJobs) -> Result<()> {
+    for (name, job) in jobs {
+        job.validate_for_persistence()
+            .map_err(|err| eyre!("Saved job '{name}' is not persistable: {err}"))?;
+    }
     let document = SavedJobsDocument::current(jobs.clone());
     super::keystore::write_yaml_atomic(path, &document)
 }
@@ -909,6 +1027,72 @@ mod tests {
         let content = std::fs::read_to_string(tmp.path().join("jobs.yml")).expect("read jobs");
         assert!(content.contains("schema_version: 2"));
         assert!(content.contains("jobs:"));
+    }
+
+    #[test]
+    fn save_saved_jobs_rejects_runtime_binding_before_write() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        let runtime_job = Job::try_new(
+            Identifiers::default(),
+            Input::CollectBinding {
+                binding: crate::job::model::BindingKey::try_new("one-use-host").expect("binding key"),
+                diagnostic_type: "standard".to_string(),
+                include: None,
+                exclude: None,
+            },
+            Some(SaveTarget::retained(PathBuf::from("/tmp/esdiag"))),
+            None,
+            None,
+        )
+        .expect("ephemeral runtime job");
+        let mut jobs = SavedJobs::default();
+        jobs.insert("runtime".to_string(), runtime_job);
+
+        let error = save_saved_jobs(&jobs).expect_err("runtime job must not persist");
+
+        assert!(error.to_string().contains("only stable known-host Collect inputs"));
+        assert!(!tmp.path().join("jobs.yml").exists());
+    }
+
+    #[test]
+    fn save_saved_jobs_rejects_runtime_output_binding_without_overwriting_existing_jobs() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        let mut stable_jobs = SavedJobs::default();
+        stable_jobs.insert("stable".to_string(), test_job("stable"));
+        save_saved_jobs(&stable_jobs).expect("save stable jobs");
+        let before = std::fs::read(tmp.path().join("jobs.yml")).expect("saved jobs bytes");
+
+        let runtime_output = crate::job::model::BindingKey::try_new("one-use-exporter").expect("binding key");
+        let runtime_job = Job::try_new(
+            Identifiers::default(),
+            Input::Collect {
+                host: "stable".to_string(),
+                diagnostic_type: "standard".to_string(),
+                include: None,
+                exclude: None,
+            },
+            Some(SaveTarget::retained(PathBuf::from("/tmp/esdiag"))),
+            Some(Process {
+                selection: None,
+                export: JobOutput::Binding {
+                    binding: runtime_output,
+                },
+            }),
+            None,
+        )
+        .expect("ephemeral output-bound job");
+        let mut jobs = SavedJobs::default();
+        jobs.insert("runtime-output".to_string(), runtime_job);
+
+        let error = save_saved_jobs(&jobs).expect_err("runtime output must not persist");
+
+        assert!(error.to_string().contains("stable outputs"));
+        assert_eq!(
+            std::fs::read(tmp.path().join("jobs.yml")).expect("saved jobs remain unchanged"),
+            before
+        );
     }
 
     #[test]
@@ -1421,6 +1605,168 @@ collect-job:
             JobOutput::Directory { output_dir: actual } => assert_eq!(actual, &output_dir),
             _ => panic!("expected process to directory"),
         }
+    }
+
+    #[test]
+    fn job_draft_round_trips_processed_and_raw_remote_targets_independently() {
+        let _guard = test_env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        save_collect_host("prod");
+        save_collect_host("monitoring");
+        let job = Job::try_new(
+            Identifiers::default(),
+            Input::Collect {
+                host: "prod".to_string(),
+                diagnostic_type: "standard".to_string(),
+                include: None,
+                exclude: None,
+            },
+            Some(SaveTarget::retained(PathBuf::from("/tmp/retain"))),
+            Some(Process {
+                selection: None,
+                export: JobOutput::KnownHost {
+                    name: "monitoring".to_string(),
+                },
+            }),
+            Some(SendTarget {
+                upload_id: "upload-123".to_string(),
+            }),
+        )
+        .expect("process and raw send job");
+
+        let draft = job.to_signals();
+        assert_eq!(draft.send.remote_target.as_deref(), Some("monitoring"));
+        assert_eq!(draft.send.raw_remote_target.as_deref(), Some("upload-123"));
+
+        let recompiled = Job::from_signals(draft, Identifiers::default()).expect("compile unchanged draft");
+        assert!(matches!(
+            &recompiled.process().expect("process").export,
+            JobOutput::KnownHost { name } if name == "monitoring"
+        ));
+        assert_eq!(
+            recompiled.send().map(|send| send.upload_id.as_str()),
+            Some("upload-123")
+        );
+    }
+
+    #[test]
+    fn backend_normalization_clears_targets_without_preconditions() {
+        let mut draft = JobDraft::default();
+        draft.collect.save = false;
+        draft.process.enabled = false;
+        draft.process.mode = ProcessMode::Forward;
+        draft.send.remote_target = Some("monitoring".to_string());
+        draft.send.raw_remote_target = Some("upload-123".to_string());
+
+        let availability = draft.normalize_targets();
+
+        assert_eq!(
+            availability,
+            DraftTargetAvailability {
+                processed_documents: false,
+                raw_bundle: false,
+            }
+        );
+        assert!(draft.send.remote_target.is_none());
+        assert!(draft.send.raw_remote_target.is_none());
+    }
+
+    #[test]
+    fn incomplete_draft_is_rejected_without_losing_editable_state() {
+        let mut draft = JobDraft::default();
+        draft.collect.known_host = "  ".to_string();
+        draft.process.enabled = true;
+        draft.send.remote_target = None;
+        let original = serde_json::to_value(&draft).expect("serialize editable draft");
+
+        let error =
+            Job::from_signals(draft.clone(), Identifiers::default()).expect_err("incomplete draft must not compile");
+
+        assert!(error.to_string().contains("known host") || error.to_string().contains("output target"));
+        assert_eq!(
+            serde_json::to_value(&draft).expect("serialize retained draft"),
+            original,
+            "compile failures must not mutate editable draft state"
+        );
+    }
+
+    #[test]
+    fn backend_normalization_moves_forward_upload_into_raw_target() {
+        let mut draft = JobDraft::default();
+        draft.collect.mode = CollectMode::Upload;
+        draft.process.enabled = false;
+        draft.process.mode = ProcessMode::Forward;
+        draft.send.mode = SendMode::Remote;
+        draft.send.remote_target = Some("upload-123".to_string());
+
+        let availability = draft.normalize_targets();
+
+        assert!(availability.raw_bundle);
+        assert!(draft.send.remote_target.is_none());
+        assert_eq!(draft.send.raw_remote_target.as_deref(), Some("upload-123"));
+    }
+
+    #[test]
+    fn local_raw_delivery_enables_retained_save_for_live_collect() {
+        let mut draft = JobDraft::default();
+        draft.collect.mode = CollectMode::Collect;
+        draft.collect.save = false;
+        draft.send.raw_local = true;
+
+        let availability = draft.normalize_targets();
+
+        assert!(draft.collect.save);
+        assert!(availability.raw_bundle);
+        assert!(draft.send.raw_local);
+    }
+
+    #[test]
+    fn target_availability_covers_streaming_staged_and_loaded_workflows() {
+        let mut streaming = JobDraft::default();
+        streaming.collect.mode = CollectMode::Collect;
+        streaming.collect.save = false;
+        streaming.process.enabled = true;
+        assert_eq!(
+            streaming.normalize_targets(),
+            DraftTargetAvailability {
+                processed_documents: true,
+                raw_bundle: false,
+            }
+        );
+
+        let mut staged = streaming.clone();
+        staged.collect.save = true;
+        assert_eq!(
+            staged.normalize_targets(),
+            DraftTargetAvailability {
+                processed_documents: true,
+                raw_bundle: true,
+            }
+        );
+
+        let mut loaded = JobDraft::default();
+        loaded.collect.mode = CollectMode::Upload;
+        loaded.collect.source = CollectSource::ServiceLink;
+        loaded.collect.save = false;
+        loaded.process.enabled = true;
+        assert_eq!(
+            loaded.normalize_targets(),
+            DraftTargetAvailability {
+                processed_documents: true,
+                raw_bundle: true,
+            }
+        );
+        assert!(!loaded.collect.save, "Load retention must not introduce Save");
+
+        loaded.process.enabled = false;
+        loaded.process.mode = ProcessMode::Forward;
+        assert_eq!(
+            loaded.normalize_targets(),
+            DraftTargetAvailability {
+                processed_documents: false,
+                raw_bundle: true,
+            }
+        );
     }
 
     #[test]

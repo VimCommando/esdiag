@@ -12,4 +12,18 @@
     <p><b>Product:</b> {{ product }}</p>
     <p><b>Outcome:</b> {{ outcome }}</p>
     <p><b>Ingested:</b> {{ docs_created }} documents in {{ duration }} seconds</p>
+    {% if let Some(destination) = upload_destination %}
+    <p><b>Raw bundle:</b> <a target="_blank" rel="noopener noreferrer" href="{{ destination }}">{{ destination }}</a></p>
+    {% endif %}
+    {% if let Some(error) = execution_error %}
+    <p><b>Execution error:</b> {{ error }}</p>
+    {% endif %}
+    {% if !recorded_failures.is_empty() %}
+    <p><b>Recorded diagnostic failures:</b></p>
+    <ul>
+        {% for failure in recorded_failures %}
+        <li>{{ failure }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
 </div>

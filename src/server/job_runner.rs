@@ -8,14 +8,19 @@ use super::{
 };
 use crate::{
     data::{Application, HostRole, Uri, collect_product},
-    exporter::Exporter,
+    exporter::{DocumentExporter, Exporter},
+    job::{
+        context::{ExecutionContext, ExecutionIdentity, ExecutionObserver, RetentionPolicy},
+        executor::execute_with_context,
+        model::{BindingKey, ExportTarget, Input, Job, Process, SaveTarget, SendTarget},
+        outcome::{ExecutionEvent, ExecutionOutcome},
+    },
     processor::{
-        Collector, DiagnosticOutcome, Identifiers, IncludedDiagnosticJobEvent, Processor, SkipKind,
+        DiagnosticOutcome, EventSeverity, Identifiers, IncludedDiagnosticJobEvent, SkipKind,
         api::{ApiResolver, ProcessSelection},
-        display_label, new_job_id,
+        display_label,
     },
     receiver::Receiver,
-    uploader,
 };
 use eyre::{Result, eyre};
 use std::{
@@ -26,57 +31,31 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{fs, fs::File, io::AsyncWriteExt, sync::mpsc};
+use tokio::{fs, sync::mpsc};
+#[cfg(test)]
+use tokio::{fs::File, io::AsyncWriteExt};
 
 const RETAINED_BUNDLE_TTL: Duration = Duration::from_secs(3600);
 
-struct JobDescriptor<'a> {
-    id: u64,
-    owner: &'a str,
-    source: &'a str,
-    started: Arc<AtomicBool>,
+struct WebExecutionObserver {
+    tx: mpsc::Sender<ServerEvent>,
+    owner: String,
 }
 
-struct JobExecutionContext<'a> {
-    state: Arc<ServerState>,
-    signals: &'a JobRunSignals,
-    job_id: u64,
-    source: &'a str,
-    identifiers: Identifiers,
-    request_user: &'a str,
-    tx: &'a mpsc::Sender<ServerEvent>,
-    replace_existing_entry: bool,
-    started: Arc<AtomicBool>,
-}
-
-struct LocalArchiveJobContext<'a> {
-    state: Arc<ServerState>,
-    signals: &'a JobRunSignals,
-    job: JobDescriptor<'a>,
-    path: PathBuf,
-    identifiers: Identifiers,
-    tx: &'a mpsc::Sender<ServerEvent>,
-    replace_existing_entry: bool,
-}
-
-struct ProcessorJobContext<'a> {
-    state: Arc<ServerState>,
-    tx: &'a mpsc::Sender<ServerEvent>,
-    receiver: Arc<Receiver>,
-    exporter: Arc<Exporter>,
-    identifiers: Identifiers,
-    process_selection: Option<ProcessSelection>,
-    job: JobDescriptor<'a>,
-    replace_existing_entry: bool,
-}
-
-struct ForwardJobContext<'a> {
-    state: Arc<ServerState>,
-    tx: &'a mpsc::Sender<ServerEvent>,
-    signals: &'a JobRunSignals,
-    job: JobDescriptor<'a>,
-    path: &'a Path,
-    replace_existing_entry: bool,
+impl ExecutionObserver for WebExecutionObserver {
+    fn observe(&self, event: &ExecutionEvent) {
+        let payload = serde_json::json!({
+            "execution": {
+                "jobId": event.identity.job_id,
+                "stage": format!("{:?}", event.stage).to_ascii_lowercase(),
+                "lifecycle": format!("{:?}", event.lifecycle).to_ascii_lowercase(),
+                "message": event.message,
+            }
+        });
+        let _ = self
+            .tx
+            .try_send(signal_event(payload.to_string()).for_owner(self.owner.clone()));
+    }
 }
 
 pub async fn run_job(
@@ -92,7 +71,7 @@ pub async fn run_job(
     let owner = job.owner.clone();
     let started = Arc::new(AtomicBool::new(false));
     let download_token = signals.archive.download_token.trim().to_string();
-    let should_track_download = signals.job.collect.save && !download_token.is_empty();
+    let should_track_download = (signals.job.collect.save || signals.job.send.raw_local) && !download_token.is_empty();
     let validation = validate_job_request(&state, &signals, &job).await;
     if let Err(error) = validation {
         if should_track_download {
@@ -136,63 +115,19 @@ pub async fn run_job(
         && signals.job.process.mode == ProcessMode::Process
         && !signals.job.collect.save
         && !replace_existing_entry;
-
-    let result = match &job.input {
-        JobInput::LocalArchive { path, .. } => {
-            execute_local_archive_job(LocalArchiveJobContext {
-                state: state.clone(),
-                signals: &signals,
-                job: JobDescriptor {
-                    id: job_id,
-                    owner: &owner,
-                    source: &source,
-                    started: started.clone(),
-                },
-                path: path.clone(),
-                identifiers,
-                tx: &tx,
-                replace_existing_entry,
-            })
-            .await
-        }
-        JobInput::FromServiceLink { uri, .. } => {
-            execute_service_link_job(
-                JobExecutionContext {
-                    state: state.clone(),
-                    signals: &signals,
-                    job_id,
-                    source: &source,
-                    identifiers,
-                    request_user: &request_user,
-                    tx: &tx,
-                    replace_existing_entry,
-                    started: started.clone(),
-                },
-                uri.clone(),
-            )
-            .await
-        }
-        JobInput::FromRemoteHost {
-            host, diagnostic_type, ..
-        } => {
-            execute_remote_collection_job(
-                JobExecutionContext {
-                    state: state.clone(),
-                    signals: &signals,
-                    job_id,
-                    source: &source,
-                    identifiers,
-                    request_user: &request_user,
-                    tx: &tx,
-                    replace_existing_entry,
-                    started: started.clone(),
-                },
-                host.clone(),
-                diagnostic_type.clone(),
-            )
-            .await
-        }
-    };
+    let result = execute_unified_web_job(
+        state.clone(),
+        &signals,
+        job_id,
+        &owner,
+        &source,
+        identifiers,
+        &tx,
+        &job,
+        replace_existing_entry,
+        started.clone(),
+    )
+    .await;
 
     if let Err(error) = result {
         if should_track_download {
@@ -231,416 +166,314 @@ pub async fn run_job(
     job.cleanup().await;
 }
 
-async fn execute_local_archive_job(ctx: LocalArchiveJobContext<'_>) -> Result<()> {
-    let LocalArchiveJobContext {
-        state,
-        signals,
-        job,
-        path,
-        identifiers,
-        tx,
-        replace_existing_entry,
-    } = ctx;
-
-    match signals.job.process.mode {
-        ProcessMode::Process => {
-            let receiver = Arc::new(Receiver::try_from(Uri::File(path))?);
-            let exporter = Arc::new(select_processed_exporter(state.clone(), signals).await?);
-            let process_selection = explicit_process_selection(signals)?;
-            run_processor_job(ProcessorJobContext {
-                state,
-                tx,
-                receiver,
-                exporter,
-                identifiers,
-                process_selection,
-                job,
-                replace_existing_entry,
-            })
-            .await
-        }
-        ProcessMode::Forward => {
-            run_forward_job(ForwardJobContext {
-                state,
-                tx,
-                signals,
-                job,
-                path: &path,
-                replace_existing_entry,
-            })
-            .await
-        }
-    }
-}
-
-async fn execute_service_link_job(ctx: JobExecutionContext<'_>, uri: Uri) -> Result<()> {
-    let JobExecutionContext {
-        state,
-        signals,
-        job_id,
-        source,
-        identifiers,
-        request_user,
-        tx,
-        replace_existing_entry,
-        started,
-    } = ctx;
-
-    if signals.job.collect.save {
-        state.record_job_started(request_user).await?;
-        started.store(true, Ordering::SeqCst);
-        if !replace_existing_entry {
-            send_event(tx, job_feed_event(template::JobCollectionProcessing { job_id, source })).await;
-        }
-        send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
-
-        let collected = collect_service_link_archive(job_id, request_user, uri, source, signals, identifiers).await?;
-        if let JobInput::LocalArchive { path, .. } = collected.input {
-            let archive_filename = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("diagnostic.zip")
-                .to_string();
-            publish_retained_download(
-                &state,
-                request_user,
-                &signals.archive.download_token,
-                archive_filename.clone(),
-                path.clone(),
-                None,
-            )
-            .await?;
-            state.record_success(request_user, 0, 0).await;
-            started.store(false, Ordering::SeqCst);
-            send_event(
-                tx,
-                replace_job_event(
-                    job_id,
-                    template::JobCollectionCompleted {
-                        job_id,
-                        source,
-                        archive_path: &archive_filename,
-                    },
-                ),
-            )
-            .await;
-            let handoff_job_id = new_job_id();
-            return execute_local_archive_job(LocalArchiveJobContext {
-                state,
-                signals,
-                job: JobDescriptor {
-                    id: handoff_job_id,
-                    owner: request_user,
-                    source,
-                    started,
-                },
-                path,
-                identifiers: collected.identifiers,
-                tx,
-                replace_existing_entry: false,
-            })
-            .await;
-        }
-
-        return Err(eyre!("Service link collection did not produce a local archive"));
-    }
-
-    match signals.job.process.mode {
-        ProcessMode::Process => {
-            let receiver = Arc::new(Receiver::try_from(uri)?);
-            let exporter = Arc::new(select_processed_exporter(state.clone(), signals).await?);
-            let process_selection = explicit_process_selection(signals)?;
-            run_processor_job(ProcessorJobContext {
-                state,
-                tx,
-                receiver,
-                exporter,
-                identifiers,
-                process_selection,
-                job: JobDescriptor {
-                    id: job_id,
-                    owner: request_user,
-                    source,
-                    started: started.clone(),
-                },
-                replace_existing_entry: false,
-            })
-            .await
-        }
-        ProcessMode::Forward => {
-            let path = download_service_link_to_temp(&uri, job_id, source).await?;
-            let result = run_forward_job(ForwardJobContext {
-                state,
-                tx,
-                signals,
-                job: JobDescriptor {
-                    id: job_id,
-                    owner: request_user,
-                    source,
-                    started,
-                },
-                path: &path,
-                replace_existing_entry: false,
-            })
-            .await;
-            cleanup_local_path(&path).await;
-            result
-        }
-    }
-}
-
-async fn execute_remote_collection_job(
-    ctx: JobExecutionContext<'_>,
-    host: crate::data::KnownHost,
-    diagnostic_type: String,
+#[allow(clippy::too_many_arguments)]
+async fn execute_unified_web_job(
+    state: Arc<ServerState>,
+    signals: &JobRunSignals,
+    job_id: u64,
+    owner: &str,
+    source: &str,
+    identifiers: Identifiers,
+    tx: &mpsc::Sender<ServerEvent>,
+    request: &JobRequest,
+    replace_existing_entry: bool,
+    started: Arc<AtomicBool>,
 ) -> Result<()> {
-    let JobExecutionContext {
-        state,
-        signals,
-        job_id,
-        identifiers,
-        request_user,
-        tx,
-        replace_existing_entry,
-        started,
-        ..
-    } = ctx;
+    let mut draft = signals.job.clone();
+    draft.normalize_targets();
+    let mut context = ExecutionContext::default()
+        .with_identity(ExecutionIdentity::new(job_id, owner))
+        .with_observer(Arc::new(WebExecutionObserver {
+            tx: tx.clone(),
+            owner: owner.to_string(),
+        }));
 
-    let source = host.get_url()?.to_string();
-    if signals.job.process.mode == ProcessMode::Process && !signals.job.collect.save {
-        if !replace_existing_entry {
-            send_event(
-                tx,
-                job_feed_event(template::JobProcessing {
-                    job_id,
-                    source: &source,
-                }),
-            )
-            .await;
+    let input = match &request.input {
+        JobInput::LocalArchive { path, .. } => Input::Load {
+            uri: Uri::File(path.clone()),
+        },
+        JobInput::FromServiceLink { uri, .. } => {
+            let binding = BindingKey::try_new(format!("web-service-link-{job_id}"))?;
+            context.inputs.bind_uri(binding.clone(), uri.clone(), None);
+            Input::LoadBinding { binding }
         }
-        send_event(tx, signal_event(r#"{\"loading\":false,\"processing\":true}"#)).await;
-
-        let receiver = Arc::new(Receiver::try_from(host)?);
-        let exporter = Arc::new(select_processed_exporter(state.clone(), signals).await?);
-        let process_selection = explicit_process_selection(signals)?;
-        return run_processor_job(ProcessorJobContext {
-            state,
-            tx,
-            receiver,
-            exporter,
-            identifiers,
-            process_selection,
-            job: JobDescriptor {
-                id: job_id,
-                owner: request_user,
-                source: &source,
-                started: started.clone(),
-            },
-            // The collection entry above is now the element that processor
-            // completion or failure must replace.
-            replace_existing_entry: true,
-        })
-        .await;
-    }
-
-    if signals.job.collect.save {
-        state.record_job_started(request_user).await?;
-        started.store(true, Ordering::SeqCst);
-        if !replace_existing_entry {
-            send_event(
-                tx,
-                job_feed_event(template::JobCollectionProcessing {
-                    job_id,
-                    source: &source,
-                }),
-            )
-            .await;
-        }
-        send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
-    }
-
-    let collected = collect_remote_archive(job_id, request_user, host, &diagnostic_type, signals, identifiers).await?;
-    let cleanup_path = if signals.job.collect.save {
-        None
-    } else {
-        match &collected.input {
-            JobInput::LocalArchive {
-                cleanup_path: Some(path),
-                ..
-            } => Some(path.clone()),
-            _ => None,
+        JobInput::FromRemoteHost {
+            host, diagnostic_type, ..
+        } => {
+            let binding = BindingKey::try_new(format!("web-collect-{job_id}"))?;
+            let product = collect_product(host.app())?;
+            context
+                .inputs
+                .bind_receiver(binding.clone(), Receiver::try_from(host.clone())?, Some(product));
+            Input::CollectBinding {
+                binding,
+                diagnostic_type: diagnostic_type.clone(),
+                include: None,
+                exclude: None,
+            }
         }
     };
 
-    let result = if let JobInput::LocalArchive { path, cleanup_path, .. } = collected.input {
-        if signals.job.collect.save {
-            let archive_filename = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("diagnostic.zip")
-                .to_string();
-            publish_retained_download(
-                &state,
-                request_user,
-                &signals.archive.download_token,
-                archive_filename.clone(),
-                path.clone(),
-                cleanup_path,
-            )
-            .await?;
-            state.record_success(request_user, 0, 0).await;
-            started.store(false, Ordering::SeqCst);
-            send_event(
-                tx,
-                replace_job_event(
-                    job_id,
-                    template::JobCollectionCompleted {
-                        job_id,
-                        source: &source,
-                        archive_path: &archive_filename,
-                    },
-                ),
-            )
-            .await;
-            let handoff_job_id = new_job_id();
-            execute_local_archive_job(LocalArchiveJobContext {
-                state,
-                signals,
-                job: JobDescriptor {
-                    id: handoff_job_id,
-                    owner: request_user,
-                    source: &source,
-                    started,
-                },
-                path,
-                identifiers: collected.identifiers,
-                tx,
-                replace_existing_entry: false,
-            })
-            .await
+    let send = raw_send_target(&draft);
+    let save = if input.is_collect() && (draft.collect.save || send.is_some()) {
+        if draft.collect.save {
+            let output_dir = std::env::temp_dir().join(format!("esdiag-web-job-{job_id}"));
+            Some(SaveTarget::retained(output_dir))
         } else {
-            execute_local_archive_job(LocalArchiveJobContext {
-                state,
-                signals,
-                job: JobDescriptor {
-                    id: job_id,
-                    owner: request_user,
-                    source: &source,
-                    started,
-                },
-                path,
-                identifiers: collected.identifiers,
-                tx,
-                replace_existing_entry,
-            })
-            .await
+            Some(SaveTarget::temporary())
         }
     } else {
-        Err(eyre!("Remote collection did not produce a local archive"))
+        None
     };
 
-    if let Some(path) = cleanup_path {
-        cleanup_local_path(&path).await;
+    if !input.is_collect() && (draft.collect.save || draft.send.raw_local) {
+        context = context.with_retention(RetentionPolicy::RetainLoadedBundle);
     }
 
-    result
-}
-
-async fn run_processor_job(ctx: ProcessorJobContext<'_>) -> Result<()> {
-    let ProcessorJobContext {
-        state,
-        tx,
-        receiver,
-        exporter,
-        identifiers,
-        process_selection,
-        job,
-        replace_existing_entry,
-    } = ctx;
-
-    let (child_event_tx, child_event_rx) = mpsc::unbounded_channel();
-    let processor =
-        Processor::try_new_with_child_events(receiver, exporter, identifiers, process_selection, child_event_tx)
-            .await?;
-    let child_event_task = tokio::spawn(render_child_diagnostic_events(
-        tx.clone(),
-        job.owner.to_string(),
-        child_event_rx,
-    ));
-    let processor = match processor.start().await {
-        Ok(processor) => processor,
-        Err(failed) => {
-            let error = failed.state.error.clone();
-            drop(failed);
-            child_event_task.abort();
-            return Err(eyre!(error));
-        }
+    state.record_job_started(owner).await?;
+    started.store(true, Ordering::SeqCst);
+    let processing_template = if draft.process.mode == ProcessMode::Process {
+        processing_job_event(
+            replace_existing_entry,
+            job_id,
+            template::JobProcessing { job_id, source },
+        )
+    } else {
+        processing_job_event(
+            replace_existing_entry,
+            job_id,
+            template::JobForwardProcessing { job_id, source },
+        )
     };
-    state.record_job_started(job.owner).await?;
-    job.started.store(true, Ordering::SeqCst);
+    send_event(tx, processing_template).await;
+    send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
 
-    if !replace_existing_entry {
+    let process = if draft.process.enabled && draft.process.mode == ProcessMode::Process {
+        let exporter = select_processed_exporter(state.clone(), signals).await?;
+        let binding = BindingKey::try_new(format!("web-document-export-{job_id}"))?;
+        context.bind_document_exporter(binding.clone(), DocumentExporter::try_from(exporter)?);
+        Some(Process {
+            selection: explicit_process_selection(signals)?,
+            export: ExportTarget::Binding { binding },
+        })
+    } else {
+        None
+    };
+
+    let job = Job::try_new(identifiers, input, save, process, send)?;
+    let outcome = execute_with_context(job, context).await;
+    let execution_error = (!outcome.succeeded()).then(|| execution_outcome_error(&outcome));
+
+    if let Some(path) = outcome.retained_bundle.as_ref()
+        && (draft.collect.save || draft.send.raw_local)
+    {
+        let (retained_path, cleanup_path) = match &request.input {
+            JobInput::LocalArchive {
+                cleanup_path: Some(_), ..
+            } => {
+                let retained_dir = std::env::temp_dir().join(format!("esdiag-retained-{job_id}"));
+                fs::create_dir_all(&retained_dir).await?;
+                let retained_path = retained_dir.join(
+                    path.file_name()
+                        .unwrap_or_else(|| std::ffi::OsStr::new("diagnostic.zip")),
+                );
+                fs::copy(path, &retained_path).await?;
+                (retained_path, Some(retained_dir))
+            }
+            JobInput::LocalArchive { cleanup_path: None, .. } => (path.clone(), None),
+            JobInput::FromServiceLink { .. } | JobInput::FromRemoteHost { .. } => {
+                (path.clone(), path.parent().map(Path::to_path_buf))
+            }
+        };
+        let filename = retained_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("diagnostic.zip")
+            .to_string();
+        publish_retained_download(
+            &state,
+            owner,
+            &signals.archive.download_token,
+            filename,
+            retained_path,
+            cleanup_path,
+        )
+        .await?;
+    }
+
+    if let Some(report) = outcome.report.as_ref() {
+        let diagnostic_outcome = report.outcome();
+        if execution_error.is_some() {
+            state.record_failure(owner).await;
+        } else {
+            state
+                .record_outcome(owner, diagnostic_outcome, report.diagnostic.docs.errors)
+                .await;
+        }
+        started.store(false, Ordering::SeqCst);
+        let product = report.diagnostic.display_label();
+        let upload_destination = outcome
+            .upload
+            .as_ref()
+            .map(|upload| format!("https://upload.elastic.co/g/{}", upload.slug));
+        let (status_class, heading) = if execution_error.is_some() {
+            ("status-error", "⚠️ Diagnostic completed with output failures")
+        } else {
+            (
+                completed_status_class(&diagnostic_outcome),
+                completed_heading(&diagnostic_outcome),
+            )
+        };
+        let recorded_failures = recorded_report_failures(report);
         send_event(
             tx,
-            processing_job_event(
+            terminal_job_event(
                 replace_existing_entry,
-                job.id,
-                template::JobProcessing {
-                    job_id: job.id,
-                    source: job.source,
+                job_id,
+                template::JobCompleted {
+                    job_id,
+                    status_class,
+                    heading,
+                    diagnostic_id: &report.diagnostic.metadata.id,
+                    docs_created: &report.diagnostic.docs.created,
+                    duration: &format!("{:.3}", report.diagnostic.processing_duration as f64 / 1000.0),
+                    source,
+                    kibana_link: report.diagnostic.kibana_link.as_deref().unwrap_or(""),
+                    product: &product,
+                    outcome: diagnostic_outcome.as_str(),
+                    upload_destination: upload_destination.as_deref(),
+                    execution_error: execution_error.as_deref(),
+                    recorded_failures,
+                },
+            ),
+        )
+        .await;
+        render_child_outcomes(tx, owner, &outcome).await;
+        return Ok(());
+    }
+
+    if let Some(mut error) = execution_error {
+        if let Some(upload) = outcome.upload.as_ref() {
+            error.push_str(&format!(
+                "; raw bundle uploaded successfully: https://upload.elastic.co/g/{}",
+                upload.slug
+            ));
+        }
+        return Err(eyre!(error));
+    }
+
+    state.record_success(owner, 0, 0).await;
+    started.store(false, Ordering::SeqCst);
+    if let Some(upload) = outcome.upload {
+        let destination = format!("https://upload.elastic.co/g/{}", upload.slug);
+        send_event(
+            tx,
+            terminal_job_event(
+                replace_existing_entry,
+                job_id,
+                template::JobForwardCompleted {
+                    job_id,
+                    source,
+                    destination: &destination,
+                },
+            ),
+        )
+        .await;
+    } else if let Some(path) = outcome.retained_bundle {
+        let archive_path = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("diagnostic.zip");
+        send_event(
+            tx,
+            terminal_job_event(
+                replace_existing_entry,
+                job_id,
+                template::JobCollectionCompleted {
+                    job_id,
+                    source,
+                    archive_path,
                 },
             ),
         )
         .await;
     }
-    send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
+    Ok(())
+}
 
-    match processor.process().await {
-        Ok(completed) => {
-            let report = &completed.state.report;
-            let outcome = report.outcome();
-            state
-                .record_outcome(job.owner, outcome, report.diagnostic.docs.errors)
-                .await;
-            job.started.store(false, Ordering::SeqCst);
-            let product = report.diagnostic.display_label();
-            send_event(
-                tx,
-                terminal_job_event(
-                    replace_existing_entry,
-                    job.id,
-                    template::JobCompleted {
-                        job_id: job.id,
-                        status_class: completed_status_class(&outcome),
-                        heading: completed_heading(&outcome),
-                        diagnostic_id: &report.diagnostic.metadata.id,
-                        docs_created: &report.diagnostic.docs.created,
-                        duration: &format!("{:.3}", report.diagnostic.processing_duration as f64 / 1000.0),
-                        source: job.source,
-                        kibana_link: report.diagnostic.kibana_link.as_deref().unwrap_or(""),
-                        product: &product,
-                        outcome: outcome.as_str(),
-                    },
-                ),
-            )
-            .await;
-            drop(completed);
-            if let Err(err) = child_event_task.await {
-                tracing::error!("Child diagnostic event task failed: {}", err);
-            }
-            Ok(())
-        }
-        Err(failed) => {
-            let error = failed.state.error.clone();
-            drop(failed);
-            child_event_task.abort();
-            Err(eyre!(error))
-        }
+fn execution_outcome_error(outcome: &ExecutionOutcome) -> String {
+    outcome
+        .stages
+        .iter()
+        .filter_map(|stage| match &stage.status {
+            crate::job::outcome::StageStatus::Failed(error) => Some(format!("{:?} failed: {error}", stage.stage)),
+            crate::job::outcome::StageStatus::Blocked(reason) => Some(format!("{:?} blocked: {reason}", stage.stage)),
+            crate::job::outcome::StageStatus::Succeeded | crate::job::outcome::StageStatus::Skipped(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+async fn render_child_outcomes(tx: &mpsc::Sender<ServerEvent>, owner: &str, outcome: &ExecutionOutcome) {
+    let (child_tx, child_rx) = mpsc::unbounded_channel();
+    for child in &outcome.children {
+        let _ = child_tx.send(IncludedDiagnosticJobEvent::Queued {
+            job_id: child.job_id(),
+            path: child.path.clone(),
+        });
+        let _ = child_tx.send(IncludedDiagnosticJobEvent::Started {
+            job_id: child.job_id(),
+            path: child.path.clone(),
+        });
+        let event = match (&child.diagnostic_outcome, child.report()) {
+            (DiagnosticOutcome::Skipped(_), _) => IncludedDiagnosticJobEvent::Skipped {
+                job_id: child.job_id(),
+                path: child.path.clone(),
+                outcome: child.diagnostic_outcome,
+                application: child.application(),
+                platform: child.platform(),
+                reason: child.execution_error().unwrap_or_default().to_string(),
+            },
+            (_, Some(report)) => IncludedDiagnosticJobEvent::Completed {
+                job_id: child.job_id(),
+                path: child.path.clone(),
+                outcome: child.diagnostic_outcome,
+                application: report.diagnostic.application,
+                platform: report.diagnostic.platform(),
+                diagnostic_id: report.diagnostic.metadata.id.clone(),
+                docs_created: report.diagnostic.docs.created,
+                duration_ms: child.runtime.unwrap_or_default(),
+                kibana_link: report.diagnostic.kibana_link.clone(),
+                execution_error: child.export_error().map(str::to_string),
+                recorded_failures: recorded_report_failures(report),
+            },
+            (_, None) => IncludedDiagnosticJobEvent::Failed {
+                job_id: child.job_id(),
+                path: child.path.clone(),
+                error: child.execution_error().unwrap_or_default().to_string(),
+            },
+        };
+        let _ = child_tx.send(event);
     }
+    drop(child_tx);
+    render_child_diagnostic_events(tx.clone(), owner.to_string(), child_rx).await;
 }
 
 fn is_job_admission_error(error: &eyre::Report) -> bool {
     error.downcast_ref::<JobAdmissionError>().is_some()
+}
+
+fn raw_send_target(draft: &crate::data::JobDraft) -> Option<SendTarget> {
+    draft
+        .send
+        .raw_remote_target
+        .clone()
+        .or_else(|| {
+            (draft.process.mode == ProcessMode::Forward && draft.send.mode == SendMode::Remote)
+                .then(|| draft.send.remote_target.clone())
+                .flatten()
+        })
+        .map(|upload_id| SendTarget { upload_id })
 }
 
 async fn render_child_diagnostic_events(
@@ -687,6 +520,8 @@ async fn render_child_diagnostic_events(
                 docs_created,
                 duration_ms,
                 kibana_link,
+                execution_error,
+                recorded_failures,
             } => {
                 let source = child_source(&path);
                 let product = display_label(application, platform);
@@ -698,8 +533,16 @@ async fn render_child_diagnostic_events(
                         job_id,
                         template::JobCompleted {
                             job_id,
-                            status_class: completed_status_class(&outcome),
-                            heading: completed_heading(&outcome),
+                            status_class: if execution_error.is_some() {
+                                "error"
+                            } else {
+                                completed_status_class(&outcome)
+                            },
+                            heading: if execution_error.is_some() {
+                                "Processing failed"
+                            } else {
+                                completed_heading(&outcome)
+                            },
                             diagnostic_id: &diagnostic_id,
                             docs_created: &docs_created,
                             duration: &duration,
@@ -707,6 +550,9 @@ async fn render_child_diagnostic_events(
                             kibana_link: &kibana_link,
                             product: &product,
                             outcome: outcome.as_str(),
+                            upload_destination: None,
+                            execution_error: execution_error.as_deref(),
+                            recorded_failures,
                         },
                     )
                     .for_owner(owner.clone()),
@@ -763,6 +609,15 @@ fn child_source(path: &str) -> String {
     format!("Included diagnostic: {path}")
 }
 
+fn recorded_report_failures(report: &crate::processor::DiagnosticReport) -> Vec<String> {
+    report
+        .events()
+        .iter()
+        .filter(|event| event.severity != EventSeverity::Success)
+        .map(|event| format!("{:?} {}: {}", event.severity, event.source, event.reason))
+        .collect()
+}
+
 fn completed_status_class(outcome: &DiagnosticOutcome) -> &'static str {
     match outcome {
         DiagnosticOutcome::Failed => "status-error",
@@ -815,99 +670,6 @@ fn explicit_process_selection(signals: &JobRunSignals) -> Result<Option<ProcessS
         diagnostic_type: signals.job.process.diagnostic_type.clone(),
         selected,
     }))
-}
-
-async fn run_forward_job(ctx: ForwardJobContext<'_>) -> Result<()> {
-    let ForwardJobContext {
-        state,
-        tx,
-        signals,
-        job,
-        path,
-        replace_existing_entry,
-    } = ctx;
-    let job_id = job.id;
-    let owner = job.owner;
-    let source = job.source;
-    if signals.job.send.mode == SendMode::Local {
-        if !replace_existing_entry {
-            send_event(
-                tx,
-                processing_job_event(
-                    replace_existing_entry,
-                    job_id,
-                    template::JobForwardProcessing { job_id, source },
-                ),
-            )
-            .await;
-        }
-        state.record_job_started(owner).await?;
-        job.started.store(true, Ordering::SeqCst);
-        send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
-
-        let destination = Path::new(path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| format!("Browser download started for {name}"))
-            .unwrap_or_else(|| "Browser download started".to_string());
-        state.record_success(owner, 0, 0).await;
-        job.started.store(false, Ordering::SeqCst);
-        send_event(
-            tx,
-            terminal_job_event(
-                replace_existing_entry,
-                job_id,
-                template::JobForwardCompleted {
-                    job_id,
-                    source,
-                    destination: &destination,
-                },
-            ),
-        )
-        .await;
-        return Ok(());
-    }
-
-    let target = signals.job.send.remote_target.as_deref().unwrap_or("").trim();
-    if target.is_empty() {
-        return Err(eyre!(
-            "Remote forward requires an Elastic Upload Service upload id or URL"
-        ));
-    }
-
-    if !replace_existing_entry {
-        send_event(
-            tx,
-            processing_job_event(
-                replace_existing_entry,
-                job_id,
-                template::JobForwardProcessing { job_id, source },
-            ),
-        )
-        .await;
-    }
-    state.record_job_started(owner).await?;
-    job.started.store(true, Ordering::SeqCst);
-    send_event(tx, signal_event(r#"{"loading":false,"processing":true}"#)).await;
-
-    let response = uploader::upload_file(path, target, uploader::DEFAULT_UPLOAD_API_URL).await?;
-    state.record_success(owner, 0, 0).await;
-    job.started.store(false, Ordering::SeqCst);
-    let destination = format!("https://upload.elastic.co/g/{}", response.slug);
-    send_event(
-        tx,
-        terminal_job_event(
-            replace_existing_entry,
-            job_id,
-            template::JobForwardCompleted {
-                job_id,
-                source,
-                destination: &destination,
-            },
-        ),
-    )
-    .await;
-    Ok(())
 }
 
 fn processing_job_event(_replace_existing_entry: bool, _job_id: u64, template: impl askama::Template) -> ServerEvent {
@@ -1047,92 +809,7 @@ fn validate_remote_send_uri(uri: &Uri) -> Result<()> {
     Ok(())
 }
 
-async fn collect_remote_archive(
-    job_id: u64,
-    owner: &str,
-    host: crate::data::KnownHost,
-    diagnostic_type: &str,
-    signals: &JobRunSignals,
-    identifiers: Identifiers,
-) -> Result<JobRequest> {
-    let temp_dir = std::env::temp_dir().join(format!("esdiag-job-{job_id}"));
-    std::fs::create_dir_all(&temp_dir)?;
-    let (output_dir, cleanup_path) = if signals.job.collect.save {
-        (temp_dir.clone(), Some(temp_dir.clone()))
-    } else {
-        (temp_dir.clone(), Some(temp_dir))
-    };
-
-    let source = host.get_url()?.to_string();
-    let receiver = Receiver::try_from(host.clone())?;
-    let exporter = Exporter::for_collect_archive(output_dir)?;
-    let collector = Collector::try_new(
-        receiver,
-        exporter,
-        collect_product(host.app())?,
-        diagnostic_type.to_string(),
-        None,
-        None,
-        identifiers.clone(),
-    )
-    .await?;
-    let result = collector.collect().await?;
-    let path = PathBuf::from(result.path.clone());
-    let filename = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| eyre!("Collected archive path is missing a filename"))?
-        .to_string();
-
-    Ok(JobRequest {
-        owner: owner.to_string(),
-        identifiers: identifiers.with_filename(Some(filename.clone())),
-        input: JobInput::LocalArchive {
-            source,
-            filename,
-            path,
-            cleanup_path,
-        },
-    })
-}
-
-async fn collect_service_link_archive(
-    job_id: u64,
-    owner: &str,
-    uri: Uri,
-    source: &str,
-    signals: &JobRunSignals,
-    identifiers: Identifiers,
-) -> Result<JobRequest> {
-    let filename = local_archive_filename(source, job_id)?;
-    let path = std::env::temp_dir().join(format!("esdiag-service-link-{job_id}-{filename}"));
-    let cleanup_path = if signals.job.collect.save {
-        None
-    } else {
-        Some(path.clone())
-    };
-
-    download_service_link_to_path(&uri, &path).await?;
-
-    Ok(JobRequest {
-        owner: owner.to_string(),
-        identifiers: identifiers.with_filename(Some(filename.clone())),
-        input: JobInput::LocalArchive {
-            source: source.to_string(),
-            filename,
-            path,
-            cleanup_path,
-        },
-    })
-}
-
-async fn download_service_link_to_temp(uri: &Uri, job_id: u64, source: &str) -> Result<PathBuf> {
-    let filename = local_archive_filename(source, job_id)?;
-    let temp_path = std::env::temp_dir().join(format!("esdiag-service-link-{job_id}-{filename}"));
-    download_service_link_to_path(uri, &temp_path).await?;
-    Ok(temp_path)
-}
-
+#[cfg(test)]
 async fn download_service_link_to_path(uri: &Uri, path: &Path) -> Result<()> {
     let Uri::ServiceLink(url) = uri else {
         return Err(eyre!("Expected an authenticated Elastic Upload Service URL"));
@@ -1170,19 +847,6 @@ async fn download_service_link_to_path(uri: &Uri, path: &Path) -> Result<()> {
         return Err(eyre!("Downloaded empty file, check upload link expiration"));
     }
     Ok(())
-}
-
-fn local_archive_filename(source: &str, job_id: u64) -> Result<String> {
-    let filename = Path::new(source)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("service-link-{job_id}.zip"));
-    if filename.contains(std::path::MAIN_SEPARATOR) {
-        return Err(eyre!("Invalid archive filename"));
-    }
-    Ok(filename)
 }
 
 async fn publish_retained_download(
@@ -1252,19 +916,6 @@ async fn send_terminal_signal(tx: &mpsc::Sender<ServerEvent>, state: &ServerStat
     .await;
 }
 
-async fn cleanup_local_path(path: &Path) {
-    let metadata = fs::metadata(path).await;
-    let result = match metadata {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path).await,
-        Ok(_) => fs::remove_file(path).await,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err),
-    };
-    if let Err(err) = result {
-        tracing::debug!("Failed to clean local job path {}: {}", path.display(), err);
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::await_holding_lock)]
 mod tests {
@@ -1273,7 +924,7 @@ mod tests {
         skipped_child_reason, validate_job_request, validate_local_send_uri, validate_remote_send_uri,
     };
     use crate::{
-        data::{HostRole, KnownHostBuilder, Product, Uri},
+        data::{CollectMode, HostRole, JobDraft, KnownHostBuilder, Product, Uri},
         exporter::Exporter,
         processor::{DiagnosticOutcome, IncludedDiagnosticJobEvent, SkipKind},
         server::{
@@ -1336,6 +987,35 @@ mod tests {
         assert!(validate_local_send_uri(&uri).is_err());
     }
 
+    #[test]
+    fn web_draft_preserves_raw_send_alongside_processed_output() {
+        let mut draft = JobDraft::default();
+        draft.process.mode = ProcessMode::Process;
+        draft.process.enabled = true;
+        draft.send.mode = SendMode::Remote;
+        draft.send.remote_target = Some("processed-cluster".to_string());
+        draft.send.raw_remote_target = Some("raw-upload".to_string());
+
+        assert_eq!(
+            super::raw_send_target(&draft).map(|target| target.upload_id),
+            Some("raw-upload".to_string())
+        );
+    }
+
+    #[test]
+    fn forward_web_draft_uses_legacy_remote_target_as_raw_send() {
+        let mut draft = JobDraft::default();
+        draft.process.mode = ProcessMode::Forward;
+        draft.process.enabled = false;
+        draft.send.mode = SendMode::Remote;
+        draft.send.remote_target = Some("raw-upload".to_string());
+
+        assert_eq!(
+            super::raw_send_target(&draft).map(|target| target.upload_id),
+            Some("raw-upload".to_string())
+        );
+    }
+
     #[tokio::test]
     async fn service_mode_allows_bundle_save_downloads() {
         let state = test_state(RuntimeMode::Service);
@@ -1355,6 +1035,60 @@ mod tests {
         };
 
         assert!(validate_job_request(&state, &signals, &job).await.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn loaded_bundle_process_retention_publishes_owner_scoped_download_without_save() {
+        let output = tempfile::tempdir().expect("processed output");
+        let archive = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/archives/elasticsearch-api-diagnostics-9.3.3.zip"
+        ));
+        let token = "loaded-bundle-token";
+        let owner = "owner@example.com";
+        let state = Arc::new(test_state(RuntimeMode::User));
+        let mut signals = JobRunSignals::default();
+        signals.job.collect.mode = CollectMode::Upload;
+        signals.job.collect.source = CollectSource::UploadFile;
+        signals.job.process.enabled = true;
+        signals.job.send.mode = SendMode::Local;
+        signals.job.send.local_target = "directory".to_string();
+        signals.job.send.local_directory = output.path().display().to_string();
+        signals.job.send.raw_local = true;
+        signals.archive.download_token = token.to_string();
+        let request = JobRequest {
+            owner: owner.to_string(),
+            identifiers: Default::default(),
+            input: JobInput::LocalArchive {
+                source: archive.display().to_string(),
+                filename: "uploaded.zip".to_string(),
+                path: archive,
+                cleanup_path: Some(std::path::PathBuf::from("/tmp/unused-cleanup-path")),
+            },
+        };
+        let (tx, mut rx) = mpsc::channel(32);
+
+        run_job(state.clone(), signals, 88, owner.to_string(), tx, request, false).await;
+
+        let retained = state.retained_bundle(token).await.expect("retained download");
+        assert_eq!(retained.owner, owner);
+        assert!(retained.path.as_ref().expect("retained path").exists());
+        assert!(
+            retained
+                .path
+                .as_ref()
+                .expect("retained path")
+                .parent()
+                .expect("retained directory")
+                .to_string_lossy()
+                .contains("esdiag-retained-88"),
+            "a loaded bundle retains through execution policy, not Save"
+        );
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            events.iter().any(|event| event.owner() == owner),
+            "completion and retention signals remain owner-scoped"
+        );
     }
 
     #[tokio::test]
@@ -1414,6 +1148,43 @@ mod tests {
         let event = rx.recv().await.expect("child job event");
         assert_eq!(event.owner(), owner);
         handle.await.expect("child renderer should complete");
+    }
+
+    #[tokio::test]
+    async fn child_outcome_projection_inserts_before_terminal_replace() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let mut outcome = crate::job::outcome::ExecutionOutcome::new(crate::job::context::ExecutionIdentity::new(
+            1,
+            "alice@example.com",
+        ));
+        let mut child_execution = crate::job::outcome::ExecutionOutcome::new(
+            crate::job::context::ExecutionIdentity::new(7, "alice@example.com"),
+        );
+        child_execution.record(
+            crate::job::outcome::Stage::Process,
+            crate::job::outcome::StageStatus::Failed("child failed".to_string()),
+        );
+        outcome.children.push(crate::job::outcome::ChildExecutionOutcome {
+            path: "elasticsearch".to_string(),
+            execution: Box::new(child_execution),
+            diagnostic_outcome: DiagnosticOutcome::Failed,
+            application: Some(crate::data::Application::Elasticsearch),
+            platform: crate::data::Platform::ECK,
+            runtime: None,
+        });
+
+        super::render_child_outcomes(&tx, "alice@example.com", &outcome).await;
+
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(matches!(
+            events.first(),
+            Some(ServerEvent::JobFeed { html, .. }) if html.contains("id=\"job-7\"")
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ServerEvent::ReplaceSelector { selector, html, .. }
+                if selector == "#job-7" && html.contains("Processing Failed")
+        )));
     }
 
     #[tokio::test]

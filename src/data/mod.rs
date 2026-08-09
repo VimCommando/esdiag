@@ -40,9 +40,10 @@ pub use known_host::{CredentialDirection, ElasticCloud, HostRole, KnownHost, Kno
 pub use platform::Platform;
 pub use product::Product;
 pub use saved_jobs::{
-    CollectMode, CollectSource, Job, JobBuilder, JobOutput, JobProcessSelection, JobSignals, JobSignalsCollect,
-    JobSignalsProcess, JobSignalsSend, NeedsAction, NeedsCollect, ProcessMode, SavedJobs, SendMode, load_saved_jobs,
-    load_saved_jobs_async, save_saved_jobs, with_saved_jobs_async,
+    CollectMode, CollectSource, DraftTargetAvailability, Job, JobBuilder, JobDraft, JobDraftCollect, JobDraftProcess,
+    JobDraftSend, JobOutput, JobProcessSelection, JobSignals, JobSignalsCollect, JobSignalsProcess, JobSignalsSend,
+    NeedsAction, NeedsCollect, ProcessMode, SavedJobs, SendMode, load_saved_jobs, load_saved_jobs_async,
+    save_saved_jobs, with_saved_jobs_async,
 };
 pub use settings::Settings;
 pub use uri::Uri;
@@ -59,10 +60,10 @@ pub fn collect_product(app: Option<Application>) -> Result<Product> {
             Ok(Product::from(application))
         }
         Some(Application::Agent) => Err(eyre!(
-            "Collect is out of scope by design for Elastic Agent. Elastic Agent provides its own diagnostic bundle; use `read`/`Load` instead."
+            "Collect is out of scope by design for Elastic Agent. Elastic Agent provides its own diagnostic bundle; acquire it through CLI `process` input or Web UI `Upload`."
         )),
         None => Err(eyre!(
-            "Collect is out of scope by design without an application. Select Elasticsearch, Kibana, or Logstash for API collection, or load a product-provided diagnostic bundle with `read`/`Load`."
+            "Collect is out of scope by design for platform targets (ECE, ECK, and KubernetesPlatform). Load the platform-generated bundle through CLI `process` input or Web UI `Upload`; only Elasticsearch, Kibana, and Logstash support API collection."
         )),
     }
 }
@@ -189,4 +190,36 @@ where
     }
 
     deserializer.deserialize_option(OptionMapVisitor(std::marker::PhantomData))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Application, Product, collect_product};
+
+    #[test]
+    fn collect_product_accepts_every_api_collectable_application() {
+        for (application, product) in [
+            (Application::Elasticsearch, Product::Elasticsearch),
+            (Application::Kibana, Product::Kibana),
+            (Application::Logstash, Product::Logstash),
+        ] {
+            assert_eq!(
+                collect_product(Some(application)).expect("collectable application"),
+                product
+            );
+        }
+    }
+
+    #[test]
+    fn collect_product_refuses_non_collectable_targets_as_by_design() {
+        for application in [Some(Application::Agent), None] {
+            let error = collect_product(application)
+                .expect_err("non-collectable target must be rejected")
+                .to_string();
+            assert!(error.contains("out of scope by design"));
+            assert!(error.contains("CLI `process` input"));
+            assert!(error.contains("Web UI `Upload`"));
+            assert!(!error.contains("not yet implemented"));
+        }
+    }
 }

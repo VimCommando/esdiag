@@ -67,6 +67,7 @@ impl DiagnosticProcessor for ElasticCloudKubernetesDiagnostic {
 }
 
 impl ElasticCloudKubernetesDiagnostic {
+    #[cfg(test)]
     pub fn uuid(&self) -> &str {
         &self.metadata.uuid
     }

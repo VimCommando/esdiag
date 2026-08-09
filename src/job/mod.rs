@@ -7,10 +7,14 @@
 //! saved-job command handlers shared by the CLI (`esdiag job run`) and the
 //! web server.
 
+/// Execution-only resources, identity, retention policy, and observers.
+pub mod context;
 /// The one executor: derives staged vs streaming and drives the stages.
 pub mod executor;
 /// The phase-structured `Job` model with validated construction.
 pub mod model;
+/// Structured per-stage results and typed lifecycle events.
+pub mod outcome;
 
 use crate::data::{Job as SavedJob, KnownHost, load_saved_jobs, save_saved_jobs};
 use crate::job::model::Input;
@@ -85,6 +89,7 @@ pub fn handle_job_delete(name: &str) -> Result<()> {
 
 pub fn save_job(name: &str, job: SavedJob) -> Result<()> {
     validate_saved_job_name(name)?;
+    job.validate_for_persistence()?;
     let mut jobs = load_saved_jobs()?;
     jobs.insert(name.trim().to_string(), job);
     save_saved_jobs(&jobs)?;
@@ -111,6 +116,12 @@ pub async fn run_job(job: SavedJob) -> Result<()> {
     match job.input() {
         Input::Collect { host, .. } => tracing::info!("Running saved collect job against {host}"),
         Input::Load { uri } => tracing::info!("Running saved load job from {uri}"),
+        Input::CollectBinding { binding, .. } | Input::LoadBinding { binding } => {
+            return Err(eyre!(
+                "Saved job contains runtime input binding '{}'; runtime bindings cannot be persisted",
+                binding.as_str()
+            ));
+        }
     }
 
     let outcome = executor::execute(job).await?;
