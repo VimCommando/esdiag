@@ -1,6 +1,6 @@
 ## Context
 
-Local ESDiag state is currently split across `hosts.yml`, `secrets.yml`, `jobs.yml`, unlock state, and a two-field `settings.yml` used primarily by desktop/user-mode server startup. There is no first-run command and no general persistent preference model. The Agent Skill consequently tries to detect and assemble missing state itself, which puts credential handling and application onboarding in prompt instructions.
+Local ESDiag state is currently split across `hosts.yml`, `secrets.yml`, `jobs.yml`, unlock state, and a two-field `settings.yml` used by desktop/user-mode server startup. There is no CLI first-run command or general persistent preference model. The Agent Skill consequently tries to detect and assemble missing state itself, which puts credential handling and CLI onboarding in prompt instructions.
 
 The existing domain model already separates concerns correctly. `KnownHost` stores non-secret endpoint metadata and a secret reference, the keystore owns authentication material, `SavedJobs` references known hosts, a send-role Elasticsearch host can identify its view-role Kibana host through `viewer`, and `Identifiers` already honors an explicit `--user` and `ESDIAG_USER`. Initialization should compose those models, not replace them.
 
@@ -10,12 +10,11 @@ The runtime environment also already represents one output deployment: `ESDIAG_O
 
 **Goals:**
 
-- Give a newly installed local user one secure, guided path to a successful repeatable workflow.
+- Give a newly installed CLI user one secure, terminal-guided path to a successful repeatable workflow.
 - Persist only non-secret preferences and references in one general `esdiag.yml` file.
 - Reuse `KnownHost`, viewer links, keystore secrets, saved jobs, and existing clients in process.
-- Resolve one canonical output deployment consistently across CLI, desktop, web user mode, and future Agent Builder commands.
+- Resolve one canonical output deployment consistently across CLI commands while exposing a reusable backend resolver for future GUI and Agent Builder consumers.
 - Default diagnostic user identifiers from persisted configuration after explicit CLI and environment values.
-- Offer installation of the running binary's version-matched ESDiag skill without making agent presence a prerequisite for initialization.
 - Make initialization resumable, idempotent, and safe around existing files.
 - Keep agents out of secret collection by making credential entry a terminal-native interaction.
 
@@ -29,6 +28,10 @@ The runtime environment also already represents one output deployment: `ESDIAG_O
 - Providing a non-interactive bootstrap language in the first iteration; existing commands and environment variables remain available for automation.
 - Performing Agent Builder conversations or diagnostic analysis.
 - Downloading agent skills or requiring any supported coding agent to be installed.
+- Providing a web or desktop onboarding flow.
+- Changing web/desktop user-mode startup, settings persistence, or service-mode behavior.
+- Migrating or removing the legacy desktop `settings.yml`; the GUI onboarding follow-on owns that transition.
+- Installing or managing coding-agent skills; the agent CLI change owns that command surface and behavior.
 
 ## Decisions
 
@@ -39,21 +42,25 @@ Introduce a versioned `ApplicationConfig` stored at `~/.esdiag/esdiag.yml`:
 ```yaml
 version: 1
 user: reno@example.com
-output: diagnostic-output
-default_job: production-standard
+output:
+  default: diagnostic-output
+  authenticated_on: "2026-08-12T20:00:00Z"
+  assets_version: "0.17.0-SNAPSHOT"
+job:
+  default: production-standard
 ```
 
-`output` names a saved Elasticsearch host with role `send`; that host's `viewer` names the saved Kibana host with role `view`. `default_job` names an entry in `jobs.yml`. Authentication remains a secret reference in each host and encrypted material remains in `secrets.yml`. The output Elasticsearch and Kibana hosts may share one secret identifier when they use the same credentials.
+`output.default` names a saved Elasticsearch host with role `send`; that host's `viewer` names the saved Kibana host with role `view`. `output.authenticated_on` records successful endpoint authentication, and `output.assets_version` records the ESDiag asset version after setup. `job.default` names an entry in `jobs.yml`. Authentication remains a secret reference in each host and encrypted material remains in `secrets.yml`. The output Elasticsearch and Kibana hosts may share one secret identifier when they use the same credentials.
 
 This makes configuration a small preference layer rather than a second inventory. Alternative considered: store both URLs and credentials in `esdiag.yml`. That duplicates `KnownHost`, creates another secret surface, and allows configuration to drift.
 
-### Replace, rather than supplement, desktop settings
+### Defer desktop settings migration to GUI onboarding
 
-Do not create `esdiag.yml` alongside a permanently supported `settings.yml`. On first user-mode load or `esdiag init`, inspect legacy `settings.yml` and migrate representable preferences into `ApplicationConfig`. Preserve a backup until the new file has been written and validated.
+This change adds `esdiag.yml` for CLI preferences without changing how existing web/desktop user mode reads or writes `settings.yml`. `esdiag init` does not delete, rewrite, or claim to migrate the desktop settings file. This temporary coexistence is an explicit sequencing boundary, not a permanent two-configuration design.
 
-An `active_target` that names a valid send host becomes `output`. A legacy `kibana_url` is representable only when it matches the selected send host's viewer; otherwise initialization asks the user to create or select the corresponding view host before completing migration. Ordinary startup reports an actionable migration error instead of silently pairing unrelated endpoints. Service mode neither reads nor writes either local file.
+The follow-on GUI onboarding change will use the same `ApplicationConfig` and `OutputDeployment` services, define how representable `active_target` and `kibana_url` values migrate, preserve a backup, and remove the legacy write path only after user-mode compatibility is covered. Until then, CLI output selection comes from explicit arguments, a complete environment deployment, or `esdiag.yml`; it does not infer preferences from `settings.yml`.
 
-Alternative considered: extend `settings.yml` indefinitely. Its name and current desktop-only shape obscure that the values affect all local CLI workflows, and retaining both names creates precedence ambiguity.
+Alternative considered: migrate desktop settings as part of CLI onboarding. That would change UI startup and persistence behavior without specifying the GUI onboarding experience, preventing the two flows from being reviewed and delivered independently.
 
 ### Resolve the output deployment as one atomic value
 
@@ -61,7 +68,7 @@ Add a shared `OutputDeployment` resolver that yields an Elasticsearch host, its 
 
 1. An explicit command target.
 2. A complete runtime environment deployment beginning with `ESDIAG_OUTPUT_URL`, with `ESDIAG_KIBANA_URL` required by operations that need Kibana.
-3. The `ApplicationConfig.output` saved-host reference.
+3. The `ApplicationConfig.output.default` saved-host reference.
 4. A configuration error.
 
 Once a source wins, all endpoints and credentials come from that source. A partial environment deployment fails closed; it is never completed with a saved host or preference from another deployment. `ESDIAG_OUTPUT_APIKEY` or the existing output username/password pair authenticates both environment-backed Elasticsearch and Kibana. No analysis-specific Elasticsearch URL or Kibana credential variables are introduced.
@@ -79,13 +86,12 @@ InspectExisting
     -> OutputDeployment
     -> CollectionHosts
     -> DefaultJob
-    -> AgentSkills
     -> Complete
 ```
 
-Each transition validates its resulting domain object before persisting it. Completed stages are detected on the next run and offered for reuse or explicit replacement. Files are written atomically where their existing APIs support it; initialization never shells out to another `esdiag` process.
+Each transition validates its resulting domain object before persisting it. Completed stages are detected on the next run and offered for reuse or explicit replacement. Files are written atomically where their existing APIs support it; initialization never shells out to another `esdiag` process. Stage services accept typed inputs and return typed results without terminal prompting so the follow-on GUI can compose the same backend operations.
 
-The wizard persists independently valid stages rather than attempting a transaction across four files. An interruption can therefore leave a valid keystore or host without falsely marking initialization complete. `ApplicationConfig` is written last and acts as the completion record.
+The wizard persists independently valid stages rather than attempting a transaction across four files. An interruption can therefore leave a valid keystore or host without falsely marking initialization complete. `ApplicationConfig` fields are written as their corresponding validated stages complete, but file existence alone is not a completion marker: readiness is derived from its required references and the referenced domain state. This keeps completion semantics independent of whether the CLI or a future GUI writes the shared configuration.
 
 ### Keep credential entry on the controlling terminal
 
@@ -110,7 +116,7 @@ Alternative considered: add a new deployment inventory type. The existing host-r
 
 After the output deployment is usable, initialization creates or selects at least one collect-role host, offers a loop for additional hosts, and builds the first saved job through the existing typed job model. The default successful path creates a processing job whose output is the configured send host, so running it produces indexed data rather than only a local archive. The user may explicitly select a collect-only job instead.
 
-The selected job name is stored as `default_job`; the job body remains solely in `jobs.yml`. Initialization may finish without additional hosts beyond the first, but it does not claim a repeatable diagnostic workflow is ready without a valid default job.
+The selected job name is stored as `job.default`; the job body remains solely in `jobs.yml`. Initialization may finish without additional hosts beyond the first, but it does not claim a repeatable diagnostic workflow is ready without a valid default job.
 
 ### Apply identifier precedence explicitly
 
@@ -122,42 +128,27 @@ Default user resolution becomes:
 
 The configured user is copied into the normal `Identifiers` value at workflow construction time. No global mutable environment value is synthesized.
 
-### Keep onboarding guidance separate from normal skill use
-
-Add `references/onboarding.md` to the canonical skill and generated packages. The main skill routes explicit first-install/configuration requests and missing-configuration failures to that reference. The reference explains the stages and asks the human to run `esdiag init` locally; it does not reproduce commands for writing secrets or files manually.
-
-### Offer embedded agent skill installation without gating success
-
-After the diagnostic workflow is configured, `init` asks whether to detect and install the embedded ESDiag skill for supported local coding agents. The stage calls the same in-process target detection and installation service exposed by `esdiag agent skills`; it does not spawn another ESDiag process, download a plugin, or duplicate path logic.
-
-The wizard shows detected targets and lets the user accept, select explicit additional targets, or decline. Declining completes initialization normally. A conflict or installation failure is recorded in the final outcome and gives the standalone recovery command, but it does not invalidate the already configured keystore, output deployment, hosts, or job. No skill-installation preference or target path is persisted in `esdiag.yml`; installed files and their ownership markers are the authoritative state.
-
-Alternative considered: install automatically whenever an agent is detected. Writing into multiple agent homes is a separate user-visible mutation and should remain opt-in even inside an onboarding wizard.
-
 ## Risks / Trade-offs
 
 - **Cross-file interruption leaves partial state** → Persist only independently valid stages, detect them on rerun, and write the completion configuration last.
-- **Legacy `kibana_url` cannot always be mapped automatically** → Require an explicit viewer selection during migration and preserve a backup until completion.
 - **Environment and saved configuration could identify different deployments** → Select one complete source atomically and fail on partial environment configuration.
 - **Initialization becomes a large interactive workflow** → Keep each stage backed by existing domain APIs and make the stage boundaries independently testable.
 - **Setup may require elevated cluster privileges or a license** → Validate first, ask explicitly before setup, and distinguish configured endpoints from provisioned assets.
 - **A shared API key might not be valid for both products** → Test both clients and allow explicitly selected distinct existing secret references while keeping shared credentials the default.
-- **Changing the settings filename affects desktop startup** → Provide one-time migration with backup and compatibility tests; do not silently discard unrepresentable values.
-- **Optional skill installation can fail after core initialization succeeds** → Keep it as a non-gating final stage, preserve per-target results, and provide `esdiag agent skills` as a resumable standalone action.
+- **`esdiag.yml` and legacy desktop `settings.yml` temporarily coexist** → Keep their consumers isolated in this change and make consolidation an explicit requirement of the GUI onboarding follow-on.
 
 ## Migration Plan
 
-1. Add `ApplicationConfig`, path resolution, atomic serialization, and validation without changing consumers.
-2. Add legacy `Settings` import and backup behavior with fixtures for representable and ambiguous configurations.
-3. Add atomic `OutputDeployment` resolution and migrate omitted-output CLI and user-mode consumers.
-4. Add persisted default-user resolution to identifier construction.
-5. Implement and test the staged `esdiag init` workflow using existing keystore, host, client, setup, job, and embedded-skill installer APIs.
-6. Update desktop/web user-mode settings to write `esdiag.yml`; retain service-mode isolation.
-7. Add and package `references/onboarding.md`, then update documentation and changelog.
-8. Remove legacy `settings.yml` writes after migration coverage passes.
+1. Add `ApplicationConfig`, path resolution, atomic serialization, and validation without changing web/desktop consumers.
+2. Add atomic `OutputDeployment` resolution and migrate omitted-output CLI consumers.
+3. Add persisted default-user resolution to identifier construction.
+4. Extract flow-neutral backend operations for configuration, credentials, hosts, jobs, endpoint validation, setup, and readiness.
+5. Implement and test the terminal-specific staged `esdiag init` orchestration over those operations.
+6. Update CLI and configuration documentation and the changelog.
+7. Leave web/desktop settings behavior unchanged for the GUI onboarding follow-on.
 
-Rollback restores the backed-up `settings.yml` and leaves `hosts.yml`, `secrets.yml`, and `jobs.yml` unchanged. `esdiag.yml` contains no secrets and can be ignored safely by older releases.
+Rollback leaves `settings.yml`, `hosts.yml`, `secrets.yml`, and `jobs.yml` unchanged. `esdiag.yml` contains no secrets and can be ignored safely by older releases.
 
 ## Open Questions
 
-None. Asset setup and agent skill installation are explicit offers rather than automatic initialization side effects, and the first version is intentionally interactive.
+None. Asset setup is an explicit offer rather than an automatic initialization side effect, and the first version is intentionally interactive.

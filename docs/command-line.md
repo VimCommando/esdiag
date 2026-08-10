@@ -24,6 +24,7 @@ esdiag <command> --help
 - Configure and validate saved hosts with `esdiag host`
 - Manage encrypted credentials with `esdiag keystore`
 - Install Elasticsearch and Kibana assets with `esdiag setup`
+- Initialize a repeatable local diagnostic workflow with `esdiag init`
 - Collect fresh API diagnostics from a saved host with `esdiag collect`
 - Process diagnostic input into Elasticsearch documents with `esdiag process`
 - Run a local upload/UI service with `esdiag serve`
@@ -40,6 +41,7 @@ Commands:
   collect   Collect a diagnostic bundle from a known host's API endpoints, writes output to a directory
   serve     Start a web server to receive diagnostic bundle uploads
   host      Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
+  init      Interactively configure a repeatable local diagnostic workflow
   keystore  Manage encrypted secrets in the local keystore
   process   Receives a diagnostic from the input, processes it, and sends processed docs to the output
   upload    Upload a raw diagnostic archive to Elastic Upload Service
@@ -95,6 +97,7 @@ By default, `esdiag` stores local state under `~/.esdiag/`:
 
 - `hosts.yml`: saved host definitions
 - `secrets.yml`: encrypted keystore backing `--secret` references
+- `esdiag.yml`: non-secret CLI preferences, including the default user, output host, and saved job
 - `settings.yml`: saved UI/runtime settings such as active target selection
 - `last_run/`: debug artifacts from processing and related commands
 
@@ -113,6 +116,20 @@ These environment variables change where local state is read and written:
 - `ESDIAG_OUTPUT_APIKEY`: default output API key
 - `ESDIAG_OUTPUT_USERNAME`: default output username
 - `ESDIAG_OUTPUT_PASSWORD`: default output password
+- `ESDIAG_KIBANA_URL`: default Kibana viewer URL paired with an environment-defined output deployment
+
+`esdiag init` is terminal-only. It creates or unlocks the keystore, validates a
+linked Elasticsearch output and Kibana viewer, optionally installs output assets
+after confirmation, saves one or more collect hosts, and creates a default saved
+job. Credentials are entered without echo and are stored only in `secrets.yml`;
+`esdiag.yml` retains names and preferences, never credential material.
+
+When an output is omitted, ESDiag resolves one complete deployment in this
+order: an explicit command target, complete `ESDIAG_OUTPUT_*` plus
+`ESDIAG_KIBANA_URL` environment configuration, then `esdiag.yml`. It does not
+combine endpoints or credentials from different sources. The existing
+desktop-only `settings.yml` remains unchanged; a later GUI onboarding flow will
+migrate it.
 - `ESDIAG_KIBANA_URL`: Kibana URL used by `serve`, processing metadata, and host-omitted setup flows
 - `ESDIAG_KIBANA_SPACE`: optional Kibana space appended to generated Kibana links
 - `ESDIAG_MODE`: runtime mode for `serve` when `--mode` is omitted; valid values are `user` and `service`

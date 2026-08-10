@@ -4,12 +4,16 @@
 
 /// Elastic Stack application components (the application axis)
 mod application;
+/// Local non-secret workflow preferences
+mod application_config;
 /// Authentication methods
 mod auth;
 /// Encrypted secret storage
 mod keystore;
 /// Manage saving and loading hosts from a YAML file
 mod known_host;
+/// Canonical Elasticsearch and Kibana output-deployment resolution
+mod output_deployment;
 /// Deployment platforms (the platform axis)
 mod platform;
 /// Saved job configurations
@@ -20,6 +24,7 @@ pub mod settings;
 mod uri;
 
 pub use application::Application;
+pub use application_config::ApplicationConfig;
 pub use auth::{Auth, AuthType};
 #[cfg(all(feature = "server", feature = "keystore"))]
 pub(crate) use keystore::get_active_unlock_keystore_password;
@@ -38,6 +43,7 @@ pub use known_host::{
     CredentialDirection, ElasticCloud, HostRole, HostRoute, KnownHost, KnownHostBuilder, KnownHostCliUpdate,
     ResolvedKnownHost,
 };
+pub use output_deployment::{OutputDeployment, OutputDeploymentSource};
 pub use platform::Platform;
 pub use saved_jobs::{
     CollectMode, CollectSource, DraftTargetAvailability, Job, JobBuilder, JobDraft, JobDraftCollect, JobDraftProcess,

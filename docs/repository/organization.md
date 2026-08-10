@@ -63,6 +63,7 @@ src/
 ├── job.rs
 ├── lib.rs
 ├── main.rs
+├── onboarding.rs
 ├── setup.rs
 └── uploader.rs
 ```
@@ -83,5 +84,6 @@ src/
 - `src/setup.rs`: Asset installation logic for Elasticsearch and Kibana setup flows.
 - `src/uploader.rs`: Upload logic for sending collected archives to the Elastic Upload Service.
 - `src/job.rs`: Saved job execution and management helpers.
+- `src/onboarding.rs`: Flow-neutral first-run configuration, persistence, and readiness operations shared by terminal and future GUI flows.
 - `src/env.rs`: Environment-variable defaults and lookup helpers.
 - `src/embeds.rs`: Embedded static asset wiring used by the application.
