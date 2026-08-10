@@ -12,8 +12,8 @@ use esdiag::setup;
 use esdiag::{
     client::Client,
     data::{
-        Application, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, Product, SecretAuth, Settings, Uri,
-        add_secret, clear_unlock_lease, collect_product, create_keystore, default_unlock_ttl, get_keystore_path,
+        Application, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, SecretAuth, Settings, Uri, add_secret,
+        clear_unlock_lease, collect_application, create_keystore, default_unlock_ttl, get_keystore_path,
         get_password_for_secret_commands, get_unlock_status, keystore_exists, parse_unlock_ttl, remove_secret,
         resolve_secret_auth, rotate_keystore_password, update_secret, validate_existing_keystore_password,
         write_unlock_lease,
@@ -786,9 +786,9 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 match known_host {
                     Uri::KnownHost(host) | Uri::ElasticCloudAdmin(host) | Uri::ElasticGovCloudAdmin(host) => {
                         ensure_host_role(&host, HostRole::Collect, "collect")?;
-                        let product = collect_product(host.app())?;
+                        let application = collect_application(host.app())?;
                         if let Some(sources) = sources {
-                            esdiag::processor::init_sources(sources_product_key(&product)?, sources)?;
+                            esdiag::processor::init_sources(sources_application_key(application)?, sources)?;
                         }
                         tracing::info!("Collecting diagnostic from {host}");
                         tracing::info!("Saving diagnostic to {output}");
@@ -799,13 +799,13 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                             }
                         };
                         let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
-                        let filename = format!("{}.zip", default_collect_archive_name(&product, &timestamp));
+                        let filename = format!("{}.zip", default_collect_archive_name(application, &timestamp));
                         let identifiers = Identifiers::new(account, case, Some(filename), opportunity, user);
                         let binding = esdiag::job::model::BindingKey::try_new("cli-collect-input")?;
                         let mut context = esdiag::job::context::ExecutionContext::default();
                         context
                             .inputs
-                            .bind_receiver(binding.clone(), Receiver::try_from(host)?, Some(product));
+                            .bind_receiver(binding.clone(), Receiver::try_from(host)?, Some(application));
                         let job = esdiag::job::model::Job::try_new(
                             identifiers,
                             esdiag::job::model::Input::CollectBinding {
@@ -1084,8 +1084,8 @@ async fn run(cli: Cli) -> Result<CommandResult> {
 
                 let receiver = Receiver::try_from(input_uri.clone())?;
                 if let Some(sources) = sources {
-                    let product = detect_sources_product_for_process(&input_uri, &receiver).await?;
-                    esdiag::processor::init_sources(sources_product_key(&product)?, sources)?;
+                    let application = detect_sources_application_for_process(&input_uri, &receiver).await?;
+                    esdiag::processor::init_sources(sources_application_key(application)?, sources)?;
                 }
                 let identifiers = Identifiers::new(account, case, receiver.filename(), opportunity, user);
                 let mut context = esdiag::job::context::ExecutionContext::default();
@@ -1093,13 +1093,13 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     Uri::File(_) | Uri::Directory(_) => esdiag::job::model::Input::Load { uri: input_uri.clone() },
                     _ => {
                         let binding = esdiag::job::model::BindingKey::try_new("cli-process-input")?;
-                        let product = match &input_uri {
+                        let application = match &input_uri {
                             Uri::KnownHost(host) | Uri::ElasticCloudAdmin(host) | Uri::ElasticGovCloudAdmin(host) => {
-                                host.app().map(Product::from)
+                                host.app()
                             }
                             _ => None,
                         };
-                        context.inputs.bind_receiver(binding.clone(), receiver, product);
+                        context.inputs.bind_receiver(binding.clone(), receiver, application);
                         esdiag::job::model::Input::LoadBinding { binding }
                     }
                 };
@@ -1347,22 +1347,25 @@ fn derive_process_job(input: &str, output: Option<&str>, identifiers: Identifier
         .process_to(output)
 }
 
-fn sources_product_key(product: &Product) -> Result<&'static str> {
-    esdiag::processor::diagnostic::data_source::source_product_key(product).map_err(|_| {
+fn sources_application_key(application: Application) -> Result<&'static str> {
+    esdiag::processor::diagnostic::data_source::source_application_key(application).map_err(|_| {
         eyre!(
             "--sources is only supported for Elasticsearch, Kibana, and Logstash inputs, got {}",
-            product
+            application
         )
     })
 }
 
-async fn detect_sources_product_for_process(input_uri: &Uri, receiver: &Receiver) -> Result<Product> {
+async fn detect_sources_application_for_process(input_uri: &Uri, receiver: &Receiver) -> Result<Application> {
     match input_uri {
         Uri::KnownHost(host) | Uri::ElasticCloudAdmin(host) | Uri::ElasticGovCloudAdmin(host) => host
             .app()
-            .map(Product::from)
             .ok_or_else(|| eyre!("--sources is only supported for application diagnostics")),
-        _ => Ok(receiver.try_get_manifest_from_files().await?.product),
+        _ => receiver
+            .try_get_manifest_from_files()
+            .await?
+            .application()
+            .ok_or_else(|| eyre!("--sources is only supported for application diagnostics")),
     }
 }
 
@@ -1845,7 +1848,7 @@ mod tests {
     #[cfg(feature = "server")]
     use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
     use clap::Parser;
-    use esdiag::data::{HostRole, KnownHost, Product, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
+    use esdiag::data::{Application, HostRole, KnownHost, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
     #[cfg(feature = "keystore")]
     use esdiag::processor::Identifiers;
     use esdiag::processor::diagnostic::DiagnosticReportBuilder;
@@ -2160,7 +2163,7 @@ mod tests {
         let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
         let host = KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Some(Application::Elasticsearch),
             Url::parse("http://localhost:9200").expect("valid url"),
             vec![HostRole::Collect],
             None,
@@ -2185,7 +2188,7 @@ mod tests {
         let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
         let host = KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("valid url"),
             vec![HostRole::Collect],
             None,
@@ -2342,7 +2345,7 @@ mod tests {
             None,
             None,
             Some("minimal".to_string()),
-            Product::Elasticsearch,
+            Some(Application::Elasticsearch),
             Some("elasticsearch_diagnostic".to_string()),
             Some("esdiag".to_string()),
             Some("8.15.0".to_string()),
@@ -2370,17 +2373,18 @@ mod tests {
 
     #[test]
     fn process_summary_includes_child_outcomes_for_parent_bundles() {
-        let parent_manifest = DiagnosticManifest::new(
+        let mut parent_manifest = DiagnosticManifest::new(
             "2024-01-01T00:00:00Z".to_string(),
             Some("esdiag-test".to_string()),
             None,
             None,
             Some("support".to_string()),
-            Product::ECK,
+            None,
             Some("eck-diagnostics".to_string()),
             Some("esdiag".to_string()),
             Some("3.0.0".to_string()),
         );
+        parent_manifest.set_platform(esdiag::data::Platform::ECK);
         let parent_report = DiagnosticReportBuilder::try_from(parent_manifest)
             .expect("parent report builder")
             .receiver("Directory /tmp/eck".to_string())
@@ -2393,7 +2397,7 @@ mod tests {
             None,
             None,
             Some("standard".to_string()),
-            Product::Elasticsearch,
+            Some(Application::Elasticsearch),
             Some("elasticsearch_diagnostic".to_string()),
             Some("esdiag".to_string()),
             Some("9.3.3".to_string()),
@@ -2458,7 +2462,7 @@ mod tests {
     #[test]
     fn elastic_cloud_admin_hosts_validate_via_receiver() {
         let uri = Uri::ElasticCloudAdmin(KnownHost::new_legacy_apikey(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("https://admin.found.no/api/v1/deployments/test/elasticsearch/main-elasticsearch/proxy/")
                 .expect("valid url"),
             vec![HostRole::Collect],
@@ -2474,7 +2478,7 @@ mod tests {
     #[test]
     fn standard_known_hosts_validate_via_client() {
         let uri = Uri::KnownHost(KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("valid url"),
             vec![HostRole::Collect],
             None,

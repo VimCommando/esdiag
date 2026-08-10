@@ -17,7 +17,7 @@ use super::{
     outcome::{ChildExecutionOutcome, ExecutionEvent, ExecutionOutcome, Lifecycle, Stage, StageStatus, UploadResult},
 };
 use crate::{
-    data::{Platform, Product, Uri},
+    data::{Application, Platform, Uri},
     exporter::BundleExporter,
     processor::{
         CollectOptions, DiagnosticOutcome, Identifiers,
@@ -116,7 +116,7 @@ pub async fn execute_with_context(job: Job, context: ExecutionContext) -> Execut
         job.process()
             .map(|process| {
                 collect_process_selection(
-                    resolved.product.as_ref().unwrap_or(&Product::Unknown),
+                    resolved.application.as_ref().unwrap_or(&Application::Agent),
                     collect_diagnostic_type(job.input()),
                     collect_include(job.input()),
                     collect_exclude(job.input()),
@@ -200,14 +200,14 @@ pub async fn execute_with_context(job: Job, context: ExecutionContext) -> Execut
             Stage::Save,
             Lifecycle::Started,
         ));
-        let Some(product) = resolved.product.clone() else {
+        let Some(application) = resolved.application else {
             record_stage(
                 &context,
                 &mut outcome,
                 Stage::Collect,
-                StageStatus::Failed("Collect input did not resolve a product".to_string()),
+                StageStatus::Failed("Collect input did not resolve an application".to_string()),
             );
-            record_blocked_outputs(&context, &job, &mut outcome, "Collect product resolution failed");
+            record_blocked_outputs(&context, &job, &mut outcome, "Collect application resolution failed");
             return outcome;
         };
         let exporter = match BundleExporter::archive(output_dir) {
@@ -227,7 +227,7 @@ pub async fn execute_with_context(job: Job, context: ExecutionContext) -> Execut
             resolved.receiver,
             exporter,
             CollectOptions {
-                product,
+                application,
                 r#type: collect_diagnostic_type(job.input()).to_string(),
                 include: collect_include(job.input()).cloned(),
                 exclude: collect_exclude(job.input()).cloned(),
@@ -646,15 +646,15 @@ fn canonicalize_process_selection(selection: ProcessSelection) -> Result<Process
 }
 
 fn collect_process_selection(
-    product: &Product,
+    application: &Application,
     diagnostic_type: &str,
     include: Option<&Vec<String>>,
     exclude: Option<&Vec<String>>,
     process: &Process,
 ) -> Result<Option<ProcessSelection>> {
-    let product = match product {
-        Product::Elasticsearch => "elasticsearch",
-        Product::Logstash => "logstash",
+    let product = match application {
+        Application::Elasticsearch => "elasticsearch",
+        Application::Logstash => "logstash",
         _ => return Ok(None),
     };
     if let Some(selection) = &process.selection {
@@ -791,7 +791,7 @@ mod tests {
         let address = listener.local_addr().expect("listener address");
         drop(listener);
         let host = crate::data::KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             url::Url::parse(&format!("http://{address}")).expect("output URL"),
             vec![crate::data::HostRole::Send],
             None,
@@ -910,7 +910,7 @@ mod tests {
             .with_observer(observer.clone())
             .with_sender(TestSender { fail: false });
         let host = crate::data::KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             url::Url::parse(&format!("http://{address}")).expect("mock URL"),
             vec![crate::data::HostRole::Collect],
             None,
@@ -919,7 +919,7 @@ mod tests {
         context.inputs.bind_receiver(
             binding,
             Receiver::try_from(host).expect("source receiver"),
-            Some(Product::Elasticsearch),
+            Some(Application::Elasticsearch),
         );
 
         let outcome = execute_with_context(job, context).await;
@@ -963,7 +963,7 @@ mod tests {
             axum::serve(listener, app).await.expect("mock server");
         });
         crate::data::KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             url::Url::parse(&format!("http://{address}")).expect("mock URL"),
             vec![crate::data::HostRole::Collect],
             None,

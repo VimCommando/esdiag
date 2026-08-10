@@ -194,26 +194,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Application, Product, collect_product};
+    use super::{Application, collect_application};
 
     #[test]
-    fn collect_product_accepts_every_api_collectable_application() {
-        for (application, product) in [
-            (Application::Elasticsearch, Product::Elasticsearch),
-            (Application::Kibana, Product::Kibana),
-            (Application::Logstash, Product::Logstash),
-        ] {
+    fn collect_application_accepts_every_api_collectable_application() {
+        for application in [Application::Elasticsearch, Application::Kibana, Application::Logstash] {
             assert_eq!(
-                collect_product(Some(application)).expect("collectable application"),
-                product
+                collect_application(Some(application)).expect("collectable application"),
+                application
             );
         }
     }
 
     #[test]
-    fn collect_product_refuses_non_collectable_targets_as_by_design() {
+    fn collect_application_refuses_non_collectable_targets_as_by_design() {
         for application in [Some(Application::Agent), None] {
-            let error = collect_product(application)
+            let error = collect_application(application)
                 .expect_err("non-collectable target must be rejected")
                 .to_string();
             assert!(error.contains("out of scope by design"));
