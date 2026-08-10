@@ -4,8 +4,12 @@
 
 /// Write collection output to a zip archive
 mod archive;
+/// Role-typed raw bundle output used by the Save stage.
+mod bundle;
 /// Write collection output to a directory
 mod directory;
+/// Role-typed processed document output used by the Export stage.
+mod document;
 /// Send to an Elasticsearch cluster with the `_bulk` API
 mod elasticsearch;
 /// Write to an `.ndjson` file
@@ -18,7 +22,9 @@ use crate::{
     processor::{BatchResponse, DiagnosticReport, ProcessorSummary},
 };
 pub use archive::ArchiveExporter;
+pub use bundle::BundleExporter;
 pub use directory::DirectoryExporter;
+pub use document::DocumentExporter;
 use elasticsearch::ElasticsearchExporter;
 use eyre::{Result, eyre};
 use file::FileExporter;
@@ -68,21 +74,6 @@ impl Exporter {
         match uri {
             Uri::Directory(path) | Uri::File(path) => Ok(Self::Directory(DirectoryExporter::try_from(path)?)),
             _ => Err(eyre!("Collect requires a local directory output when --zip is not set")),
-        }
-    }
-
-    pub fn for_collect_archive(output_dir: PathBuf) -> Result<Self> {
-        Ok(Self::Archive(ArchiveExporter::zip(output_dir)?))
-    }
-
-    pub fn into_collect_exporter(self) -> Result<ArchiveExporter> {
-        match self {
-            Self::Archive(exporter) => Ok(exporter),
-            Self::Directory(exporter) => Ok(ArchiveExporter::Directory(exporter)),
-            unsupported => Err(eyre!(
-                "Collect supports only directory or archive exporters, got {}",
-                unsupported
-            )),
         }
     }
 
@@ -462,7 +453,7 @@ fn build_kibana_link(kibana_url: &str, diagnostic_id: &str, collection_date: u64
 mod tests {
     use super::{ArchiveExporter, Exporter, format_directory_label};
     use crate::data::{HostRole, KnownHost, KnownHostBuilder, Product, Uri};
-    use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
+    use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
     use tempfile::TempDir;
     use url::Url;
 
@@ -544,6 +535,35 @@ mod tests {
         assert_eq!(value["docs"], 0);
         assert_eq!(value["doc_errors"], 3);
         assert_eq!(value["batch"]["count"], 3);
+    }
+
+    #[tokio::test]
+    async fn document_channel_streams_with_bounded_backpressure() {
+        let tmp = TempDir::new().expect("temp dir");
+        let exporter = Exporter::try_from(Uri::File(tmp.path().join("documents.ndjson"))).expect("file exporter");
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+
+        tx.try_send(serde_json::json!({"id": 1}))
+            .expect("first document fills the bounded channel");
+        assert!(
+            matches!(
+                tx.try_send(serde_json::json!({"id": 2})),
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+            ),
+            "the producer must observe backpressure before the consumer starts"
+        );
+
+        let consumer = tokio::spawn(exporter.document_channel(rx, "metrics-node-esdiag".to_string(), 1));
+        tokio::time::timeout(Duration::from_secs(1), tx.send(serde_json::json!({"id": 2})))
+            .await
+            .expect("the running exporter must drain while production continues")
+            .expect("channel remains open");
+        drop(tx);
+
+        let summary = consumer.await.expect("document channel task");
+        let value = serde_json::to_value(summary).expect("summary json");
+        assert_eq!(value["docs"], 2);
+        assert_eq!(value["doc_errors"], 0);
     }
 
     #[test]

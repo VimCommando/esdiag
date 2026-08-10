@@ -125,6 +125,8 @@ pub struct Jobs {
     pub saved_remote_target: Option<String>,
     pub saved_local_target: String,
     pub saved_local_directory: String,
+    pub saved_raw_remote_target: Option<String>,
+    pub saved_raw_local: bool,
     pub saved_user: String,
     pub saved_account: String,
     pub saved_case_number: String,
@@ -286,6 +288,9 @@ pub struct JobCompleted<'a> {
     pub product: &'a str,
     /// The derived diagnostic outcome (ADR-0016), e.g. `complete`/`partial`.
     pub outcome: &'a str,
+    pub upload_destination: Option<&'a str>,
+    pub execution_error: Option<&'a str>,
+    pub recorded_failures: Vec<String>,
 }
 
 #[derive(Template)]
@@ -536,6 +541,8 @@ mod tests {
             saved_remote_target: None,
             saved_local_target: "directory".to_string(),
             saved_local_directory: "/tmp".to_string(),
+            saved_raw_remote_target: None,
+            saved_raw_local: false,
             saved_user: String::new(),
             saved_account: String::new(),
             saved_case_number: String::new(),
@@ -554,6 +561,14 @@ mod tests {
         assert!(html.contains("evt.target.value === '' ? null : evt.target.value"));
         assert!(html.contains("$job.process.enabled"));
         assert!(html.contains("$job.send.mode === 'remote' ||"));
+        assert!(
+            html.contains("$job.collect.source !== 'known-host'"),
+            "Save Job must be disabled for upload, service-link, and API-key drafts"
+        );
+        assert!(
+            html.contains("$job.collect.known_host.trim()"),
+            "Save Job must require a selected known host"
+        );
         let remote_select = html
             .split_once(r#"id="send-remote-target""#)
             .and_then(|(_, remainder)| remainder.split_once("</select>"))
@@ -580,6 +595,9 @@ mod tests {
             kibana_link: "https://kb.example/app/dashboards#/view/child",
             product: "Elasticsearch",
             outcome: "complete",
+            upload_destination: Some("https://upload.elastic.co/g/raw-bundle"),
+            execution_error: Some("Send failed"),
+            recorded_failures: vec!["Error cluster_settings: request failed".to_string()],
         }
         .render()
         .expect("completed template renders");
@@ -589,6 +607,10 @@ mod tests {
         assert!(completed.contains("Included diagnostic: child-es"));
         assert!(completed.contains("status-success"));
         assert!(completed.contains("Processing complete!"));
+        assert!(completed.contains("https://upload.elastic.co/g/raw-bundle"));
+        assert!(completed.contains("Send failed"));
+        assert!(completed.contains("Recorded diagnostic failures"));
+        assert!(completed.contains("cluster_settings: request failed"));
 
         let no_link = JobCompleted {
             job_id: 102,
@@ -601,6 +623,9 @@ mod tests {
             kibana_link: "",
             product: "Elasticsearch",
             outcome: "complete",
+            upload_destination: None,
+            execution_error: None,
+            recorded_failures: Vec::new(),
         }
         .render()
         .expect("completed template without Kibana link renders");

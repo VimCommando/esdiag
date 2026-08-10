@@ -37,7 +37,9 @@ Invariants validated at construction (the rest are unrepresentable):
 
 - `save` ⟹ `input` is `Collect`
 - `send` ⟹ a bundle exists (`Load` input, or `save` set)
-- at least one of `save` / `process` / `send` is set
+- `Collect` selects at least one of `save` / `process` / `send`
+- `Load` may select no output stage when an execution-context retention policy
+  is the requested work
 
 Execution mode is *derived*, not stored: `save` + `process` → staged (process the
 materialised bundle); `Collect` + `process` without `save` → streaming.
@@ -68,5 +70,7 @@ materialised bundle); `Collect` + `process` without `save` → streaming.
   job-staged process paths (they converge on the one executor).
 - **New capabilities fall out for free:** `Load`-input jobs, streaming jobs, and
   Save + Process + Export + Send in a single run — none expressible today.
-- **`JobSignals` collapses** to a thin UI projection of `Job`, or is removed; the
-  web form binds the `Job` phases directly.
+- **`JobDraft` is the web editing projection:** the backend normalizes its
+  stage-dependent target availability over SSE, then compiles it to a validated
+  `Job` plus execution-only runtime bindings. Processed-document Export and
+  raw-bundle Send keep independent targets.

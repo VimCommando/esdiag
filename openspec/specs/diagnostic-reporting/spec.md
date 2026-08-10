@@ -5,9 +5,7 @@
 Defines the `DiagnosticReport`: the events it records during collection and processing,
 the single outcome derived from them, and how consumers — the CLI exit code, the web job
 feed, and Kibana links — read that one verdict.
-
 ## Requirements
-
 ### Requirement: Record parsing status for lookups
 The system SHALL record the `parsed` status for every entry in the `lookup` section of the `DiagnosticReport`.
 
@@ -111,24 +109,45 @@ emitting a `tracing::warn!`.
 - **THEN** the report MUST record a success-level event identifying that source
 
 ### Requirement: Report is the persisted source of truth
-The persisted `DiagnosticReport` SHALL be the single source of truth for the diagnostic
-verdict. The owner-scoped job feed SHALL render collection and processing failures from
-the persisted report's recorded events, and the CLI exit code and WebUI status SHALL be
-determined from the same single `DiagnosticOutcome`. No consumer SHALL derive the
-verdict from a separate path.
+The persisted `DiagnosticReport` SHALL remain the single source of truth for a
+diagnostic's verdict, and its `DiagnosticOutcome` SHALL be derived only from the
+report's recorded events, including per-source exporter transport and document
+results. `ExecutionOutcome` SHALL be the source of truth for the whole Job's
+terminal status across input, Save, Process, Export, and Send. A stage failure
+outside the report event stream SHALL NOT imperatively rewrite a completed
+diagnostic's `DiagnosticOutcome`; an exporter failure recorded in the report
+SHALL affect the derived verdict under the existing outcome rules. Any
+hard-failed selected parent stage SHALL make the aggregate Job status
+non-success. Consumers SHALL display the diagnostic verdict and whole-job
+status distinctly when they differ.
 
-#### Scenario: Job feed renders recorded failures
-- **WHEN** the owner-scoped job feed displays a completed diagnostic that recorded
-  failure events
-- **THEN** the feed MUST render those failures from the persisted report
+#### Scenario: Job feed renders recorded diagnostic failures
+- **WHEN** the owner-scoped job feed displays a completed diagnostic that recorded failure events
+- **THEN** it MUST render those diagnostic failures from the persisted report
 
-#### Scenario: CLI exit code reflects the outcome
-- **WHEN** the CLI `process` command finishes a diagnostic
-- **THEN** its exit code MUST be determined by the report's `DiagnosticOutcome`
+#### Scenario: CLI exit code reflects diagnostic and execution outcomes
+- **WHEN** the CLI process command finishes a Job
+- **THEN** its exit code MUST be non-zero when the report's DiagnosticOutcome is Failed
+- **AND** it MUST be non-zero when any selected parent stage has failed
+- **AND** it MUST still render every successful stage result
 
-#### Scenario: WebUI status reflects the outcome
-- **WHEN** the WebUI shows the status of a completed diagnostic
-- **THEN** the displayed status MUST be the report's single `DiagnosticOutcome`
+#### Scenario: Web UI distinguishes verdict from job status
+- **GIVEN** Process completes with a successful DiagnosticOutcome
+- **AND** a selected raw-bundle Send fails
+- **WHEN** the Web UI renders completion
+- **THEN** the diagnostic verdict MUST remain the report's successful DiagnosticOutcome
+- **AND** the Job terminal status MUST be non-success with the Send failure shown
+
+#### Scenario: Export failure preserves completed report
+- **GIVEN** Process produces a completed DiagnosticReport
+- **WHEN** Export fails
+- **THEN** the report and its DiagnosticOutcome derived from all recorded exporter events MUST remain available
+- **AND** the ExecutionOutcome MUST record Export failure separately
+
+#### Scenario: Document rejection affects diagnostic verdict
+- **WHEN** Export records rejected documents or transport failures in the DiagnosticReport
+- **THEN** the DiagnosticOutcome MUST reflect those recorded events
+- **AND** the executor MUST NOT replace that derived verdict with a separately assigned value
 
 ### Requirement: Two-level export status
 Export status SHALL be recorded at two distinct levels: the **request/transport** status

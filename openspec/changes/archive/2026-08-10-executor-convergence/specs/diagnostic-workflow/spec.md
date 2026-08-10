@@ -1,9 +1,57 @@
-# diagnostic-workflow
+## ADDED Requirements
 
-## Purpose
+### Requirement: Workflow Draft Compiles to Unified Job Phases
+The web workflow SHALL hold editable panel state as a backend-owned `JobDraft`
+whose fields mirror the unified phases (`input`, `save`, `process` with its
+export sink, `send`). Datastar signals SHALL carry form interaction values, not
+an independently executable operation model. On execution, the backend SHALL
+compile the draft into one validated `Job` and its runtime execution bindings.
+Incomplete draft state MAY be represented while editing but SHALL NOT be
+treated as an executable `Job`. The UI verbs `collect` / `process` / `send`
+remain presentation labels and SHALL NOT be required to map one-to-one onto
+backend stages.
 
-Defines the three-panel Collect, Process, and Send advanced diagnostic workflow in the web UI, including stage options, send targeting, and compatibility with existing exporters and upload paths.
-## Requirements
+#### Scenario: Panel selections construct a Job
+- **WHEN** the user configures the `Collect`, `Process`, and `Send` panels and executes
+- **THEN** the backend MUST compile the JobDraft into a single validated Job and its execution bindings
+- **AND** it MUST hand that Job and context to the one executor
+
+#### Scenario: Invalid stage combination is rejected before execution
+- **WHEN** the configured panels would produce a `Job` that violates a construction invariant (e.g. `Send` with no bundle)
+- **THEN** the workflow MUST reject the configuration before execution rather than start an invalid run
+
+#### Scenario: Incomplete form state remains a draft
+- **GIVEN** the user has not yet selected a required host or output target
+- **WHEN** the backend receives the current form signals
+- **THEN** it MUST preserve the editable JobDraft state
+- **AND** it MUST NOT weaken Job construction invariants to represent that incomplete state
+
+### Requirement: Processed and Raw Output Targets Are Distinct
+The JobDraft SHALL store the processed-document Export target independently
+from the raw-bundle Send target. Converting a Job to editable state and back
+SHALL preserve both targets without one overwriting the other.
+
+#### Scenario: Draft round-trips both remote targets
+- **GIVEN** a staged Job exports processed documents to a diagnostic cluster and sends its raw bundle to an upload-service target
+- **WHEN** the workflow projects that Job into editable draft state and recompiles it
+- **THEN** the diagnostic-cluster Export target MUST remain selected
+- **AND** the upload-service Send target MUST remain selected
+
+### Requirement: Existing Bundle Retention Is Execution Policy
+The workflow SHALL configure retained-input execution policy, rather than a
+Save stage, when the selected web input is an existing remote bundle such as an
+Elastic Upload Service link and the user requests a retained browser download.
+`Save` SHALL remain the stage that serializes a newly collected diagnostic.
+
+#### Scenario: Service-link input is retained and processed
+- **GIVEN** the Collect panel source resolves to an existing service-link bundle
+- **AND** the user requests a retained download and processing
+- **WHEN** the draft compiles
+- **THEN** the Job MUST use Load plus Process/Export without Save
+- **AND** the execution context MUST retain the materialized input for browser download
+
+## MODIFIED Requirements
+
 ### Requirement: Three-Panel Diagnostic Workflow
 The web advanced workflow pages SHALL present distinct panels named `Collect`,
 `Process`, and `Send`. `Collect` SHALL provide `Collect` or `Upload`, and
@@ -27,47 +75,6 @@ before execution.
 - **THEN** the processed-document target MAY use a Local choice
 - **AND** the raw-bundle target MAY independently use a Remote upload-service choice
 
-### Requirement: Collect Stage Options
-The `Collect` panel SHALL support `Collect` and `Upload` options. `Collect` SHALL support remote diagnostic intake through a known host in `user` mode, explicit remote URL plus API key, or Elastic Upload Service input. `Upload` SHALL support drag-and-drop and file-picker selection of a local archive.
-
-#### Scenario: User chooses remote collect option
-- **WHEN** the user selects `Collect -> Collect`
-- **THEN** the panel displays remote intake inputs
-- **AND** local upload inputs are hidden or inactive
-
-#### Scenario: User chooses upload option
-- **WHEN** the user selects `Collect -> Upload`
-- **THEN** the panel displays drag-and-drop and file-picker controls for a local archive
-- **AND** remote intake inputs are hidden or inactive
-
-### Requirement: Collect Save Behavior
-When `Collect -> Collect` is active, the panel SHALL provide an optional `Save` control that retains the collected archive as a downloadable workflow bundle before downstream stages consume it. The browser workflow SHALL NOT require the user to configure a local filesystem path in order to save the bundle.
-
-#### Scenario: User configures remote collection with retained bundle download
-- **WHEN** the user selects `Collect -> Collect`, chooses a diagnostic type, and enables `Save`
-- **THEN** the workflow records the selected remote diagnostic type
-- **AND** the collected remote archive is retained as a downloadable workflow bundle before downstream workflow stages consume it
-
-#### Scenario: Save auto-initiates browser download from the same Go action
-- **GIVEN** the user enables `Save`
-- **WHEN** remote collection completes successfully
-- **THEN** the workflow initiates bundle download through a separate browser request or action
-- **AND** the download is triggered automatically from the same workflow execution without requiring a second manual click
-- **AND** the SSE workflow response remains dedicated to workflow status updates rather than file transfer
-
-### Requirement: Process Stage Options
-The `Process` panel SHALL support `Process` and `Forward` options. `Process` SHALL expose diagnostic type selection and advanced processor configuration. `Forward` SHALL preserve the raw diagnostic archive unchanged from the collected or uploaded workflow input.
-
-#### Scenario: User chooses processing
-- **WHEN** the user selects `Process -> Process`
-- **THEN** the panel displays diagnostic type selection and advanced processor configuration
-- **AND** downstream execution produces processed diagnostic output
-
-#### Scenario: User chooses forwarding
-- **WHEN** the user selects `Process -> Forward`
-- **THEN** processing-specific selectors are hidden or inactive
-- **AND** downstream execution preserves the raw diagnostic archive unchanged
-
 ### Requirement: Send Stage Options
 The `Send` panel SHALL present independent processed-document and raw-bundle
 target groups when their preconditions are met. Each group SHALL support the
@@ -87,14 +94,6 @@ rather than introducing a second filesystem target.
 #### Scenario: User chooses local output
 - **WHEN** the user chooses a Local option for an available output role
 - **THEN** the panel displays the local behavior compatible with that role
-
-### Requirement: Send Panel Owns Output Selection
-The workflow SHALL move output target selection from the footer into the `Send` panel. `Remote` and `Local` are UI-level send choices layered over existing output/exporter options rather than a separate exporter system.
-
-#### Scenario: User configures send target in panel
-- **WHEN** the user configures the `Send` panel
-- **THEN** output target selection is performed inside the panel instead of the footer
-- **AND** the chosen send mode maps onto an existing compatible exporter option or uploader capability
 
 ### Requirement: Send Target Availability Follows Workflow State
 The backend SHALL derive `Send` panel target availability from the active
@@ -195,53 +194,3 @@ enable retained-input execution policy without adding Save.
 - **WHEN** the user chooses local raw-bundle delivery
 - **THEN** the UI MUST state that local bundle download is handled in Collect
 - **AND** the workflow MUST enable retained-input policy without adding a Save stage
-
-### Requirement: Workflow Draft Compiles to Unified Job Phases
-The web workflow SHALL hold editable panel state as a backend-owned `JobDraft`
-whose fields mirror the unified phases (`input`, `save`, `process` with its
-export sink, `send`). Datastar signals SHALL carry form interaction values, not
-an independently executable operation model. On execution, the backend SHALL
-compile the draft into one validated `Job` and its runtime execution bindings.
-Incomplete draft state MAY be represented while editing but SHALL NOT be
-treated as an executable `Job`. The UI verbs `collect` / `process` / `send`
-remain presentation labels and SHALL NOT be required to map one-to-one onto
-backend stages.
-
-#### Scenario: Panel selections construct a Job
-- **WHEN** the user configures the `Collect`, `Process`, and `Send` panels and executes
-- **THEN** the backend MUST compile the JobDraft into a single validated Job and its execution bindings
-- **AND** it MUST hand that Job and context to the one executor
-
-#### Scenario: Invalid stage combination is rejected before execution
-- **WHEN** the configured panels would produce a `Job` that violates a construction invariant (e.g. `Send` with no bundle)
-- **THEN** the workflow MUST reject the configuration before execution rather than start an invalid run
-
-#### Scenario: Incomplete form state remains a draft
-- **GIVEN** the user has not yet selected a required host or output target
-- **WHEN** the backend receives the current form signals
-- **THEN** it MUST preserve the editable JobDraft state
-- **AND** it MUST NOT weaken Job construction invariants to represent that incomplete state
-
-### Requirement: Processed and Raw Output Targets Are Distinct
-The JobDraft SHALL store the processed-document Export target independently
-from the raw-bundle Send target. Converting a Job to editable state and back
-SHALL preserve both targets without one overwriting the other.
-
-#### Scenario: Draft round-trips both remote targets
-- **GIVEN** a staged Job exports processed documents to a diagnostic cluster and sends its raw bundle to an upload-service target
-- **WHEN** the workflow projects that Job into editable draft state and recompiles it
-- **THEN** the diagnostic-cluster Export target MUST remain selected
-- **AND** the upload-service Send target MUST remain selected
-
-### Requirement: Existing Bundle Retention Is Execution Policy
-The workflow SHALL configure retained-input execution policy, rather than a
-Save stage, when the selected web input is an existing remote bundle such as an
-Elastic Upload Service link and the user requests a retained browser download.
-`Save` SHALL remain the stage that serializes a newly collected diagnostic.
-
-#### Scenario: Service-link input is retained and processed
-- **GIVEN** the Collect panel source resolves to an existing service-link bundle
-- **AND** the user requests a retained download and processing
-- **WHEN** the draft compiles
-- **THEN** the Job MUST use Load plus Process/Export without Save
-- **AND** the execution context MUST retain the materialized input for browser download

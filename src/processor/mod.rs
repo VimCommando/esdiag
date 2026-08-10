@@ -18,7 +18,8 @@ mod kubernetes_platform;
 /// Processors for Logstash diagnostics
 mod logstash;
 
-pub use collector::{CollectionResult, Collector, default_collect_archive_name};
+pub(crate) use collector::{CollectOptions, collect_bundle};
+pub use collector::{CollectionResult, default_collect_archive_name};
 pub use diagnostic::{
     DataSource, DiagnosticManifest, DiagnosticReport, Manifest, RequestedApi, SourceContext,
     data_source::init_sources,
@@ -32,15 +33,16 @@ pub use elasticsearch::Cluster as ElasticsearchCluster;
 pub use crate::processor::diagnostic::data_source::StreamingDataSource;
 use crate::{
     data::{Application, Platform},
-    exporter::Exporter,
+    exporter::{DocumentExporter as StageDocumentExporter, Exporter},
     receiver::Receiver,
 };
 use api::ProcessSelection;
 use elastic_cloud_kubernetes::ElasticCloudKubernetesDiagnostic;
 use elasticsearch::{ElasticsearchDiagnostic, Licenses};
 use eyre::{Result, eyre};
+#[cfg(test)]
+use futures::FutureExt;
 use futures::{
-    FutureExt,
     future::BoxFuture,
     stream::{BoxStream, FuturesUnordered},
 };
@@ -62,7 +64,7 @@ const UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE: &str = "Unsupported product or d
 const ELASTIC_CLOUD_LICENSE_HOLDER: &str = "Elastic Cloud";
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 
-pub struct Processor<S: State> {
+struct Processor<S: State> {
     receiver: Arc<Receiver>,
     exporter: Arc<Exporter>,
     child_event_tx: Option<mpsc::UnboundedSender<IncludedDiagnosticJobEvent>>,
@@ -76,6 +78,7 @@ pub struct Ready {
     manifest: DiagnosticManifest,
     identifiers: Identifiers,
     process_selection: Option<ProcessSelection>,
+    #[cfg_attr(not(test), allow(dead_code))]
     process_included_diagnostics: bool,
 }
 
@@ -100,6 +103,8 @@ pub struct Completed {
 pub struct Failed {
     pub error: String,
     pub runtime: u128,
+    pub report: Option<DiagnosticReport>,
+    pub included_diagnostics: Vec<IncludedDiagnosticOutcome>,
 }
 
 /// The `Status` trait represents the state of a processing job
@@ -126,6 +131,15 @@ pub struct IncludedDiagnosticOutcome {
     /// Skip reason or failure error, when the child did not complete.
     pub reason: Option<String>,
     pub runtime: Option<u128>,
+    /// A hard Export-stage failure after this child produced its report.
+    /// The report-derived `outcome` remains unchanged.
+    pub export_error: Option<String>,
+}
+
+pub(crate) struct ProcessStageExecution {
+    pub report: DiagnosticReport,
+    pub included_diagnostics: Vec<diagnostic::DiagPath>,
+    pub export_error: Option<String>,
 }
 
 impl IncludedDiagnosticOutcome {
@@ -158,6 +172,8 @@ pub enum IncludedDiagnosticJobEvent {
         docs_created: u32,
         duration_ms: u128,
         kibana_link: Option<String>,
+        execution_error: Option<String>,
+        recorded_failures: Vec<String>,
     },
     Skipped {
         job_id: u64,
@@ -182,6 +198,7 @@ pub fn display_label(application: Option<Application>, platform: Platform) -> St
     }
 }
 
+#[cfg(test)]
 fn spawn_sub_processors(
     diag_paths: Vec<diagnostic::DiagPath>,
     receiver: Arc<Receiver>,
@@ -261,6 +278,7 @@ fn spawn_sub_processors(
                             report: Some(Box::new(report)),
                             reason: None,
                             runtime: Some(complete.state.runtime),
+                            export_error: None,
                         };
                         send_child_outcome_event(&event_tx, &outcome);
                         outcome
@@ -288,6 +306,7 @@ fn spawn_sub_processors(
                             platform,
                             reason: Some(failed.state.error),
                             runtime: None,
+                            export_error: None,
                         },
                         None => failed_child_outcome_with_context(
                             child_job_id,
@@ -324,10 +343,12 @@ fn spawn_sub_processors(
     handles
 }
 
+#[cfg(test)]
 fn failed_child_outcome(job_id: u64, path: String, error: String) -> IncludedDiagnosticOutcome {
     failed_child_outcome_with_context(job_id, path, error, None, Platform::Unknown)
 }
 
+#[cfg(test)]
 fn failed_child_outcome_with_context(
     job_id: u64,
     path: String,
@@ -344,6 +365,7 @@ fn failed_child_outcome_with_context(
         platform,
         reason: Some(error),
         runtime: None,
+        export_error: None,
     }
 }
 
@@ -354,7 +376,7 @@ fn failed_child_outcome_with_context(
 /// platform APIs — so it must not be borrowed for an application whose processor
 /// is merely unwritten. Reporting one as the other tells a user the feature they
 /// are waiting on is never coming.
-fn skip_kind_for(error: &str) -> Option<SkipKind> {
+pub(crate) fn skip_kind_for(error: &str) -> Option<SkipKind> {
     match error {
         KIBANA_PROCESSING_NOT_IMPLEMENTED | AGENT_PROCESSING_NOT_IMPLEMENTED => Some(SkipKind::NotImplemented),
         UNSUPPORTED_PRODUCT_OR_DIAGNOSTIC_BUNDLE => Some(SkipKind::ByDesign),
@@ -362,6 +384,15 @@ fn skip_kind_for(error: &str) -> Option<SkipKind> {
     }
 }
 
+pub(crate) fn skipped_application(error: &str) -> Option<Application> {
+    match error {
+        KIBANA_PROCESSING_NOT_IMPLEMENTED => Some(Application::Kibana),
+        AGENT_PROCESSING_NOT_IMPLEMENTED => Some(Application::Agent),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
 fn send_child_event(
     child_event_tx: &Option<mpsc::UnboundedSender<IncludedDiagnosticJobEvent>>,
     event: IncludedDiagnosticJobEvent,
@@ -371,6 +402,7 @@ fn send_child_event(
     }
 }
 
+#[cfg(test)]
 fn send_child_outcome_event(
     child_event_tx: &Option<mpsc::UnboundedSender<IncludedDiagnosticJobEvent>>,
     outcome: &IncludedDiagnosticOutcome,
@@ -394,6 +426,13 @@ fn send_child_outcome_event(
             docs_created: report.diagnostic.docs.created,
             duration_ms: outcome.runtime.unwrap_or_default(),
             kibana_link: report.diagnostic.kibana_link.clone(),
+            execution_error: outcome.export_error.clone(),
+            recorded_failures: report
+                .events()
+                .iter()
+                .filter(|event| event.severity != EventSeverity::Success)
+                .map(|event| format!("{:?} {}: {}", event.severity, event.source, event.reason))
+                .collect(),
         },
         (_, None) => IncludedDiagnosticJobEvent::Failed {
             job_id: outcome.job_id,
@@ -478,39 +517,45 @@ impl Processor<Ready> {
         })
     }
 
+    #[cfg(test)]
     async fn try_new_child(receiver: Arc<Receiver>, exporter: Arc<Exporter>, identifiers: Identifiers) -> Result<Self> {
         Self::try_new_with_options(receiver, exporter, identifiers, None, None, false).await
     }
 }
 
 impl Processor<Ready> {
-    pub async fn try_new_with_child_events(
+    /// Executor entry point. Included diagnostics are returned as declarations
+    /// so the job executor can run each one with an inherited child context.
+    pub(crate) async fn try_new_for_executor(
         receiver: Arc<Receiver>,
-        exporter: Arc<Exporter>,
+        exporter: StageDocumentExporter,
         identifiers: Identifiers,
         process_selection: Option<ProcessSelection>,
-        child_event_tx: mpsc::UnboundedSender<IncludedDiagnosticJobEvent>,
     ) -> Result<Self> {
         Self::try_new_with_options(
             receiver,
-            exporter,
+            Arc::new(exporter.into_inner()),
             identifiers,
             process_selection,
-            Some(child_event_tx),
-            true,
+            None,
+            false,
         )
         .await
     }
-}
 
-impl Processor<Ready> {
+    pub(crate) fn included_diagnostics(&self) -> Vec<diagnostic::DiagPath> {
+        self.state.manifest.included_diagnostics.clone().unwrap_or_default()
+    }
+
     /// Try creating a processor with the receiver, exporter and identifiers.
     /// Will attempt to build a manifest from a call to the receiver.
-    pub async fn try_new(receiver: Arc<Receiver>, exporter: Arc<Exporter>, identifiers: Identifiers) -> Result<Self> {
+    #[cfg(test)]
+    async fn try_new(receiver: Arc<Receiver>, exporter: Arc<Exporter>, identifiers: Identifiers) -> Result<Self> {
         Self::try_new_with_selection(receiver, exporter, identifiers, None).await
     }
 
-    pub async fn try_new_with_selection(
+    #[cfg(test)]
+    async fn try_new_with_selection(
         receiver: Arc<Receiver>,
         exporter: Arc<Exporter>,
         identifiers: Identifiers,
@@ -520,7 +565,7 @@ impl Processor<Ready> {
     }
 
     /// State transition from `Ready` to `Processing`, returning the progress channel
-    pub async fn start(self) -> Result<Processor<Processing>, Processor<Failed>> {
+    async fn start(self) -> Result<Processor<Processing>, Processor<Failed>> {
         tracing::debug!("Transitioned: Processor<Processing>");
         let (summary_tx, summary_rx) = mpsc::channel::<ProcessorSummary>(10);
 
@@ -549,16 +594,21 @@ impl Processor<Ready> {
                         state: Failed {
                             runtime: self.start_time.elapsed().as_millis(),
                             error: err.to_string(),
+                            report: None,
+                            included_diagnostics: Vec::new(),
                         },
                     });
                 }
             };
 
+            #[cfg(test)]
             let mut child_identifiers = identifiers.clone();
+            #[cfg(test)]
             if let Some(parent_uuid) = diagnostic.uuid() {
                 child_identifiers = child_identifiers.with_parent_id(parent_uuid);
             }
 
+            #[cfg(test)]
             let sub_processors = if self.state.process_included_diagnostics {
                 spawn_sub_processors(
                     included_diagnostics,
@@ -568,6 +618,11 @@ impl Processor<Ready> {
                     self.child_event_tx.clone(),
                 )
             } else {
+                FuturesUnordered::new()
+            };
+            #[cfg(not(test))]
+            let sub_processors = {
+                let _ = included_diagnostics;
                 FuturesUnordered::new()
             };
 
@@ -624,16 +679,49 @@ impl Processor<Ready> {
                 state: Failed {
                     runtime: self.start_time.elapsed().as_millis(),
                     error: err.to_string(),
+                    report: None,
+                    included_diagnostics: Vec::new(),
                 },
             }),
         }
     }
 }
 
+pub(crate) async fn process_documents(
+    receiver: Arc<Receiver>,
+    exporter: StageDocumentExporter,
+    identifiers: Identifiers,
+    process_selection: Option<ProcessSelection>,
+    discover_included_diagnostics: bool,
+) -> Result<ProcessStageExecution> {
+    let processor = Processor::try_new_for_executor(receiver, exporter, identifiers, process_selection).await?;
+    let included_diagnostics = if discover_included_diagnostics {
+        processor.included_diagnostics()
+    } else {
+        Vec::new()
+    };
+    let processing = processor.start().await.map_err(|failed| eyre!(failed.state.error))?;
+    match processing.process().await {
+        Ok(completed) => Ok(ProcessStageExecution {
+            report: completed.state.report,
+            included_diagnostics,
+            export_error: None,
+        }),
+        Err(mut failed) => match failed.state.report.take() {
+            Some(report) => Ok(ProcessStageExecution {
+                report,
+                included_diagnostics,
+                export_error: Some(failed.state.error.clone()),
+            }),
+            None => Err(eyre!(failed.state.error)),
+        },
+    }
+}
+
 /// The actively `Processing` state.
 impl Processor<Processing> {
     #[tracing::instrument(skip_all)]
-    pub async fn process(self) -> Result<Processor<Completed>, Processor<Failed>> {
+    async fn process(self) -> Result<Processor<Completed>, Processor<Failed>> {
         tracing::debug!("Processing with async progress updates");
 
         let Processing {
@@ -655,20 +743,7 @@ impl Processor<Processing> {
             report
         });
 
-        let process_result = diagnostic.process(summary_tx).await;
-        if let Err(err) = process_result {
-            return Err(Processor {
-                receiver: self.receiver,
-                exporter: self.exporter,
-                child_event_tx: self.child_event_tx,
-                start_time: self.start_time,
-                id: self.id,
-                state: Failed {
-                    runtime: self.start_time.elapsed().as_millis(),
-                    error: err.to_string(),
-                },
-            });
-        }
+        let process_error = diagnostic.process(summary_tx).await.err();
 
         // Wait for sub processors to finish
         let mut included_diagnostics = Vec::new();
@@ -689,6 +764,8 @@ impl Processor<Processing> {
                     state: Failed {
                         runtime: self.start_time.elapsed().as_millis(),
                         error: err.to_string(),
+                        report: None,
+                        included_diagnostics,
                     },
                 });
             }
@@ -713,6 +790,22 @@ impl Processor<Processing> {
         report.add_processing_duration(self.start_time.elapsed().as_millis());
         if let Err(e) = self.exporter.save_report(&report).await {
             tracing::error!("Failed to save report: {}", e);
+        }
+
+        if let Some(error) = process_error {
+            return Err(Processor {
+                receiver: self.receiver,
+                exporter: self.exporter,
+                child_event_tx: self.child_event_tx,
+                start_time: self.start_time,
+                id: self.id,
+                state: Failed {
+                    runtime: self.start_time.elapsed().as_millis(),
+                    error: error.to_string(),
+                    report: Some(report),
+                    included_diagnostics,
+                },
+            });
         }
 
         Ok(Processor {
@@ -745,6 +838,7 @@ enum Diagnostic {
 }
 
 impl Diagnostic {
+    #[cfg(test)]
     pub fn uuid(&self) -> Option<String> {
         match self {
             Diagnostic::Elasticsearch(diagnostic) => Some(diagnostic.uuid().to_string()),

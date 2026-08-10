@@ -20,7 +20,7 @@ point in that one space, and the two-type `Collector`/`Processor` split plus the
 ## The six stages
 
 - **Collect** — call live product APIs for a *new* diagnostic
-- **Load** — read an *existing* diagnostic (directory/bundle; CLI `read`, UI upload, service download)
+- **Load** — read an *existing* diagnostic (CLI `process` input, UI upload, service download)
 - **Save** — write raw collected APIs to a directory/bundle (`Save` ⟸ `Collect`)
 - **Process** — transform diagnostic data into documents
 - **Export** — write *processed* documents to a remote/local destination (`Export` ⟸ `Process`)
@@ -30,7 +30,7 @@ point in that one space, and the two-type `Collector`/`Processor` split plus the
 
 - **Phase 1 — input (required, exactly one):** `Collect` xor `Load`
 - **Phase 2 — middle (optional):** `Save`, `Process`, or `Save` then `Process`
-- **Phase 3 — output (optional, at most one):** `Export` xor `Send`
+- **Phase 3 — output (optional, and/or):** `Export` (inside `Process`) and/or `Send`
 
 ## Considered options
 
@@ -45,10 +45,12 @@ point in that one space, and the two-type `Collector`/`Processor` split plus the
 
 - **`Save` sets the execution mode.** `Save` then `Process` is *staged* — collection
   must complete and the bundle materialise before processing begins (the bundle is
-  a serialization barrier). `Process` without `Save` is *streaming* — receive,
-  transform, and export overlap concurrently (this is what the `get_stream` /
-  `StreamingDataSource` / `document_channel` machinery exists for). Enabling the
-  bundle is therefore a first-class behavioural switch, not merely an extra sink.
+  a serialization barrier). `Collect` plus `Process` without `Save` is *streaming*
+  — receive, transform, and export overlap concurrently (this is what the
+  `get_stream` / `StreamingDataSource` / `document_channel` machinery exists
+  for). `Load` plus `Process` is staged over the existing bundle. Enabling Save
+  on Collect is therefore a first-class behavioural switch, not merely an extra
+  sink.
 - **The two write-sink roles co-vary and can co-occur.** `Save` targets a bundle
   sink (raw), `Export` targets a document sink (processed); workflow
   Collect→Save→Process→Export uses both. Typing the sinks by role (see the
