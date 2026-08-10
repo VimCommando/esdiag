@@ -973,6 +973,7 @@ fn get_jobs_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Application;
     use crate::test_env_lock;
     use tempfile::TempDir;
 
@@ -987,7 +988,7 @@ mod tests {
 
     fn save_collect_host(name: &str) {
         crate::data::KnownHostBuilder::new(url::Url::parse("http://localhost:9200/").expect("url"))
-            .product(crate::data::Product::Elasticsearch)
+            .application(Application::Elasticsearch)
             .roles(vec![HostRole::Collect, HostRole::Send])
             .build()
             .expect("host")

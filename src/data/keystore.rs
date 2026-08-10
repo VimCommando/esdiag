@@ -969,7 +969,8 @@ fn derive_key(password: &str, salt: &[u8], params: &KdfParams) -> Result<[u8; KE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HostRole, Job, JobOutput, KnownHostBuilder, Product, SavedJobs, save_saved_jobs};
+    use crate::data::Application;
+    use crate::data::{HostRole, Job, JobOutput, KnownHostBuilder, SavedJobs, save_saved_jobs};
     use crate::job::model::{Input, Process, SaveTarget, SendTarget};
     use crate::test_env_lock;
     use tempfile::TempDir;
@@ -1394,7 +1395,7 @@ ciphertext: ""
 
     fn save_secret_backed_host(secret_id: &str, host_name: &str) {
         let host = KnownHostBuilder::new(Url::parse("https://prod.example.com:9200").expect("url"))
-            .product(Product::Elasticsearch)
+            .application(Application::Elasticsearch)
             .roles(vec![HostRole::Collect, HostRole::Send])
             .secret(Some(secret_id.to_string()))
             .build_with_secret_auth(SecretAuth::basic("elastic", "pw"))

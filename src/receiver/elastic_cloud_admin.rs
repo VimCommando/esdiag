@@ -158,6 +158,7 @@ impl TryFrom<KnownHost> for ElasticCloudAdminReceiver {
     type Error = eyre::Report;
 
     fn try_from(host: KnownHost) -> Result<Self> {
+        let host = host.resolve()?.into_known_host();
         let url = host.get_url()?;
         match host.get_auth_for_direction(CredentialDirection::Input)? {
             Auth::Apikey(apikey) => Ok(ElasticCloudAdminReceiver::new(url, apikey.expose_secret().clone())?),

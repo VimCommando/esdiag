@@ -12,8 +12,6 @@ mod keystore;
 mod known_host;
 /// Deployment platforms (the platform axis)
 mod platform;
-/// Elastic stack products (legacy flattened axis)
-mod product;
 /// Saved job configurations
 pub mod saved_jobs;
 /// Application Settings
@@ -36,9 +34,11 @@ pub use keystore::{
 };
 #[cfg(all(test, feature = "server"))]
 pub(crate) use known_host::write_hosts_yml_for_tests;
-pub use known_host::{CredentialDirection, ElasticCloud, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate};
+pub use known_host::{
+    CredentialDirection, ElasticCloud, HostRole, HostRoute, KnownHost, KnownHostBuilder, KnownHostCliUpdate,
+    ResolvedKnownHost,
+};
 pub use platform::Platform;
-pub use product::Product;
 pub use saved_jobs::{
     CollectMode, CollectSource, DraftTargetAvailability, Job, JobBuilder, JobDraft, JobDraftCollect, JobDraftProcess,
     JobDraftSend, JobOutput, JobProcessSelection, JobSignals, JobSignalsCollect, JobSignalsProcess, JobSignalsSend,
@@ -54,10 +54,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
-pub fn collect_product(app: Option<Application>) -> Result<Product> {
+pub fn collect_application(app: Option<Application>) -> Result<Application> {
     match app {
         Some(application @ (Application::Elasticsearch | Application::Kibana | Application::Logstash)) => {
-            Ok(Product::from(application))
+            Ok(application)
         }
         Some(Application::Agent) => Err(eyre!(
             "Collect is out of scope by design for Elastic Agent. Elastic Agent provides its own diagnostic bundle; acquire it through CLI `process` input or Web UI `Upload`."
@@ -194,26 +194,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Application, Product, collect_product};
+    use super::{Application, collect_application};
 
     #[test]
-    fn collect_product_accepts_every_api_collectable_application() {
-        for (application, product) in [
-            (Application::Elasticsearch, Product::Elasticsearch),
-            (Application::Kibana, Product::Kibana),
-            (Application::Logstash, Product::Logstash),
-        ] {
+    fn collect_application_accepts_every_api_collectable_application() {
+        for application in [Application::Elasticsearch, Application::Kibana, Application::Logstash] {
             assert_eq!(
-                collect_product(Some(application)).expect("collectable application"),
-                product
+                collect_application(Some(application)).expect("collectable application"),
+                application
             );
         }
     }
 
     #[test]
-    fn collect_product_refuses_non_collectable_targets_as_by_design() {
+    fn collect_application_refuses_non_collectable_targets_as_by_design() {
         for application in [Some(Application::Agent), None] {
-            let error = collect_product(application)
+            let error = collect_application(application)
                 .expect_err("non-collectable target must be rejected")
                 .to_string();
             assert!(error.contains("out of scope by design"));

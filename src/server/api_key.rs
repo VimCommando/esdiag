@@ -231,7 +231,7 @@ async fn run_api_key_id(state: Arc<ServerState>, job_id: u64, request_user: Stri
 mod tests {
     use super::run_api_key_form;
     use crate::{
-        data::{HostRole, KnownHost, Product, Settings, Uri, authenticate},
+        data::{Application, HostRole, KnownHost, Settings, Uri, authenticate},
         exporter::Exporter,
         server::{ApiKeyFormSignals, ServerEvent, test_server_state},
     };
@@ -254,7 +254,7 @@ mod tests {
         hosts.insert(
             "secure-es".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -273,7 +273,7 @@ mod tests {
 
         let state = test_server_state();
         *state.exporter.write().await = Exporter::try_from(KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("secure output uri"),
             vec![HostRole::Send],
             None,

@@ -4,8 +4,7 @@
 
 use super::keystore::upsert_secret_auth_batch;
 use crate::data::{
-    Application, Auth, Platform, Product, SecretAuth, get_keystore_password,
-    resolve_secret_auth as resolve_secret_by_id,
+    Application, Auth, Platform, SecretAuth, get_keystore_password, resolve_secret_auth as resolve_secret_by_id,
 };
 use eyre::{Result, eyre};
 use redact::Secret;
@@ -92,16 +91,13 @@ fn default_collect_roles() -> Vec<HostRole> {
 fn app_cli_name(app: Option<Application>) -> &'static str {
     match app {
         Some(app) => app.key(),
-        None => "none",
+        None => "unresolved",
     }
 }
 
 fn app_display(app: Option<Application>) -> String {
-    app.map(|app| app.to_string()).unwrap_or_else(|| "None".to_string())
-}
-
-fn app_from_legacy_product(product: Product) -> Option<Application> {
-    product.application()
+    app.map(|app| app.to_string())
+        .unwrap_or_else(|| "Unresolved".to_string())
 }
 
 pub trait IntoKnownHostApp {
@@ -117,12 +113,6 @@ impl IntoKnownHostApp for Application {
 impl IntoKnownHostApp for Option<Application> {
     fn into_known_host_app(self) -> Option<Application> {
         self
-    }
-}
-
-impl IntoKnownHostApp for Product {
-    fn into_known_host_app(self) -> Option<Application> {
-        app_from_legacy_product(self)
     }
 }
 
@@ -283,13 +273,6 @@ impl KnownHostBuilder {
     pub fn app(self, app: impl IntoKnownHostApp) -> Self {
         Self {
             app: app.into_known_host_app(),
-            ..self
-        }
-    }
-
-    pub fn product(self, product: Product) -> Self {
-        Self {
-            app: app_from_legacy_product(product),
             ..self
         }
     }
@@ -478,6 +461,52 @@ pub struct KnownHost {
     pub legacy_apikey: Option<Secret<String>>,
     pub legacy_username: Option<String>,
     pub legacy_password: Option<Secret<String>>,
+}
+
+/// The route used by a concrete known host to reach its application API.
+///
+/// Route is transport metadata: it is deliberately independent of the target
+/// [`Application`]. In particular, a Cloud admin route still targets
+/// Elasticsearch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostRoute {
+    Direct,
+    ElasticCloud,
+    ElasticCloudAdmin,
+    ElasticGovCloudAdmin,
+}
+
+/// A saved host that has crossed the runtime-validation boundary.
+///
+/// A resolved host always has a concrete URL and a live API application. Template
+/// records and legacy records without a determinable application remain
+/// [`KnownHost`] values and cannot be resolved for runtime use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedKnownHost(KnownHost);
+
+impl ResolvedKnownHost {
+    pub fn application(&self) -> Application {
+        self.0.app.expect("resolved hosts always have an application")
+    }
+
+    pub fn route(&self) -> HostRoute {
+        match self.0.cloud_id() {
+            Some(ElasticCloud::ElasticCloud) => HostRoute::ElasticCloud,
+            Some(ElasticCloud::ElasticCloudAdmin) => HostRoute::ElasticCloudAdmin,
+            Some(ElasticCloud::ElasticGovCloudAdmin) => HostRoute::ElasticGovCloudAdmin,
+            None => HostRoute::Direct,
+        }
+    }
+
+    pub fn into_known_host(self) -> KnownHost {
+        self.0
+    }
+}
+
+impl AsRef<KnownHost> for ResolvedKnownHost {
+    fn as_ref(&self) -> &KnownHost {
+        &self.0
+    }
 }
 
 #[derive(Serialize)]
@@ -935,6 +964,37 @@ impl KnownHost {
 
     pub fn app(&self) -> Option<Application> {
         self.app
+    }
+
+    /// Validate this persisted host before using it for a live API operation.
+    ///
+    /// Template-backed records are intentionally valid persisted configuration,
+    /// but require materialization first. Likewise, legacy records with an
+    /// absent application remain readable but cannot silently default to
+    /// Elasticsearch at runtime.
+    pub fn resolve(self) -> Result<ResolvedKnownHost> {
+        if self.is_template() {
+            return Err(eyre!(
+                "Template-backed hosts must be resolved into a concrete URL before runtime use"
+            ));
+        }
+        let application = self.app.ok_or_else(|| {
+            eyre!("Host has no application. Set an application before using this concrete host at runtime.")
+        })?;
+        if !matches!(
+            application,
+            Application::Elasticsearch | Application::Kibana | Application::Logstash
+        ) {
+            return Err(eyre!(
+                "Collect is out of scope by design for {application}. Use an existing diagnostic bundle with read/Load instead."
+            ));
+        }
+        if self.url.is_none() {
+            return Err(eyre!("Resolved host is missing a concrete URL"));
+        }
+        let mut validated = self;
+        validated.normalize_and_validate_roles("<runtime>")?;
+        Ok(ResolvedKnownHost(validated))
     }
 
     pub fn get_url(&self) -> Result<Url> {
@@ -1418,6 +1478,7 @@ impl KnownHost {
 
     fn normalize_and_validate_roles(&mut self, host_name: &str) -> Result<()> {
         let app = self.app();
+        let is_template = self.is_template();
         let roles = &mut self.roles;
 
         if roles.is_empty() {
@@ -1435,6 +1496,9 @@ impl KnownHost {
                 HostRole::Collect => {}
                 HostRole::Send if app == Some(Application::Elasticsearch) => {}
                 HostRole::View if app == Some(Application::Kibana) => {}
+                // A dynamic template selects its application at materialization.
+                // `resolve` reruns this validation once the application is known.
+                HostRole::Send | HostRole::View if app.is_none() && is_template => {}
                 HostRole::Send => {
                     return Err(eyre!(
                         "Host '{host_name}' role 'send' is only valid for Elasticsearch hosts"
@@ -1784,7 +1848,7 @@ mod tests {
         hosts.insert(
             "default-role".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 Vec::new(),
                 None,
@@ -1806,7 +1870,7 @@ mod tests {
         hosts.insert(
             "kb-invalid-send".to_string(),
             KnownHost::new_no_auth(
-                Product::Kibana,
+                Application::Kibana,
                 Url::parse("http://localhost:5601").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -1826,7 +1890,7 @@ mod tests {
         hosts.insert(
             "collect-only".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -1836,7 +1900,7 @@ mod tests {
         hosts.insert(
             "collect-send".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9201").expect("url"),
                 vec![HostRole::Collect, HostRole::Send],
                 None,
@@ -1846,7 +1910,7 @@ mod tests {
         hosts.insert(
             "view-host".to_string(),
             KnownHost::new_no_auth(
-                Product::Kibana,
+                Application::Kibana,
                 Url::parse("http://localhost:5601").expect("url"),
                 vec![HostRole::View],
                 None,
@@ -1872,7 +1936,7 @@ mod tests {
         hosts.insert(
             "source".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 Some("viewer-host".to_string()),
@@ -1882,7 +1946,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHost::new_no_auth(
-                Product::Kibana,
+                Application::Kibana,
                 Url::parse("http://localhost:5601").expect("url"),
                 vec![HostRole::View],
                 None,
@@ -1901,7 +1965,7 @@ mod tests {
         hosts.insert(
             "source".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 Some("viewer-host".to_string()),
@@ -1911,7 +1975,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHost::new_no_auth(
-                Product::Kibana,
+                Application::Kibana,
                 Url::parse("http://localhost:5601").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -1930,7 +1994,7 @@ mod tests {
         hosts.insert(
             "source".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 Some("viewer-host".to_string()),
@@ -1940,7 +2004,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHost::new_no_auth(
-                Product::Kibana,
+                Application::Kibana,
                 Url::parse("http://localhost:5601").expect("url"),
                 vec![HostRole::View],
                 None,
@@ -1962,7 +2026,7 @@ mod tests {
         hosts.insert(
             "legacy-es".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 default_collect_roles(),
                 None,
@@ -1993,7 +2057,7 @@ mod tests {
         hosts.insert(
             "secret-only".to_string(),
             KnownHost::new_legacy_basic(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 default_collect_roles(),
                 None,
@@ -2026,7 +2090,7 @@ mod tests {
         hosts.insert(
             "prod-es".to_string(),
             KnownHost::new_legacy_basic(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 default_collect_roles(),
                 None,
@@ -2113,7 +2177,7 @@ mod tests {
         hosts.insert(
             "prod-es".to_string(),
             KnownHost::new_legacy_basic(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 default_collect_roles(),
                 None,
@@ -2143,7 +2207,7 @@ mod tests {
         hosts.insert(
             "prod-es".to_string(),
             KnownHost::new_legacy_basic(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 default_collect_roles(),
                 None,
@@ -2155,7 +2219,7 @@ mod tests {
         hosts.insert(
             "legacy-only".to_string(),
             KnownHost::new_legacy_basic(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9201").expect("url"),
                 default_collect_roles(),
                 None,
@@ -2191,7 +2255,7 @@ mod tests {
         hosts.insert(
             "es-prod".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 default_collect_roles(),
                 None,
@@ -2203,7 +2267,7 @@ mod tests {
         hosts.insert(
             "kb-prod".to_string(),
             KnownHost::new_legacy_basic(
-                Product::Kibana,
+                Application::Kibana,
                 Url::parse("http://localhost:5601").expect("url"),
                 default_collect_roles(),
                 None,
@@ -2294,7 +2358,7 @@ mod tests {
     #[test]
     fn merge_cli_update_preserves_omitted_fields() {
         let host = KnownHost::new_legacy_apikey(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("url"),
             vec![HostRole::Collect],
             None,
@@ -2321,7 +2385,7 @@ mod tests {
     #[test]
     fn merge_cli_update_switches_secret_host_to_apikey() {
         let host = KnownHost::new_legacy_basic(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("url"),
             vec![HostRole::Collect],
             None,
@@ -2346,7 +2410,7 @@ mod tests {
     #[test]
     fn merge_cli_update_applies_explicit_false_for_accept_invalid_certs() {
         let host = KnownHost::new_legacy_apikey(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("url"),
             vec![HostRole::Collect],
             None,
@@ -2375,7 +2439,7 @@ mod tests {
         hosts.insert(
             "prod-es".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -2400,7 +2464,7 @@ mod tests {
         hosts.insert(
             "prod-es".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -2425,7 +2489,7 @@ mod tests {
         hosts.insert(
             "legacy-es".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -2442,7 +2506,7 @@ mod tests {
     #[test]
     fn merge_cli_update_rejects_partial_basic_auth_without_secret() {
         let host = KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("url"),
             vec![HostRole::Collect],
             None,
@@ -2468,7 +2532,7 @@ mod tests {
     #[test]
     fn merge_cli_update_rejects_partial_basic_auth_for_existing_basic_host() {
         let host = KnownHost::new_legacy_basic(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("url"),
             vec![HostRole::Collect],
             None,
@@ -2502,7 +2566,7 @@ mod tests {
         hosts.insert(
             "prod-es".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -2528,7 +2592,7 @@ mod tests {
         hosts.insert(
             "z-prod".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9201").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -2538,7 +2602,7 @@ mod tests {
         hosts.insert(
             "a-prod".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -2661,7 +2725,7 @@ url: https://platform.example
         let host = KnownHostBuilder::new(
             Url::parse("https://cloud.elastic.co/deployments/deployment-123").expect("cloud url"),
         )
-        .product(Product::Elasticsearch)
+        .application(Application::Elasticsearch)
         .build()
         .expect("build cloud host");
         assert_eq!(
@@ -2676,7 +2740,7 @@ url: https://platform.example
             Url::parse("https://admin.us-gov-east-1.aws.elastic-cloud.com/deployments/deployment-123")
                 .expect("govcloud admin url"),
         )
-        .product(Product::Elasticsearch)
+        .application(Application::Elasticsearch)
         .build()
         .expect("build govcloud admin host");
 
@@ -2722,7 +2786,7 @@ url: https://platform.example
             Url::parse("https://admin.found.no/api/v1/deployments/deployment-123/elasticsearch/es-ref-id/proxy")
                 .expect("cloud admin proxy url"),
         )
-        .product(Product::Elasticsearch)
+        .application(Application::Elasticsearch)
         .build()
         .expect("build cloud admin host");
 

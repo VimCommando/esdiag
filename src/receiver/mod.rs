@@ -26,7 +26,7 @@ pub use logstash::{LogstashReceiver, LogstashRequestError};
 pub use resolver::{InputResolver, ResolvedInput};
 
 use super::{
-    data::{KnownHost, Product, Uri, collect_product},
+    data::{Application, KnownHost, Uri},
     processor::{DataSource, DiagnosticManifest, Manifest, SourceContext, StreamingDataSource},
 };
 use archive::{ArchiveBytesReceiver, ArchiveFileReceiver};
@@ -341,7 +341,7 @@ impl Receiver {
             Receiver::Logstash(receiver) => receiver.try_get_manifest().await,
             Receiver::ElasticCloudAdmin(receiver) => receiver.try_get_manifest().await,
         }?;
-        self.set_source_product_from_manifest(&manifest.product)?;
+        self.set_source_application_from_manifest(manifest.application())?;
         Ok(manifest)
     }
 
@@ -352,7 +352,7 @@ impl Receiver {
         {
             Ok(manifest) => {
                 tracing::debug!("Using diagnostic_manifest.json");
-                self.set_source_product_from_manifest(&manifest.product)?;
+                self.set_source_application_from_manifest(manifest.application())?;
                 return Ok(manifest);
             }
             Err(e) => tracing::debug!("Error reading diagnostic_manifest.json: {e}"),
@@ -362,7 +362,7 @@ impl Receiver {
             Ok(manifest) => {
                 tracing::warn!("Falling back to manifest.json");
                 let manifest: DiagnosticManifest = manifest.into();
-                self.set_source_product_from_manifest(&manifest.product)?;
+                self.set_source_application_from_manifest(manifest.application())?;
                 Ok(manifest)
             }
             Err(e) => Err(eyre!("Failed to identify product from diagnostic manifest: {}", e)),
@@ -383,8 +383,11 @@ impl Receiver {
         }
     }
 
-    fn set_source_product_from_manifest(&self, product: &Product) -> Result<()> {
-        let Ok(product) = crate::processor::diagnostic::data_source::source_product_key(product) else {
+    fn set_source_application_from_manifest(&self, application: Option<Application>) -> Result<()> {
+        let Some(application) = application else {
+            return Ok(());
+        };
+        let Ok(product) = crate::processor::diagnostic::data_source::source_application_key(application) else {
             return Ok(());
         };
 
@@ -429,12 +432,19 @@ impl TryFrom<Uri> for Receiver {
                 Receiver::ElasticCloudAdmin(ElasticCloudAdminReceiver::try_from(host)?)
             }
             Uri::File(file) => Receiver::ArchiveFile(ArchiveFileReceiver::try_from(file)?),
-            Uri::KnownHost(host) => match collect_product(host.app())? {
-                Product::Elasticsearch => Receiver::Elasticsearch(ElasticsearchReceiver::try_from(host)?),
-                Product::Logstash => Receiver::Logstash(LogstashReceiver::try_from(host)?),
-                Product::Kibana => Receiver::Kibana(KibanaReceiver::try_from(host)?),
-                product => unreachable!("collect_product returned non-collectable product {product}"),
-            },
+            Uri::KnownHost(host) => {
+                let resolved = host.resolve()?;
+                let application = resolved.application();
+                let host = resolved.into_known_host();
+                match application {
+                    Application::Elasticsearch => Receiver::Elasticsearch(ElasticsearchReceiver::try_from(host)?),
+                    Application::Logstash => Receiver::Logstash(LogstashReceiver::try_from(host)?),
+                    Application::Kibana => Receiver::Kibana(KibanaReceiver::try_from(host)?),
+                    application => {
+                        unreachable!("KnownHost::resolve returned non-collectable application {application}")
+                    }
+                }
+            }
             Uri::ServiceLink(url) => Receiver::ArchiveBytes(UploadServiceDownloader::try_from(url)?.download()?),
             _ => return Err(eyre!("Unsupported URI: {uri}")),
         };
@@ -476,7 +486,7 @@ impl std::fmt::Display for Receiver {
 #[cfg(test)]
 mod tests {
     use super::{DirectoryReceiver, Receiver};
-    use crate::data::{Application, KnownHostBuilder, Product};
+    use crate::data::{Application, KnownHostBuilder};
     use url::Url;
 
     fn directory_receiver() -> Receiver {
@@ -524,24 +534,7 @@ mod tests {
 
         let err = Receiver::try_from(host).err().expect("agent collect should be refused");
 
-        assert!(err.to_string().contains("out of scope by design for Elastic Agent"));
-        assert!(err.to_string().contains("CLI `process` input"));
-        assert!(err.to_string().contains("Web UI `Upload`"));
-    }
-
-    #[test]
-    fn known_host_receiver_refuses_platform_collect_by_design() {
-        let host = KnownHostBuilder::new(Url::parse("https://platform.example").expect("url"))
-            .product(Product::ECK)
-            .build()
-            .expect("host");
-
-        let err = Receiver::try_from(host)
-            .err()
-            .expect("platform collect should be refused");
-
-        assert!(err.to_string().contains("out of scope by design for platform targets"));
-        assert!(err.to_string().contains("CLI `process` input"));
-        assert!(err.to_string().contains("Web UI `Upload`"));
+        assert!(err.to_string().contains("out of scope by design for Agent"));
+        assert!(err.to_string().contains("read/Load"));
     }
 }

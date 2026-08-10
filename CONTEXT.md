@@ -189,6 +189,31 @@ The transport used to receive from a *remote* source — the HTTP layer that tal
 to a live cluster's REST API. Local receivers do not use a client.
 _Avoid_: connection, transport
 
+**Saved host**:
+A reusable, persisted target definition. It records the target application, endpoint
+state, route, roles, and a credential reference; it does not identify the platform of
+the diagnostic produced by a future collection.
+_Avoid_: product (a saved host is not a diagnostic classification)
+
+**Route**:
+How a concrete saved-host endpoint reaches its target application: direct, or through
+an Elastic Cloud admin proxy. A route is transport metadata, never an application. A
+Cloud admin route targets Elasticsearch and vouches for an `ElasticCloudHosted` platform
+hint once collection starts.
+_Avoid_: application, platform
+
+**Unresolved host**:
+A saved host with a URL template that still needs an identifier and/or application
+selection before it has a concrete endpoint. It is valid persisted configuration but
+cannot create a client, receiver, or collector.
+_Avoid_: unknown application (uncertainty belongs to resolution state)
+
+**Resolved host**:
+A concrete target derived from a saved host after validating its URL, application,
+route, and roles. It is the only saved-host form permitted to enter runtime dispatch.
+_Avoid_: materialized template (a template is one source of a resolved host, not the
+concept itself)
+
 **Data source**:
 A named unit of diagnostic data, and the unit of extensibility — adding one is what
 it takes to collect or process something new. Deliberately transport-neutral: it is

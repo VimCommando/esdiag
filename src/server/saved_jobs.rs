@@ -237,7 +237,7 @@ pub async fn delete_saved_job(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HostRole, Product, load_saved_jobs};
+    use crate::data::{Application, HostRole, load_saved_jobs};
     use crate::job::model::Input;
     use axum::body::to_bytes;
     use std::collections::BTreeMap;
@@ -270,7 +270,7 @@ mod tests {
         hosts.insert(
             "elasticsearch-local".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -292,7 +292,7 @@ mod tests {
         hosts.insert(
             "send-only".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -358,7 +358,7 @@ mod tests {
         hosts.insert(
             "elasticsearch-local".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,

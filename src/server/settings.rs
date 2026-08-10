@@ -340,7 +340,7 @@ fn render_settings_error_script(err_msg: &str) -> String {
 mod tests {
     use super::{get_modal, update_settings};
     use crate::{
-        data::{HostRole, KnownHost, Product, Settings, Uri, authenticate},
+        data::{Application, HostRole, KnownHost, Settings, Uri, authenticate},
         exporter::Exporter,
         server::{RuntimeMode, ServerEvent, ServerPolicy, SettingsUpdateSignals, test_server_state},
     };
@@ -371,7 +371,7 @@ mod tests {
         hosts.insert(
             "secure-es".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -439,7 +439,7 @@ mod tests {
         hosts.insert(
             "saved-host".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -473,7 +473,7 @@ mod tests {
         hosts.insert(
             "collector-only".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -645,7 +645,7 @@ mod tests {
         hosts.insert(
             "secure-es".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,

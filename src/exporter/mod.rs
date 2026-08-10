@@ -452,7 +452,7 @@ fn build_kibana_link(kibana_url: &str, diagnostic_id: &str, collection_date: u64
 #[cfg(test)]
 mod tests {
     use super::{ArchiveExporter, Exporter, format_directory_label};
-    use crate::data::{HostRole, KnownHost, KnownHostBuilder, Product, Uri};
+    use crate::data::{Application, HostRole, KnownHost, KnownHostBuilder, Uri};
     use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
     use tempfile::TempDir;
     use url::Url;
@@ -598,7 +598,7 @@ mod tests {
         hosts.insert(
             "send-host".to_string(),
             KnownHostBuilder::new(Url::parse("https://es.example:9200").expect("es url"))
-                .product(Product::Elasticsearch)
+                .application(Application::Elasticsearch)
                 .roles(vec![HostRole::Send])
                 .viewer(Some("viewer-host".to_string()))
                 .build()
@@ -607,7 +607,7 @@ mod tests {
         hosts.insert(
             "viewer-host".to_string(),
             KnownHostBuilder::new(Url::parse("https://kb.example:5601").expect("kb url"))
-                .product(Product::Kibana)
+                .application(Application::Kibana)
                 .roles(vec![HostRole::View])
                 .build()
                 .expect("viewer host"),

@@ -2,7 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use crate::data::Product;
+use crate::data::Application;
 use eyre::{Result, eyre};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -101,12 +101,14 @@ pub trait DataSource {
     }
 }
 
-pub fn source_product_key(product: &Product) -> Result<&'static str> {
-    match product {
-        Product::Elasticsearch => Ok("elasticsearch"),
-        Product::Kibana => Ok("kibana"),
-        Product::Logstash => Ok("logstash"),
-        _ => Err(eyre!("sources.yml overrides are not supported for product {}", product)),
+pub fn source_application_key(application: Application) -> Result<&'static str> {
+    match application {
+        Application::Elasticsearch => Ok("elasticsearch"),
+        Application::Kibana => Ok("kibana"),
+        Application::Logstash => Ok("logstash"),
+        Application::Agent => Err(eyre!(
+            "sources.yml overrides are not supported for application {application}"
+        )),
     }
 }
 
@@ -489,7 +491,8 @@ impl Source {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessableClaim, get_sources, validate_processable_registry};
+    use super::{ProcessableClaim, get_sources, source_application_key, validate_processable_registry};
+    use crate::data::Application;
     use semver::{Version, VersionReq};
 
     #[test]
@@ -504,6 +507,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn source_registry_keys_cover_live_collectable_applications_only() {
+        assert_eq!(
+            source_application_key(Application::Elasticsearch).unwrap(),
+            "elasticsearch"
+        );
+        assert_eq!(source_application_key(Application::Kibana).unwrap(), "kibana");
+        assert_eq!(source_application_key(Application::Logstash).unwrap(), "logstash");
+        assert!(source_application_key(Application::Agent).is_err());
     }
 
     #[test]
