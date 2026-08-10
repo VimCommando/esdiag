@@ -152,7 +152,7 @@ mod tests {
         let loaded = ApplicationConfig::load().expect("load configuration");
 
         assert_eq!(loaded, config);
-        assert!(written.contains("output: output-elasticsearch"));
+        assert!(written.contains("default_diagnostics_cluster: output-elasticsearch"));
         assert!(written.contains("default_job: production-standard"));
         for forbidden in ["apikey", "password", "authorization", "https://es.example"] {
             assert!(!written.contains(forbidden), "{forbidden} must not be serialized");

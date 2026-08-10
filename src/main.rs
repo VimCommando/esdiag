@@ -1946,9 +1946,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
 
     if !initial.collect_host_configured || prompt_confirm("Add or replace a collect host? [y/N]: ")? {
         loop {
-            let collect_name_default = output_name_for_defaults
-                .clone()
-                .unwrap_or_else(|| "collect".to_string());
+            let collect_name_default = output_name_for_defaults.clone().unwrap_or_else(|| "source".to_string());
             let name = prompt_with_default("Collect host name", &collect_name_default)?;
             let url = prompt_url_with_default(
                 "Collect Elasticsearch URL",
@@ -1962,9 +1960,19 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     .and_then(|output| KnownHost::get_known(&output))
                     .and_then(|host| host.secret)
             } else {
-                Some(prompt_required("Collect-host credential name: ")?)
+                Some(prompt_with_default("Collect-host credential name", &name)?)
             };
-            let auth = None;
+            let auth = if reuse_output_secret {
+                None
+            } else {
+                Some(prompt_api_key("Collect-host", detected_esdiag_local_preset().as_ref())?)
+            };
+            let keystore_password = if auth.is_some() {
+                unlock_keystore(default_unlock_ttl())?;
+                Some(get_password_for_secret_commands()?)
+            } else {
+                None
+            };
             save_collect_host(
                 CollectHostInput {
                     name: name.clone(),
@@ -1973,7 +1981,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     secret_id,
                     auth,
                 },
-                None,
+                keystore_password.as_deref(),
             )?;
             most_recent_collect_host = Some(name);
             if !prompt_confirm("Add another collect host? [y/N]: ")? {
