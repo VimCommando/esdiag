@@ -15,7 +15,7 @@ pub use kibana::KibanaClient;
 pub use logstash::LogstashClient;
 
 extern crate elasticsearch as es;
-use crate::data::{Application, Uri, collect_application};
+use crate::data::{Application, Uri};
 use eyre::{Result, eyre};
 use reqwest::Method;
 use std::collections::HashMap;
@@ -226,12 +226,17 @@ impl TryFrom<Uri> for Client {
 
     fn try_from(uri: Uri) -> Result<Self, Self::Error> {
         match uri {
-            Uri::KnownHost(host) => match collect_application(host.app())? {
-                Application::Kibana => Ok(Client::Kibana(KibanaClient::try_from(host)?)),
-                Application::Elasticsearch => Ok(Client::Elasticsearch(ElasticsearchClient::try_from(host)?)),
-                Application::Logstash => Ok(Client::Logstash(LogstashClient::try_from(host)?)),
-                Application::Agent => unreachable!("collect_application returned Agent"),
-            },
+            Uri::KnownHost(host) => {
+                let resolved = host.resolve()?;
+                let application = resolved.application();
+                let host = resolved.into_known_host();
+                match application {
+                    Application::Kibana => Ok(Client::Kibana(KibanaClient::try_from(host)?)),
+                    Application::Elasticsearch => Ok(Client::Elasticsearch(ElasticsearchClient::try_from(host)?)),
+                    Application::Logstash => Ok(Client::Logstash(LogstashClient::try_from(host)?)),
+                    Application::Agent => unreachable!("KnownHost::resolve returned Agent"),
+                }
+            }
             _ => Err(eyre!("Unsupported URI")),
         }
     }

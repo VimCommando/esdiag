@@ -7,7 +7,7 @@ use super::{
     ServerState, job_feed_event, replace_job_event, signal_event, template, template_event,
 };
 use crate::{
-    data::{Application, HostRole, Uri, collect_application},
+    data::{Application, HostRole, Uri},
     exporter::{DocumentExporter, Exporter},
     job::{
         context::{ExecutionContext, ExecutionIdentity, ExecutionObserver, RetentionPolicy},
@@ -201,10 +201,13 @@ async fn execute_unified_web_job(
             host, diagnostic_type, ..
         } => {
             let binding = BindingKey::try_new(format!("web-collect-{job_id}"))?;
-            let application = collect_application(host.app())?;
-            context
-                .inputs
-                .bind_receiver(binding.clone(), Receiver::try_from(host.clone())?, Some(application));
+            let resolved = host.clone().resolve()?;
+            let application = resolved.application();
+            context.inputs.bind_receiver(
+                binding.clone(),
+                Receiver::try_from(resolved.into_known_host())?,
+                Some(application),
+            );
             Input::CollectBinding {
                 binding,
                 diagnostic_type: diagnostic_type.clone(),

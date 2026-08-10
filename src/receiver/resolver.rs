@@ -6,7 +6,7 @@
 
 use super::{Receiver, UploadServiceDownloader};
 use crate::{
-    data::{Application, HostRole, KnownHost, Uri, collect_application},
+    data::{Application, HostRole, KnownHost, Uri},
     job::model::{BindingKey, Input},
 };
 use eyre::{Result, eyre};
@@ -110,12 +110,13 @@ impl InputResolver {
             .get(host_key)
             .cloned()
             .ok_or_else(|| eyre!("Host '{host_key}' referenced by job not found in hosts.yml"))?;
-        if !host.has_role(HostRole::Collect) {
+        let resolved = host.resolve()?;
+        if !resolved.as_ref().has_role(HostRole::Collect) {
             return Err(eyre!("Collect host '{host_key}' is missing the collect role"));
         }
-        let application = collect_application(host.app())?;
+        let application = resolved.application();
         Ok(ResolvedInput::new(
-            Receiver::try_from(host)?,
+            Receiver::try_from(resolved.into_known_host())?,
             Some(application),
             None,
             None,

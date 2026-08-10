@@ -26,7 +26,7 @@ pub use logstash::{LogstashReceiver, LogstashRequestError};
 pub use resolver::{InputResolver, ResolvedInput};
 
 use super::{
-    data::{Application, KnownHost, Uri, collect_application},
+    data::{Application, KnownHost, Uri},
     processor::{DataSource, DiagnosticManifest, Manifest, SourceContext, StreamingDataSource},
 };
 use archive::{ArchiveBytesReceiver, ArchiveFileReceiver};
@@ -432,12 +432,19 @@ impl TryFrom<Uri> for Receiver {
                 Receiver::ElasticCloudAdmin(ElasticCloudAdminReceiver::try_from(host)?)
             }
             Uri::File(file) => Receiver::ArchiveFile(ArchiveFileReceiver::try_from(file)?),
-            Uri::KnownHost(host) => match collect_application(host.app())? {
-                Application::Elasticsearch => Receiver::Elasticsearch(ElasticsearchReceiver::try_from(host)?),
-                Application::Logstash => Receiver::Logstash(LogstashReceiver::try_from(host)?),
-                Application::Kibana => Receiver::Kibana(KibanaReceiver::try_from(host)?),
-                application => unreachable!("collect_application returned non-collectable application {application}"),
-            },
+            Uri::KnownHost(host) => {
+                let resolved = host.resolve()?;
+                let application = resolved.application();
+                let host = resolved.into_known_host();
+                match application {
+                    Application::Elasticsearch => Receiver::Elasticsearch(ElasticsearchReceiver::try_from(host)?),
+                    Application::Logstash => Receiver::Logstash(LogstashReceiver::try_from(host)?),
+                    Application::Kibana => Receiver::Kibana(KibanaReceiver::try_from(host)?),
+                    application => {
+                        unreachable!("KnownHost::resolve returned non-collectable application {application}")
+                    }
+                }
+            }
             Uri::ServiceLink(url) => Receiver::ArchiveBytes(UploadServiceDownloader::try_from(url)?.download()?),
             _ => return Err(eyre!("Unsupported URI: {uri}")),
         };
