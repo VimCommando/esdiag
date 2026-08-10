@@ -1,6 +1,6 @@
 ---
 name: esdiag-release
-description: Prepare, stage, verify, and publish ESDiag numbered releases. Use when cutting a maintenance branch, setting a stable version, drafting notes, publishing containers or the crates.io crate, creating a numeric tag, attaching native Homebrew assets, updating the elastic/tools Formula, or validating a draft GitHub release.
+description: Prepare and verify ESDiag numbered releases, with explicit human approval for publication. Use when cutting a maintenance branch, setting a stable version, drafting notes, publishing containers or the crates.io crate, creating a numeric tag, attaching native Homebrew assets, updating the elastic/tools Formula, or validating a draft GitHub release.
 ---
 
 # ESDiag Release

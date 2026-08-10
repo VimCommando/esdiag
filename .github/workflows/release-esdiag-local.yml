@@ -17,8 +17,14 @@ jobs:
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          # Set this on a release branch when the previous release tag is not
+          # an ancestor of the tagged commit.
+          RELEASE_NOTES_START_TAG: ""
         run: |
-          previous_tag="$(git tag --merged HEAD --sort=-v:refname | sed -n '2p')"
+          previous_tag="$RELEASE_NOTES_START_TAG"
+          if [ -z "$previous_tag" ]; then
+            previous_tag="$(git tag --merged HEAD --sort=-v:refname | sed -n '2p')"
+          fi
           test -n "$previous_tag"
           gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
             gh release create "${{ github.ref_name }}" --draft --verify-tag --generate-notes \

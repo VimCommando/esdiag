@@ -32,7 +32,10 @@ End with a link to the release branch `CHANGELOG.md`.
 In `.github/workflows/release-esdiag-local.yml`:
 
 - Trigger numeric tags with `"[0-9]*.[0-9]*.[0-9]*"`.
-- Create the release with `--notes-start-tag "$PREVIOUS"`.
+- Create the release with `--notes-start-tag "$PREVIOUS"`. Set the workflow's
+  `RELEASE_NOTES_START_TAG` override on a release branch when `PREVIOUS` is not
+  an ancestor of the tagged commit; otherwise leave it empty and use the
+  computed previous merged tag.
 - Keep the release draft after verification.
 - Never automate `gh release edit ... --draft=false`.
 
