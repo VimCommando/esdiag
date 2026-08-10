@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define the portable Bash ESDiag Lite collector and its generated, version-aware API behavior.
+
+## Requirements
 
 ### Requirement: Portable ESDiag Lite Artifact
 The project SHALL provide `bin/esdiag-lite.sh` as a self-contained Elasticsearch diagnostic collection script that runs under Bash 3.2 or newer. Uncompressed collection MUST require only Bash, `curl`, and standard POSIX utilities. ZIP output additionally requires a runtime `zip` executable. The deployed script MUST NOT require `jq`, `yq`, Python, Rust, the ESDiag binary, or a container runtime.
@@ -163,7 +167,7 @@ Each successful collection SHALL produce either an `api-diagnostics-<timestamp>.
 - **AND** processes the available collected API files without requiring files for version-unsupported skipped APIs
 
 ### Requirement: Collection-Only Utility Boundary
-The script and its documentation SHALL identify `esdiag-lite.sh` as a collection-only utility. The script MUST NOT process, analyze, transform, export, send, upload, or visualize collected diagnostics. Its ZIP archive or directory output SHALL be suitable as input to `esdiag` diagnostic processing.
+The script and its documentation SHALL identify `esdiag-lite.sh` as a collection-only utility. The script MUST NOT process, analyze, transform, export, or visualize collected diagnostics. It MAY explicitly forward a completed ZIP archive to the Elastic Upload Service, but that transport MUST NOT modify the diagnostic content or perform ESDiag processing. Its ZIP archive or directory output SHALL be suitable as input to `esdiag` diagnostic processing.
 
 #### Scenario: Complete lite collection without processing
 - **GIVEN** valid environment and archive configuration

@@ -53,9 +53,9 @@ Argument, environment, authentication, and dependency validation occurs before t
 
 - Reimplement a general JSON or NPM-semver parser in Bash.
 - Generate collection behavior for sources not tagged `lite`.
-- Add authentication modes beyond API key and username/password, retries, parallelism controls, archive formats beyond `zip` and `none`, upload support, or Kibana/Logstash collection.
+- Add authentication modes beyond API key and username/password, retries, parallelism controls, archive formats beyond `zip` and `none`, upload targets beyond the Elastic Upload Service, or Kibana/Logstash collection.
 - Change the ESDiag Rust CLI, Web UI, receiver, processor, or exporter behavior.
-- Process, analyze, transform, send, upload, or visualize diagnostics inside `esdiag-lite.sh`.
+- Process, analyze, transform, export, or visualize diagnostics inside ESDiag Lite. Explicit forwarding of a completed ZIP archive to the Elastic Upload Service is allowed.
 - Make the generated script POSIX `sh`; Bash 3.2 is the compatibility floor.
 
 ## Decisions
@@ -145,6 +145,16 @@ shfmt -d -i 2 -ci -bn "$script"
 ```
 
 The generator must emit code that already conforms to this style so regeneration produces no `shfmt` diff. ShellCheck and `shfmt` are maintainer and CI dependencies only; they are not required in the restricted environment that executes the script.
+
+### Provide a Windows PowerShell counterpart
+
+`bin/esdiag-lite.ps1` will provide the same operator-facing collection contract on Windows PowerShell 5.1 and newer: `collect`, `watch`, `upload`, `--archive=zip|none`, `--upload=<id>`, `ELASTIC_ES_*` authentication, `UPLOAD_*` configuration, version-aware API selection, and the same processable bundle layout. The filename follows PowerShell's standard `.ps1` convention; documentation will show invocation with `powershell -File bin/esdiag-lite.ps1` (or a PowerShell host's equivalent).
+
+A repository-side generator will render named `Get-Api<Source>` functions and the collection sequence into marked regions in both script artifacts from the shared `lite` source definitions. Handwritten PowerShell code will own argument parsing, version predicates, HTTP requests, manifest generation, archiving, and upload transport. This preserves a single authoritative API catalog without requiring a YAML parser or generator tooling on the target Windows host.
+
+PowerShell built-ins will replace Unix runtime utilities where practical: `Invoke-WebRequest` for requests, `Compress-Archive` for ZIP creation, `Get-FileHash` for SHA-256, and .NET stream APIs for 50,000,000-byte upload parts. ZIP remains an optional mode; the script must retain uncompressed collection when `Compress-Archive` is unavailable. No Bash, `curl`, `jq`, external `zip`, `split`, or Unix compatibility layer will be required to run the PowerShell artifact.
+
+The PowerShell script will be formatted and statically checked with repository-defined PowerShell tooling where available, and its generated region will participate in the existing drift check. Behavior tests will mock HTTP and archive/upload boundaries so they run without a live cluster or upload service.
 
 ## Risks / Trade-offs
 
