@@ -6,7 +6,7 @@ use super::super::processor::{DataSource, DiagnosticManifest, SourceContext, Str
 use super::{RawResponse, Receive, ReceiveRaw};
 use crate::{
     client::KibanaClient,
-    data::{KnownHost, Product},
+    data::{Application, KnownHost},
 };
 use eyre::{Result, eyre};
 use futures::stream::BoxStream;
@@ -235,7 +235,7 @@ impl Receive for KibanaReceiver {
             None,
             None,
             Some("compatible".to_string()),
-            Product::Kibana,
+            Some(Application::Kibana),
             Some("kibana_diagnostic".to_string()),
             Some("esdiag".to_string()),
             Some(status.version.number),

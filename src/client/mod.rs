@@ -15,7 +15,7 @@ pub use kibana::KibanaClient;
 pub use logstash::LogstashClient;
 
 extern crate elasticsearch as es;
-use crate::data::{Product, Uri, collect_product};
+use crate::data::{Application, Uri, collect_application};
 use eyre::{Result, eyre};
 use reqwest::Method;
 use std::collections::HashMap;
@@ -191,22 +191,22 @@ impl Client {
     }
 }
 
-impl From<Client> for Product {
+impl From<Client> for Application {
     fn from(client: Client) -> Self {
         match client {
-            Client::Elasticsearch(_) => Product::Elasticsearch,
-            Client::Kibana(_) => Product::Kibana,
-            Client::Logstash(_) => Product::Logstash,
+            Client::Elasticsearch(_) => Application::Elasticsearch,
+            Client::Kibana(_) => Application::Kibana,
+            Client::Logstash(_) => Application::Logstash,
         }
     }
 }
 
-impl From<&Client> for Product {
+impl From<&Client> for Application {
     fn from(client: &Client) -> Self {
         match client {
-            Client::Elasticsearch(_) => Product::Elasticsearch,
-            Client::Kibana(_) => Product::Kibana,
-            Client::Logstash(_) => Product::Logstash,
+            Client::Elasticsearch(_) => Application::Elasticsearch,
+            Client::Kibana(_) => Application::Kibana,
+            Client::Logstash(_) => Application::Logstash,
         }
     }
 }
@@ -226,11 +226,11 @@ impl TryFrom<Uri> for Client {
 
     fn try_from(uri: Uri) -> Result<Self, Self::Error> {
         match uri {
-            Uri::KnownHost(host) => match collect_product(host.app())? {
-                Product::Kibana => Ok(Client::Kibana(KibanaClient::try_from(host)?)),
-                Product::Elasticsearch => Ok(Client::Elasticsearch(ElasticsearchClient::try_from(host)?)),
-                Product::Logstash => Ok(Client::Logstash(LogstashClient::try_from(host)?)),
-                product => unreachable!("collect_product returned non-collectable product {product}"),
+            Uri::KnownHost(host) => match collect_application(host.app())? {
+                Application::Kibana => Ok(Client::Kibana(KibanaClient::try_from(host)?)),
+                Application::Elasticsearch => Ok(Client::Elasticsearch(ElasticsearchClient::try_from(host)?)),
+                Application::Logstash => Ok(Client::Logstash(LogstashClient::try_from(host)?)),
+                Application::Agent => unreachable!("collect_application returned Agent"),
             },
             _ => Err(eyre!("Unsupported URI")),
         }

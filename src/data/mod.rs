@@ -12,8 +12,6 @@ mod keystore;
 mod known_host;
 /// Deployment platforms (the platform axis)
 mod platform;
-/// Elastic stack products (legacy flattened axis)
-mod product;
 /// Saved job configurations
 pub mod saved_jobs;
 /// Application Settings
@@ -36,9 +34,11 @@ pub use keystore::{
 };
 #[cfg(all(test, feature = "server"))]
 pub(crate) use known_host::write_hosts_yml_for_tests;
-pub use known_host::{CredentialDirection, ElasticCloud, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate};
+pub use known_host::{
+    CredentialDirection, ElasticCloud, HostRole, HostRoute, KnownHost, KnownHostBuilder, KnownHostCliUpdate,
+    ResolvedKnownHost,
+};
 pub use platform::Platform;
-pub use product::Product;
 pub use saved_jobs::{
     CollectMode, CollectSource, DraftTargetAvailability, Job, JobBuilder, JobDraft, JobDraftCollect, JobDraftProcess,
     JobDraftSend, JobOutput, JobProcessSelection, JobSignals, JobSignalsCollect, JobSignalsProcess, JobSignalsSend,
@@ -54,10 +54,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
-pub fn collect_product(app: Option<Application>) -> Result<Product> {
+pub fn collect_application(app: Option<Application>) -> Result<Application> {
     match app {
         Some(application @ (Application::Elasticsearch | Application::Kibana | Application::Logstash)) => {
-            Ok(Product::from(application))
+            Ok(application)
         }
         Some(Application::Agent) => Err(eyre!(
             "Collect is out of scope by design for Elastic Agent. Elastic Agent provides its own diagnostic bundle; acquire it through CLI `process` input or Web UI `Upload`."

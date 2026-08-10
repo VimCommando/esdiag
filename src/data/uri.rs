@@ -2,9 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use crate::data::Product;
-
-use super::{ElasticCloud, KnownHost, KnownHostBuilder};
+use super::{ElasticCloud, KnownHost, KnownHostBuilder, ResolvedKnownHost};
 use eyre::{OptionExt, Report, Result, eyre};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -78,7 +76,7 @@ impl Uri {
         tracing::debug!("kibana: Env {}", url);
         let (apikey, username, password) = try_get_auth_env()?;
         let host = KnownHostBuilder::new(Url::parse(&url)?)
-            .product(Product::Kibana)
+            .application(crate::data::Application::Kibana)
             .apikey(apikey)
             .username(username)
             .password(password)
@@ -147,11 +145,15 @@ impl TryFrom<KnownHost> for Uri {
     type Error = eyre::Report;
 
     fn try_from(host: KnownHost) -> Result<Self> {
-        if host.is_template() {
-            return Err(eyre!(
-                "Template-backed hosts must be resolved into a concrete URL before runtime use"
-            ));
-        }
+        host.resolve()?.try_into()
+    }
+}
+
+impl TryFrom<ResolvedKnownHost> for Uri {
+    type Error = eyre::Report;
+
+    fn try_from(host: ResolvedKnownHost) -> Result<Self> {
+        let host = host.into_known_host();
         let host_uri = match host.cloud_id() {
             Some(ElasticCloud::ElasticCloud) => Uri::KnownHost(host),
             Some(ElasticCloud::ElasticCloudAdmin) => Uri::ElasticCloudAdmin(host),

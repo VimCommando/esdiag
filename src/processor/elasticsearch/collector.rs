@@ -5,7 +5,7 @@
 use super::super::collector::{ApiCollectOutcome, CollectOptions, CollectionResult, default_collect_archive_name};
 use super::DiagnosticManifest;
 use crate::{
-    data::Product,
+    data::Application,
     exporter::ArchiveExporter,
     processor::RequestedApi,
     receiver::{ElasticCloudAdminRequestError, ElasticsearchRequestError, Receiver},
@@ -35,7 +35,7 @@ impl ElasticsearchCollector {
             .and_then(|name| std::path::Path::new(name).file_stem())
             .map(|stem| stem.to_string_lossy().to_string())
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| default_collect_archive_name(&options.product, &timestamp));
+            .unwrap_or_else(|| default_collect_archive_name(options.application, &timestamp));
         Ok(Self {
             receiver,
             exporter: exporter.with_archive_name(&collection_name)?,
@@ -278,7 +278,7 @@ impl ElasticsearchCollector {
             None,
             None,
             Some(self.options.r#type.clone()),
-            Product::Elasticsearch,
+            Application::Elasticsearch.into(),
             Some("elasticsearch_diagnostic".to_string()),
             Some("esdiag".to_string()),
             stack_version,

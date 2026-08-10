@@ -5,7 +5,7 @@
 use super::super::processor::{DataSource, DiagnosticManifest, SourceContext};
 use super::{RawResponse, Receive, ReceiveRaw};
 use crate::client::LogstashClient;
-use crate::data::{KnownHost, Product};
+use crate::data::{Application, KnownHost};
 use eyre::{Result, eyre};
 use futures::stream::BoxStream;
 use reqwest::Method;
@@ -191,7 +191,7 @@ impl Receive for LogstashReceiver {
             None,
             None,
             None,
-            Product::Logstash,
+            Some(Application::Logstash),
             Some("logstash_diagnostic".to_string()),
             Some("esdiag".to_string()),
             Some(version.to_string()),

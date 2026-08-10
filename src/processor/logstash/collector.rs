@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use crate::{
-    data::Product,
+    data::Application,
     exporter::ArchiveExporter,
     processor::{
         DiagnosticManifest, RequestedApi,
@@ -35,7 +35,7 @@ impl LogstashCollector {
             .and_then(|name| std::path::Path::new(name).file_stem())
             .map(|stem| stem.to_string_lossy().to_string())
             .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| default_collect_archive_name(&options.product, &timestamp));
+            .unwrap_or_else(|| default_collect_archive_name(options.application, &timestamp));
         Ok(Self {
             receiver,
             exporter: exporter.with_archive_name(&collection_name)?,
@@ -269,7 +269,7 @@ impl LogstashCollector {
             None,
             None,
             Some(self.options.r#type.clone()),
-            Product::Logstash,
+            Application::Logstash.into(),
             Some("logstash_diagnostic".to_string()),
             Some("esdiag".to_string()),
             stack_version,

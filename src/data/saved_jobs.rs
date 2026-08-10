@@ -987,7 +987,7 @@ mod tests {
 
     fn save_collect_host(name: &str) {
         crate::data::KnownHostBuilder::new(url::Url::parse("http://localhost:9200/").expect("url"))
-            .product(crate::data::Product::Elasticsearch)
+            .application(crate::data::Application::Elasticsearch)
             .roles(vec![HostRole::Collect, HostRole::Send])
             .build()
             .expect("host")

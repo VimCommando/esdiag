@@ -958,7 +958,7 @@ pub fn new_job_id() -> u64 {
 mod tests {
     use super::*;
     use crate::{
-        data::{KnownHostBuilder, Product, Uri},
+        data::{KnownHostBuilder, Uri},
         exporter::Exporter,
         receiver::Receiver,
     };
@@ -1264,7 +1264,7 @@ mod tests {
             None,
             None,
             Some("support".to_string()),
-            Product::Unknown,
+            None,
             None,
             None,
             Some("8.19.3".to_string()),
