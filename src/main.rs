@@ -2430,7 +2430,7 @@ mod tests {
                     path: "child-kibana".to_string(),
                     outcome: DiagnosticOutcome::Skipped(SkipKind::NotImplemented),
                     report: None,
-                    application: Some(esdiag::data::Application::Kibana),
+                    application: Some(Application::Kibana),
                     platform: esdiag::data::Platform::ECK,
                     reason: Some("Kibana processing is not yet implemented".to_string()),
                     runtime: None,

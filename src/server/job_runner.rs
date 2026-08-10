@@ -1171,7 +1171,7 @@ mod tests {
             path: "elasticsearch".to_string(),
             execution: Box::new(child_execution),
             diagnostic_outcome: DiagnosticOutcome::Failed,
-            application: Some(crate::data::Application::Elasticsearch),
+            application: Some(Application::Elasticsearch),
             platform: crate::data::Platform::ECK,
             runtime: None,
         });

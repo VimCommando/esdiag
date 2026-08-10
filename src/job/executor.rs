@@ -1091,7 +1091,7 @@ mod tests {
             child.diagnostic_outcome,
             DiagnosticOutcome::Skipped(crate::processor::SkipKind::NotImplemented)
         );
-        assert_eq!(child.application(), Some(crate::data::Application::Kibana));
+        assert_eq!(child.application(), Some(Application::Kibana));
         assert_eq!(
             child.execution_error(),
             Some("Kibana processing is not yet implemented")

@@ -1,5 +1,5 @@
 use axum::{Json, Router, routing::get};
-use esdiag::data::{HostRole, KnownHost, Settings};
+use esdiag::data::{Application, HostRole, KnownHost, Settings};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -922,7 +922,7 @@ async fn host_add_infers_app_from_concrete_url_and_requires_app_for_ambiguous_ta
     let hosts = read_hosts(&home);
     assert_eq!(
         hosts.get("prod-es").expect("saved host exists").app,
-        Some(esdiag::data::Application::Elasticsearch)
+        Some(Application::Elasticsearch)
     );
 
     let ambiguous = run_esdiag_async(

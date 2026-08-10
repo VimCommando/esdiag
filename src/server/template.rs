@@ -437,7 +437,7 @@ fn output_target_label(target: &str) -> String {
 mod tests {
     use super::{JobCompleted, JobSkipped, Jobs, build_footer_output_context};
     use crate::{
-        data::{HostRole, KnownHost, Uri},
+        data::{Application, HostRole, KnownHost, Uri},
         exporter::Exporter,
     };
     use askama::Template;
@@ -451,7 +451,7 @@ mod tests {
         hosts.insert(
             "localhost".to_string(),
             KnownHost::new_no_auth(
-                crate::data::Application::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -461,7 +461,7 @@ mod tests {
         hosts.insert(
             "secure-prod".to_string(),
             KnownHost::new_legacy_apikey(
-                crate::data::Application::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("https://secure.example.com:9200").expect("url"),
                 vec![HostRole::Send],
                 None,

@@ -484,7 +484,7 @@ mod tests {
         status, unlock,
     };
     use crate::{
-        data::{KnownHost, Settings, authenticate},
+        data::{Application, KnownHost, Settings, authenticate},
         exporter::Exporter,
         server::{RuntimeMode, ServerEvent, ServerPolicy, ServerState, Stats, test_server_state},
     };
@@ -625,7 +625,7 @@ mod tests {
         hosts.insert(
             "legacy".to_string(),
             KnownHost::new_legacy_apikey(
-                crate::data::Application::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![crate::data::HostRole::Send],
                 None,
@@ -745,7 +745,7 @@ mod tests {
         hosts.insert(
             "legacy".to_string(),
             KnownHost::new_legacy_apikey(
-                crate::data::Application::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![crate::data::HostRole::Send],
                 None,
@@ -781,7 +781,7 @@ mod tests {
         hosts.insert(
             "legacy-es".to_string(),
             KnownHost::new_legacy_apikey(
-                crate::data::Application::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![crate::data::HostRole::Send],
                 None,
@@ -901,14 +901,14 @@ mod tests {
         let _tmp = setup_env();
 
         let noauth_host = KnownHost::new_no_auth(
-            crate::data::Application::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("url"),
             vec![crate::data::HostRole::Send],
             None,
             false,
         );
         let secure_host = KnownHost::new_legacy_basic(
-            crate::data::Application::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("https://secure.example.com:9200").expect("url"),
             vec![crate::data::HostRole::Send],
             None,
@@ -938,7 +938,7 @@ mod tests {
         settings.active_target = Some("secure".to_string());
         settings.save().expect("save secure settings");
         *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::new_no_auth(
-            crate::data::Application::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("https://secure.example.com:9200").expect("secure url"),
             vec![crate::data::HostRole::Send],
             None,
@@ -964,7 +964,7 @@ mod tests {
         hosts.insert(
             "secure".to_string(),
             KnownHost::new_legacy_apikey(
-                crate::data::Application::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![crate::data::HostRole::Send],
                 None,
@@ -979,7 +979,7 @@ mod tests {
             .expect("save settings without an explicit output");
 
         let runtime_exporter = crate::exporter::Exporter::try_from(KnownHost::new_legacy_apikey(
-            crate::data::Application::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("url"),
             vec![crate::data::HostRole::Send],
             None,
@@ -1001,7 +1001,7 @@ mod tests {
     async fn service_mode_non_secure_output_bypasses_keystore_preflight() {
         let state = test_service_state();
         *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::new_no_auth(
-            crate::data::Application::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("url"),
             vec![crate::data::HostRole::Send],
             None,
@@ -1023,7 +1023,7 @@ mod tests {
 
         let state = test_service_state();
         *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::new_legacy_apikey(
-            crate::data::Application::Elasticsearch,
+            Application::Elasticsearch,
             Url::parse("https://secure.example.com:9200").expect("url"),
             vec![crate::data::HostRole::Send],
             None,

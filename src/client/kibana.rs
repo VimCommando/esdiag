@@ -108,7 +108,7 @@ fn to_kibana_sync_auth(auth: Auth) -> kibana_sync::Auth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::HostRole;
+    use crate::data::{Application, HostRole};
     use futures::future::join_all;
     use std::sync::{
         Arc,
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn known_host_conversion_builds_shared_client_with_display_url() {
         let host = KnownHost::new_no_auth(
-            crate::data::Application::Kibana,
+            Application::Kibana,
             Url::parse("http://localhost:5601").expect("url"),
             vec![HostRole::Collect],
             None,

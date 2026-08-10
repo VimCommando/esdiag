@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{ServerState, get_theme_dark, template};
-use crate::data::{HostRole, KnownHost, Settings, is_collectable_app};
+use crate::data::{Application, HostRole, KnownHost, Settings, is_collectable_app};
 #[cfg(feature = "keystore")]
 use crate::data::{Job, load_saved_jobs_async};
 use crate::exporter::Exporter;
@@ -489,7 +489,7 @@ fn job_host_options(state: &Arc<ServerState>) -> JobHostOptions {
             }
         }
 
-        if host.has_role(HostRole::Send) && host.app() == Some(crate::data::Application::Elasticsearch) {
+        if host.has_role(HostRole::Send) && host.app() == Some(Application::Elasticsearch) {
             send_remote_hosts.push(name.clone());
             if host.requires_keystore_secret() {
                 send_secure_hosts.push(name.clone());
@@ -536,7 +536,7 @@ fn default_downloads_dir() -> PathBuf {
 mod tests {
     use super::job_host_options;
     use crate::{
-        data::{HostRole, KnownHost, KnownHostBuilder},
+        data::{Application, HostRole, KnownHost, KnownHostBuilder},
         server::test_server_state,
     };
     use std::collections::BTreeMap;
@@ -549,7 +549,7 @@ mod tests {
         hosts.insert(
             "es-remote".to_string(),
             KnownHostBuilder::new(Url::parse("https://es.example.com:9200").expect("es url"))
-                .application(crate::data::Application::Elasticsearch)
+                .application(Application::Elasticsearch)
                 .roles(vec![HostRole::Send])
                 .build()
                 .expect("es host"),
@@ -557,7 +557,7 @@ mod tests {
         hosts.insert(
             "es-local".to_string(),
             KnownHostBuilder::new(Url::parse("http://localhost:9200").expect("local es url"))
-                .application(crate::data::Application::Elasticsearch)
+                .application(Application::Elasticsearch)
                 .roles(vec![HostRole::Send])
                 .build()
                 .expect("local es host"),
@@ -565,7 +565,7 @@ mod tests {
         hosts.insert(
             "kb-collect".to_string(),
             KnownHostBuilder::new(Url::parse("https://kb.example.com:5601").expect("kb url"))
-                .application(crate::data::Application::Kibana)
+                .application(Application::Kibana)
                 .roles(vec![HostRole::Collect])
                 .build()
                 .expect("kb host"),
@@ -573,7 +573,7 @@ mod tests {
         hosts.insert(
             "agent-collect".to_string(),
             KnownHostBuilder::new(Url::parse("https://agent.example.com:8220").expect("agent url"))
-                .application(crate::data::Application::Agent)
+                .application(Application::Agent)
                 .roles(vec![HostRole::Collect])
                 .build()
                 .expect("agent host"),

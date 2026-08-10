@@ -2,7 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::{ElasticCloud, KnownHost, KnownHostBuilder, ResolvedKnownHost};
+use super::{Application, ElasticCloud, KnownHost, KnownHostBuilder, ResolvedKnownHost};
 use eyre::{OptionExt, Report, Result, eyre};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -76,7 +76,7 @@ impl Uri {
         tracing::debug!("kibana: Env {}", url);
         let (apikey, username, password) = try_get_auth_env()?;
         let host = KnownHostBuilder::new(Url::parse(&url)?)
-            .application(crate::data::Application::Kibana)
+            .application(Application::Kibana)
             .apikey(apikey)
             .username(username)
             .password(password)
