@@ -142,13 +142,22 @@ impl ExecutionContext {
         }
         let mut child = self.clone();
         child.identity = ExecutionIdentity {
-            job_id: new_job_id(),
+            job_id: next_distinct_job_id(self.identity.job_id, new_job_id),
             owner: self.identity.owner.clone(),
             parent_job_id: Some(self.identity.job_id),
         };
         child.inherited_platform = Some(inherited_platform);
         child.child_depth += 1;
         Ok(child)
+    }
+}
+
+fn next_distinct_job_id(parent_job_id: u64, mut next_job_id: impl FnMut() -> u64) -> u64 {
+    loop {
+        let job_id = next_job_id();
+        if job_id != parent_job_id {
+            return job_id;
+        }
     }
 }
 
@@ -168,5 +177,14 @@ mod tests {
         assert_eq!(child.inherited_platform, Some(Platform::ECK));
         assert_eq!(child.child_depth, 1);
         assert!(child.child(Platform::ECK).is_err());
+    }
+
+    #[test]
+    fn child_job_id_skips_parent_identity_collision() {
+        let mut allocated_ids = [42, 43].into_iter();
+
+        let child_id = next_distinct_job_id(42, || allocated_ids.next().expect("allocated ID"));
+
+        assert_eq!(child_id, 43);
     }
 }
