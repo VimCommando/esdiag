@@ -652,7 +652,7 @@ fn parse_assets_yml(application: Application, assets_store: &EmbeddedAssets) -> 
     let contents = assets_store
         .get_file(Path::new(&filename))
         .ok_or(eyre!("embedded assets did not contain expected file {filename}"))?;
-    let assets = serde_yaml::from_slice(&contents)?;
+    let assets = yaml_serde::from_slice(&contents)?;
     Ok(assets)
 }
 
@@ -790,7 +790,7 @@ mod tests {
   endpoint: "_ingest/pipeline"
   method: "PUT"
 "#;
-        let assets: Vec<Asset> = serde_yaml::from_str(yaml).unwrap();
+        let assets: Vec<Asset> = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(assets.len(), 2);
         assert_eq!(assets[0].name, "roles");
         assert!(assets[0].requires_security);

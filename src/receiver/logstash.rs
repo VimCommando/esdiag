@@ -33,6 +33,17 @@ pub struct LogstashRequestError {
     pub response_size_bytes: u64,
 }
 
+impl LogstashRequestError {
+    pub fn new(status: reqwest::StatusCode, body: String, response_time_ms: u64, response_size_bytes: u64) -> Self {
+        Self {
+            status,
+            body,
+            response_time_ms,
+            response_size_bytes,
+        }
+    }
+}
+
 impl std::fmt::Display for LogstashRequestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "http {} - {}", self.status, self.body)

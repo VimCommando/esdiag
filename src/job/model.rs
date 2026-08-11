@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn deserialization_rejects_invalid_job_shape() {
-        let err = serde_yaml::from_str::<Job>(
+        let err = yaml_serde::from_str::<Job>(
             r#"
 input:
   type: collect
@@ -617,7 +617,7 @@ send:
 
     #[test]
     fn deserialization_rejects_empty_runtime_binding_key() {
-        let error = serde_yaml::from_str::<Job>(
+        let error = yaml_serde::from_str::<Job>(
             r#"
 input:
   type: load-binding

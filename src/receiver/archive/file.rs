@@ -7,7 +7,7 @@ use crate::{
     processor::{DataSource, SourceContext, StreamingDataSource},
     receiver::{MissingSource, RawResponse, Receive, ReceiveMultiple, ReceiveRaw},
 };
-use eyre::{Result, eyre};
+use eyre::{Result, WrapErr, eyre};
 use futures::stream::BoxStream;
 use serde::de::DeserializeOwned;
 use std::{
@@ -92,8 +92,16 @@ impl Receive for ArchiveFileReceiver {
                 Ok(filename) => {
                     tracing::debug!("Reading {}", filename);
                     let file = archive.by_name(&filename)?;
-                    let reader = BufReader::new(file);
-                    let data: T = serde_json::from_reader(reader)?;
+                    let mut contents = String::new();
+                    BufReader::new(file).read_to_string(&mut contents)?;
+                    if contents.trim().is_empty() {
+                        return Err(MissingSource::Empty {
+                            path: filename.to_string(),
+                        }
+                        .into());
+                    }
+                    let data: T = serde_json::from_str(&contents)
+                        .wrap_err_with(|| format!("Failed to parse {filename} for {}", T::name()))?;
                     return Ok(data);
                 }
                 Err(e) => {

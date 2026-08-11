@@ -91,7 +91,7 @@ Alternative considered: choose one primary result by precedence. That would hide
 
 Add a global `--format <yaml|json>` option, defaulting to `yaml` regardless of terminal detection or agent mode. YAML uses `yaml_serde::to_writer` from the `yaml-serde` project for readable block output. JSON uses compact `serde_json::to_writer`.
 
-Migrate existing project imports from `serde_yaml` to `yaml_serde` in the same change and remove `serde_yaml` from `Cargo.toml` and `Cargo.lock`. Stable structs preserve field order for human readability, enum and field names use snake_case, durations use integer `duration_ms`, and URLs and paths are strings. Secrets, credential material, and raw internal errors are never serialized.
+Migrate existing project imports from `serde_yaml` to `yaml_serde` in the same change and remove `serde_yaml` from `Cargo.toml` and `Cargo.lock`. Stable structs preserve field order for human readability, enum and field names use snake_case, durations use integer `duration_ms`, and URLs and paths are strings. Secrets, credential material, and raw internal error chains are never serialized; HTTP failures explicitly preserve the server response `status`, `error.type`, and `error.reason` fields for troubleshooting.
 
 Schema evolution follows CLI semantic versioning: additive optional fields are compatible; removing or renaming fields or discriminator values is breaking.
 
@@ -99,7 +99,7 @@ Alternative considered: JSON by default. JSON has broader parser availability bu
 
 ### Enforce a single-purpose stdout channel
 
-Tracing, warnings, and progress stay on stderr. Finite commands write exactly one YAML document or JSON value to stdout after successful completion. Table/list commands return sequences inside that outcome instead of rendering tables or terminal colors.
+Tracing, warnings, and progress stay on stderr. Finite commands write exactly one YAML document or JSON value to stdout after successful completion. Table/list commands return sequences inside that outcome instead of rendering tables. Interactive terminals may color YAML keys for readability; non-interactive stdout remains uncolored and machine-parseable.
 
 Commands fall into three output categories:
 
@@ -131,13 +131,13 @@ completed:
       id: prod-es@2026-08-08~a1b2
 ```
 
-The command still exits non-zero and does not claim overall success. Raw causes and temporary paths remain excluded. Structured-stream jobs retain the NDJSON exception: after stdout records begin, their failure context remains on stderr rather than injecting another schema into the stream.
+The command still exits non-zero and does not claim overall success. Raw causes and temporary paths remain excluded. HTTP response `status`, `error.type`, and `error.reason` are an explicit exception because they let callers diagnose remote failures without separately recovering logs. Structured-stream jobs retain the NDJSON exception: after stdout records begin, their failure context remains on stderr rather than injecting another schema into the stream.
 
 Alternative considered: discard the accumulated outcome on error. That keeps a simpler `Result<JobOutcome>` signature but makes automation unable to distinguish “nothing happened” from “processing succeeded and send failed.”
 
 ### Serialize failures after command execution begins
 
-Replace `main() -> Result<()>`'s terminal error rendering with an explicit exit path. For finite-result commands, a failure writes a compact `CliFailure` value to stdout in the selected format and exits non-zero. The failure contains a stable category and safe message, with optional allowlisted context; detailed cause chains remain available through stderr debug logging.
+Replace `main() -> Result<()>`'s terminal error rendering with an explicit exit path. For finite-result commands, a failure writes a compact `CliFailure` value to stdout in the selected format and exits non-zero. The failure contains a stable category and safe message, with optional allowlisted context; HTTP failures additionally retain their response `status`, `error.type`, and `error.reason`, while detailed internal cause chains remain available through stderr debug logging.
 
 Clap-controlled help, version, and argument-parse failures remain text because they occur before command execution. Structured-stream failures do not inject a foreign failure value into a partial NDJSON stream; they exit non-zero and report the operational error on stderr.
 

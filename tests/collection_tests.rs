@@ -366,7 +366,7 @@ fn test_process_zip_accepts_output_directory_with_dot() {
 }
 
 #[test]
-fn test_collect_rejects_hosts_without_collect_role() {
+fn test_collect_attempts_hosts_without_collect_role() {
     let home = tempdir().expect("temp home");
     let hosts_path = home.path().join("hosts.yml");
     fs::write(
@@ -398,10 +398,13 @@ fn test_collect_rejects_hosts_without_collect_role() {
 
     assert!(
         !output.status.success(),
-        "collect should fail for host without collect role"
+        "the unavailable test host should not collect successfully"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("required role 'collect'"));
+    assert!(
+        !stderr.contains("required role 'collect'"),
+        "collect should proceed past visibility-role validation, stderr was:\n{stderr}"
+    );
 }
 
 #[test]

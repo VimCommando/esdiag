@@ -41,6 +41,8 @@ pub struct JobOutcome {
     /// Whether `bundle_path` points at a retained archive-file bundle as
     /// opposed to a temporary staging bundle.
     pub bundle_retained: bool,
+    /// Whether the retained bundle was produced by this job's collection stage.
+    pub bundle_created: bool,
     /// The upload slug returned by the Elastic Uploader for a `Send` stage.
     pub upload_slug: Option<String>,
     /// Whether a `Process` stage ran to completion.
@@ -49,12 +51,68 @@ pub struct JobOutcome {
     pub execution: Option<ExecutionOutcome>,
 }
 
+/// The stage that failed after a job may already have produced durable output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailedStage {
+    Collect,
+    Process,
+    Send,
+}
+
+/// Preserves the safe, completed portion of a failed saved-job execution.
+pub struct JobExecutionFailure {
+    pub stage: FailedStage,
+    pub outcome: JobOutcome,
+    message: String,
+}
+
+impl std::fmt::Debug for JobExecutionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("JobExecutionFailure")
+            .field("stage", &self.stage)
+            .field("message", &self.message)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Display for JobExecutionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for JobExecutionFailure {}
+
+fn job_outcome(outcome: ExecutionOutcome) -> JobOutcome {
+    JobOutcome {
+        bundle_path: outcome.retained_bundle.clone(),
+        bundle_retained: outcome.retained_bundle.is_some(),
+        bundle_created: outcome.collection.is_some(),
+        upload_slug: outcome.upload.as_ref().map(|upload| upload.slug.clone()),
+        processed: outcome.report.is_some(),
+        execution: Some(outcome),
+    }
+}
+
+fn failed_stage(outcome: &ExecutionOutcome) -> FailedStage {
+    outcome
+        .stages
+        .iter()
+        .find(|stage| stage.status.is_unsuccessful())
+        .map(|stage| match stage.stage {
+            Stage::Send => FailedStage::Send,
+            Stage::Process | Stage::Export => FailedStage::Process,
+            Stage::Collect | Stage::Load | Stage::Save => FailedStage::Collect,
+        })
+        .unwrap_or(FailedStage::Process)
+}
+
 /// Execute one job: resolve the Phase-1 input, honor the derived mode
 /// (staged vs streaming), and run the selected stages. Phase 3 is and/or —
 /// `Export` (inside `Process`) and `Send` may both run in one job.
 pub async fn execute(job: Job) -> Result<JobOutcome> {
     let outcome = execute_with_context(job, ExecutionContext::default()).await;
-    let succeeded = outcome.succeeded();
     if !outcome.succeeded() {
         let failures = outcome
             .stages
@@ -65,17 +123,14 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
             })
             .collect::<Vec<_>>()
             .join("; ");
-        return Err(eyre!("Job execution failed: {failures}"));
+        let stage = failed_stage(&outcome);
+        return Err(eyre::Report::new(JobExecutionFailure {
+            stage,
+            outcome: job_outcome(outcome),
+            message: format!("Job execution failed: {failures}"),
+        }));
     }
-    let result = JobOutcome {
-        bundle_path: outcome.retained_bundle.clone(),
-        bundle_retained: outcome.retained_bundle.is_some(),
-        upload_slug: outcome.upload.as_ref().map(|upload| upload.slug.clone()),
-        processed: outcome.report.is_some(),
-        execution: Some(outcome),
-    };
-    debug_assert!(succeeded);
-    Ok(result)
+    Ok(job_outcome(outcome))
 }
 
 pub async fn execute_with_context(job: Job, context: ExecutionContext) -> ExecutionOutcome {

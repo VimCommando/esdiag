@@ -74,7 +74,14 @@ For finite commands, stdout SHALL contain only the structured terminal outcome. 
 - **AND** agent mode changes only the default stderr log level
 
 ### Requirement: Finite Command Failures Are Structured
-After a finite command begins execution, a terminal failure SHALL emit one structured failure value to stdout in the selected format and exit non-zero. The failure SHALL contain a stable category and safe human-readable message, MAY include allowlisted command context, and MUST NOT expose credentials or an unrestricted internal error chain. When a phase-composed job created durable results before a later stage failed, the failure SHALL retain those allowlisted completed-stage facts, identify the failed stage, and communicate whole-job retry safety without claiming overall success.
+After a finite command begins execution, a terminal failure SHALL emit one structured failure value to stdout in the selected format and exit non-zero. The failure SHALL contain a stable category and safe human-readable message, MAY include allowlisted command context, and MUST NOT expose credentials or an unrestricted internal error chain. HTTP response failures SHALL additionally include the response `status` and, when present, the response error `type` and `reason` fields verbatim to make troubleshooting possible without recovering logs. When a phase-composed job created durable results before a later stage failed, the failure SHALL retain those allowlisted completed-stage facts, identify the failed stage, and communicate whole-job retry safety without claiming overall success.
+
+#### Scenario: HTTP failure exposes diagnostic response fields
+- **GIVEN** a finite command receives an HTTP error response with `status`, `error.type`, and `error.reason`
+- **WHEN** the command emits its structured failure
+- **THEN** the result retains its stable CLI `category`
+- **AND** it includes the response `status`, `type`, and `reason` values
+- **AND** it exits non-zero
 
 #### Scenario: Unknown saved job returns structured failure
 - **WHEN** the user runs `esdiag job run unknown-name`
@@ -145,4 +152,5 @@ CLI outcome types SHALL be allowlisted projections and MUST NOT serialize API ke
 - **GIVEN** a command fails while handling credentials
 - **WHEN** the structured failure is serialized
 - **THEN** it contains a safe category and message
-- **AND** it does not contain supplied credential material
+- **AND** it does not contain supplied credential material from the CLI, keystore, or error chain
+- **AND** the explicitly supported HTTP response `reason` is preserved when the server includes it

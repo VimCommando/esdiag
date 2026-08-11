@@ -28,6 +28,17 @@ pub struct ElasticCloudAdminRequestError {
     pub response_size_bytes: u64,
 }
 
+impl ElasticCloudAdminRequestError {
+    pub fn new(status: reqwest::StatusCode, body: String, response_time_ms: u64, response_size_bytes: u64) -> Self {
+        Self {
+            status,
+            body,
+            response_time_ms,
+            response_size_bytes,
+        }
+    }
+}
+
 impl std::fmt::Display for ElasticCloudAdminRequestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "http {} - {}", self.status, self.body)

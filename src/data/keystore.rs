@@ -344,7 +344,7 @@ pub(crate) fn write_yaml_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
     let write_result = (|| -> Result<()> {
         let file = secure_output_file(&temp_path)?;
         let mut writer = BufWriter::new(file);
-        serde_yaml::to_writer(&mut writer, value)?;
+        yaml_serde::to_writer(&mut writer, value)?;
         writer.flush()?;
         drop(writer);
         replace_file_atomic(path, &temp_path)
@@ -470,7 +470,7 @@ fn encrypt_unlock_lease(data: &UnlockLeaseData) -> Result<EncryptedUnlockLease> 
     let nonce = rand::random::<[u8; NONCE_SIZE]>();
     let kdf = KdfParams::current();
     let key = derive_context_key(&unlock_context_material()?, &salt, &kdf)?;
-    let plaintext = serde_yaml::to_string(data)?;
+    let plaintext = yaml_serde::to_string(data)?;
     let cipher = Aes256GcmSiv::new_from_slice(&key)?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
@@ -510,7 +510,7 @@ fn decrypt_unlock_lease(encrypted: EncryptedUnlockLease) -> Result<UnlockLeaseDa
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
         .map_err(|_| eyre!("Failed to decrypt unlock lease"))?;
-    Ok(serde_yaml::from_slice(&plaintext)?)
+    Ok(yaml_serde::from_slice(&plaintext)?)
 }
 
 fn remove_unlock_file_best_effort(path: &Path, reason: &str) {
@@ -535,7 +535,7 @@ pub fn read_unlock_lease() -> Result<Option<UnlockLease>> {
         }
     };
     let reader = BufReader::new(file);
-    let encrypted: EncryptedUnlockLease = match serde_yaml::from_reader(reader) {
+    let encrypted: EncryptedUnlockLease = match yaml_serde::from_reader(reader) {
         Ok(data) => data,
         Err(err) => {
             tracing::warn!("Invalid unlock lease '{}': {}", path.display(), err);
@@ -903,7 +903,7 @@ fn read_store(keystore_password: &str) -> Result<KeystoreData> {
 
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let encrypted: EncryptedKeystore = serde_yaml::from_reader(reader)?;
+    let encrypted: EncryptedKeystore = yaml_serde::from_reader(reader)?;
     if !matches!(encrypted.version, 1 | ENCRYPTED_ENVELOPE_VERSION) {
         return Err(eyre!("Unsupported keystore version {}", encrypted.version));
     }
@@ -931,7 +931,7 @@ fn read_store(keystore_password: &str) -> Result<KeystoreData> {
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
         .map_err(|_| eyre!("Failed to decrypt keystore. Check keystore password."))?;
-    Ok(serde_yaml::from_slice(&plaintext)?)
+    Ok(yaml_serde::from_slice(&plaintext)?)
 }
 
 fn write_store(store: &KeystoreData, keystore_password: &str) -> Result<()> {
@@ -939,7 +939,7 @@ fn write_store(store: &KeystoreData, keystore_password: &str) -> Result<()> {
     let nonce = rand::random::<[u8; NONCE_SIZE]>();
     let kdf = KdfParams::current();
     let key = derive_key(keystore_password, &salt, &kdf)?;
-    let plaintext = serde_yaml::to_string(store)?;
+    let plaintext = yaml_serde::to_string(store)?;
 
     let cipher = Aes256GcmSiv::new_from_slice(&key)?;
     let ciphertext = cipher
@@ -1188,13 +1188,13 @@ mod tests {
 
         let keystore_file = File::open(keystore_path).expect("open keystore");
         let keystore: EncryptedKeystore =
-            serde_yaml::from_reader(BufReader::new(keystore_file)).expect("keystore envelope");
+            yaml_serde::from_reader(BufReader::new(keystore_file)).expect("keystore envelope");
         assert_eq!(keystore.version, ENCRYPTED_ENVELOPE_VERSION);
         assert_eq!(keystore.kdf, KdfParams::current());
 
         let unlock_file = File::open(unlock_path).expect("open unlock lease");
         let unlock: EncryptedUnlockLease =
-            serde_yaml::from_reader(BufReader::new(unlock_file)).expect("unlock envelope");
+            yaml_serde::from_reader(BufReader::new(unlock_file)).expect("unlock envelope");
         assert_eq!(unlock.version, ENCRYPTED_ENVELOPE_VERSION);
         assert_eq!(unlock.kdf, KdfParams::current());
     }
@@ -1309,7 +1309,7 @@ mod tests {
         add_secret("output-secret", None, None, Some("output-key".to_string()), "pw").expect("add output secret");
 
         let entries = list_secret_entries("pw").expect("list secret entries");
-        let rendered = serde_yaml::to_string(&entries).expect("serialize decrypted test entries");
+        let rendered = yaml_serde::to_string(&entries).expect("serialize decrypted test entries");
 
         assert!(rendered.contains("input-secret"));
         assert!(rendered.contains("output-secret"));
@@ -1324,7 +1324,7 @@ mod tests {
 
     #[test]
     fn encrypted_envelopes_default_missing_kdf_to_current_rounds() {
-        let keystore: EncryptedKeystore = serde_yaml::from_str(
+        let keystore: EncryptedKeystore = yaml_serde::from_str(
             r#"
 version: 1
 salt: ""

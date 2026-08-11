@@ -20,6 +20,8 @@ published release notes, maintenance branches, and tagged history.
 ### Changed
 
 - Changed saved hosts to distinguish target applications from Cloud routing and unresolved URL templates, with clearer validation for legacy host records (#366).
+- Changed finite CLI commands to emit typed YAML outcomes on stdout by default, with `--format json` available for interoperability; command failures now return safe structured results and document streams retain their NDJSON-only stdout contract.
+- Removed the Agent Skill's prose-output parser; first-run onboarding and the remaining native agent CLI helpers are delivered by their successor changes.
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
 - Changed platform detection to identify Elastic Cloud Hosted bundles from a cluster license issued to `Elastic Cloud`, so API-only hosted bundles no longer report an unknown platform (#347).
 - Changed collection and processing source selection to use canonical registry keys and added a maintainer reconciliation utility for upstream support-diagnostics sources (#348).
@@ -32,6 +34,10 @@ published release notes, maintenance branches, and tagged history.
 - Scoped live `Collect` to Elasticsearch, Kibana, and Logstash; Agent and platform diagnostics now direct users to `Load`/`read` product-provided bundles (#355).
 - Changed CLI, web, and synchronous API diagnostics to use one staged execution workflow, including independent processed-document export and raw-bundle upload targets.
 - Changed `esdiag job run` to report the retained archive, upload destination, and processed diagnostic identifier and Kibana link produced by the selected phases, rather than only reporting that execution completed.
+- Changed the `collect` host role to control collection-picker visibility only; direct and saved-job collection accepts any saved host.
+- Changed HTTP collection failures to retain their response status, type, and reason instead of reporting a missing source version.
+- Changed empty diagnostic source files to be skipped rather than reported as processing errors.
+- Changed stdout document exports to write complete NDJSON records atomically when processors run concurrently.
 
 ### Fixed
 

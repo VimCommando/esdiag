@@ -218,10 +218,10 @@ printf '200'
 EOF
     cat > "$tmp/bin/esdiag" <<'EOF'
 #!/usr/bin/env bash
-case "${1:-} ${2:-}" in
-    '--version ') printf 'esdiag 1.0.0\n' ;;
-    'keystore status') printf 'Keystore: unlocked\n' ;;
-    'host list') printf 'collect-host\n' ;;
+case "$*" in
+    --version*) printf 'esdiag 1.0.0\n' ;;
+    *'keystore status'*) printf '{"result":"keystore_status","exists":true,"unlock_active":true}\n' ;;
+    *'host list'*) printf '{"result":"hosts_listed","hosts":[{"name":"collect-host"}]}\n' ;;
 esac
 EOF
     chmod +x "$tmp/bin/curl" "$tmp/bin/esdiag"
@@ -244,34 +244,19 @@ test_connect_uses_direct_esql_without_conversation() {
     assert_not_contains "$requests" 'tools/_execute'
 }
 
-# --------------------------------------------------------- output parsing --
+# ------------------------------------------------------ typed CLI outcomes --
 
-test_extracts_diagnostic_id_and_kibana_link() {
-    local out
-    out="$(printf 'process complete in 4.212 seconds: 18432 documents for my-cluster@2026-08-07~ab12\nKibana Link: https://kb.example/app/dashboards#/view/report\n' \
-        | "$scripts/extract-diagnostic.sh")"
-    assert_eq "$(printf '%s' "$out" | jq -r .diagnostic_id)" "my-cluster@2026-08-07~ab12"
-    assert_eq "$(printf '%s' "$out" | jq -r .kibana_link)" "https://kb.example/app/dashboards#/view/report"
+test_structured_process_outcome_exposes_identifiers_and_links() {
+    local out='{"result":"diagnostic_processed","diagnostic":{"id":"my-cluster@2026-08-07~ab12","kibana_url":"https://kb.example/app/dashboards#/view/report"}}'
+    assert_eq "$(printf '%s' "$out" | jq -r .result)" "diagnostic_processed"
+    assert_eq "$(printf '%s' "$out" | jq -r .diagnostic.id)" "my-cluster@2026-08-07~ab12"
+    assert_eq "$(printf '%s' "$out" | jq -r .diagnostic.kibana_url)" "https://kb.example/app/dashboards#/view/report"
 }
 
-test_extracts_included_diagnostics_separately() {
-    local out
-    out="$(printf 'process complete in 1.0 seconds: 10 documents for primary@2026-08-07~aaaa\n\nincluded diagnostic complete in 2.0 seconds: 20 documents for extra@2026-08-07~bbbb (kibana)\n' \
-        | "$scripts/extract-diagnostic.sh")"
-    assert_eq "$(printf '%s' "$out" | jq -r .diagnostic_id)" "primary@2026-08-07~aaaa"
-    assert_eq "$(printf '%s' "$out" | jq -r '.included[0]')" "extra@2026-08-07~bbbb"
-}
-
-test_extract_reports_missing_identifier() {
-    if printf 'some unrelated output\n' | "$scripts/extract-diagnostic.sh" >/dev/null 2>&1; then
-        fail "missing identifier was reported as success"
-    fi
-}
-
-test_extract_handles_absent_kibana_link() {
-    local out
-    out="$(printf 'process complete in 1.0 seconds: 10 documents for only@2026-08-07~cccc\n' | "$scripts/extract-diagnostic.sh")"
-    assert_eq "$(printf '%s' "$out" | jq -r .kibana_link)" "null"
+test_structured_process_outcome_keeps_included_results_typed() {
+    local out='{"result":"diagnostic_processed","diagnostic":{"id":"primary"},"included":[{"status":"completed","diagnostic":{"id":"extra"}},{"status":"skipped","source":"kibana","reason":"not implemented"}]}'
+    assert_eq "$(printf '%s' "$out" | jq -r '.included[0].diagnostic.id')" "extra"
+    assert_eq "$(printf '%s' "$out" | jq -r '.included[1].status')" "skipped"
 }
 
 # ------------------------------------------------------- streaming client --

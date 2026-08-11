@@ -38,8 +38,8 @@ If locked, stop and ask the user to unlock with `esdiag keystore unlock` or thro
 esdiag keystore status
 ```
 
-- `Keystore: unlocked until <date> (duration)` — proceed normally.
-- `Keystore: locked` — stop and tell the user to unlock it via the web UI or with `esdiag keystore unlock` before continuing.
+- `result: keystore_status` with `unlock_active: true` — proceed normally.
+- `result: keystore_status` with `unlock_active: false` — stop and tell the user to unlock it via the web UI or with `esdiag keystore unlock` before continuing.
 
 ## Bind to an Analysis Deployment
 
@@ -97,8 +97,12 @@ Run `esdiag keystore status` before using saved hosts or jobs. If locked, stop a
 When `ESDIAG_JOB` is configured:
 
 ```sh
-esdiag job run "$ESDIAG_JOB" 2>&1 | scripts/extract-diagnostic.sh
+esdiag job run "$ESDIAG_JOB"
 ```
+
+Read `process.diagnostic.id` and `process.diagnostic.kibana_url` from the
+returned YAML outcome. A `job_completed` result can also contain `save` and
+`send`; do not infer success from prose.
 
 When no job is configured, offer to create one. Establish prerequisites in this order:
 
@@ -109,9 +113,12 @@ When no job is configured, offer to create one. Establish prerequisites in this 
 Create the reusable process job as part of its first run:
 
 ```sh
-esdiag process <COLLECT_HOST> <OUTPUT_HOST> --save-job <NAME> 2>&1 \
-  | scripts/extract-diagnostic.sh
+esdiag process <COLLECT_HOST> <OUTPUT_HOST> --save-job <NAME>
 ```
+
+Read `diagnostic.id` and `diagnostic.kibana_url` from the returned YAML
+outcome. Request `--format json` only when the caller already uses JSON
+deserialization.
 
 Use the existing `{host}-{action}-{destination}` naming convention and let the user override it. Do not use `collect --save-job` for analysis: that creates a local archive but sends no diagnostic to the analysis cluster.
 
@@ -142,7 +149,7 @@ Treat the response as unstructured markdown. You may summarize an explicit not-f
 - Use `esdiag host add <NAME> <APP> <URL>` to create and save a new host definition in `~/.esdiag/hosts.yml`.
 - Use `esdiag host update <NAME>` with mutable flags to modify an existing saved host in place.
 - Use `esdiag host remove <NAME>` to delete an existing saved host from `hosts.yml`.
-- Use `esdiag host list` to print a compact inventory of saved hosts (`name`, `app`, `secret`).
+- Use `esdiag host list` to return a `hosts_listed` YAML outcome with typed `hosts` entries.
 - Use `esdiag host auth <NAME>` to test a saved host's persisted authentication and connection settings without modifying it.
 - Use `--apikey` for API key auth or `--user`/`--password` for basic auth.
 - `--user` is the primary basic-auth flag (with `--username` available as an alias).
@@ -198,7 +205,7 @@ Treat the response as unstructured markdown. You may summarize an explicit not-f
   - `--opportunity`
   - `--user`
 - Use `--sources` to override endpoint source definitions when testing new API mappings or reproducing source-selection behavior.
-- After a successful `esdiag process`, if the output contains a `Kibana Link: <url>` line, present that URL to the user as a clickable markdown link. Do not manually look up Kibana hosts.
+- After a successful `esdiag process`, read `diagnostic.kibana_url` from the YAML outcome and present it as a clickable markdown link. Do not manually look up Kibana hosts.
 - Use `--save-job <NAME>` on compatible `process` invocations to persist the job before execution. The input must be a saved known host, and `[OUTPUT]` must be explicit.
 
 ## Collect Diagnostics
@@ -216,9 +223,7 @@ Treat the response as unstructured markdown. You may summarize an explicit not-f
 
 Saved jobs persist named diagnostic configurations to `~/.esdiag/jobs.yml` so they can be re-run without reconfiguration. Jobs are saved from the `/jobs` web UI or managed via the CLI. Requires the `keystore` feature (enabled by default).
 
-- Use `esdiag job list` to print all saved jobs as a table (name, collection target, processing level, send target).
-  - Stale host references (hosts no longer in `hosts.yml`) are highlighted in red.
-  - Prints nothing when no jobs exist.
+- Use `esdiag job list` to return a `jobs_listed` YAML outcome with typed phase-composed `jobs` entries. An empty store is `jobs: []`.
 - Use `esdiag job run <NAME>` to execute a saved job end-to-end (collect → process → send).
   - Resolves the collection host from `hosts.yml` and credentials from the keystore.
   - Fails with a clear error if the job name is unknown, the jobs file is missing, or the referenced host no longer exists.

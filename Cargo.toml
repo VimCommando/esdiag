@@ -47,7 +47,6 @@ semver = { version = "1.0.28", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = { version = "1.0.150", features = ["float_roundtrip", "raw_value"] }
 serde_with = { version = "3.20.0", default-features = false, features = ["macros"] }
-serde_yaml = "0.9"
 sha2 = "0.10.9"
 tar = { version = "0.4.46", optional = true, default-features = false }
 tauri = { version = "2.11.2", optional = true , features = [] }
@@ -67,6 +66,7 @@ uuid = { version = "1.23", features = ["v4", "fast-rng"] }
 zip = { version = "8.6.0", default-features = false, features = [
     "deflate-flate2",
 ] }
+yaml_serde = "0.10.4"
 
 [dev-dependencies]
 portpicker = "0.1.1"

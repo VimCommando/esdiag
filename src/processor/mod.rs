@@ -96,6 +96,8 @@ pub struct Processing {
 pub struct Completed {
     pub report: DiagnosticReport,
     pub runtime: u128,
+    /// Canonical URI for the exporter that received processed documents.
+    pub output: String,
     pub included_diagnostics: Vec<IncludedDiagnosticOutcome>,
 }
 
@@ -788,6 +790,7 @@ impl Processor<Processing> {
         report.add_identifiers(identifiers);
         report.add_origin(origin);
         report.add_processing_duration(self.start_time.elapsed().as_millis());
+        let output = self.exporter.outcome_uri();
         if let Err(e) = self.exporter.save_report(&report).await {
             tracing::error!("Failed to save report: {}", e);
         }
@@ -817,6 +820,7 @@ impl Processor<Processing> {
             state: Completed {
                 report,
                 runtime: self.start_time.elapsed().as_millis(),
+                output,
                 included_diagnostics,
             },
         })

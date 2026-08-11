@@ -242,7 +242,7 @@ fn required_source_keys(product: &str) -> &'static [&'static str] {
 }
 
 fn parse_sources_content(label: &str, content: &str) -> Result<HashMap<String, Source>> {
-    serde_yaml::from_str(content).map_err(|e| eyre!("Failed to parse {}: {}", label, e))
+    yaml_serde::from_str(content).map_err(|e| eyre!("Failed to parse {}: {}", label, e))
 }
 
 fn validate_sources_product(product: &str, sources: &HashMap<String, Source>, label: &str) -> Result<()> {

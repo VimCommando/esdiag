@@ -7,7 +7,8 @@ The system SHALL provide `esdiag job list` as a CLI subcommand that emits a stru
 - **WHEN** the user runs `esdiag job list` and `jobs.yml` contains entries
 - **THEN** the system emits a YAML job-list outcome by default and exits with code 0
 - **AND** each saved job appears as one typed entry
-- **AND** no terminal table or ANSI color is present
+- **AND** no terminal table is present
+- **AND** non-interactive stdout contains no ANSI color
 
 #### Scenario: List with no saved jobs
 - **WHEN** the user runs `esdiag job list` and `jobs.yml` does not exist or is empty

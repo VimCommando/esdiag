@@ -442,7 +442,7 @@ fn doc_tag_cache() -> &'static BTreeMap<String, HashSet<String>> {
 
 fn doc_tags(markdown: &str) -> HashSet<String> {
     split_okf_frontmatter(markdown)
-        .and_then(|(frontmatter, _)| serde_yaml::from_str::<OkfFrontmatter>(frontmatter).ok())
+        .and_then(|(frontmatter, _)| yaml_serde::from_str::<OkfFrontmatter>(frontmatter).ok())
         .map(|frontmatter| {
             frontmatter
                 .tags
@@ -532,8 +532,8 @@ mod tests {
         http::{HeaderMap, HeaderValue, StatusCode},
         response::IntoResponse,
     };
-    use serde_yaml::Value;
     use std::sync::Arc;
+    use yaml_serde::Value;
 
     fn setup_env() -> crate::TestEnv {
         crate::TestEnv::new()
@@ -559,7 +559,7 @@ mod tests {
             let markdown = String::from_utf8_lossy(&content.data);
             let (frontmatter, body) =
                 split_okf_frontmatter(&markdown).unwrap_or_else(|| panic!("{file} should start with OKF frontmatter"));
-            let frontmatter: Value = serde_yaml::from_str(frontmatter)
+            let frontmatter: Value = yaml_serde::from_str(frontmatter)
                 .unwrap_or_else(|err| panic!("{file} has invalid YAML frontmatter: {err}"));
             let doc_type = frontmatter
                 .get("type")

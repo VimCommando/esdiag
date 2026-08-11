@@ -348,7 +348,12 @@ impl ElasticsearchDiagnostic {
                     tracing::debug!("{} is absent: {}", T::name(), err);
                     ProcessorSummary::missing(T::name())
                 } else {
-                    tracing::warn!("{}", err);
+                    tracing::warn!(
+                        "Failed to process data source {} (aliases: {}): {}",
+                        T::name(),
+                        T::aliases().join(", "),
+                        err
+                    );
                     ProcessorSummary::new(T::name()).with_error(err.to_string())
                 };
                 summary_tx.send(summary).await.map_err(|err| {
@@ -577,10 +582,20 @@ pub struct Lookups {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_es_dispatch_registry;
+    use super::{missing_source_error, validate_es_dispatch_registry};
+    use crate::receiver::MissingSource;
 
     #[test]
     fn dispatch_table_and_registry_agree() {
         validate_es_dispatch_registry().expect("Elasticsearch dispatch table matches the collection registry");
+    }
+
+    #[test]
+    fn empty_source_files_are_treated_as_missing() {
+        let error = eyre::Report::new(MissingSource::Empty {
+            path: "internal_health.json".to_string(),
+        });
+
+        assert!(missing_source_error(&error));
     }
 }

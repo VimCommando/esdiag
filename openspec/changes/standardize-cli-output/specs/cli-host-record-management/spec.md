@@ -8,7 +8,8 @@ The system SHALL provide `esdiag host list` to emit a structured list outcome co
 - **WHEN** the user runs `esdiag host list`
 - **THEN** the command emits a YAML host-list outcome by default
 - **AND** each saved host appears as one typed entry in `hosts`
-- **AND** no terminal table or ANSI color is present
+- **AND** no terminal table is present
+- **AND** non-interactive stdout contains no ANSI color
 
 #### Scenario: List represents empty host storage
 - **GIVEN** no saved hosts exist

@@ -278,6 +278,15 @@ impl Exporter {
         }
     }
 
+    /// The user-facing output URI reported after processing completes.
+    ///
+    /// Prefer the configured Kibana base URL for Elasticsearch output so the
+    /// result identifies where the exported documents can be viewed. Other
+    /// exporters report their canonical destination URI.
+    pub fn outcome_uri(&self) -> String {
+        self.kibana_base_url().unwrap_or_else(|| self.target_uri())
+    }
+
     pub fn target_label(&self) -> String {
         match self {
             Exporter::Archive(exporter) => format!("archive: {}", exporter),
@@ -300,9 +309,7 @@ impl Exporter {
     pub fn kibana_base_url(&self) -> Option<String> {
         match self {
             Exporter::Elasticsearch(exporter) => exporter.kibana_base_url(),
-            Exporter::Archive(_) | Exporter::Directory(_) | Exporter::File(_) | Exporter::Stream(_) => {
-                kibana_base_url_from_env()
-            }
+            Exporter::Archive(_) | Exporter::Directory(_) | Exporter::File(_) | Exporter::Stream(_) => None,
         }
     }
 
@@ -587,6 +594,7 @@ mod tests {
         let stream = Exporter::default();
         assert_eq!(stream.target_uri(), "stdio://stdout");
         assert_eq!(stream.target_label(), "stdout: -");
+        assert_eq!(stream.outcome_uri(), "stdio://stdout");
     }
 
     #[test]
@@ -624,6 +632,7 @@ mod tests {
             .expect("kibana link");
 
         assert!(kibana_link.starts_with("https://kb.example:5601/s/esdiag/app/dashboards#/view/"));
+        assert_eq!(exporter.outcome_uri(), "https://kb.example:5601/s/esdiag");
 
         unsafe {
             std::env::remove_var("ESDIAG_KIBANA_URL");
@@ -631,64 +640,22 @@ mod tests {
     }
 
     #[test]
-    fn kibana_link_falls_back_to_env_for_non_host_outputs() {
+    fn kibana_link_is_omitted_for_non_cluster_outputs() {
         let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let tmp = setup_env();
         unsafe {
             std::env::set_var("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
             std::env::set_var("ESDIAG_KIBANA_SPACE", "ops");
         }
 
-        let exporter = Exporter::default();
-        let kibana_link = exporter
-            .kibana_link("diag-123", 1_700_000_000_000)
-            .expect("kibana link");
-
-        assert!(kibana_link.starts_with("https://env-kb.example:5601/s/ops/app/dashboards#/view/"));
+        let stream = Exporter::default();
+        let directory = Exporter::try_from(Uri::Directory(tmp.path().to_path_buf())).expect("directory exporter");
+        assert!(stream.kibana_link("diag-123", 1_700_000_000_000).is_none());
+        assert!(directory.kibana_link("diag-123", 1_700_000_000_000).is_none());
 
         unsafe {
             std::env::remove_var("ESDIAG_KIBANA_URL");
             std::env::remove_var("ESDIAG_KIBANA_SPACE");
         }
-    }
-
-    #[test]
-    fn kibana_link_omits_space_when_explicitly_empty() {
-        let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
-        unsafe {
-            std::env::set_var("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
-            std::env::set_var("ESDIAG_KIBANA_SPACE", "");
-        }
-
-        let exporter = Exporter::default();
-        let kibana_link = exporter
-            .kibana_link("diag-123", 1_700_000_000_000)
-            .expect("kibana link");
-
-        assert!(kibana_link.starts_with("https://env-kb.example:5601/app/dashboards#/view/"));
-
-        unsafe {
-            std::env::remove_var("ESDIAG_KIBANA_URL");
-            std::env::remove_var("ESDIAG_KIBANA_SPACE");
-        }
-    }
-
-    #[test]
-    fn kibana_link_falls_back_to_default_kibana_url_when_no_override_exists() {
-        let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
-        unsafe {
-            std::env::remove_var("ESDIAG_KIBANA_URL");
-            std::env::remove_var("ESDIAG_KIBANA_SPACE");
-        }
-
-        let exporter = Exporter::default();
-
-        let kibana_link = exporter
-            .kibana_link("diag-123", 1_700_000_000_000)
-            .expect("default kibana link");
-
-        assert!(kibana_link.starts_with("http://localhost:5601/s/esdiag/app/dashboards#/view/"));
     }
 }

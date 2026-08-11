@@ -139,13 +139,15 @@ fi
 head_ 'Local collection tooling'
 if command -v esdiag >/dev/null 2>&1; then
     ok "esdiag on PATH ($(esdiag --version 2>/dev/null | head -1))"
-    keystore_status="$(esdiag keystore status 2>&1 | head -1)"
-    case "$keystore_status" in
-        *unlocked*) ok "$keystore_status" ;;
-        *locked*) warn "$keystore_status"; note 'Unlock before collection with: esdiag keystore unlock' ;;
-        *) warn "keystore status: ${keystore_status}" ;;
-    esac
-    host_count="$(esdiag host list 2>/dev/null | grep -c . || true)"
+    keystore_status="$(esdiag --format json keystore status 2>/dev/null)" || keystore_status=""
+    if printf '%s' "$keystore_status" | jq -e '.result == "keystore_status" and .unlock_active == true' >/dev/null 2>&1; then
+        ok 'keystore is unlocked'
+    elif printf '%s' "$keystore_status" | jq -e '.result == "keystore_status" and .unlock_active == false' >/dev/null 2>&1; then
+        warn 'keystore is locked'; note 'Unlock before collection with: esdiag keystore unlock'
+    else
+        warn 'could not read structured keystore status'
+    fi
+    host_count="$(esdiag --format json host list 2>/dev/null | jq -r 'if .result == "hosts_listed" then (.hosts | length) else 0 end' 2>/dev/null || true)"
     if [ "${host_count:-0}" -gt 0 ]; then
         ok "${host_count} saved host(s)"
     else

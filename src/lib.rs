@@ -2,6 +2,8 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+/// Stable, structured finite-command output projections.
+pub mod cli_output;
 /// Shared client libraries for remote connections
 pub mod client;
 /// Data structures and types for serializing and deserializing

@@ -16,12 +16,29 @@ pub mod model;
 /// Structured per-stage results and typed lifecycle events.
 pub mod outcome;
 
-pub use executor::JobOutcome;
+pub use executor::{FailedStage, JobExecutionFailure, JobOutcome};
 
 use crate::data::{Job as SavedJob, KnownHost, load_saved_jobs, save_saved_jobs};
 use crate::job::model::Input;
 use eyre::{Result, eyre};
 use std::io::IsTerminal;
+
+/// A saved-job lookup failed before execution began.
+///
+/// The CLI may expose the name safely as structured `resource` context while
+/// keeping other error details out of its public output contract.
+#[derive(Debug)]
+pub struct SavedJobNotFound {
+    pub name: String,
+}
+
+impl std::fmt::Display for SavedJobNotFound {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Saved job '{}' not found", self.name)
+    }
+}
+
+impl std::error::Error for SavedJobNotFound {}
 
 pub fn handle_job_list() -> Result<()> {
     let jobs = load_saved_jobs()?;
@@ -64,7 +81,9 @@ pub fn handle_job_list() -> Result<()> {
 
 pub async fn handle_job_run(name: &str) -> Result<JobOutcome> {
     let jobs = load_saved_jobs()?;
-    let job = jobs.get(name).ok_or_else(|| eyre!("Saved job '{}' not found", name))?;
+    let job = jobs
+        .get(name)
+        .ok_or_else(|| eyre::Report::new(SavedJobNotFound { name: name.to_string() }))?;
 
     if let Input::Collect { host, .. } = job.input() {
         let host_key = host.trim();
