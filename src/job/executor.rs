@@ -64,6 +64,7 @@ pub struct JobExecutionFailure {
     pub stage: FailedStage,
     pub outcome: JobOutcome,
     message: String,
+    source: eyre::Report,
 }
 
 impl std::fmt::Debug for JobExecutionFailure {
@@ -82,7 +83,11 @@ impl std::fmt::Display for JobExecutionFailure {
     }
 }
 
-impl std::error::Error for JobExecutionFailure {}
+impl std::error::Error for JobExecutionFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
 
 fn job_outcome(outcome: ExecutionOutcome) -> JobOutcome {
     JobOutcome {
@@ -108,6 +113,15 @@ fn failed_stage(outcome: &ExecutionOutcome) -> FailedStage {
         .unwrap_or(FailedStage::Process)
 }
 
+fn failed(stage: FailedStage, outcome: JobOutcome, error: eyre::Report) -> eyre::Report {
+    eyre::Report::new(JobExecutionFailure {
+        stage,
+        outcome,
+        message: error.to_string(),
+        source: error,
+    })
+}
+
 /// Execute one job: resolve the Phase-1 input, honor the derived mode
 /// (staged vs streaming), and run the selected stages. Phase 3 is and/or —
 /// `Export` (inside `Process`) and `Send` may both run in one job.
@@ -124,11 +138,11 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
             .collect::<Vec<_>>()
             .join("; ");
         let stage = failed_stage(&outcome);
-        return Err(eyre::Report::new(JobExecutionFailure {
+        return Err(failed(
             stage,
-            outcome: job_outcome(outcome),
-            message: format!("Job execution failed: {failures}"),
-        }));
+            job_outcome(outcome),
+            eyre!("Job execution failed: {failures}"),
+        ));
     }
     Ok(job_outcome(outcome))
 }
@@ -767,6 +781,17 @@ mod tests {
         sync::{Arc, Mutex},
     };
     use zip::ZipArchive;
+
+    #[derive(Debug)]
+    struct SourceError;
+
+    impl std::fmt::Display for SourceError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("source error")
+        }
+    }
+
+    impl std::error::Error for SourceError {}
 
     fn fixture_archive(name: &str) -> PathBuf {
         PathBuf::from(format!("{}/tests/archives/{name}", env!("CARGO_MANIFEST_DIR")))
@@ -1455,5 +1480,20 @@ mod tests {
         assert!(selection.selected.contains(&"logstash_node".to_string()));
         // `logstash_version` is a collect-only prerequisite with no processor.
         assert!(!selection.selected.contains(&"logstash_version".to_string()));
+    }
+
+    #[test]
+    fn failed_job_preserves_source_error_for_downcasting() {
+        let report = failed(
+            FailedStage::Process,
+            JobOutcome::default(),
+            eyre::Report::new(SourceError),
+        );
+
+        assert!(
+            report
+                .chain()
+                .any(|cause| cause.downcast_ref::<SourceError>().is_some())
+        );
     }
 }

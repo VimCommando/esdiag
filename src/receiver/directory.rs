@@ -69,7 +69,7 @@ impl Receive for DirectoryReceiver {
     {
         let ctx = self.source_context()?;
         let source_paths = T::candidate_source_file_paths(&ctx)?;
-        let mut last_open_error = None;
+        let mut last_error = None;
 
         for source_path in source_paths {
             let filename = self.path.join(&self.work_dir).join(source_path);
@@ -79,25 +79,28 @@ impl Receive for DirectoryReceiver {
                     let mut contents = String::new();
                     BufReader::new(file).read_to_string(&mut contents)?;
                     if contents.trim().is_empty() {
-                        return Err(MissingSource::Empty {
-                            path: filename.display().to_string(),
-                        }
-                        .into());
+                        last_error = Some(
+                            MissingSource::Empty {
+                                path: filename.display().to_string(),
+                            }
+                            .into(),
+                        );
+                        continue;
                     }
                     let data: T = serde_json::from_str(&contents)
                         .wrap_err_with(|| format!("Failed to parse {} for {}", filename.display(), T::name()))?;
                     return Ok(data);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    last_open_error = Some(e);
+                    last_error = Some(e.into());
                     continue;
                 }
                 Err(e) => return Err(e.into()),
             }
         }
 
-        match last_open_error {
-            Some(e) => Err(e.into()),
+        match last_error {
+            Some(e) => Err(e),
             None => Err(MissingSource::NoCandidates { source: T::name() }.into()),
         }
     }

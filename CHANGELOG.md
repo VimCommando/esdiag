@@ -37,6 +37,8 @@ published release notes, maintenance branches, and tagged history.
 - Changed the `collect` host role to control collection-picker visibility only; direct and saved-job collection accepts any saved host.
 - Changed HTTP collection failures to retain their response status, type, and reason instead of reporting a missing source version.
 - Changed empty diagnostic source files to be skipped rather than reported as processing errors.
+- Changed diagnostic source lookup to skip empty candidate files and continue to legacy or aliased paths (#376).
+- Changed staged job failures to retain their underlying error chain, so structured output preserves HTTP status, type, and reason (#376).
 - Changed stdout document exports to write complete NDJSON records atomically when processors run concurrently.
 
 ### Fixed

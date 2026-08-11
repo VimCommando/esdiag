@@ -657,18 +657,21 @@ fn parse_http_response_details(status: u16, body: &str) -> HttpResponseDetails {
 }
 
 fn http_response_details(error: &eyre::Report) -> Option<HttpResponseDetails> {
-    if let Some(error) = error.downcast_ref::<ElasticsearchRequestError>() {
-        return Some(parse_http_response_details(error.status.as_u16(), &error.body));
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<ElasticsearchRequestError>() {
+            return Some(parse_http_response_details(error.status.as_u16(), &error.body));
+        }
+        if let Some(error) = cause.downcast_ref::<KibanaRequestError>() {
+            return Some(parse_http_response_details(error.status.as_u16(), &error.body));
+        }
+        if let Some(error) = cause.downcast_ref::<LogstashRequestError>() {
+            return Some(parse_http_response_details(error.status.as_u16(), &error.body));
+        }
+        if let Some(error) = cause.downcast_ref::<ElasticCloudAdminRequestError>() {
+            return Some(parse_http_response_details(error.status.as_u16(), &error.body));
+        }
     }
-    if let Some(error) = error.downcast_ref::<KibanaRequestError>() {
-        return Some(parse_http_response_details(error.status.as_u16(), &error.body));
-    }
-    if let Some(error) = error.downcast_ref::<LogstashRequestError>() {
-        return Some(parse_http_response_details(error.status.as_u16(), &error.body));
-    }
-    error
-        .downcast_ref::<ElasticCloudAdminRequestError>()
-        .map(|error| parse_http_response_details(error.status.as_u16(), &error.body))
+    None
 }
 
 fn structured_failure(error: &eyre::Report) -> CliFailure {
