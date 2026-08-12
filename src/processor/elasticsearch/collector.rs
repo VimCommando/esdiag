@@ -62,6 +62,7 @@ impl ElasticsearchCollector {
                 path: self.exporter.to_string(),
                 success: 0,
                 total: apis.len() + 1, // +1 for manifest
+                duration_ms: 0,
             };
 
             // Source weight governs collect concurrency (ADR-0017); the

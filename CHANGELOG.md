@@ -10,9 +10,18 @@ published release notes, maintenance branches, and tagged history.
 
 ## [Unreleased]
 
+### Added
+
+- Added a portable ESDiag Agent Skill for Claude Code, Codex, and OpenCode that owns its executable helpers and references. Analysis runs through the diagnostic skill installed on the Elastic deployment and remains available in Kibana Agent Builder conversation history for continued investigation.
+- Added a read-only binding workflow that validates Kibana Agent Builder access and direct Elasticsearch diagnostic-data access without creating a model call or throwaway conversation.
+- Added a cluster-review workflow that selects or collects a diagnostic, guides first-job setup when needed, streams the cluster agent's progress, and reports which diagnostic was analyzed.
+- Added `ESDIAG_KIBANA_URL`, `ESDIAG_ELASTICSEARCH_URL`, `ESDIAG_KIBANA_APIKEY`, `ESDIAG_KIBANA_APIKEY_FILE`, `ESDIAG_AGENT_ID`, `ESDIAG_INFERENCE_ID`, `ESDIAG_JOB`, and `ESDIAG_DIAGNOSTIC_MAX_AGE` for configuring analysis against a deployment.
+
 ### Changed
 
 - Changed saved hosts to distinguish target applications from Cloud routing and unresolved URL templates, with clearer validation for legacy host records (#366).
+- Changed finite CLI commands to emit typed YAML outcomes on stdout by default, with `--format json` available for interoperability; command failures now return safe structured results and document streams retain their NDJSON-only stdout contract.
+- Removed the Agent Skill's prose-output parser; first-run onboarding and the remaining native agent CLI helpers are delivered by their successor changes.
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
 - Changed platform detection to identify Elastic Cloud Hosted bundles from a cluster license issued to `Elastic Cloud`, so API-only hosted bundles no longer report an unknown platform (#347).
 - Changed collection and processing source selection to use canonical registry keys and added a maintainer reconciliation utility for upstream support-diagnostics sources (#348).
@@ -24,6 +33,13 @@ published release notes, maintenance branches, and tagged history.
 - Changed saved jobs to rewrite legacy `jobs.yml` definitions into the versioned phase-based schema on first read (#353).
 - Scoped live `Collect` to Elasticsearch, Kibana, and Logstash; Agent and platform diagnostics now direct users to `Load`/`read` product-provided bundles (#355).
 - Changed CLI, web, and synchronous API diagnostics to use one staged execution workflow, including independent processed-document export and raw-bundle upload targets.
+- Changed `esdiag job run` to report the retained archive, upload destination, and processed diagnostic identifier and Kibana link produced by the selected phases, rather than only reporting that execution completed.
+- Changed the `collect` host role to control collection-picker visibility only; direct and saved-job collection accepts any saved host.
+- Changed HTTP collection failures to retain their response status, type, and reason instead of reporting a missing source version.
+- Changed empty diagnostic source files to be skipped rather than reported as processing errors.
+- Changed diagnostic source lookup to skip empty candidate files and continue to legacy or aliased paths (#376).
+- Changed staged job failures to retain their underlying error chain, so structured output preserves HTTP status, type, and reason (#376).
+- Changed stdout document exports to write complete NDJSON records atomically when processors run concurrently.
 
 ### Fixed
 

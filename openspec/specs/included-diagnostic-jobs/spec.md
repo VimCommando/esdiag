@@ -29,11 +29,11 @@ Each successfully processed included diagnostic SHALL be reported with its own d
 - **THEN** the job feed MUST display one completed result per child diagnostic
 - **AND** each completed result MUST use the `diagnostic.id` and Kibana link from its own child report
 
-#### Scenario: CLI process reports child links
+#### Scenario: CLI process returns structured child outcomes
 - **WHEN** the CLI `process` command completes an ECK or KubernetesPlatform parent bundle with one or more successfully processed child diagnostics
-- **THEN** the CLI summary MUST include each completed child diagnostic's `diagnostic.id`
-- **AND** the CLI summary MUST include each completed child diagnostic's Kibana link when a Kibana base URL is configured
-- **AND** the CLI summary MUST NOT present the empty parent diagnostic link as the only actionable result
+- **THEN** the structured process outcome MUST include one completed child entry per diagnostic
+- **AND** each entry MUST contain its `diagnostic.id`, product, created document count, integer duration in milliseconds, and Kibana URL when configured
+- **AND** the outcome MUST NOT present the empty parent diagnostic link as the only actionable result
 
 ### Requirement: Synchronous API Multi-Result Reporting
 Synchronous diagnostic processing APIs SHALL return one JSON array entry for each diagnostic result produced by processing.
@@ -63,10 +63,10 @@ Recognized included diagnostics without an implemented diagnostic processor SHAL
 - **THEN** the job feed MUST display an `info` status result for that child diagnostic
 - **AND** the result MUST explain that the child diagnostic was recognized but skipped because processing is not implemented
 
-#### Scenario: CLI process reports unsupported child diagnostic
+#### Scenario: CLI process returns structured skipped child
 - **WHEN** the CLI `process` command reads an included diagnostic manifest whose product does not have an implemented processor
-- **THEN** the CLI summary MUST include an informational skipped entry for that child diagnostic
-- **AND** the skipped entry MUST explain that the child diagnostic was recognized but skipped because processing is not implemented
+- **THEN** the structured process outcome MUST include a skipped child entry
+- **AND** the entry MUST contain the source path, product when known, and skip reason
 
 #### Scenario: API reports unsupported child diagnostic
 - **WHEN** synchronous API processing reads an included diagnostic manifest whose product does not have an implemented processor
@@ -77,6 +77,16 @@ Recognized included diagnostics without an implemented diagnostic processor SHAL
 - **WHEN** a parent bundle contains both supported Elasticsearch child diagnostics and recognized unsupported child diagnostics
 - **THEN** supported child diagnostics MUST still process and render completed results
 - **AND** unsupported child diagnostics MUST render informational skipped results
+
+### Requirement: Failed Included Diagnostics Remain Typed CLI Children
+A failed included diagnostic SHALL appear as a failed child entry inside an otherwise successful parent CLI process outcome. The entry SHALL contain the source path and safe error message and MUST NOT convert the entire parent command into a failed outcome when the parent processing lifecycle completed successfully.
+
+#### Scenario: Child fails after parent succeeds
+- **GIVEN** parent diagnostic processing completes successfully
+- **WHEN** one included diagnostic fails
+- **THEN** the process command exits successfully with a structured parent outcome
+- **AND** the failed child appears with a failed discriminator, source path, and safe error message
+- **AND** completed or skipped sibling outcomes remain present
 
 ### Requirement: Child Outcome Preservation
 The execution lifecycle SHALL preserve a child `ExecutionOutcome` for each

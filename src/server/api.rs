@@ -587,7 +587,6 @@ mod tests {
                 runtime: Some(250),
             },
         ];
-
         let entries = diagnostic_result_entries(&outcome);
         let entries = entries.as_array().expect("array response");
 

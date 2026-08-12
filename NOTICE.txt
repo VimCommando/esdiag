@@ -5,8 +5,8 @@ Copyright 2012-2025 Elasticsearch B.V.
 This document lists the licenses of the projects used in esdiag.
 
 ## Overview of licenses
-- [Apache License 2.0](#Apache-2.0) (229)
-- [MIT License](#MIT) (73)
+- [Apache License 2.0](#Apache-2.0) (228)
+- [MIT License](#MIT) (72)
 - [Unicode License v3](#Unicode-3.0) (19)
 - [BSD 3-Clause "New" or "Revised" License](#BSD-3-Clause) (3)
 - [zlib License](#Zlib) (2)
@@ -5496,7 +5496,6 @@ Apache License 2.0
 - [serde_json]( https://github.com/serde-rs/json ) 1.0.150
 - [serde_path_to_error]( https://github.com/dtolnay/path-to-error ) 0.1.20
 - [serde_urlencoded]( https://github.com/nox/serde_urlencoded ) 0.7.1
-- [serde_yaml]( https://github.com/dtolnay/serde-yaml ) 0.9.34+deprecated
 - [shlex]( https://github.com/comex/rust-shlex ) 1.3.0
 - [syn]( https://github.com/dtolnay/syn ) 2.0.117
 - [sync_wrapper]( https://github.com/Actyx/sync_wrapper ) 1.0.2
@@ -7105,7 +7104,6 @@ MIT License
 
 #### Used by
 - [libyaml-rs]( https://github.com/yaml/libyaml-rs ) 0.3.0
-- [unsafe-libyaml]( https://github.com/dtolnay/unsafe-libyaml ) 0.2.11
 - [zmij]( https://github.com/dtolnay/zmij ) 1.0.21
 
 #### License

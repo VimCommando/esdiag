@@ -13,7 +13,6 @@ use redact::serde::expose_secret;
 #[cfg(test)]
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
-use serde_yaml;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
@@ -26,6 +25,7 @@ use std::{
     str::FromStr,
 };
 use url::Url;
+use yaml_serde;
 
 const DEFAULT_TEMPLATE_PRODUCT: &str = "elasticsearch";
 
@@ -1428,7 +1428,7 @@ impl KnownHost {
             true => {
                 let file = File::open(path)?;
                 let reader = BufReader::new(file);
-                let mut hosts: BTreeMap<String, KnownHost> = serde_yaml::from_reader(reader)?;
+                let mut hosts: BTreeMap<String, KnownHost> = yaml_serde::from_reader(reader)?;
                 for (name, host) in hosts.iter_mut() {
                     host.normalize_and_validate_roles(name)?;
                 }
@@ -1464,7 +1464,7 @@ impl KnownHost {
         );
         let file = File::create(&path)?;
         let writer = BufWriter::new(file);
-        serde_yaml::to_writer(writer, &hosts)?;
+        yaml_serde::to_writer(writer, &hosts)?;
         Ok(format!("{}", path.display()))
     }
 
@@ -1617,7 +1617,7 @@ pub(crate) fn write_hosts_yml_for_tests(hosts: &BTreeMap<String, KnownHost>) -> 
     let path = KnownHost::get_hosts_path();
     let file = File::create(&path)?;
     let writer = BufWriter::new(file);
-    serde_yaml::to_writer(writer, &TestKnownHostsRef(hosts))?;
+    yaml_serde::to_writer(writer, &TestKnownHostsRef(hosts))?;
     Ok(format!("{}", path.display()))
 }
 
@@ -2691,7 +2691,7 @@ app: none
 url: https://platform.example
 "#,
         ] {
-            let host: KnownHost = serde_yaml::from_str(yaml).expect("host without application should deserialize");
+            let host: KnownHost = yaml_serde::from_str(yaml).expect("host without application should deserialize");
 
             assert_eq!(host.app(), None);
         }

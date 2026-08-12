@@ -1026,7 +1026,7 @@ mod tests {
 
     #[test]
     fn identifiers_deserialize_empty_strings_as_none() {
-        let identifiers: Identifiers = serde_yaml::from_str(
+        let identifiers: Identifiers = yaml_serde::from_str(
             r#"
 account: ''
 case_number: ''
@@ -1265,7 +1265,7 @@ user: ada
             Some("ada".to_string()),
         );
 
-        let yaml = serde_yaml::to_string(&identifiers).expect("serialize identifiers");
+        let yaml = yaml_serde::to_string(&identifiers).expect("serialize identifiers");
 
         assert!(!yaml.contains("account"));
         assert!(!yaml.contains("case_number"));

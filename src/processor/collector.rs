@@ -87,12 +87,14 @@ impl Collector {
         }
     }
 
-    async fn collect(&self) -> Result<CollectionResult> {
-        let result = match self {
+    pub async fn collect(&self) -> Result<CollectionResult> {
+        let started = std::time::Instant::now();
+        let mut result = match self {
             Self::Elasticsearch(collector) => collector.collect().await?,
             Self::Logstash(collector) => collector.collect().await?,
             Self::Kibana(collector) => collector.collect().await?,
         };
+        result.duration_ms = started.elapsed().as_millis();
 
         tracing::info!(
             "Collected {} of {} files into {}",
@@ -117,6 +119,7 @@ pub struct CollectionResult {
     pub path: String,
     pub success: usize,
     pub total: usize,
+    pub duration_ms: u128,
 }
 
 pub(crate) struct ApiCollectOutcome {

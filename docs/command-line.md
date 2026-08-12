@@ -57,8 +57,29 @@ Options:
 ### Global options
 
 - `--debug` enables debug logging for any command.
+- `--format yaml|json` selects the terminal result representation for finite commands. YAML is the default; JSON is a compact interoperability format.
 - `--help` and `--version` work at the top level.
 - Logging defaults to `info` unless overridden by `--debug` or `LOG_LEVEL`.
+
+### Structured command outcomes
+
+Finite commands write exactly one typed outcome to stdout. The default YAML
+uses a stable snake_case `result` discriminator; use `--format json` when a
+consumer needs JSON. Operational logs, warnings, progress, and detailed error
+causes remain on stderr. HTTP failures retain the CLI's stable `category` and
+also expose the server response `status`, error `type`, and error `reason` when
+available, so callers can troubleshoot the remote response directly.
+
+Successful outcomes expose durable facts such as archive paths, diagnostic IDs,
+document counts, Kibana links, and upload destinations. Commands that fail
+after execution begins write a `command_failed` outcome to stdout and exit
+non-zero. A saved job failure can include prior completed `save` and `process`
+facts plus `failed_stage` and `retry_safe`.
+
+`process ... -` and saved jobs whose process export is stdout retain their
+NDJSON document stream; ESDiag never appends a YAML, JSON, or prose terminal
+outcome to that stream. `serve` writes one readiness outcome after binding
+unless its configured exporter owns stdout.
 
 ### No-command behavior
 
@@ -185,7 +206,8 @@ Use `esdiag host remove <NAME>` to delete a saved host. Removing an unknown host
 
 ### `host list`
 
-Use `esdiag host list` to print a compact saved-host table with columns `name`, `app`, and `secret`. When no hosts are saved, the command prints `No saved hosts`.
+Use `esdiag host list` to return a `hosts_listed` outcome containing typed host
+entries. When no hosts are saved, it returns `hosts: []`.
 
 ### `host auth`
 
@@ -199,6 +221,7 @@ Role validation rules enforced by the saved host model:
 - `send` is valid only for Elasticsearch hosts
 - `view` is valid only for Kibana hosts
 - omitted roles default to `collect`
+- `collect` controls visibility in collection pickers; any saved host can still be used as a CLI or saved-job collection input
 
 ### Migration from legacy syntax
 

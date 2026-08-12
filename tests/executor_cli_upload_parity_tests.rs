@@ -104,7 +104,7 @@ async fn standalone_upload_uses_executor_sender_with_custom_api_url() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("upload complete"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("diagnostic_uploaded"));
     assert_eq!(calls.head.load(Ordering::SeqCst), 1);
     assert_eq!(calls.put.load(Ordering::SeqCst), 1);
     assert_eq!(calls.finalize.load(Ordering::SeqCst), 1);
@@ -132,9 +132,9 @@ fn process_archive_uses_executor_and_writes_selected_local_output() {
         "the selected processed-document output must be written"
     );
     assert!(
-        String::from_utf8_lossy(&result.stderr).contains("complete"),
-        "stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
+        String::from_utf8_lossy(&result.stdout).contains("diagnostic_processed"),
+        "stdout: {}",
+        String::from_utf8_lossy(&result.stdout)
     );
 }
 
@@ -211,9 +211,9 @@ async fn process_uses_environment_output_when_output_is_omitted() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("process complete"),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&output.stdout).contains("diagnostic_processed"),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
     server.abort();
 }

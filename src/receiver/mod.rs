@@ -48,7 +48,7 @@ pub struct RawResponse {
     pub response_size_bytes: u64,
 }
 
-/// A source a receiver looked for but the bundle does not contain.
+/// A source a receiver can treat as absent during processing.
 ///
 /// Processors match on this type to tell a legitimately absent source apart
 /// from a source that is present but unreadable, so receivers must report
@@ -59,6 +59,8 @@ pub enum MissingSource {
     NoCandidates { source: String },
     /// The archive did not contain the resolved entry path.
     ArchiveEntry { path: String },
+    /// A resolved source file exists but contains no JSON value.
+    Empty { path: String },
 }
 
 impl std::fmt::Display for MissingSource {
@@ -66,6 +68,7 @@ impl std::fmt::Display for MissingSource {
         match self {
             Self::NoCandidates { source } => write!(f, "No candidate source files available for {source}"),
             Self::ArchiveEntry { path } => write!(f, "File not found in archive: {path}"),
+            Self::Empty { path } => write!(f, "Source file is empty: {path}"),
         }
     }
 }

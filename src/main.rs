@@ -5,6 +5,12 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use clap::{ArgAction, Args, Parser, Subcommand, builder::BoolishValueParser, builder::styling};
+use esdiag::cli_output::{
+    BundleResult, CliFailure, CliFailureCategory, CliOutcome, CompletedStages, DiagnosticResult, FileCounts,
+    IncludedDiagnosticResult, JobInputResult, JobProcessResult, JobSaveResult, JobSendResult, JobStage,
+    KeystoreOperation, OutputFormat, ProcessResult, SavedJobResult, SendResult, write_terminal_outcome,
+};
+use esdiag::job::{FailedStage, JobExecutionFailure, JobOutcome, SavedJobNotFound};
 #[cfg(feature = "server")]
 use esdiag::server::{AuthProvider, RuntimeMode, Server, ServerStartOptions};
 #[cfg(feature = "setup")]
@@ -21,13 +27,16 @@ use esdiag::{
     env::LOG_LEVEL,
     exporter::Exporter,
     processor::{CollectionResult, DiagnosticOutcome, Identifiers, default_collect_archive_name},
-    receiver::Receiver,
+    receiver::{
+        ElasticCloudAdminRequestError, ElasticsearchRequestError, KibanaRequestError, LogstashRequestError, Receiver,
+    },
     uploader,
 };
 use eyre::{Result, eyre};
 use redact::Secret;
 use std::{
     io::{IsTerminal, Write},
+    process::ExitCode,
     str::FromStr,
     time::Duration,
 };
@@ -52,6 +61,9 @@ struct Cli {
     /// Enable agent-oriented low-noise CLI behavior
     #[arg(global = true, long, short = 'a')]
     agent: bool,
+    /// Result representation for finite command outcomes
+    #[arg(global = true, long, value_enum, default_value_t = OutputFormat::Yaml)]
+    format: OutputFormat,
     /// Commands
     #[command(subcommand)]
     command: Option<Commands>,
@@ -434,19 +446,35 @@ enum KeystoreCommands {
 
 const TOKIO_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
 
-fn main() -> Result<()> {
-    tokio::runtime::Builder::new_multi_thread()
+fn main() -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(TOKIO_THREAD_STACK_SIZE)
-        .build()?
-        .block_on(async_main())
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("Failed to create runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match runtime.block_on(async_main()) {
+        Ok(exit_code) => exit_code,
+        Err(error) => {
+            eprintln!("{error:?}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
-async fn async_main() -> Result<()> {
+async fn async_main() -> Result<ExitCode> {
     // Parse CLI early to configure execution mode and logging.
     let cli = Cli::parse();
     let filter = resolve_tracing_filter(&cli);
     init_tracing(filter);
+    let stdout_owned = command_owns_stdout(&cli);
+    let no_command = cli.command.is_none();
 
     std::panic::set_hook(Box::new(|panic| {
         // Log any panics as errors
@@ -456,18 +484,21 @@ async fn async_main() -> Result<()> {
 
     clear_last_run_files()?;
 
-    match run(cli).await {
+    let format = cli.format;
+    match run(cli, format).await {
         Ok(result) => {
-            if let Some(summary) = result.summary() {
-                emit_completion_summary(&summary)?;
+            if let Some(outcome) = result.outcome {
+                write_terminal_outcome(format, &outcome)?;
             }
-            if result.emit_summary && result.summary.is_none() {
-                tracing::debug!("{} complete", result.name);
-            }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
             tracing::error!("{}", e);
+            if !stdout_owned && !no_command {
+                let failure = structured_failure(&e);
+                write_terminal_outcome(format, &failure)?;
+                return Ok(ExitCode::FAILURE);
+            }
             Err(eyre!(e))
         }
     }
@@ -488,50 +519,48 @@ fn init_tracing(filter: EnvFilter) {
 
 #[derive(Debug)]
 struct CommandResult {
-    name: &'static str,
-    summary: Option<String>,
-    emit_summary: bool,
+    outcome: Option<CliOutcome>,
 }
 
 impl CommandResult {
-    fn named(name: &'static str) -> Self {
-        Self {
-            name,
-            summary: None,
-            emit_summary: true,
-        }
+    fn outcome(outcome: CliOutcome) -> Self {
+        Self { outcome: Some(outcome) }
     }
 
-    fn without_summary(name: &'static str) -> Self {
-        Self {
-            name,
-            summary: None,
-            emit_summary: false,
-        }
-    }
-
-    fn with_summary(name: &'static str, summary: String) -> Self {
-        Self {
-            name,
-            summary: Some(summary),
-            emit_summary: true,
-        }
-    }
-
-    fn summary(&self) -> Option<String> {
-        if !self.emit_summary {
-            return None;
-        }
-        Some(
-            self.summary
-                .clone()
-                .unwrap_or_else(|| format!("{} complete", self.name)),
-        )
+    fn stream() -> Self {
+        Self { outcome: None }
     }
 }
 
 fn is_agent_mode(cli: &Cli) -> bool {
     cli.agent || std::env::var_os("CLAUDECODE").is_some()
+}
+
+fn command_owns_stdout(cli: &Cli) -> bool {
+    let direct_process_stream = matches!(
+        &cli.command,
+        Some(Commands::Process {
+            output: Some(output),
+            ..
+        }) if output == "-"
+    );
+    #[cfg(feature = "keystore")]
+    let saved_job_stream = matches!(
+        &cli.command,
+        Some(Commands::Job {
+            command: JobCommands::Run { name }
+        }) if esdiag::data::load_saved_jobs()
+            .ok()
+            .and_then(|jobs| jobs.get(name).cloned())
+            .and_then(|job| {
+                job.process()
+                    .map(|process| process.export == esdiag::job::model::ExportTarget::Stdout)
+            })
+            .unwrap_or(false)
+    );
+    #[cfg(not(feature = "keystore"))]
+    let saved_job_stream = false;
+    direct_process_stream || saved_job_stream
 }
 
 fn resolve_tracing_filter(cli: &Cli) -> EnvFilter {
@@ -544,151 +573,161 @@ fn resolve_tracing_filter(cli: &Cli) -> EnvFilter {
     }
 }
 
-fn write_completion_summary<W: Write>(writer: &mut W, summary: &str) -> std::io::Result<()> {
-    writeln!(writer, "{summary}")
+fn classify_failure(error: &eyre::Report) -> CliFailureCategory {
+    if let Some(response) = http_response_details(error) {
+        return match response.status {
+            401 | 403 => CliFailureCategory::AuthenticationFailed,
+            404 => CliFailureCategory::NotFound,
+            500..=599 => CliFailureCategory::Internal,
+            _ => CliFailureCategory::InvalidInput,
+        };
+    }
+    let message = error.to_string().to_ascii_lowercase();
+    if message.contains("not found") {
+        CliFailureCategory::NotFound
+    } else if message.contains("auth") || message.contains("credential") {
+        CliFailureCategory::AuthenticationFailed
+    } else if message.contains("collect") {
+        CliFailureCategory::CollectionFailed
+    } else if message.contains("process") {
+        CliFailureCategory::ProcessingFailed
+    } else if message.contains("upload") || message.contains("send") {
+        CliFailureCategory::SendFailed
+    } else if message.contains("keystore") || message.contains("secret") {
+        CliFailureCategory::KeystoreFailed
+    } else {
+        CliFailureCategory::InvalidInput
+    }
 }
 
-fn emit_completion_summary(summary: &str) -> Result<()> {
-    let mut stderr = std::io::stderr();
-    write_completion_summary(&mut stderr, summary)?;
-    stderr.flush()?;
-    Ok(())
+fn safe_failure_message(error: &eyre::Report) -> String {
+    if let Some(response) = http_response_details(error) {
+        return match response.status {
+            401 => "The server rejected the request because authentication credentials are required.".to_string(),
+            403 => "The server rejected the request because the credentials are not authorized.".to_string(),
+            404 => "The requested server resource was not found.".to_string(),
+            500..=599 => format!(
+                "The server failed to complete the request with HTTP {}.",
+                response.status
+            ),
+            status => format!("The server rejected the request with HTTP {status}."),
+        };
+    }
+    match classify_failure(error) {
+        CliFailureCategory::NotFound => "requested resource was not found",
+        CliFailureCategory::AuthenticationFailed => "authentication failed",
+        CliFailureCategory::CollectionFailed => "diagnostic collection failed",
+        CliFailureCategory::ProcessingFailed => "diagnostic processing failed",
+        CliFailureCategory::SendFailed => "diagnostic upload failed",
+        CliFailureCategory::KeystoreFailed => "keystore operation failed",
+        CliFailureCategory::SetupFailed => "setup failed",
+        CliFailureCategory::Internal | CliFailureCategory::InvalidInput => "command execution failed",
+    }
+    .to_string()
 }
 
-#[cfg(test)]
-fn format_process_summary(completed: &esdiag::processor::Completed) -> String {
-    format_process_result_summary(&completed.report, completed.runtime, &completed.included_diagnostics)
+struct HttpResponseDetails {
+    status: u16,
+    error_type: Option<String>,
+    reason: Option<String>,
 }
 
-fn format_execution_process_summary(outcome: &esdiag::job::outcome::ExecutionOutcome) -> Result<String> {
-    let report = outcome
-        .report
+fn parse_http_response_details(status: u16, body: &str) -> HttpResponseDetails {
+    let response_error = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .map(|body| body.get("error").unwrap_or(&body).clone());
+    let error_type = response_error
         .as_ref()
-        .ok_or_else(|| eyre!("Process completed without a diagnostic report"))?;
-    let mut summary = format_process_result_summary(report, report.diagnostic.processing_duration, &[]);
-    format_execution_child_outcomes(&mut summary, &outcome.children);
-    Ok(summary)
+        .and_then(|error| error.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let reason = response_error
+        .as_ref()
+        .and_then(|error| error.get("reason"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+
+    HttpResponseDetails {
+        status,
+        error_type,
+        reason,
+    }
 }
 
-fn format_execution_child_outcomes(summary: &mut String, children: &[esdiag::job::outcome::ChildExecutionOutcome]) {
-    for child in children {
-        match (&child.diagnostic_outcome, child.report()) {
-            (DiagnosticOutcome::Skipped(_), _) => {
-                let product = esdiag::processor::display_label(child.application(), child.platform());
-                summary.push_str(&format!(
-                    "\n\nincluded diagnostic {}: {} ({product})\nReason: {}",
-                    child.diagnostic_outcome,
-                    child.path,
-                    child.execution_error().unwrap_or_default()
-                ));
-            }
-            (_, Some(report)) => {
-                summary.push_str(&format!(
-                    "\n\nincluded diagnostic {} in {:.3} seconds: {} documents for {} ({})",
-                    child.diagnostic_outcome,
-                    child.runtime.unwrap_or_default() as f64 / 1000.0,
-                    report.diagnostic.docs.created,
-                    report.diagnostic.metadata.id,
-                    report.diagnostic.display_label()
-                ));
-                summary.push_str(&format!("\nSource: {}", child.path));
-                if let Some(kibana_link) = report.diagnostic.kibana_link.as_deref() {
-                    summary.push_str(&format!("\nKibana Link: {kibana_link}"));
-                }
-                summary.push_str(&format_report_events(report));
-                if let Some(error) = child.export_error() {
-                    summary.push_str(&format!("\nExecution error: {error}"));
-                }
-            }
-            (_, None) => {
-                summary.push_str(&format!(
-                    "\n\nincluded diagnostic failed: {}\nError: {}",
-                    child.path,
-                    child.execution_error().unwrap_or_default()
-                ));
-            }
+fn http_response_details(error: &eyre::Report) -> Option<HttpResponseDetails> {
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<ElasticsearchRequestError>() {
+            return Some(parse_http_response_details(error.status.as_u16(), &error.body));
+        }
+        if let Some(error) = cause.downcast_ref::<KibanaRequestError>() {
+            return Some(parse_http_response_details(error.status.as_u16(), &error.body));
+        }
+        if let Some(error) = cause.downcast_ref::<LogstashRequestError>() {
+            return Some(parse_http_response_details(error.status.as_u16(), &error.body));
+        }
+        if let Some(error) = cause.downcast_ref::<ElasticCloudAdminRequestError>() {
+            return Some(parse_http_response_details(error.status.as_u16(), &error.body));
         }
     }
+    None
 }
 
-fn format_process_result_summary(
-    report: &esdiag::processor::DiagnosticReport,
-    runtime: u128,
-    children: &[esdiag::processor::IncludedDiagnosticOutcome],
-) -> String {
-    let mut summary = format!(
-        "process {} in {:.3} seconds: {} documents for {}",
-        report.outcome(),
-        runtime as f64 / 1000.0,
-        report.diagnostic.docs.created,
-        report.diagnostic.metadata.id
-    );
-    if let Some(kibana_link) = report.diagnostic.kibana_link.as_deref() {
-        summary.push_str(&format!("\nKibana Link: {kibana_link}"));
+fn structured_failure(error: &eyre::Report) -> CliFailure {
+    if let Some(missing_job) = error.downcast_ref::<SavedJobNotFound>() {
+        return CliFailure::new(CliFailureCategory::NotFound, "saved job was not found")
+            .resource(missing_job.name.clone());
     }
-    summary.push_str(&format_report_events(report));
-    for child in children {
-        match (&child.outcome, &child.report) {
-            (DiagnosticOutcome::Skipped(_), _) => {
-                let product = esdiag::processor::display_label(child.application, child.platform);
-                summary.push_str(&format!(
-                    "\n\nincluded diagnostic {}: {} ({product})\nReason: {}",
-                    child.outcome,
-                    child.path,
-                    child.reason.as_deref().unwrap_or_default()
-                ));
+    let Some(job_failure) = error.downcast_ref::<JobExecutionFailure>() else {
+        let mut failure = CliFailure::new(classify_failure(error), safe_failure_message(error));
+        if let Some(response) = http_response_details(error) {
+            failure = failure.http_status(response.status);
+            if let Some(error_type) = response.error_type {
+                failure = failure.type_(error_type);
             }
-            (_, Some(report)) => {
-                summary.push_str(&format!(
-                    "\n\nincluded diagnostic {} in {:.3} seconds: {} documents for {} ({})",
-                    child.outcome,
-                    child.runtime.unwrap_or_default() as f64 / 1000.0,
-                    report.diagnostic.docs.created,
-                    report.diagnostic.metadata.id,
-                    report.diagnostic.display_label()
-                ));
-                summary.push_str(&format!("\nSource: {}", child.path));
-                if let Some(kibana_link) = report.diagnostic.kibana_link.as_deref() {
-                    summary.push_str(&format!("\nKibana Link: {kibana_link}"));
-                }
-                summary.push_str(&format_report_events(report));
-                if let Some(error) = child.export_error.as_deref() {
-                    summary.push_str(&format!("\nExecution error: {error}"));
-                }
-            }
-            (_, None) => {
-                summary.push_str(&format!(
-                    "\n\nincluded diagnostic failed: {}\nError: {}",
-                    child.path,
-                    child.reason.as_deref().unwrap_or_default()
-                ));
+            if let Some(reason) = response.reason {
+                failure = failure.reason(reason);
             }
         }
+        return failure;
+    };
+    let (category, failed_stage) = match job_failure.stage {
+        FailedStage::Collect => (CliFailureCategory::CollectionFailed, JobStage::Collect),
+        FailedStage::Process => (CliFailureCategory::ProcessingFailed, JobStage::Process),
+        FailedStage::Send => (CliFailureCategory::SendFailed, JobStage::Send),
+    };
+    let outcome = &job_failure.outcome;
+    let completed = CompletedStages {
+        save: outcome
+            .bundle_path
+            .as_ref()
+            .filter(|_| outcome.bundle_retained && outcome.bundle_created)
+            .map(|path| BundleResult {
+                path: path.display().to_string(),
+            }),
+        process: outcome.execution.as_ref().and_then(execution_process_result),
+        send: outcome.upload_slug.as_ref().map(|slug| SendResult {
+            destination: format!("https://upload.elastic.co/g/{slug}"),
+        }),
+    };
+    let mut failure = CliFailure::new(category, safe_failure_message(error));
+    failure.failed_stage = Some(failed_stage);
+    failure.retry_safe = Some(false);
+    if completed.save.is_some() || completed.process.is_some() || completed.send.is_some() {
+        failure.completed = Some(completed);
     }
-    summary
+    failure
 }
 
-/// Render the report's recorded error/warning events (source + reason) — the
-/// persisted record, not tracing logs (ADR-0016). Success events are elided
-/// from the CLI summary to keep it scannable.
-fn format_report_events(report: &esdiag::processor::DiagnosticReport) -> String {
-    let mut rendered = String::new();
-    for event in report.events() {
-        match event.severity {
-            esdiag::processor::EventSeverity::Success => {}
-            severity => {
-                rendered.push_str(&format!("\n  [{severity:?}] {}: {}", event.source, event.reason));
-            }
-        }
+fn collection_outcome(result: CollectionResult, upload_destination: Option<String>) -> CliOutcome {
+    CliOutcome::ArchiveCollected {
+        path: result.path,
+        files: FileCounts {
+            successful: result.success,
+            total: result.total,
+        },
+        duration_ms: Some(result.duration_ms),
+        upload_destination,
     }
-    rendered
-}
-
-fn format_collect_summary(result: &CollectionResult) -> String {
-    format!(
-        "Collected {} of {} files into {}",
-        result.success, result.total, result.path
-    )
 }
 
 fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) -> String {
@@ -708,8 +747,131 @@ fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) ->
     }
 }
 
+fn execution_process_result(outcome: &esdiag::job::outcome::ExecutionOutcome) -> Option<ProcessResult> {
+    let report = outcome.report.as_ref()?;
+    let included = outcome
+        .children
+        .iter()
+        .map(|child| match (child.diagnostic_outcome, child.report()) {
+            (DiagnosticOutcome::Skipped(_), _) => IncludedDiagnosticResult::Skipped {
+                source: child.path.clone(),
+                product: Some(esdiag::processor::display_label(child.application(), child.platform())),
+                reason: child
+                    .execution_error()
+                    .unwrap_or("diagnostic processing skipped")
+                    .to_string(),
+            },
+            (_, Some(report)) => IncludedDiagnosticResult::Completed {
+                source: child.path.clone(),
+                diagnostic: DiagnosticResult {
+                    id: report.diagnostic.metadata.id.clone(),
+                    product: report.diagnostic.display_label(),
+                    documents: report.diagnostic.docs.created,
+                    duration_ms: child.runtime.unwrap_or_default(),
+                    source: child.path.clone(),
+                    output: String::new(),
+                    kibana_url: report.diagnostic.kibana_link.clone(),
+                },
+            },
+            (_, None) => IncludedDiagnosticResult::Failed {
+                source: child.path.clone(),
+                error: child
+                    .execution_error()
+                    .unwrap_or("included diagnostic processing failed")
+                    .to_string(),
+            },
+        })
+        .collect();
+
+    Some(ProcessResult {
+        diagnostic: DiagnosticResult {
+            id: report.diagnostic.metadata.id.clone(),
+            product: report.diagnostic.display_label(),
+            documents: report.diagnostic.docs.created,
+            duration_ms: report.diagnostic.processing_duration,
+            source: "primary".to_string(),
+            output: String::new(),
+            kibana_url: report.diagnostic.kibana_link.clone(),
+        },
+        included,
+    })
+}
+
+fn job_outcome(name: String, outcome: JobOutcome) -> CliOutcome {
+    CliOutcome::JobCompleted {
+        job: name,
+        save: outcome
+            .bundle_path
+            .filter(|_| outcome.bundle_retained && outcome.bundle_created)
+            .map(|path| BundleResult {
+                path: path.display().to_string(),
+            }),
+        process: outcome.execution.as_ref().and_then(execution_process_result),
+        send: outcome.upload_slug.map(|slug| SendResult {
+            destination: format!("https://upload.elastic.co/g/{slug}"),
+        }),
+    }
+}
+
+fn host_result(name: String, host: &KnownHost) -> esdiag::cli_output::HostResult {
+    esdiag::cli_output::HostResult {
+        name,
+        app: host.app().map(|app| app.key().to_string()),
+        roles: host.roles().iter().map(ToString::to_string).collect(),
+        target: host.transport_display(),
+        secret_reference: host.secret_reference().map(str::to_string),
+    }
+}
+
+fn saved_job_result(name: String, job: &esdiag::data::Job) -> SavedJobResult {
+    let input = match job.input() {
+        esdiag::job::model::Input::Collect {
+            host, diagnostic_type, ..
+        } => JobInputResult::Collect {
+            host: host.clone(),
+            diagnostic_type: diagnostic_type.clone(),
+        },
+        esdiag::job::model::Input::CollectBinding {
+            binding,
+            diagnostic_type,
+            ..
+        } => JobInputResult::Collect {
+            host: format!("binding:{}", binding.as_str()),
+            diagnostic_type: diagnostic_type.clone(),
+        },
+        esdiag::job::model::Input::Load { uri } => JobInputResult::Load {
+            source: uri.to_string(),
+        },
+        esdiag::job::model::Input::LoadBinding { binding } => JobInputResult::Load {
+            source: format!("binding:{}", binding.as_str()),
+        },
+    };
+    let save = job.save().map(|save| JobSaveResult {
+        directory: save.dir.as_ref().map(|path| path.display().to_string()),
+    });
+    let process = job.process().map(|process| JobProcessResult {
+        export: match &process.export {
+            esdiag::job::model::ExportTarget::KnownHost { name } => format!("host:{name}"),
+            esdiag::job::model::ExportTarget::File { path } => path.display().to_string(),
+            esdiag::job::model::ExportTarget::Directory { output_dir } => output_dir.display().to_string(),
+            esdiag::job::model::ExportTarget::Stdout => "-".to_string(),
+            esdiag::job::model::ExportTarget::Binding { binding } => format!("binding:{}", binding.as_str()),
+        },
+    });
+    let send = job.send().map(|send| JobSendResult {
+        upload_id: send.upload_id.clone(),
+    });
+    SavedJobResult {
+        name,
+        input,
+        save,
+        process,
+        send,
+    }
+}
+
 #[tracing::instrument(skip_all)]
-async fn run(cli: Cli) -> Result<CommandResult> {
+async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
     // If there are CLI arguments but no subcommand, avoid starting the desktop/Tauri
     // entrypoint. The desktop UI should only start when launched absolutely without arguments.
     if should_error_for_missing_subcommand(std::env::args_os().len(), cli.command.is_none()) {
@@ -733,6 +895,7 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 tracing::info!("Starting ESDiag server");
                 let runtime_mode = resolve_serve_runtime_mode(mode)?;
                 let exporter = resolve_serve_exporter(output)?;
+                let exporter_owns_stdout = exporter.target_uri() == "stdio://stdout";
 
                 let kibana_url = kibana.unwrap_or_else(|| {
                     esdiag::env::get_string("ESDIAG_KIBANA_URL")
@@ -740,7 +903,7 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         .unwrap_or_else(|_| "http://localhost:5601".to_string())
                 });
 
-                let (mut server, _bound_addr) = Server::start_with_options(
+                let (mut server, bound_addr) = Server::start_with_options(
                     [0, 0, 0, 0],
                     port,
                     exporter,
@@ -754,10 +917,23 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 )
                 .await?;
 
+                if exporter_owns_stdout {
+                    tracing::info!("Server ready at {bound_addr}");
+                } else {
+                    write_terminal_outcome(
+                        format,
+                        &CliOutcome::ServerReady {
+                            address: bound_addr.ip().to_string(),
+                            port: bound_addr.port(),
+                            runtime_mode: runtime_mode.to_string(),
+                            output: "configured".to_string(),
+                        },
+                    )?;
+                }
                 wait_for_shutdown_signal().await?;
 
                 server.shutdown().await;
-                Ok(CommandResult::named("serve"))
+                Ok(CommandResult::stream())
             }
             Commands::Collect {
                 host,
@@ -819,21 +995,17 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                             upload_id.map(|upload_id| esdiag::job::model::SendTarget { upload_id }),
                         )?;
                         let outcome = esdiag::job::executor::execute_with_context(job, context).await;
-                        let mut summary = outcome
-                            .collection
-                            .as_ref()
-                            .map(format_collect_summary)
-                            .unwrap_or_else(|| format_execution_failure(&outcome));
-                        if let Some(upload) = outcome.upload.as_ref() {
-                            summary.push_str(&format!("\nRaw bundle: https://upload.elastic.co/g/{}", upload.slug));
-                        }
                         if !outcome.succeeded() {
-                            if outcome.collection.is_some() {
-                                summary.push_str(&format!("\n{}", format_execution_failure(&outcome)));
-                            }
-                            return Err(eyre!("{summary}"));
+                            return Err(eyre!("{}", format_execution_failure(&outcome)));
                         }
-                        Ok(CommandResult::with_summary("collect", summary))
+                        let result = outcome
+                            .collection
+                            .ok_or_else(|| eyre!("Collection completed without a collection result"))?;
+                        let upload_destination = outcome
+                            .upload
+                            .as_ref()
+                            .map(|upload| format!("https://upload.elastic.co/g/{}", upload.slug));
+                        Ok(CommandResult::outcome(collection_outcome(result, upload_destination)))
                     }
                     Uri::ElasticCloud(_) => Err(eyre!("Elastic Cloud API collection not yet implemented")),
                     _ => Err(eyre!("Collect requires a known host")),
@@ -869,15 +1041,14 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     let host = if url_template {
                         build_host_from_definition(app, &target, true, &update, secret_auth)?
                     } else if let Some(host) = maybe_materialize_template_target(&target)? {
-                        let merged = host.merge_cli_update(&update, secret_auth)?;
-                        let uri = Uri::try_from(merged.clone())?;
-                        ensure_uri_role(&uri, HostRole::Collect, "host add")?;
-                        merged
+                        host.merge_cli_update(&update, secret_auth)?
                     } else {
                         build_host_from_definition(app, &target, false, &update, secret_auth)?
                     };
-                    let summary = save_host(&name, host.clone(), "added", !host.is_template()).await?;
-                    Ok(CommandResult::with_summary("host add", summary))
+                    save_host(&name, host.clone(), "added", !host.is_template()).await?;
+                    Ok(CommandResult::outcome(CliOutcome::HostAdded {
+                        host: host_result(name, &host),
+                    }))
                 }
                 HostCommands::Update { name, args } => {
                     tracing::info!("Updating host {name}");
@@ -894,38 +1065,46 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                         None
                     };
                     let host = existing.merge_cli_update(&update, secret_auth)?;
-                    let summary = save_host(&name, host.clone(), "updated", !host.is_template()).await?;
-                    Ok(CommandResult::with_summary("host update", summary))
+                    save_host(&name, host.clone(), "updated", !host.is_template()).await?;
+                    Ok(CommandResult::outcome(CliOutcome::HostUpdated {
+                        host: host_result(name, &host),
+                    }))
                 }
                 HostCommands::Remove { name } => {
                     tracing::info!("Removing host {name}");
                     let hostfile = delete_host_from_cli(&name)?;
                     tracing::info!("Host {name} successfully deleted from {hostfile}");
-                    Ok(CommandResult::with_summary(
-                        "host remove",
-                        format!("Host '{name}' removed from {hostfile}"),
-                    ))
+                    Ok(CommandResult::outcome(CliOutcome::HostRemoved { name, path: hostfile }))
                 }
                 HostCommands::List => {
-                    render_host_list()?;
-                    Ok(CommandResult::without_summary("host list"))
+                    let hosts = KnownHost::parse_hosts_yml()?
+                        .into_iter()
+                        .map(|(name, host)| host_result(name, &host))
+                        .collect();
+                    Ok(CommandResult::outcome(CliOutcome::HostsListed { hosts }))
                 }
                 HostCommands::Auth { target } => {
                     tracing::info!("Testing saved host {target}");
                     if let Some(host) = KnownHost::resolve_template_reference(&target)? {
-                        let summary = validate_host_connection(&target, Uri::try_from(host)?).await?;
-                        return Ok(CommandResult::with_summary("host auth", summary));
+                        validate_host_connection(&target, Uri::try_from(host)?).await?;
+                        return Ok(CommandResult::outcome(CliOutcome::HostAuthenticated {
+                            name: target,
+                            message: None,
+                        }));
                     }
                     let host = KnownHost::get_known(&target).ok_or_else(|| eyre!("Host '{target}' not found"))?;
                     if host.is_template() {
-                        return Ok(CommandResult::with_summary(
-                            "host auth",
-                            KnownHost::template_guidance(&target),
-                        ));
+                        return Ok(CommandResult::outcome(CliOutcome::HostAuthenticated {
+                            name: target.clone(),
+                            message: Some(KnownHost::template_guidance(&target)),
+                        }));
                     }
                     let uri = Uri::try_from(host)?;
-                    let summary = validate_host_connection(&target, uri).await?;
-                    Ok(CommandResult::with_summary("host auth", summary))
+                    validate_host_connection(&target, uri).await?;
+                    Ok(CommandResult::outcome(CliOutcome::HostAuthenticated {
+                        name: target,
+                        message: None,
+                    }))
                 }
                 HostCommands::Legacy(args) => Err(legacy_host_command_error(&args)),
             },
@@ -940,10 +1119,11 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     let (username, password, apikey) = resolve_secret_input(username, password, apikey)?;
                     let path = add_secret(&secret_id, username, password, apikey, &keystore_password)?;
                     tracing::info!("Secret '{secret_id}' saved to {path}");
-                    Ok(CommandResult::with_summary(
-                        "keystore",
-                        format_keystore_secret_summary("saved", &secret_id, &path),
-                    ))
+                    Ok(CommandResult::outcome(CliOutcome::KeystoreChanged {
+                        operation: KeystoreOperation::Added,
+                        secret_id: Some(secret_id),
+                        path: Some(path),
+                    }))
                 }
                 KeystoreCommands::Update {
                     secret_id,
@@ -955,10 +1135,11 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     let (username, password, apikey) = resolve_secret_input(username, password, apikey)?;
                     let path = update_secret(&secret_id, username, password, apikey, &keystore_password)?;
                     tracing::info!("Secret '{secret_id}' updated in {path}");
-                    Ok(CommandResult::with_summary(
-                        "keystore",
-                        format_keystore_secret_summary("updated", &secret_id, &path),
-                    ))
+                    Ok(CommandResult::outcome(CliOutcome::KeystoreChanged {
+                        operation: KeystoreOperation::Updated,
+                        secret_id: Some(secret_id),
+                        path: Some(path),
+                    }))
                 }
                 KeystoreCommands::Remove {
                     secret_id,
@@ -970,10 +1151,11 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     let expected = expected_secret_auth(username, password, apikey)?;
                     let path = remove_secret(&secret_id, expected, &keystore_password)?;
                     tracing::info!("Secret '{secret_id}' deleted from {path}");
-                    Ok(CommandResult::with_summary(
-                        "keystore",
-                        format_keystore_secret_summary("deleted", &secret_id, &path),
-                    ))
+                    Ok(CommandResult::outcome(CliOutcome::KeystoreChanged {
+                        operation: KeystoreOperation::Removed,
+                        secret_id: Some(secret_id),
+                        path: Some(path),
+                    }))
                 }
                 KeystoreCommands::Unlock { ttl } => {
                     let ttl = ttl
@@ -993,40 +1175,43 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     } else {
                         tracing::info!("Keystore unlocked via {}", unlock_path.display());
                     }
-                    let lock_status = format_keystore_lock_status(&status);
-                    let rendered_lock_status =
-                        colorize_keystore_lock_status(&lock_status, std::io::stderr().is_terminal());
-                    Ok(CommandResult::with_summary("keystore", rendered_lock_status))
+                    Ok(CommandResult::outcome(CliOutcome::KeystoreStatus {
+                        exists: status.keystore_exists,
+                        unlock_active: status.unlock_active,
+                        expires_at_epoch: status.expires_at_epoch,
+                    }))
                 }
                 KeystoreCommands::Lock => {
-                    let lock_status = format_keystore_lock_status(&esdiag::data::UnlockStatus {
+                    let status = esdiag::data::UnlockStatus {
                         keystore_exists: keystore_exists()?,
                         unlock_active: false,
                         expires_at_epoch: None,
                         unlock_path: esdiag::data::get_unlock_path()?,
-                    });
-                    let rendered_lock_status =
-                        colorize_keystore_lock_status(&lock_status, std::io::stderr().is_terminal());
+                    };
                     if clear_unlock_lease()? {
                         tracing::info!("Keystore unlock lease removed");
                     } else {
                         tracing::info!("Keystore unlock lease was already absent");
                     }
-                    Ok(CommandResult::with_summary("keystore", rendered_lock_status))
+                    Ok(CommandResult::outcome(CliOutcome::KeystoreStatus {
+                        exists: status.keystore_exists,
+                        unlock_active: false,
+                        expires_at_epoch: None,
+                    }))
                 }
                 KeystoreCommands::Status => {
                     let status = get_unlock_status()?;
                     let keystore_path = get_keystore_path()?;
-                    let lock_status = format_keystore_lock_status(&status);
-                    let rendered_lock_status =
-                        colorize_keystore_lock_status(&lock_status, std::io::stderr().is_terminal());
                     tracing::info!(
                         "Keystore: {} ({})",
                         if status.keystore_exists { "present" } else { "absent" },
                         keystore_path.display()
                     );
-                    tracing::info!("{rendered_lock_status}");
-                    Ok(CommandResult::with_summary("keystore", rendered_lock_status))
+                    Ok(CommandResult::outcome(CliOutcome::KeystoreStatus {
+                        exists: status.keystore_exists,
+                        unlock_active: status.unlock_active,
+                        expires_at_epoch: status.expires_at_epoch,
+                    }))
                 }
                 KeystoreCommands::Password => {
                     if !keystore_exists()? {
@@ -1037,10 +1222,11 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     let new_password = prompt_new_keystore_password()?;
                     let path = rotate_keystore_password(&current_password, &new_password)?;
                     tracing::info!("Keystore password updated for {path}");
-                    Ok(CommandResult::with_summary(
-                        "keystore",
-                        format_keystore_password_summary(&path),
-                    ))
+                    Ok(CommandResult::outcome(CliOutcome::KeystoreChanged {
+                        operation: KeystoreOperation::PasswordChanged,
+                        secret_id: None,
+                        path: Some(path),
+                    }))
                 }
                 KeystoreCommands::Migrate => {
                     let keystore_password = get_password_for_secret_commands()?;
@@ -1048,10 +1234,11 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     tracing::info!(
                         "Keystore migration complete: migrated {migrated} host(s), unchanged {unchanged} host(s)."
                     );
-                    Ok(CommandResult::with_summary(
-                        "keystore",
-                        format_keystore_migrate_summary(migrated, unchanged),
-                    ))
+                    Ok(CommandResult::outcome(CliOutcome::KeystoreChanged {
+                        operation: KeystoreOperation::Migrated,
+                        secret_id: None,
+                        path: Some(format!("migrated={migrated},unchanged={unchanged}")),
+                    }))
                 }
             },
             Commands::Process {
@@ -1075,7 +1262,7 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 }
                 let input_uri = Uri::try_from(input)?;
                 let output_uri = Uri::try_from(output.clone())?;
-                ensure_uri_role(&input_uri, HostRole::Collect, "process input")?;
+                let stdout_owned = matches!(output_uri, Uri::Stream);
                 if has_explicit_output {
                     ensure_uri_role(&output_uri, HostRole::Send, "process output")?;
                 }
@@ -1132,20 +1319,18 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     None,
                 )?;
                 let outcome = esdiag::job::executor::execute_with_context(job, context).await;
-                let mut summary = match format_execution_process_summary(&outcome) {
-                    Ok(summary) => summary,
-                    Err(_) => format_execution_failure(&outcome),
-                };
-                if !outcome.succeeded() {
-                    if outcome.report.is_some() {
-                        summary.push_str(&format!("\n{}", format_execution_failure(&outcome)));
-                    }
-                    return Err(eyre!("{summary}"));
+                let process = execution_process_result(&outcome);
+                if !outcome.succeeded() || outcome.diagnostic_outcome() == Some(DiagnosticOutcome::Failed) {
+                    return Err(eyre!("{}", format_execution_failure(&outcome)));
                 }
-                if outcome.diagnostic_outcome() == Some(DiagnosticOutcome::Failed) {
-                    return Err(eyre!("{summary}"));
+                if stdout_owned {
+                    Ok(CommandResult::stream())
+                } else {
+                    let diagnostic = process
+                        .map(|result| result.diagnostic)
+                        .ok_or_else(|| eyre!("Process completed without a diagnostic report"))?;
+                    Ok(CommandResult::outcome(CliOutcome::DiagnosticProcessed { diagnostic }))
                 }
-                Ok(CommandResult::with_summary("process", summary))
             }
             Commands::Upload {
                 file_name,
@@ -1158,25 +1343,11 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     file_path.display(),
                     upload_id
                 );
-                let job = esdiag::job::model::Job::try_new(
-                    Identifiers::default(),
-                    esdiag::job::model::Input::Load {
-                        uri: Uri::File(file_path),
-                    },
-                    None,
-                    None,
-                    Some(esdiag::job::model::SendTarget { upload_id }),
-                )?;
-                let context =
-                    esdiag::job::context::ExecutionContext::default().with_sender(uploader::BundleSender::new(api_url));
-                let outcome = esdiag::job::executor::execute_with_context(job, context).await;
-                if !outcome.succeeded() {
-                    return Err(eyre!("{}", format_execution_failure(&outcome)));
-                }
-                if let Some(upload) = outcome.upload {
-                    tracing::info!("Upload complete for slug {}", upload.slug);
-                }
-                Ok(CommandResult::named("upload"))
+                let response = uploader::upload_file(&file_path, &upload_id, &api_url).await?;
+                tracing::info!("Upload complete for slug {}", response.slug);
+                Ok(CommandResult::outcome(CliOutcome::DiagnosticUploaded {
+                    destination: format!("{}/g/{}", api_url.trim_end_matches('/'), response.slug),
+                }))
             }
             #[cfg(feature = "setup")]
             Commands::Setup { host } => {
@@ -1185,7 +1356,9 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     let client = Client::try_from(uri)?;
                     tracing::info!("Setting up assets in {client}");
                     setup::assets(&client).await?;
-                    Ok(CommandResult::named("setup"))
+                    Ok(CommandResult::outcome(CliOutcome::SetupCompleted {
+                        targets: vec![client.to_string()],
+                    }))
                 } else {
                     tracing::debug!("Setting up assets with environment variables");
                     let es_uri = Uri::try_from_output_env()?;
@@ -1197,22 +1370,35 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                     let kb_client = Client::try_from(kb_uri)?;
                     tracing::info!("Setting up Kibana assets in {kb_client}");
                     setup::assets(&kb_client).await?;
-                    Ok(CommandResult::named("setup"))
+                    Ok(CommandResult::outcome(CliOutcome::SetupCompleted {
+                        targets: vec![es_client.to_string(), kb_client.to_string()],
+                    }))
                 }
             }
             #[cfg(feature = "keystore")]
             Commands::Job { command } => match command {
                 JobCommands::List => {
-                    esdiag::job::handle_job_list()?;
-                    Ok(CommandResult::named("job list"))
+                    let jobs = esdiag::data::load_saved_jobs()?
+                        .into_iter()
+                        .map(|(name, job)| saved_job_result(name, &job))
+                        .collect();
+                    Ok(CommandResult::outcome(CliOutcome::JobsListed { jobs }))
                 }
                 JobCommands::Run { name } => {
-                    esdiag::job::handle_job_run(&name).await?;
-                    Ok(CommandResult::named("job run"))
+                    let stdout_owned = esdiag::data::load_saved_jobs()?
+                        .get(&name)
+                        .and_then(|job| job.process())
+                        .is_some_and(|process| matches!(process.export, esdiag::job::model::ExportTarget::Stdout));
+                    let outcome = esdiag::job::handle_job_run(&name).await?;
+                    if stdout_owned {
+                        Ok(CommandResult::stream())
+                    } else {
+                        Ok(CommandResult::outcome(job_outcome(name, outcome)))
+                    }
                 }
                 JobCommands::Delete { name } => {
                     esdiag::job::handle_job_delete(&name)?;
-                    Ok(CommandResult::named("job delete"))
+                    Ok(CommandResult::outcome(CliOutcome::JobDeleted { name }))
                 }
             },
         }
@@ -1298,11 +1484,7 @@ async fn run(cli: Cli) -> Result<CommandResult> {
                 .run(tauri::generate_context!())
                 .expect("error while running tauri application");
 
-            Ok(CommandResult {
-                name: "tauri",
-                summary: None,
-                emit_summary: false,
-            })
+            Ok(CommandResult::stream())
         }
         #[cfg(not(all(feature = "server", feature = "desktop")))]
         {
@@ -1485,25 +1667,6 @@ async fn save_host(name: &str, host: KnownHost, action: &str, validate_connectio
     Ok(format!("Host '{name}' {action} in {hostfile}"))
 }
 
-fn render_host_list() -> Result<()> {
-    let rows = KnownHost::list_saved_summaries()?;
-    if rows.is_empty() {
-        println!("No saved hosts");
-        return Ok(());
-    }
-
-    #[allow(clippy::literal_string_with_formatting_args)]
-    let header = format!("{:<24} {:<16} {}", "name", "app", "secret");
-    println!("{header}");
-    println!("{}", "-".repeat(56));
-
-    for row in rows {
-        println!("{:<24} {:<16} {}", row.name, row.app, row.secret.unwrap_or_default());
-    }
-
-    Ok(())
-}
-
 fn legacy_host_command_error(args: &[String]) -> eyre::Report {
     let attempted = if args.is_empty() {
         "esdiag host".to_string()
@@ -1668,10 +1831,12 @@ fn format_remaining_duration_from(now_epoch: i64, expires_at_epoch: i64) -> Stri
     }
 }
 
+#[cfg(test)]
 fn format_keystore_lock_status(status: &esdiag::data::UnlockStatus) -> String {
     format_keystore_lock_status_at(chrono::Utc::now().timestamp(), status)
 }
 
+#[cfg(test)]
 fn format_keystore_lock_status_at(now_epoch: i64, status: &esdiag::data::UnlockStatus) -> String {
     if status.unlock_active {
         if let Some(expires_at_epoch) = status.expires_at_epoch {
@@ -1687,6 +1852,7 @@ fn format_keystore_lock_status_at(now_epoch: i64, status: &esdiag::data::UnlockS
     "Keystore: locked".to_string()
 }
 
+#[cfg(test)]
 fn colorize_keystore_lock_status(status: &str, colorize: bool) -> String {
     if !colorize {
         return status.to_string();
@@ -1699,18 +1865,6 @@ fn colorize_keystore_lock_status(status: &str, colorize: bool) -> String {
         return status.replacen("locked", "\x1b[31mlocked\x1b[0m", 1);
     }
     status.to_string()
-}
-
-fn format_keystore_secret_summary(action: &str, secret_id: &str, path: &str) -> String {
-    format!("Secret '{secret_id}' {action} in {path}")
-}
-
-fn format_keystore_password_summary(path: &str) -> String {
-    format!("Keystore password updated for {path}")
-}
-
-fn format_keystore_migrate_summary(migrated: usize, unchanged: usize) -> String {
-    format!("Keystore migration complete: migrated {migrated} host(s), unchanged {unchanged} host(s).")
 }
 
 fn ensure_host_role(host: &KnownHost, role: HostRole, context: &str) -> Result<()> {
@@ -1836,12 +1990,11 @@ fn resolve_serve_exporter(output: Option<String>) -> Result<Exporter> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CommandResult, Commands, HostCommands, KeystoreCommands, colorize_keystore_lock_status,
-        format_collect_summary, format_keystore_lock_status, format_keystore_lock_status_at,
-        format_keystore_migrate_summary, format_keystore_password_summary, format_keystore_secret_summary,
-        format_process_summary, format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode,
-        resolve_host_secret_auth, resolve_secret_input_with_prompt, resolve_tracing_filter,
-        should_error_for_missing_subcommand, write_completion_summary,
+        Cli, Commands, HostCommands, KeystoreCommands, classify_failure, colorize_keystore_lock_status,
+        command_owns_stdout, format_keystore_lock_status, format_keystore_lock_status_at,
+        format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode, resolve_host_secret_auth,
+        resolve_secret_input_with_prompt, resolve_tracing_filter, should_error_for_missing_subcommand,
+        structured_failure,
     };
     #[cfg(feature = "keystore")]
     use super::{derive_collect_job, derive_process_job};
@@ -1849,14 +2002,19 @@ mod tests {
     use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
     use clap::Parser;
     use esdiag::data::{Application, HostRole, KnownHost, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
-    #[cfg(feature = "keystore")]
-    use esdiag::processor::Identifiers;
-    use esdiag::processor::diagnostic::DiagnosticReportBuilder;
-    use esdiag::processor::{
-        CollectionResult, Completed, DiagnosticManifest, DiagnosticOutcome, IncludedDiagnosticOutcome, SkipKind,
-    };
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
+    use esdiag::{
+        cli_output::{CliFailureCategory, OutputFormat},
+        receiver::{
+            ElasticCloudAdminRequestError, ElasticsearchRequestError, KibanaRequestError, LogstashRequestError,
+        },
+    };
+    #[cfg(feature = "keystore")]
+    use esdiag::{
+        job::model::{ExportTarget, Input, Job, Process},
+        processor::Identifiers,
+    };
     use std::sync::Mutex;
     use tempfile::TempDir;
     use url::Url;
@@ -1901,6 +2059,130 @@ mod tests {
 
         let cli = Cli::parse_from(["esdiag", "-a", "keystore", "status"]);
         assert!(cli.agent, "short -a should enable agent mode");
+    }
+
+    #[test]
+    fn output_format_defaults_to_yaml_and_accepts_json() {
+        let yaml = Cli::parse_from(["esdiag", "keystore", "status"]);
+        assert_eq!(yaml.format, OutputFormat::Yaml);
+
+        let json = Cli::parse_from(["esdiag", "--format", "json", "keystore", "status"]);
+        assert_eq!(json.format, OutputFormat::Json);
+    }
+
+    #[test]
+    fn unauthorized_elasticsearch_responses_are_authentication_failures() {
+        let error = eyre::Report::new(ElasticsearchRequestError::new(
+            elasticsearch::http::StatusCode::UNAUTHORIZED,
+            "missing authentication credentials".to_string(),
+            5,
+            34,
+        ));
+
+        assert_eq!(classify_failure(&error), CliFailureCategory::AuthenticationFailed);
+    }
+
+    #[test]
+    fn http_failures_include_status_type_and_reason() {
+        let error = eyre::Report::new(ElasticsearchRequestError::new(
+            elasticsearch::http::StatusCode::UNAUTHORIZED,
+            r#"{"error":{"type":"security_exception","reason":"missing authentication credentials for REST request [api_key=secret]"},"status":401}"#
+                .to_string(),
+            5,
+            133,
+        ));
+        let failure = structured_failure(&error);
+        let value = serde_json::to_value(failure).expect("serialize failure");
+
+        assert_eq!(value["category"], CliFailureCategory::AuthenticationFailed.as_str());
+        assert_eq!(value["status"], 401);
+        assert_eq!(value["type"], "security_exception");
+        assert_eq!(
+            value["reason"],
+            "missing authentication credentials for REST request [api_key=secret]"
+        );
+        assert_eq!(
+            value["message"],
+            "The server rejected the request because authentication credentials are required."
+        );
+    }
+
+    #[test]
+    fn non_elasticsearch_http_failures_use_the_shared_response_projection() {
+        let body = r#"{"error":{"type":"upstream_failure","reason":"remote dependency was unavailable"}}"#.to_string();
+        let failures = [
+            (
+                eyre::Report::new(KibanaRequestError::new(
+                    reqwest::StatusCode::TOO_MANY_REQUESTS,
+                    body.clone(),
+                    5,
+                    80,
+                )),
+                429,
+                CliFailureCategory::InvalidInput,
+            ),
+            (
+                eyre::Report::new(LogstashRequestError::new(
+                    reqwest::StatusCode::NOT_FOUND,
+                    body.clone(),
+                    5,
+                    80,
+                )),
+                404,
+                CliFailureCategory::NotFound,
+            ),
+            (
+                eyre::Report::new(ElasticCloudAdminRequestError::new(
+                    reqwest::StatusCode::BAD_GATEWAY,
+                    body,
+                    5,
+                    80,
+                )),
+                502,
+                CliFailureCategory::Internal,
+            ),
+        ];
+
+        for (error, status, category) in failures {
+            let value = serde_json::to_value(structured_failure(&error)).expect("serialize failure");
+            assert_eq!(value["category"], category.as_str());
+            assert_eq!(value["status"], status);
+            assert_eq!(value["type"], "upstream_failure");
+            assert_eq!(value["reason"], "remote dependency was unavailable");
+        }
+    }
+
+    #[test]
+    fn direct_process_stdout_is_not_replaced_with_a_terminal_outcome() {
+        let cli = Cli::parse_from(["esdiag", "process", "input.zip", "-"]);
+        assert!(command_owns_stdout(&cli));
+    }
+
+    #[cfg(feature = "keystore")]
+    #[test]
+    fn saved_job_stdout_is_not_replaced_with_a_terminal_outcome() {
+        let _env_guard = env_lock().lock().expect("lock environment");
+        let _tmp = setup_env();
+        let job = Job::try_new(
+            Identifiers::default(),
+            Input::Collect {
+                host: "prod".to_string(),
+                diagnostic_type: "standard".to_string(),
+                include: None,
+                exclude: None,
+            },
+            None,
+            Some(Process {
+                selection: None,
+                export: ExportTarget::Stdout,
+            }),
+            None,
+        )
+        .expect("valid streaming job");
+        esdiag::job::save_job("stdout-job", job).expect("save job");
+
+        let cli = Cli::parse_from(["esdiag", "job", "run", "stdout-job"]);
+        assert!(command_owns_stdout(&cli));
     }
 
     #[test]
@@ -2163,7 +2445,7 @@ mod tests {
         let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
         let host = KnownHost::new_no_auth(
-            Some(Application::Elasticsearch),
+            Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("valid url"),
             vec![HostRole::Collect],
             None,
@@ -2239,6 +2521,7 @@ mod tests {
         let cli = Cli {
             debug: true,
             agent: true,
+            format: OutputFormat::Yaml,
             command: None,
         };
 
@@ -2250,213 +2533,11 @@ mod tests {
         let cli = Cli {
             debug: false,
             agent: true,
+            format: OutputFormat::Yaml,
             command: None,
         };
 
         assert_eq!(resolve_tracing_filter(&cli).to_string(), "warn");
-    }
-
-    #[test]
-    fn write_completion_summary_writes_to_provided_writer() {
-        let mut buffer = Vec::new();
-
-        write_completion_summary(&mut buffer, "process complete").expect("write summary");
-
-        assert_eq!(String::from_utf8(buffer).expect("utf8"), "process complete\n");
-    }
-
-    #[test]
-    fn keystore_status_uses_lock_status_as_stderr_summary() {
-        let result = CommandResult::with_summary("keystore", "Keystore: locked".to_string());
-
-        assert_eq!(result.summary().as_deref(), Some("Keystore: locked"));
-    }
-
-    #[test]
-    fn keystore_lock_uses_locked_stderr_summary() {
-        let result = CommandResult::with_summary("keystore", colorize_keystore_lock_status("Keystore: locked", false));
-
-        assert_eq!(result.summary().as_deref(), Some("Keystore: locked"));
-    }
-
-    #[test]
-    fn keystore_unlock_uses_unlocked_stderr_summary() {
-        let result = CommandResult::with_summary(
-            "keystore",
-            colorize_keystore_lock_status("Keystore: unlocked until later", false),
-        );
-
-        assert_eq!(result.summary().as_deref(), Some("Keystore: unlocked until later"));
-    }
-
-    #[test]
-    fn keystore_secret_summary_is_useful() {
-        assert_eq!(
-            format_keystore_secret_summary("saved", "prod-es", "/tmp/secrets.yml"),
-            "Secret 'prod-es' saved in /tmp/secrets.yml"
-        );
-    }
-
-    #[test]
-    fn keystore_password_summary_is_useful() {
-        assert_eq!(
-            format_keystore_password_summary("/tmp/secrets.yml"),
-            "Keystore password updated for /tmp/secrets.yml"
-        );
-    }
-
-    #[test]
-    fn keystore_migrate_summary_is_useful() {
-        assert_eq!(
-            format_keystore_migrate_summary(2, 3),
-            "Keystore migration complete: migrated 2 host(s), unchanged 3 host(s)."
-        );
-    }
-
-    #[test]
-    fn keystore_subcommands_do_not_fall_back_to_generic_summary() {
-        let result = CommandResult::with_summary(
-            "keystore",
-            format_keystore_secret_summary("saved", "prod-es", "/tmp/secrets.yml"),
-        );
-
-        assert_ne!(result.summary().as_deref(), Some("keystore complete"));
-    }
-
-    #[test]
-    fn collect_summary_uses_collected_counts_and_path() {
-        let summary = format_collect_summary(&CollectionResult {
-            path: "target/esdiag-20260403-220233.zip".to_string(),
-            success: 21,
-            total: 21,
-        });
-
-        assert_eq!(
-            summary,
-            "Collected 21 of 21 files into target/esdiag-20260403-220233.zip"
-        );
-    }
-
-    #[test]
-    fn process_summary_includes_kibana_link_for_stderr_output() {
-        let manifest = DiagnosticManifest::new(
-            "2024-01-01T00:00:00Z".to_string(),
-            Some("esdiag-test".to_string()),
-            None,
-            None,
-            Some("minimal".to_string()),
-            Some(Application::Elasticsearch),
-            Some("elasticsearch_diagnostic".to_string()),
-            Some("esdiag".to_string()),
-            Some("8.15.0".to_string()),
-        );
-        let mut report = DiagnosticReportBuilder::try_from(manifest)
-            .expect("report builder")
-            .receiver("Elasticsearch http://localhost:9200".to_string())
-            .build()
-            .expect("report");
-        report.add_kibana_link("https://kb.example/app/dashboards#/view/report".to_string());
-        let completed = Completed {
-            report,
-            runtime: 1_234,
-            included_diagnostics: vec![],
-        };
-        let summary = format_process_summary(&completed);
-
-        let mut buffer = Vec::new();
-        write_completion_summary(&mut buffer, &summary).expect("write summary");
-
-        let stderr = String::from_utf8(buffer).expect("utf8");
-        assert!(stderr.contains("process complete in 1.234 seconds"));
-        assert!(stderr.contains("Kibana Link: https://kb.example/app/dashboards#/view/report"));
-    }
-
-    #[test]
-    fn process_summary_includes_child_outcomes_for_parent_bundles() {
-        let mut parent_manifest = DiagnosticManifest::new(
-            "2024-01-01T00:00:00Z".to_string(),
-            Some("esdiag-test".to_string()),
-            None,
-            None,
-            Some("support".to_string()),
-            None,
-            Some("eck-diagnostics".to_string()),
-            Some("esdiag".to_string()),
-            Some("3.0.0".to_string()),
-        );
-        parent_manifest.set_platform(esdiag::data::Platform::ECK);
-        let parent_report = DiagnosticReportBuilder::try_from(parent_manifest)
-            .expect("parent report builder")
-            .receiver("Directory /tmp/eck".to_string())
-            .build()
-            .expect("parent report");
-
-        let child_manifest = DiagnosticManifest::new(
-            "2024-01-01T00:00:00Z".to_string(),
-            Some("esdiag-test".to_string()),
-            None,
-            None,
-            Some("standard".to_string()),
-            Some(Application::Elasticsearch),
-            Some("elasticsearch_diagnostic".to_string()),
-            Some("esdiag".to_string()),
-            Some("9.3.3".to_string()),
-        );
-        let mut child_report = DiagnosticReportBuilder::try_from(child_manifest)
-            .expect("child report builder")
-            .receiver("Directory /tmp/eck/child".to_string())
-            .build()
-            .expect("child report");
-        child_report.diagnostic.docs.created = 42;
-        child_report.add_kibana_link("https://kb.example/app/dashboards#/view/child".to_string());
-
-        let completed = Completed {
-            report: parent_report,
-            runtime: 2_000,
-            included_diagnostics: vec![
-                IncludedDiagnosticOutcome {
-                    job_id: 1,
-                    path: "child-es".to_string(),
-                    outcome: child_report.outcome(),
-                    application: child_report.diagnostic.application,
-                    platform: child_report.diagnostic.platform(),
-                    report: Some(Box::new(child_report)),
-                    reason: None,
-                    runtime: Some(500),
-                    export_error: None,
-                },
-                IncludedDiagnosticOutcome {
-                    job_id: 2,
-                    path: "child-kibana".to_string(),
-                    outcome: DiagnosticOutcome::Skipped(SkipKind::NotImplemented),
-                    report: None,
-                    application: Some(Application::Kibana),
-                    platform: esdiag::data::Platform::ECK,
-                    reason: Some("Kibana processing is not yet implemented".to_string()),
-                    runtime: None,
-                    export_error: None,
-                },
-                IncludedDiagnosticOutcome {
-                    job_id: 3,
-                    path: "child-missing".to_string(),
-                    outcome: DiagnosticOutcome::Failed,
-                    report: None,
-                    application: None,
-                    platform: esdiag::data::Platform::Unknown,
-                    reason: Some("manifest missing".to_string()),
-                    runtime: None,
-                    export_error: None,
-                },
-            ],
-        };
-
-        let summary = format_process_summary(&completed);
-
-        assert!(summary.contains("included diagnostic complete in 0.500 seconds: 42 documents"));
-        assert!(summary.contains("child-es"));
-        assert!(summary.contains("https://kb.example/app/dashboards#/view/child"));
-        assert!(summary.contains("included diagnostic skipped (not implemented): child-kibana (Kibana)"));
-        assert!(summary.contains("included diagnostic failed: child-missing"));
     }
 
     #[test]

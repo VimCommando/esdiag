@@ -16,10 +16,29 @@ pub mod model;
 /// Structured per-stage results and typed lifecycle events.
 pub mod outcome;
 
+pub use executor::{FailedStage, JobExecutionFailure, JobOutcome};
+
 use crate::data::{Job as SavedJob, KnownHost, load_saved_jobs, save_saved_jobs};
 use crate::job::model::Input;
 use eyre::{Result, eyre};
 use std::io::IsTerminal;
+
+/// A saved-job lookup failed before execution began.
+///
+/// The CLI may expose the name safely as structured `resource` context while
+/// keeping other error details out of its public output contract.
+#[derive(Debug)]
+pub struct SavedJobNotFound {
+    pub name: String,
+}
+
+impl std::fmt::Display for SavedJobNotFound {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Saved job '{}' not found", self.name)
+    }
+}
+
+impl std::error::Error for SavedJobNotFound {}
 
 pub fn handle_job_list() -> Result<()> {
     let jobs = load_saved_jobs()?;
@@ -60,9 +79,11 @@ pub fn handle_job_list() -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_job_run(name: &str) -> Result<()> {
+pub async fn handle_job_run(name: &str) -> Result<JobOutcome> {
     let jobs = load_saved_jobs()?;
-    let job = jobs.get(name).ok_or_else(|| eyre!("Saved job '{}' not found", name))?;
+    let job = jobs
+        .get(name)
+        .ok_or_else(|| eyre::Report::new(SavedJobNotFound { name: name.to_string() }))?;
 
     if let Input::Collect { host, .. } = job.input() {
         let host_key = host.trim();
@@ -72,9 +93,9 @@ pub async fn handle_job_run(name: &str) -> Result<()> {
     }
 
     tracing::info!("Running saved job '{name}'");
-    run_job(job.clone()).await?;
+    let outcome = run_job(job.clone()).await?;
     tracing::info!("Saved job '{name}' completed successfully");
-    Ok(())
+    Ok(outcome)
 }
 
 pub fn handle_job_delete(name: &str) -> Result<()> {
@@ -112,7 +133,7 @@ pub fn validate_saved_job_name(name: &str) -> Result<()> {
 }
 
 /// Run a saved phase-structured job definition with the one executor.
-pub async fn run_job(job: SavedJob) -> Result<()> {
+pub async fn run_job(job: SavedJob) -> Result<JobOutcome> {
     match job.input() {
         Input::Collect { host, .. } => tracing::info!("Running saved collect job against {host}"),
         Input::Load { uri } => tracing::info!("Running saved load job from {uri}"),
@@ -128,7 +149,7 @@ pub async fn run_job(job: SavedJob) -> Result<()> {
     if let (Some(bundle_path), true) = (&outcome.bundle_path, outcome.bundle_retained) {
         tracing::info!("Retained collected bundle: {}", bundle_path.display());
     }
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(test)]

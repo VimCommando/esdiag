@@ -104,6 +104,7 @@ impl KibanaCollector {
                 path: self.exporter.to_string(),
                 success: 0,
                 total: apis.len() + 1,
+                duration_ms: 0,
             };
 
             let policy = CollectConcurrencyPolicy::from_env();

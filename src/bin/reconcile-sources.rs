@@ -4,9 +4,9 @@
 
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
-use serde_yaml::{Mapping, Value};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use yaml_serde::{Mapping, Value};
 
 /// Reconcile ESDiag collection definitions from support-diagnostics (ADR-0006).
 ///
@@ -126,12 +126,12 @@ fn main() -> Result<std::process::ExitCode> {
         if args.check {
             exit_code = std::process::ExitCode::FAILURE;
         } else {
-            let content = serde_yaml::to_string(&merged).wrap_err("failed to serialize merged sources")?;
+            let content = yaml_serde::to_string(&merged).wrap_err("failed to serialize merged sources")?;
             std::fs::write(&esdiag_path, content)
                 .wrap_err_with(|| format!("failed to write {}", esdiag_path.display()))?;
             println!("[{}] wrote {}", product.key(), esdiag_path.display());
             println!(
-                "[{}] NOTE: serde_yaml rewrites comments/ordering; review the diff before committing.",
+                "[{}] NOTE: yaml_serde rewrites comments/ordering; review the diff before committing.",
                 product.key()
             );
         }
@@ -187,7 +187,7 @@ fn load_yaml_mapping(path: &Path) -> Result<Mapping> {
     }
 
     let content = std::fs::read_to_string(path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
-    match serde_yaml::from_str::<Value>(&content).wrap_err_with(|| format!("failed to parse {}", path.display()))? {
+    match yaml_serde::from_str::<Value>(&content).wrap_err_with(|| format!("failed to parse {}", path.display()))? {
         Value::Mapping(mapping) => Ok(mapping),
         Value::Null => Ok(Mapping::new()),
         _ => Err(eyre!("{} must contain a YAML mapping", path.display())),
