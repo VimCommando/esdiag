@@ -2257,11 +2257,14 @@ mod tests {
     #[test]
     fn saved_job_stdout_is_not_replaced_with_a_terminal_outcome() {
         let _env_guard = env_lock().lock().expect("lock environment");
-        let tmp = setup_env();
+        let _tmp = setup_env();
         let job = Job::try_new(
             Identifiers::default(),
-            Input::Load {
-                uri: Uri::File(tmp.path().join("input.zip")),
+            Input::Collect {
+                host: "prod".to_string(),
+                diagnostic_type: "standard".to_string(),
+                include: None,
+                exclude: None,
             },
             None,
             Some(Process {
