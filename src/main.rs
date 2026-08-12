@@ -3071,7 +3071,7 @@ mod tests {
 
     #[cfg(feature = "server")]
     #[test]
-    fn serve_exporter_requires_environment_when_output_is_omitted() {
+    fn serve_exporter_requires_configuration_when_output_is_omitted() {
         let _guard = env_lock().lock().expect("env lock");
         unsafe {
             std::env::remove_var("ESDIAG_OUTPUT_URL");
@@ -3081,10 +3081,10 @@ mod tests {
         }
 
         let err = match resolve_serve_exporter(None) {
-            Ok(_) => panic!("omitted output without environment must fail"),
+            Ok(_) => panic!("omitted output without a configured deployment must fail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("ESDIAG_OUTPUT_URL is not defined"));
+        assert!(err.to_string().contains("No output deployment is configured"));
     }
 
     #[cfg(feature = "server")]
