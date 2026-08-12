@@ -26,7 +26,7 @@ use esdiag::{
     },
     env::LOG_LEVEL,
     exporter::Exporter,
-    processor::{CollectionResult, Completed, DiagnosticOutcome, Identifiers, default_collect_archive_name},
+    processor::{CollectionResult, DiagnosticOutcome, Identifiers, default_collect_archive_name},
     receiver::{
         ElasticCloudAdminRequestError, ElasticsearchRequestError, KibanaRequestError, LogstashRequestError, Receiver,
     },
@@ -35,9 +35,7 @@ use esdiag::{
 use eyre::{Result, eyre};
 use redact::Secret;
 use std::{
-    future::Future,
     io::{IsTerminal, Write},
-    path::PathBuf,
     process::ExitCode,
     str::FromStr,
     time::Duration,
@@ -749,57 +747,6 @@ fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) ->
     }
 }
 
-fn diagnostic_result(completed: &Completed, source: String) -> DiagnosticResult {
-    let report = &completed.report;
-    DiagnosticResult {
-        id: report.diagnostic.metadata.id.clone(),
-        product: report.diagnostic.display_label(),
-        documents: report.diagnostic.docs.created,
-        duration_ms: completed.runtime,
-        source,
-        output: completed.output.clone(),
-        kibana_url: report.diagnostic.kibana_link.clone(),
-    }
-}
-
-fn process_result(completed: &Completed) -> ProcessResult {
-    let included = completed
-        .included_diagnostics
-        .iter()
-        .map(|child| match (&child.outcome, &child.report) {
-            (DiagnosticOutcome::Skipped(_), _) => IncludedDiagnosticResult::Skipped {
-                source: child.path.clone(),
-                product: Some(esdiag::processor::display_label(child.application, child.platform)),
-                reason: child
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "diagnostic processing skipped".to_string()),
-            },
-            (_, Some(report)) => IncludedDiagnosticResult::Completed {
-                source: child.path.clone(),
-                diagnostic: DiagnosticResult {
-                    id: report.diagnostic.metadata.id.clone(),
-                    product: report.diagnostic.display_label(),
-                    documents: report.diagnostic.docs.created,
-                    duration_ms: child.runtime.unwrap_or_default(),
-                    source: child.path.clone(),
-                    output: completed.output.clone(),
-                    kibana_url: report.diagnostic.kibana_link.clone(),
-                },
-            },
-            (_, None) => IncludedDiagnosticResult::Failed {
-                source: child.path.clone(),
-                error: "included diagnostic processing failed".to_string(),
-            },
-        })
-        .collect();
-
-    ProcessResult {
-        diagnostic: diagnostic_result(completed, "primary".to_string()),
-        included,
-    }
-}
-
 fn execution_process_result(outcome: &esdiag::job::outcome::ExecutionOutcome) -> Option<ProcessResult> {
     let report = outcome.report.as_ref()?;
     let included = outcome
@@ -1372,11 +1319,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                     None,
                 )?;
                 let outcome = esdiag::job::executor::execute_with_context(job, context).await;
-                let process = outcome
-                    .report
-                    .as_ref()
-                    .map(|_| execution_process_result(&outcome))
-                    .flatten();
+                let process = execution_process_result(&outcome);
                 if !outcome.succeeded() || outcome.diagnostic_outcome() == Some(DiagnosticOutcome::Failed) {
                     return Err(eyre!("{}", format_execution_failure(&outcome)));
                 }
@@ -1555,23 +1498,6 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
     }
 }
 
-async fn collect_with_optional_upload<CollectFut, UploadFn, UploadFut>(
-    collect_future: CollectFut,
-    upload_id: Option<&str>,
-    mut upload_fn: UploadFn,
-) -> Result<CollectionResult>
-where
-    CollectFut: Future<Output = Result<CollectionResult>>,
-    UploadFn: FnMut(PathBuf, String) -> UploadFut,
-    UploadFut: Future<Output = Result<()>>,
-{
-    let result = collect_future.await?;
-    if let Some(upload_id) = upload_id {
-        upload_fn(PathBuf::from(&result.path), upload_id.to_string()).await?;
-    }
-    Ok(result)
-}
-
 #[cfg(feature = "keystore")]
 fn derive_collect_job(
     host: &str,
@@ -1601,23 +1527,6 @@ fn derive_process_job(input: &str, output: Option<&str>, identifiers: Identifier
         .identifiers(identifiers)
         .collect_from(input)?
         .process_to(output)
-}
-
-async fn upload_collected_archive(file_path: PathBuf, upload_id: String) -> Result<()> {
-    if !file_path.exists() {
-        return Err(eyre!("Collected archive not found at {}", file_path.display()));
-    }
-    tracing::info!("Uploading collected archive {} to {}", file_path.display(), upload_id);
-    let response = uploader::upload_file(&file_path, &upload_id, uploader::DEFAULT_UPLOAD_API_URL)
-        .await
-        .inspect_err(|_| {
-            tracing::warn!(
-                "Upload failed; collected archive remains available at {}",
-                file_path.display()
-            );
-        })?;
-    tracing::info!("Upload complete for slug {}", response.slug);
-    Ok(())
 }
 
 fn sources_application_key(application: Application) -> Result<&'static str> {
@@ -2081,11 +1990,11 @@ fn resolve_serve_exporter(output: Option<String>) -> Result<Exporter> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, Commands, HostCommands, KeystoreCommands, classify_failure, collect_with_optional_upload,
-        colorize_keystore_lock_status, command_owns_stdout, format_keystore_lock_status,
-        format_keystore_lock_status_at, format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode,
-        resolve_host_secret_auth, resolve_secret_input_with_prompt, resolve_tracing_filter,
-        should_error_for_missing_subcommand, structured_failure, upload_collected_archive,
+        Cli, Commands, HostCommands, KeystoreCommands, classify_failure, colorize_keystore_lock_status,
+        command_owns_stdout, format_keystore_lock_status, format_keystore_lock_status_at,
+        format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode, resolve_host_secret_auth,
+        resolve_secret_input_with_prompt, resolve_tracing_filter, should_error_for_missing_subcommand,
+        structured_failure,
     };
     #[cfg(feature = "keystore")]
     use super::{derive_collect_job, derive_process_job};
@@ -2093,7 +2002,6 @@ mod tests {
     use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
     use clap::Parser;
     use esdiag::data::{Application, HostRole, KnownHost, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
-    use esdiag::processor::CollectionResult;
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
     use esdiag::{
@@ -2107,10 +2015,7 @@ mod tests {
         job::model::{ExportTarget, Input, Job, Process},
         processor::Identifiers,
     };
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::Mutex;
     use tempfile::TempDir;
     use url::Url;
 
@@ -2579,126 +2484,6 @@ mod tests {
         assert_eq!(err.to_string(), "Saved jobs require an explicit process output target");
     }
 
-    #[tokio::test]
-    async fn collect_with_optional_upload_uses_resolved_runtime_archive_path() {
-        let upload_calls = AtomicUsize::new(0);
-        let result = collect_with_optional_upload(
-            std::future::ready(Ok(CollectionResult {
-                path: "/tmp/runtime-generated-esdiag.zip".to_string(),
-                success: 1,
-                total: 1,
-                duration_ms: 0,
-            })),
-            Some("https://upload.elastic.co/g/abc123"),
-            |path, upload_id| {
-                upload_calls.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(path, std::path::PathBuf::from("/tmp/runtime-generated-esdiag.zip"));
-                assert_eq!(upload_id, "https://upload.elastic.co/g/abc123".to_string());
-                std::future::ready(Ok(()))
-            },
-        )
-        .await
-        .expect("collect with upload succeeds");
-
-        assert_eq!(result.path, "/tmp/runtime-generated-esdiag.zip");
-        assert_eq!(upload_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn collect_with_optional_upload_skips_upload_when_collect_fails() {
-        let upload_calls = AtomicUsize::new(0);
-        let result = collect_with_optional_upload(
-            std::future::ready(Err(eyre::eyre!("collect failed"))),
-            Some("abc123"),
-            |_path, _upload_id| {
-                upload_calls.fetch_add(1, Ordering::SeqCst);
-                std::future::ready(Ok(()))
-            },
-        )
-        .await;
-
-        let err = match result {
-            Ok(_) => panic!("collect failure should be returned"),
-            Err(err) => err,
-        };
-        assert!(err.to_string().contains("collect failed"));
-        assert_eq!(upload_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn collect_with_optional_upload_skips_upload_when_no_upload_id_is_provided() {
-        let upload_calls = AtomicUsize::new(0);
-        let result = collect_with_optional_upload(
-            std::future::ready(Ok(CollectionResult {
-                path: "/tmp/collect-only-esdiag.zip".to_string(),
-                success: 1,
-                total: 1,
-                duration_ms: 0,
-            })),
-            None,
-            |_path, _upload_id| {
-                upload_calls.fetch_add(1, Ordering::SeqCst);
-                std::future::ready(Ok(()))
-            },
-        )
-        .await
-        .expect("collect without upload id succeeds");
-
-        assert_eq!(result.path, "/tmp/collect-only-esdiag.zip");
-        assert_eq!(upload_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn collect_with_optional_upload_returns_upload_error_and_keeps_archive() {
-        let file = tempfile::Builder::new()
-            .prefix("diag-")
-            .suffix(".zip")
-            .tempfile()
-            .expect("temp file");
-        let path = file.path().to_path_buf();
-        let upload_calls = AtomicUsize::new(0);
-
-        let result = collect_with_optional_upload(
-            std::future::ready(Ok(CollectionResult {
-                path: path.display().to_string(),
-                success: 1,
-                total: 1,
-                duration_ms: 0,
-            })),
-            Some("abc123"),
-            |upload_path, upload_id| {
-                upload_calls.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(upload_path, path);
-                assert_eq!(upload_id, "abc123".to_string());
-                assert!(upload_path.exists(), "collected archive should still exist");
-                std::future::ready(Err(eyre::eyre!("upload failed")))
-            },
-        )
-        .await;
-
-        let err = match result {
-            Ok(_) => panic!("upload failure should be returned"),
-            Err(err) => err,
-        };
-        assert!(err.to_string().contains("upload failed"));
-        assert_eq!(upload_calls.load(Ordering::SeqCst), 1);
-        assert!(path.exists(), "upload failure should preserve collected archive");
-    }
-
-    #[tokio::test]
-    async fn upload_collected_archive_returns_clear_error_when_file_is_missing() {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let missing_path = temp_dir.path().join("missing-diag.zip");
-
-        let err = upload_collected_archive(missing_path.clone(), "abc123".to_string())
-            .await
-            .expect_err("missing archive should fail");
-
-        assert!(
-            err.to_string()
-                .contains(&format!("Collected archive not found at {}", missing_path.display()))
-        );
-    }
     #[test]
     fn upload_command_parses_file_and_upload_id() {
         let cli = Cli::parse_from(["esdiag", "upload", "diag.zip", "abc123"]);

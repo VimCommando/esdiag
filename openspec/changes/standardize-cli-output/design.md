@@ -99,7 +99,7 @@ Alternative considered: JSON by default. JSON has broader parser availability bu
 
 ### Enforce a single-purpose stdout channel
 
-Tracing, warnings, and progress stay on stderr. Finite commands write exactly one YAML document or JSON value to stdout after successful completion. Table/list commands return sequences inside that outcome instead of rendering tables. Interactive terminals may color YAML keys for readability; non-interactive stdout remains uncolored and machine-parseable.
+Tracing, warnings, and progress stay on stderr. Finite commands write exactly one YAML document or JSON value to stdout after successful completion. Table/list commands return sequences inside that outcome instead of rendering tables. All structured stdout remains uncolored and machine-parseable, including when it is written to an interactive terminal.
 
 Commands fall into three output categories:
 
