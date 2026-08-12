@@ -2386,10 +2386,7 @@ fn resolve_serve_runtime_mode(mode: Option<RuntimeMode>) -> Result<RuntimeMode> 
 
 #[cfg(feature = "server")]
 fn resolve_serve_exporter(output: Option<String>) -> Result<Exporter> {
-    match output {
-        Some(output) => Exporter::try_from(Uri::try_from(output)?),
-        None => Exporter::try_from(Uri::try_from_output_env()?),
-    }
+    Exporter::try_from(Uri::try_from(output)?)
 }
 
 #[cfg(test)]

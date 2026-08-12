@@ -16,7 +16,7 @@ The CLI SHALL provide `esdiag init` as an interactive staged workflow covering d
 - **AND** the user can finish the loop without adding another host
 
 ### Requirement: Initialization Is Resumable And Non-Destructive
-Initialization SHALL inspect existing state before each stage, reuse valid completed state by default, and require explicit confirmation before replacing a configured user preference, host, secret, or saved job. It SHALL persist only validated domain values and SHALL write `esdiag.yml` last as the completion record.
+Initialization SHALL inspect existing state before each stage, reuse valid completed state by default, and require explicit confirmation before replacing a configured user preference, host, secret, or saved job. It SHALL persist only validated domain values and SHALL write each applicable `esdiag.yml` field after its corresponding stage validates. Initialization readiness SHALL be derived from validated configuration references and referenced domain state, not from configuration-file existence alone.
 
 #### Scenario: Interrupted initialization resumes
 - **GIVEN** a prior initialization created the keystore and output hosts but stopped before creating a job
@@ -83,7 +83,7 @@ Initialization SHALL create or select a valid first saved job after at least one
 - **WHEN** the user accepts the default job shape
 - **THEN** the saved job collects from the selected collect host
 - **AND** processes to the configured output host
-- **AND** its name becomes `default_job` in `esdiag.yml`
+- **AND** its name becomes `job.default` in `esdiag.yml`
 
 #### Scenario: Collect-only job is explicit
 - **WHEN** the user selects a collect-only first job
