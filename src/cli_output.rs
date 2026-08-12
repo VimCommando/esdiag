@@ -10,7 +10,7 @@
 
 use clap::ValueEnum;
 use serde::Serialize;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 #[value(rename_all = "snake_case")]
@@ -22,27 +22,10 @@ pub enum OutputFormat {
 
 /// Writes a blank separator, exactly one terminal value, and a trailing newline.
 pub fn write_outcome<W: Write, T: Serialize>(writer: &mut W, format: OutputFormat, value: &T) -> io::Result<()> {
-    write_outcome_with_yaml_key_color(writer, format, value, false)
-}
-
-/// Writes an outcome to the terminal, colorizing YAML keys when stdout is interactive.
-pub fn write_terminal_outcome<T: Serialize>(format: OutputFormat, value: &T) -> io::Result<()> {
-    let stdout = io::stdout();
-    let colorize_yaml_keys = stdout.is_terminal();
-    write_outcome_with_yaml_key_color(&mut stdout.lock(), format, value, colorize_yaml_keys)
-}
-
-fn write_outcome_with_yaml_key_color<W: Write, T: Serialize>(
-    writer: &mut W,
-    format: OutputFormat,
-    value: &T,
-    colorize_yaml: bool,
-) -> io::Result<()> {
     writer.write_all(b"\n")?;
     match format {
         OutputFormat::Yaml => {
             let yaml = yaml_serde::to_string(value).map_err(io::Error::other)?;
-            let yaml = if colorize_yaml { colorize_yaml_keys(&yaml) } else { yaml };
             writer.write_all(yaml.as_bytes())?;
             if !yaml.ends_with('\n') {
                 writer.write_all(b"\n")?;
@@ -56,24 +39,11 @@ fn write_outcome_with_yaml_key_color<W: Write, T: Serialize>(
     writer.flush()
 }
 
-fn colorize_yaml_keys(yaml: &str) -> String {
-    yaml.split_inclusive('\n')
-        .map(|line| {
-            let (body, trailing_newline) = line.strip_suffix('\n').map_or((line, ""), |body| (body, "\n"));
-            let indentation = body.len() - body.trim_start().len();
-            let (indent, content) = body.split_at(indentation);
-            let (list_marker, content) = content
-                .strip_prefix("- ")
-                .map_or(("", content), |content| ("- ", content));
-            let Some((key, value)) = content.split_once(':') else {
-                return line.to_string();
-            };
-            if key.is_empty() {
-                return line.to_string();
-            }
-            format!("{indent}{list_marker}\x1b[36m{key}\x1b[0m:{value}{trailing_newline}")
-        })
-        .collect()
+/// Writes an outcome to stdout without changing the machine-readable payload.
+pub fn write_terminal_outcome<T: Serialize>(format: OutputFormat, value: &T) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    write_outcome(&mut stdout, format, value)
 }
 
 #[derive(Debug, Serialize)]
@@ -399,14 +369,6 @@ mod tests {
         assert_eq!(
             String::from_utf8(json).expect("json"),
             "\n{\"result\":\"archive_collected\",\"path\":\"/tmp/diagnostic.zip\",\"files\":{\"successful\":2,\"total\":3}}\n"
-        );
-    }
-
-    #[test]
-    fn yaml_key_coloring_preserves_values_and_indentation() {
-        assert_eq!(
-            colorize_yaml_keys("result: archive_collected\nfiles:\n  successful: 2\n- name: primary\n"),
-            "\x1b[36mresult\x1b[0m: archive_collected\n\x1b[36mfiles\x1b[0m:\n  \x1b[36msuccessful\x1b[0m: 2\n- \x1b[36mname\x1b[0m: primary\n"
         );
     }
 
