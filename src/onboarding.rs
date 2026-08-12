@@ -233,7 +233,7 @@ mod tests {
         let config = ApplicationConfig::load().expect("load config");
         let readiness = inspect().expect("inspect readiness");
 
-        assert_eq!(config.default_diagnostics_cluster.as_deref(), Some("output-es"));
+        assert_eq!(config.output.default.as_deref(), Some("output-es"));
         assert!(readiness.keystore_ready);
         assert!(readiness.output_configured);
         assert!(readiness.collect_host_configured);

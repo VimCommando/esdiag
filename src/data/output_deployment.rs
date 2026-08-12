@@ -214,7 +214,10 @@ mod tests {
         .expect("write hosts");
         ApplicationConfig {
             version: 1,
-            default_diagnostics_cluster: Some("saved-output".to_string()),
+            output: crate::data::OutputConfig {
+                default: Some("saved-output".to_string()),
+                ..crate::data::OutputConfig::default()
+            },
             ..ApplicationConfig::new()
         }
         .save()

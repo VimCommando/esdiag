@@ -143,7 +143,7 @@ impl ApplicationConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::ApplicationConfig;
+    use super::{ApplicationConfig, JobConfig, OutputConfig};
     use crate::data::{Application, HostRole, KnownHostBuilder};
     use std::collections::BTreeMap;
     use url::Url;
@@ -172,8 +172,13 @@ mod tests {
         let config = ApplicationConfig {
             version: 1,
             user: Some("reno@example.com".to_string()),
-            default_diagnostics_cluster: Some("output-elasticsearch".to_string()),
-            default_job: Some("production-standard".to_string()),
+            output: OutputConfig {
+                default: Some("output-elasticsearch".to_string()),
+                ..OutputConfig::default()
+            },
+            job: JobConfig {
+                default: Some("production-standard".to_string()),
+            },
         };
 
         config.save().expect("save configuration");
@@ -181,8 +186,8 @@ mod tests {
         let loaded = ApplicationConfig::load().expect("load configuration");
 
         assert_eq!(loaded, config);
-        assert!(written.contains("default_diagnostics_cluster: output-elasticsearch"));
-        assert!(written.contains("default_job: production-standard"));
+        assert!(written.contains("default: output-elasticsearch"));
+        assert!(written.contains("default: production-standard"));
         for forbidden in ["apikey", "password", "authorization", "https://es.example"] {
             assert!(!written.contains(forbidden), "{forbidden} must not be serialized");
         }
@@ -214,7 +219,10 @@ mod tests {
         crate::data::KnownHost::write_hosts_yml(&linked_output_hosts()).expect("write hosts");
         let config = ApplicationConfig {
             version: 1,
-            default_diagnostics_cluster: Some("output-elasticsearch".to_string()),
+            output: OutputConfig {
+                default: Some("output-elasticsearch".to_string()),
+                ..OutputConfig::default()
+            },
             ..ApplicationConfig::new()
         };
 
@@ -226,7 +234,10 @@ mod tests {
         let _env = crate::TestEnv::new();
         let config = ApplicationConfig {
             version: 1,
-            default_diagnostics_cluster: Some("missing".to_string()),
+            output: OutputConfig {
+                default: Some("missing".to_string()),
+                ..OutputConfig::default()
+            },
             ..ApplicationConfig::new()
         };
 
@@ -243,7 +254,9 @@ mod tests {
         let _env = crate::TestEnv::new();
         let config = ApplicationConfig {
             version: 1,
-            default_job: Some("missing-job".to_string()),
+            job: JobConfig {
+                default: Some("missing-job".to_string()),
+            },
             ..ApplicationConfig::new()
         };
 

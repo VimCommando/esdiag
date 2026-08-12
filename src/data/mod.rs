@@ -24,7 +24,7 @@ pub mod settings;
 mod uri;
 
 pub use application::Application;
-pub use application_config::ApplicationConfig;
+pub use application_config::{ApplicationConfig, JobConfig, OutputConfig};
 pub use auth::{Auth, AuthType};
 #[cfg(all(feature = "server", feature = "keystore"))]
 pub(crate) use keystore::get_active_unlock_keystore_password;
