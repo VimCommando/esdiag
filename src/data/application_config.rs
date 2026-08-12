@@ -20,11 +20,40 @@ pub struct ApplicationConfig {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "OutputConfig::is_empty")]
+    pub output: OutputConfig,
+    #[serde(default, skip_serializing_if = "JobConfig::is_empty")]
+    pub job: JobConfig,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(alias = "output")]
-    pub default_diagnostics_cluster: Option<String>,
+    pub default: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_job: Option<String>,
+    pub authenticated_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assets_version: Option<String>,
+}
+
+impl OutputConfig {
+    fn is_empty(&self) -> bool {
+        self.default.is_none() && self.authenticated_on.is_none() && self.assets_version.is_none()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+impl JobConfig {
+    fn is_empty(&self) -> bool {
+        self.default.is_none()
+    }
 }
 
 impl ApplicationConfig {
@@ -65,7 +94,7 @@ impl ApplicationConfig {
         self.validate_version()?;
 
         let hosts = KnownHost::parse_hosts_yml()?;
-        if let Some(output_name) = &self.default_diagnostics_cluster {
+        if let Some(output_name) = &self.output.default {
             let output = hosts
                 .get(output_name)
                 .ok_or_else(|| eyre!("Configured output host '{output_name}' was not found"))?;
@@ -91,7 +120,7 @@ impl ApplicationConfig {
             }
         }
 
-        if let Some(job_name) = &self.default_job {
+        if let Some(job_name) = &self.job.default {
             let jobs = load_saved_jobs()?;
             if !jobs.contains_key(job_name) {
                 return Err(eyre!("Configured default job '{job_name}' was not found"));

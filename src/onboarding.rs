@@ -51,11 +51,12 @@ pub fn inspect() -> Result<OnboardingReadiness> {
     let jobs = crate::data::load_saved_jobs()?;
 
     let output_configured = config
-        .default_diagnostics_cluster
+        .output
+        .default
         .as_ref()
         .is_some_and(|name| hosts.get(name).is_some_and(valid_output_host));
     let collect_host_configured = hosts.values().any(|host| host.has_role(HostRole::Collect));
-    let default_job_configured = config.default_job.as_ref().is_some_and(|name| jobs.contains_key(name));
+    let default_job_configured = config.job.default.as_ref().is_some_and(|name| jobs.contains_key(name));
 
     Ok(OnboardingReadiness {
         user_configured: config.user.as_deref().is_some_and(|user| !user.trim().is_empty()),
@@ -106,7 +107,7 @@ pub fn save_output_deployment(input: OutputDeploymentInput, keystore_password: &
     KnownHost::write_hosts_yml(&hosts)?;
 
     let mut config = ApplicationConfig::load()?;
-    config.default_diagnostics_cluster = Some(input.output_name);
+    config.output.default = Some(input.output_name);
     config.save()?;
     Ok(config)
 }
@@ -153,7 +154,8 @@ pub fn save_default_processing_job(name: String, collect_host: String) -> Result
     }
     let config = ApplicationConfig::load()?;
     let output = config
-        .default_diagnostics_cluster
+        .output
+        .default
         .clone()
         .ok_or_else(|| eyre!("A validated output deployment is required before creating a default job"))?;
     let job = Job::builder()
@@ -169,7 +171,7 @@ pub fn save_default_job(name: String, job: Job) -> Result<ApplicationConfig> {
     save_saved_jobs(&jobs)?;
 
     let mut config = ApplicationConfig::load()?;
-    config.default_job = Some(name);
+    config.job.default = Some(name);
     config.validate_references()?;
     config.save()?;
     Ok(config)

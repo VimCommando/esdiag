@@ -1837,7 +1837,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
 
     let initial = inspect_onboarding()?;
     println!("ESDiag first-run initialization");
-    let mut output_name_for_defaults = esdiag::data::ApplicationConfig::load()?.default_diagnostics_cluster;
+    let mut output_name_for_defaults = esdiag::data::ApplicationConfig::load()?.output.default;
     let mut output_url_for_defaults = output_name_for_defaults
         .as_ref()
         .and_then(KnownHost::get_known)
@@ -1863,7 +1863,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
     }
 
     let config = esdiag::data::ApplicationConfig::load()?;
-    let configure_cluster = if config.default_diagnostics_cluster.is_some() {
+    let configure_cluster = if config.output.default.is_some() {
         prompt_confirm("Reconfigure the default diagnostics cluster? [y/N]: ")?
     } else {
         prompt_confirm_default_yes("Configure a diagnostics cluster now? [Y/n]: ")?
@@ -1930,18 +1930,23 @@ async fn run_init_wizard() -> Result<CommandResult> {
             &keystore_password,
         )?;
 
+        let mut output_config = esdiag::data::ApplicationConfig::load()?;
+        output_config.output.authenticated_on = (output_valid && viewer_valid).then(|| chrono::Utc::now().to_rfc3339());
         #[cfg(feature = "setup")]
         if output_valid && viewer_valid && prompt_confirm("Install or update ESDiag output assets now? [y/N]: ")? {
             setup::assets(&output_client).await?;
             setup::ensure_agent_builder_license(&output_client).await?;
             setup::assets(&viewer_client).await?;
+            output_config.output.assets_version = Some(env!("CARGO_PKG_VERSION").to_string());
         } else if !output_valid || !viewer_valid {
+            output_config.output.assets_version = None;
             tracing::warn!("Skipping output asset setup until both endpoints validate successfully");
         }
         #[cfg(not(feature = "setup"))]
         if !output_valid || !viewer_valid {
             tracing::warn!("Output asset setup is unavailable and endpoint validation did not complete successfully");
         }
+        output_config.save()?;
     }
 
     if !initial.collect_host_configured || prompt_confirm("Add or replace a collect host? [y/N]: ")? {
@@ -1956,7 +1961,8 @@ async fn run_init_wizard() -> Result<CommandResult> {
                 && prompt_confirm_default_yes("Reuse the output credential for this host? [Y/n]: ")?;
             let secret_id = if reuse_output_secret {
                 esdiag::data::ApplicationConfig::load()?
-                    .default_diagnostics_cluster
+                    .output
+                    .default
                     .and_then(|output| KnownHost::get_known(&output))
                     .and_then(|host| host.secret)
             } else {
@@ -1991,7 +1997,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
     }
 
     let config = esdiag::data::ApplicationConfig::load()?;
-    if config.default_job.is_none() || prompt_confirm("Replace the default saved job? [y/N]: ")? {
+    if config.job.default.is_none() || prompt_confirm("Replace the default saved job? [y/N]: ")? {
         let collect_host_default = most_recent_collect_host
             .or_else(first_saved_collect_host)
             .ok_or_else(|| eyre!("Add a collect host before creating the default job"))?;
@@ -2001,7 +2007,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
             .collect_from(collect_host.clone())?
             .collect_to(format!("diagnostics/{collect_host}"))?;
         save_default_job(collect_job_name, collect_job)?;
-        if let Some(output) = esdiag::data::ApplicationConfig::load()?.default_diagnostics_cluster {
+        if let Some(output) = esdiag::data::ApplicationConfig::load()?.output.default {
             let process_job_name = format!("{collect_host}-process-{output}");
             save_default_processing_job(process_job_name, collect_host)?;
         }
@@ -2020,9 +2026,10 @@ fn initialization_outcome() -> Result<CliOutcome> {
         user: config
             .user
             .ok_or_else(|| eyre!("Initialization completed without a configured user"))?,
-        output: config.default_diagnostics_cluster,
+        output: config.output.default,
         job: config
-            .default_job
+            .job
+            .default
             .ok_or_else(|| eyre!("Initialization completed without a default job"))?,
     })
 }

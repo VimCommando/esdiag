@@ -47,7 +47,7 @@ impl OutputDeployment {
 
     fn from_persisted(require_kibana: bool) -> Result<Self> {
         let config = ApplicationConfig::load()?;
-        let output_name = config.default_diagnostics_cluster.ok_or_else(|| {
+        let output_name = config.output.default.ok_or_else(|| {
             eyre!("No output deployment is configured. Run `esdiag init` or provide an explicit output target.")
         })?;
         let output = KnownHost::get_known(&output_name)
