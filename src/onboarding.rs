@@ -114,6 +114,13 @@ pub fn save_output_deployment(input: OutputDeploymentInput, keystore_password: &
 
 pub fn save_collect_host(input: CollectHostInput, keystore_password: Option<&str>) -> Result<()> {
     validate_name(&input.name, "collect host")?;
+    let mut hosts = KnownHost::parse_hosts_yml()?;
+    if let Some(existing) = hosts.get(&input.name).cloned() {
+        hosts.insert(input.name, existing.with_role(HostRole::Collect));
+        KnownHost::write_hosts_yml(&hosts)?;
+        return Ok(());
+    }
+
     match (&input.secret_id, &input.auth, keystore_password) {
         (Some(secret_id), Some(auth), Some(password)) => upsert_secret_auth(secret_id, auth.clone(), password)?,
         (Some(_), None, _) | (None, None, _) => {}
@@ -132,12 +139,6 @@ pub fn save_collect_host(input: CollectHostInput, keystore_password: Option<&str
         Some(auth) => builder.build_with_secret_auth(auth)?,
         None => builder.build()?,
     };
-    let mut hosts = KnownHost::parse_hosts_yml()?;
-    if let Some(existing) = hosts.get(&input.name).cloned() {
-        hosts.insert(input.name, existing.with_role(HostRole::Collect));
-        KnownHost::write_hosts_yml(&hosts)?;
-        return Ok(());
-    }
     hosts.insert(input.name, host);
     KnownHost::write_hosts_yml(&hosts)?;
     Ok(())
@@ -199,7 +200,11 @@ mod tests {
         CollectHostInput, OnboardingReadiness, OutputDeploymentInput, inspect, save_collect_host,
         save_default_processing_job, save_output_deployment, save_user,
     };
-    use crate::data::{Application, ApplicationConfig, SecretAuth, create_keystore};
+    use crate::data::{
+        Application, ApplicationConfig, HostRole, KnownHost, KnownHostBuilder, SecretAuth, create_keystore,
+        resolve_secret_auth, upsert_secret_auth,
+    };
+    use std::collections::BTreeMap;
     use url::Url;
 
     #[test]
@@ -274,5 +279,46 @@ mod tests {
         save_default_processing_job("default".to_string(), "collect-es".to_string()).expect("save default job");
 
         assert!(inspect().expect("completed readiness").is_complete());
+    }
+
+    #[test]
+    fn existing_collect_host_does_not_update_unrelated_credentials() {
+        let _env = crate::TestEnv::new();
+        create_keystore("pw").expect("create keystore");
+        upsert_secret_auth("existing-secret", SecretAuth::apikey("existing-key"), "pw").expect("save secret");
+        let existing = KnownHostBuilder::new(Url::parse("https://existing.example:9200").expect("url"))
+            .application(Application::Elasticsearch)
+            .secret(Some("existing-secret".to_string()))
+            .build()
+            .expect("host");
+        KnownHost::write_hosts_yml(&BTreeMap::from([("existing".to_string(), existing)])).expect("write host");
+
+        save_collect_host(
+            CollectHostInput {
+                name: "existing".to_string(),
+                app: Application::Elasticsearch,
+                url: Url::parse("https://replacement.example:9200").expect("url"),
+                secret_id: Some("replacement-secret".to_string()),
+                auth: Some(SecretAuth::apikey("replacement-key")),
+            },
+            Some("pw"),
+        )
+        .expect("mark existing host collectable");
+
+        let host = KnownHost::get_known(&"existing".to_string()).expect("existing host");
+        assert!(host.has_role(HostRole::Collect));
+        assert_eq!(host.secret_reference(), Some("existing-secret"));
+        assert_eq!(
+            host.concrete_url().map(Url::as_str),
+            Some("https://existing.example:9200/")
+        );
+        assert_eq!(
+            resolve_secret_auth("existing-secret", "pw").expect("resolve existing secret"),
+            Some(SecretAuth::apikey("existing-key"))
+        );
+        assert_eq!(
+            resolve_secret_auth("replacement-secret", "pw").expect("resolve replacement secret"),
+            None
+        );
     }
 }

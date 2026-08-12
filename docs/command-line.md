@@ -130,7 +130,6 @@ order: an explicit command target, complete `ESDIAG_OUTPUT_*` plus
 combine endpoints or credentials from different sources. The existing
 desktop-only `settings.yml` remains unchanged; a later GUI onboarding flow will
 migrate it.
-- `ESDIAG_KIBANA_URL`: Kibana URL used by `serve`, processing metadata, and host-omitted setup flows
 - `ESDIAG_KIBANA_SPACE`: optional Kibana space appended to generated Kibana links
 - `ESDIAG_MODE`: runtime mode for `serve` when `--mode` is omitted; valid values are `user` and `service`
 - `ESDIAG_AUTH_PROVIDER`: authentication provider for `serve` when `--auth-provider` is omitted; valid values are `google-iap` and `none`

@@ -3133,9 +3133,9 @@ mod tests {
     fn serve_exporter_rejects_partial_runtime_environment_without_leaking_secrets() {
         let _guard = env_lock().lock().expect("env lock");
         unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_URL");
-            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "do-not-print-this-secret");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
+            std::env::set_var("ESDIAG_OUTPUT_URL", "http://localhost:9200");
+            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
+            std::env::set_var("ESDIAG_OUTPUT_USERNAME", "do-not-print-this-secret");
             std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
         }
 
@@ -3144,11 +3144,12 @@ mod tests {
             Err(err) => err,
         };
         let message = err.to_string();
-        assert!(message.contains("ESDIAG_OUTPUT_URL is not defined"));
+        assert!(message.contains("ESDIAG_OUTPUT_USERNAME and ESDIAG_OUTPUT_PASSWORD"));
         assert!(!message.contains("do-not-print-this-secret"));
 
         unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
+            std::env::remove_var("ESDIAG_OUTPUT_URL");
+            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
         }
     }
 }

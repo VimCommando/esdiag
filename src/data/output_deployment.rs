@@ -119,15 +119,7 @@ impl OutputDeployment {
 }
 
 fn runtime_output_is_declared() -> bool {
-    [
-        "ESDIAG_OUTPUT_URL",
-        "ESDIAG_OUTPUT_APIKEY",
-        "ESDIAG_OUTPUT_USERNAME",
-        "ESDIAG_OUTPUT_PASSWORD",
-        "ESDIAG_KIBANA_URL",
-    ]
-    .iter()
-    .any(|name| env::var_os(name).is_some())
+    env::var_os("ESDIAG_OUTPUT_URL").is_some()
 }
 
 fn required_environment(name: &str) -> Result<String> {
@@ -283,6 +275,22 @@ mod tests {
                 .and_then(|host| host.concrete_url())
                 .map(Url::as_str),
             Some("https://saved-kb.example:5601/")
+        );
+    }
+
+    #[test]
+    fn credentials_without_an_output_url_do_not_override_persisted_output() {
+        let mut env = crate::TestEnv::new();
+        clear_output_environment(&mut env);
+        save_linked_hosts();
+        env.set("ESDIAG_OUTPUT_APIKEY", "runtime-key");
+
+        let deployment = OutputDeployment::resolve(None, true).expect("persisted deployment");
+
+        assert_eq!(deployment.source, OutputDeploymentSource::Persisted);
+        assert_eq!(
+            deployment.elasticsearch.concrete_url().map(Url::as_str),
+            Some("https://saved-es.example:9200/")
         );
     }
 
