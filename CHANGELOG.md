@@ -16,9 +16,12 @@ published release notes, maintenance branches, and tagged history.
 - Added a read-only binding workflow that validates Kibana Agent Builder access and direct Elasticsearch diagnostic-data access without creating a model call or throwaway conversation.
 - Added a cluster-review workflow that selects or collects a diagnostic, guides first-job setup when needed, streams the cluster agent's progress, and reports which diagnostic was analyzed.
 - Added `ESDIAG_KIBANA_URL`, `ESDIAG_ELASTICSEARCH_URL`, `ESDIAG_KIBANA_APIKEY`, `ESDIAG_KIBANA_APIKEY_FILE`, `ESDIAG_AGENT_ID`, `ESDIAG_INFERENCE_ID`, `ESDIAG_JOB`, and `ESDIAG_DIAGNOSTIC_MAX_AGE` for configuring analysis against a deployment.
+- Added optional Elastic Upload Service forwarding to `esdiag-lite.sh` for newly collected and existing ZIP archives.
+- Added `esdiag-lite.ps1` for version-aware Elasticsearch diagnostic collection on Windows PowerShell.
 
 ### Changed
 
+- Replaced `min-diag.sh` with the collection-only, version-aware `esdiag-lite.sh`, using environment-based Elasticsearch authentication, optional ZIP output, and no `jq` runtime dependency.
 - Changed saved hosts to distinguish target applications from Cloud routing and unresolved URL templates, with clearer validation for legacy host records (#366).
 - Changed finite CLI commands to emit typed YAML outcomes on stdout by default, with `--format json` available for interoperability; command failures now return safe structured results and document streams retain their NDJSON-only stdout contract.
 - Removed the Agent Skill's prose-output parser; first-run onboarding and the remaining native agent CLI helpers are delivered by their successor changes.
