@@ -41,7 +41,7 @@ use redact::Secret;
 use std::{
     io::{IsTerminal, Write},
     path::PathBuf,
-    process::{Command, ExitCode},
+    process::ExitCode,
     str::FromStr,
     time::Duration,
 };
@@ -2174,41 +2174,18 @@ fn read_api_key_file(path: &str) -> Result<String> {
 }
 
 fn default_diagnostic_user() -> String {
-    detect_os_email()
-        .or_else(|| std::env::var("EMAIL").ok().filter(|email| email.contains('@')))
-        .or_else(|| std::env::var("USER").ok())
-        .or_else(|| std::env::var("USERNAME").ok())
+    default_diagnostic_user_from(|name| std::env::var(name).ok())
+}
+
+fn default_diagnostic_user_from<F>(get_environment: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
+    get_environment("EMAIL")
+        .filter(|email| email.contains('@'))
+        .or_else(|| get_environment("USER"))
+        .or_else(|| get_environment("USERNAME"))
         .unwrap_or_else(|| "user".to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn detect_os_email() -> Option<String> {
-    let username = std::env::var("USER").ok()?;
-    let output = Command::new("dscl")
-        .args([".", "-read", &format!("/Users/{username}"), "EMailAddress"])
-        .output()
-        .ok()?;
-    String::from_utf8(output.stdout)
-        .ok()?
-        .split_whitespace()
-        .find(|value| value.contains('@'))
-        .map(str::to_string)
-}
-
-#[cfg(target_os = "windows")]
-fn detect_os_email() -> Option<String> {
-    let output = Command::new("whoami").arg("/upn").output().ok()?;
-    String::from_utf8(output.stdout)
-        .ok()?
-        .lines()
-        .map(str::trim)
-        .find(|value| value.contains('@'))
-        .map(str::to_string)
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn detect_os_email() -> Option<String> {
-    None
 }
 
 fn format_epoch(epoch_seconds: i64) -> String {
@@ -2393,7 +2370,7 @@ fn resolve_serve_exporter(output: Option<String>) -> Result<Exporter> {
 mod tests {
     use super::{
         Cli, Commands, HostCommands, KeystoreCommands, classify_failure, colorize_keystore_lock_status,
-        command_owns_stdout, format_keystore_lock_status, format_keystore_lock_status_at,
+        command_owns_stdout, default_diagnostic_user_from, format_keystore_lock_status, format_keystore_lock_status_at,
         format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode, resolve_host_secret_auth,
         resolve_secret_input_with_prompt, resolve_tracing_filter, should_error_for_missing_subcommand,
         structured_failure,
@@ -2470,6 +2447,22 @@ mod tests {
 
         let json = Cli::parse_from(["esdiag", "--format", "json", "keystore", "status"]);
         assert_eq!(json.format, OutputFormat::Json);
+    }
+
+    #[test]
+    fn default_diagnostic_user_uses_environment_without_spawning_processes() {
+        let email = default_diagnostic_user_from(|name| match name {
+            "EMAIL" => Some("operator@example.com".to_string()),
+            "USER" => Some("shell-user".to_string()),
+            _ => None,
+        });
+        let user = default_diagnostic_user_from(|name| match name {
+            "USER" => Some("shell-user".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(email, "operator@example.com");
+        assert_eq!(user, "shell-user");
     }
 
     #[test]
