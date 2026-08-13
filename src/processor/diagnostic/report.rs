@@ -4,7 +4,7 @@
 
 use super::super::elasticsearch::{ClusterMetadata, License as ElasticsearchLicense};
 use super::{DiagnosticManifest, DiagnosticMetadata, Lookup};
-use crate::data::{Application, Platform};
+use crate::data::{Application, ApplicationConfig, Platform};
 use eyre::{OptionExt, Report, Result, eyre};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{NoneAsEmptyString, serde_as, skip_serializing_none};
@@ -160,7 +160,7 @@ impl Identifiers {
             case_number: normalize_identifier(case_number),
             filename: normalize_identifier(filename),
             opportunity: normalize_identifier(opportunity),
-            user: normalize_identifier(user).or_else(|| normalize_identifier(std::env::var("ESDIAG_USER").ok())),
+            user: resolve_default_user(user),
             parent_id: None,
             platform: None,
         }
@@ -201,7 +201,7 @@ impl Identifiers {
 
 impl Default for Identifiers {
     fn default() -> Self {
-        let user = normalize_identifier(std::env::var("ESDIAG_USER").ok());
+        let user = resolve_default_user(None);
         Self {
             account: None,
             case_number: None,
@@ -212,6 +212,16 @@ impl Default for Identifiers {
             platform: None,
         }
     }
+}
+
+fn resolve_default_user(explicit: Option<String>) -> Option<String> {
+    normalize_identifier(explicit)
+        .or_else(|| normalize_identifier(std::env::var("ESDIAG_USER").ok()))
+        .or_else(|| {
+            ApplicationConfig::load()
+                .ok()
+                .and_then(|config| normalize_identifier(config.user))
+        })
 }
 
 fn normalize_identifier(value: Option<String>) -> Option<String> {
@@ -975,6 +985,58 @@ impl TryFrom<String> for Origin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::ApplicationConfig;
+
+    #[test]
+    fn configured_user_supplies_an_omitted_identifier() {
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_USER");
+        ApplicationConfig {
+            version: 1,
+            user: Some("configured@example.com".to_string()),
+            ..ApplicationConfig::new()
+        }
+        .save()
+        .expect("save application config");
+
+        let identifiers = Identifiers::new(None, None, None, None, None);
+
+        assert_eq!(identifiers.user.as_deref(), Some("configured@example.com"));
+    }
+
+    #[test]
+    fn environment_user_precedes_configured_user() {
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_USER", "environment@example.com");
+        ApplicationConfig {
+            version: 1,
+            user: Some("configured@example.com".to_string()),
+            ..ApplicationConfig::new()
+        }
+        .save()
+        .expect("save application config");
+
+        let identifiers = Identifiers::new(None, None, None, None, None);
+
+        assert_eq!(identifiers.user.as_deref(), Some("environment@example.com"));
+    }
+
+    #[test]
+    fn explicit_user_precedes_environment_and_configured_user() {
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_USER", "environment@example.com");
+        ApplicationConfig {
+            version: 1,
+            user: Some("configured@example.com".to_string()),
+            ..ApplicationConfig::new()
+        }
+        .save()
+        .expect("save application config");
+
+        let identifiers = Identifiers::new(None, None, None, None, Some("explicit@example.com".to_string()));
+
+        assert_eq!(identifiers.user.as_deref(), Some("explicit@example.com"));
+    }
 
     #[test]
     fn test_lookup_parsed_status() {

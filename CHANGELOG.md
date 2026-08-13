@@ -12,6 +12,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Added
 
+- Added interactive `esdiag init` onboarding for securely configuring a local diagnostic user, output deployment, collect hosts, and default saved job (#377).
 - Added a portable ESDiag Agent Skill for Claude Code, Codex, and OpenCode that owns its executable helpers and references. Analysis runs through the diagnostic skill installed on the Elastic deployment and remains available in Kibana Agent Builder conversation history for continued investigation.
 - Added a read-only binding workflow that validates Kibana Agent Builder access and direct Elasticsearch diagnostic-data access without creating a model call or throwaway conversation.
 - Added a cluster-review workflow that selects or collects a diagnostic, guides first-job setup when needed, streams the cluster agent's progress, and reports which diagnostic was analyzed.
@@ -25,6 +26,7 @@ published release notes, maintenance branches, and tagged history.
 - Changed saved hosts to distinguish target applications from Cloud routing and unresolved URL templates, with clearer validation for legacy host records (#366).
 - Changed finite CLI commands to emit typed YAML outcomes on stdout by default, with `--format json` available for interoperability; command failures now return safe structured results and document streams retain their NDJSON-only stdout contract.
 - Removed the Agent Skill's prose-output parser; first-run onboarding and the remaining native agent CLI helpers are delivered by their successor changes.
+- Changed omitted CLI output and diagnostic-user resolution to use saved non-secret application preferences after explicit command and environment configuration (#377).
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
 - Changed platform detection to identify Elastic Cloud Hosted bundles from a cluster license issued to `Elastic Cloud`, so API-only hosted bundles no longer report an unknown platform (#347).
 - Changed collection and processing source selection to use canonical registry keys and added a maintainer reconciliation utility for upstream support-diagnostics sources (#348).

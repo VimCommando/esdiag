@@ -1031,6 +1031,13 @@ impl KnownHost {
         self.roles().contains(&role)
     }
 
+    pub fn with_role(mut self, role: HostRole) -> Self {
+        if !self.roles.contains(&role) {
+            self.roles.push(role);
+        }
+        self
+    }
+
     pub fn viewer(&self) -> Option<&str> {
         self.viewer.as_deref()
     }

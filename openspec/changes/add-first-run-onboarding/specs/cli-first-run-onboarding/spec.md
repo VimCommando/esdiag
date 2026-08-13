@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Interactive First-Run Workflow
-The CLI SHALL provide `esdiag init` as an interactive staged workflow covering default user identity, keystore creation or unlock, output deployment configuration, the first collect host, optional additional collect hosts, the first saved job, and an optional agent-skill installation offer. The workflow SHALL use in-process domain APIs and MUST NOT invoke another `esdiag` process or an external helper executable.
+The CLI SHALL provide `esdiag init` as an interactive staged workflow covering default user identity, keystore creation or unlock, output deployment configuration, the first collect host, optional additional collect hosts, and the first saved job. The workflow SHALL use in-process domain APIs and MUST NOT invoke another `esdiag` process or an external helper executable.
 
 #### Scenario: New user completes initialization
 - **GIVEN** no ESDiag local state exists
@@ -16,7 +16,7 @@ The CLI SHALL provide `esdiag init` as an interactive staged workflow covering d
 - **AND** the user can finish the loop without adding another host
 
 ### Requirement: Initialization Is Resumable And Non-Destructive
-Initialization SHALL inspect existing state before each stage, reuse valid completed state by default, and require explicit confirmation before replacing a configured user preference, host, secret, or saved job. It SHALL persist only validated domain values and SHALL write `esdiag.yml` last as the completion record.
+Initialization SHALL inspect existing state before each stage, reuse valid completed state by default, and require explicit confirmation before replacing a configured user preference, host, secret, or saved job. It SHALL persist only validated domain values and SHALL write each applicable `esdiag.yml` field after its corresponding stage validates. Initialization readiness SHALL be derived from validated configuration references and referenced domain state, not from configuration-file existence alone.
 
 #### Scenario: Interrupted initialization resumes
 - **GIVEN** a prior initialization created the keystore and output hosts but stopped before creating a job
@@ -83,40 +83,10 @@ Initialization SHALL create or select a valid first saved job after at least one
 - **WHEN** the user accepts the default job shape
 - **THEN** the saved job collects from the selected collect host
 - **AND** processes to the configured output host
-- **AND** its name becomes `default_job` in `esdiag.yml`
+- **AND** its name becomes `job.default` in `esdiag.yml`
 
 #### Scenario: Collect-only job is explicit
 - **WHEN** the user selects a collect-only first job
 - **THEN** initialization identifies that the job produces an archive rather than indexed diagnostic data
 - **AND** persists it only after explicit confirmation
 
-### Requirement: Embedded Agent Skill Installation Is Optional
-After the required diagnostic workflow stages validate, initialization SHALL offer to detect supported coding agents and install the running binary's embedded version-matched ESDiag skill using the same in-process service as `esdiag agent skills`. It MUST NOT install without user approval, download skill content, duplicate agent path logic, or make successful skill installation a prerequisite for valid ESDiag configuration.
-
-#### Scenario: User accepts detected skill targets
-- **GIVEN** initialization has configured the default saved job
-- **AND** one or more supported agent homes are detected
-- **WHEN** the user approves skill installation
-- **THEN** the embedded skill installer processes the selected targets
-- **AND** the initialization result includes each target action and reload guidance
-
-#### Scenario: User declines skill installation
-- **WHEN** the user declines the optional agent-skill stage
-- **THEN** initialization completes successfully without modifying any agent home
-- **AND** reports `esdiag agent skills` as the later standalone installation command
-
-#### Scenario: Skill installation fails after configuration
-- **GIVEN** all required ESDiag configuration stages completed
-- **WHEN** one selected agent target conflicts or cannot be written
-- **THEN** the configured identity, keystore, output deployment, hosts, and job remain valid
-- **AND** initialization reports the per-target failure and standalone recovery command
-- **AND** does not claim that the core ESDiag configuration failed
-
-### Requirement: Skill Onboarding Is A Local Handoff
-The portable ESDiag skill SHALL include `references/onboarding.md` and SHALL direct first-install or missing-configuration cases to a human-run `esdiag init`. The onboarding reference SHALL also identify `esdiag agent skills` as the standalone offline installer for the skill embedded in the binary. The skill MUST NOT reproduce secret-entry steps, manually write ESDiag state files, or request that credentials be pasted into an agent conversation.
-
-#### Scenario: Agent encounters an uninitialized installation
-- **WHEN** normal skill use receives a structured missing-configuration outcome
-- **THEN** the skill explains that first-run initialization is required
-- **AND** directs the user to run `esdiag init` locally
-- **AND** does not ask for a password or API key

@@ -1,12 +1,13 @@
 ## ADDED Requirements
 
 ### Requirement: General Application Configuration
-The system SHALL persist local non-secret preferences in a versioned `~/.esdiag/esdiag.yml` file. The configuration SHALL contain a default user identifier, output-host reference, and default saved-job reference when configured, and MUST NOT contain endpoint credentials, decrypted secrets, authorization headers, or embedded host and job definitions.
+The system SHALL persist local non-secret preferences in a versioned `~/.esdiag/esdiag.yml` file. The configuration SHALL contain `user`, an `output` section with `default`, `authenticated_on`, and `assets_version` when applicable, and a `job` section with `default` when configured. `output.default` SHALL be the output-host reference, and `job.default` SHALL be the default saved-job reference. The configuration MUST NOT contain endpoint credentials, decrypted secrets, authorization headers, or embedded host and job definitions.
 
 #### Scenario: Configuration contains references only
 - **GIVEN** initialization configured an output deployment and default saved job
 - **WHEN** `esdiag.yml` is serialized
-- **THEN** it contains the output host name and default job name
+- **THEN** it contains the output host name at `output.default` and default job name at `job.default`
+- **AND** successful endpoint authentication and asset setup are recorded, when applicable, at `output.authenticated_on` and `output.assets_version`
 - **AND** the referenced host and job bodies remain in `hosts.yml` and `jobs.yml`
 - **AND** credential material remains only in `secrets.yml`
 
@@ -17,7 +18,7 @@ The system SHALL persist local non-secret preferences in a versioned `~/.esdiag/
 - **AND** no configuration file is rewritten
 
 ### Requirement: Canonical Output Deployment Resolution
-The system SHALL resolve the processed-diagnostic output as one atomic deployment containing an Elasticsearch send target, its Kibana view target when required, and authentication from the same configuration source. Resolution precedence SHALL be explicit command target, complete `ESDIAG_OUTPUT_*` and `ESDIAG_KIBANA_URL` runtime configuration, persisted output-host reference, then configuration failure.
+The system SHALL resolve the processed-diagnostic output as one atomic deployment containing an Elasticsearch send target, its Kibana view target when required, and authentication from the same configuration source. Resolution precedence SHALL be explicit command target, complete `ESDIAG_OUTPUT_*` and `ESDIAG_KIBANA_URL` runtime configuration, the persisted `output.default` host reference, then configuration failure.
 
 #### Scenario: Runtime deployment overrides persisted output
 - **GIVEN** `esdiag.yml` references a saved output host
@@ -49,19 +50,3 @@ Environment-backed output configuration SHALL use `ESDIAG_OUTPUT_APIKEY` or the 
 - **WHEN** the output deployment constructs its Elasticsearch and Kibana clients
 - **THEN** both clients use the configured output API key
 - **AND** no duplicate Kibana credential is required
-
-### Requirement: Legacy Settings Migration
-User mode SHALL migrate representable preferences from legacy `settings.yml` into `esdiag.yml` and SHALL stop writing `settings.yml` after successful migration. It SHALL preserve a backup until the new configuration validates and MUST require explicit resolution when a legacy Kibana URL cannot be associated with the selected output host's viewer.
-
-#### Scenario: Representable settings migrate
-- **GIVEN** `settings.yml` names a valid send host whose linked viewer matches its Kibana URL
-- **AND** `esdiag.yml` does not exist
-- **WHEN** local application configuration loads
-- **THEN** the active target is migrated to the output reference in `esdiag.yml`
-- **AND** the new configuration is validated before legacy writes stop
-
-#### Scenario: Ambiguous Kibana URL requires initialization
-- **GIVEN** legacy `settings.yml` contains a Kibana URL unrelated to the active send host's viewer
-- **WHEN** migration is attempted
-- **THEN** the system preserves the legacy file and reports that viewer selection is required
-- **AND** it does not silently pair endpoints from different deployments

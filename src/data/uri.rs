@@ -2,7 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::{Application, ElasticCloud, KnownHost, KnownHostBuilder, ResolvedKnownHost};
+use super::{Application, ElasticCloud, KnownHost, KnownHostBuilder, OutputDeployment, ResolvedKnownHost};
 use eyre::{OptionExt, Report, Result, eyre};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -63,6 +63,13 @@ impl Uri {
             .password(password)
             .build()?;
         host.try_into()
+    }
+
+    /// Resolve the default output deployment without mixing runtime and saved
+    /// configuration sources. Explicit command targets continue to take
+    /// precedence through [`TryFrom<Option<String>>`].
+    pub fn try_from_default_output() -> Result<Self> {
+        OutputDeployment::resolve(None, false)?.elasticsearch.try_into()
     }
 
     /// Try creating a new Kibana Uri from the environment variables
@@ -265,7 +272,7 @@ impl TryFrom<Option<String>> for Uri {
     fn try_from(uri: Option<String>) -> Result<Self> {
         match uri {
             Some(uri) => Uri::try_from(uri),
-            None => Uri::try_from_output_env(),
+            None => Uri::try_from_default_output(),
         }
     }
 }

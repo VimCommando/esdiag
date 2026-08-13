@@ -109,6 +109,12 @@ pub enum CliOutcome {
     JobDeleted {
         name: String,
     },
+    InitializationCompleted {
+        user: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        job: String,
+    },
     SetupCompleted {
         targets: Vec<String>,
     },

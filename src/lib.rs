@@ -16,6 +16,8 @@ pub mod env;
 pub mod exporter;
 /// Shared job runner for saved diagnostic jobs
 pub mod job;
+/// Flow-neutral first-run onboarding operations
+pub mod onboarding;
 /// Data transformation and processing logic
 pub mod processor;
 /// Receive data from various sources
