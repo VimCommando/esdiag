@@ -79,9 +79,12 @@ test_plugin_version_matches_package_version() {
 for test_name in $(declare -F | awk '{print $3}' | sort); do
     [[ "$test_name" == test_* ]] || continue
     [[ -z "$only" || "$only" == "$test_name" ]] || continue
-    if "$test_name"; then
+    failed_before=$failed
+    if "$test_name" && (( failed == failed_before )); then
         printf '  PASS: %s\n' "$test_name"
         passed=$((passed + 1))
+    elif (( failed == failed_before )); then
+        fail "$test_name returned non-zero"
     fi
 done
 

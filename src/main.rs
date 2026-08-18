@@ -2555,9 +2555,14 @@ fn agent_builder_space(viewer: &Url) -> Option<String> {
             (!space.is_empty()).then(|| space.to_string())
         }
         Err(std::env::VarError::NotPresent) => {
-            let viewer_has_space = viewer
-                .path_segments()
-                .is_some_and(|mut segments| segments.any(|segment| segment == "s"));
+            let viewer_has_space = viewer.path_segments().is_some_and(|mut segments| {
+                while let Some(segment) = segments.next() {
+                    if segment == "s" {
+                        return segments.next().is_some();
+                    }
+                }
+                false
+            });
             (!viewer_has_space).then(|| esdiag::env::ESDIAG_KIBANA_DEFAULT_SPACE.to_string())
         }
         Err(_) => Some(esdiag::env::ESDIAG_KIBANA_DEFAULT_SPACE.to_string()),
@@ -2869,8 +2874,8 @@ fn resolve_serve_exporter(output: Option<String>) -> Result<Exporter> {
 mod tests {
     #[cfg(feature = "agent")]
     use super::{
-        AgentCommands, AgentSkillTarget, SkillInstallationFailure, install_skill_targets, process_ask_prompt,
-        readable_agent_name,
+        AgentCommands, AgentSkillTarget, SkillInstallationFailure, agent_builder_space, install_skill_targets,
+        process_ask_prompt, readable_agent_name,
     };
     use super::{
         Cli, Commands, HostCommands, KeystoreCommands, classify_failure, colorize_keystore_lock_status,
@@ -3055,6 +3060,24 @@ mod tests {
         assert_eq!(readable_agent_name("diagnostic-agent"), "Diagnostic Agent");
         assert_eq!(readable_agent_name("elastic-ai-agent"), "Elastic AI Agent");
         assert_eq!(readable_agent_name("custom_api_agent"), "Custom API Agent");
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn agent_builder_space_requires_a_space_segment_pair() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::remove_var("ESDIAG_KIBANA_SPACE");
+        }
+
+        assert_eq!(
+            agent_builder_space(&Url::parse("https://kb.example/app/s").expect("url")),
+            Some("esdiag".to_string())
+        );
+        assert_eq!(
+            agent_builder_space(&Url::parse("https://kb.example/app/s/support").expect("url")),
+            None
+        );
     }
 
     #[cfg(feature = "agent")]
