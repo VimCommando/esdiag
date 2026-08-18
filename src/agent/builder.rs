@@ -296,6 +296,19 @@ impl<'a> AgentBuilderClient<'a> {
     where
         F: FnMut(AgentProgress),
     {
+        if !matches!(
+            event.name.as_str(),
+            "conversation_id_set"
+                | "reasoning"
+                | "tool_call"
+                | "tool_progress"
+                | "tool_result"
+                | "message_complete"
+                | "round_complete"
+                | "error"
+        ) {
+            return Ok(());
+        }
         let data: Value = serde_json::from_str(&event.data).map_err(|_| AgentFailure::Protocol {
             event: event.name.clone(),
         })?;
@@ -339,7 +352,7 @@ impl<'a> AgentBuilderClient<'a> {
                 state.usage = usage_from(payload.get("round").and_then(|round| round.get("model_usage")));
             }
             "error" => return Err(AgentFailure::Remote),
-            _ => {}
+            _ => unreachable!("unknown events return before payload parsing"),
         }
         Ok(())
     }
@@ -646,6 +659,39 @@ mod tests {
         assert_eq!(name, "Diagnostic Agent");
         let request = request.lock().await;
         assert!(request.starts_with("GET /s/esdiag/api/agent_builder/agents/diagnostic-agent HTTP/1.1"));
+    }
+
+    #[tokio::test]
+    async fn unknown_non_json_events_do_not_block_completion() {
+        let stream = concat!(
+            "event: conversation_id_set\n",
+            "data: {\"data\":{\"conversation_id\":\"conv-123\"}}\n\n",
+            "event: future_progress\n",
+            "data: this event is not JSON\n\n",
+            "event: message_complete\n",
+            "data: {\"data\":{\"message_content\":\"Completed despite a future event\"}}\n\n"
+        );
+        let (url, _) = serve_sse(stream).await;
+        let client = KibanaClient::try_new(url, Auth::None).expect("kibana client");
+        let location = AgentBuilderLocation::new(
+            Url::parse("https://kb.example").expect("viewer"),
+            Some("esdiag".to_owned()),
+        );
+
+        let completion = AgentBuilderClient::new(&client, location)
+            .ask(
+                AgentRequest {
+                    agent_id: "elastic-ai-agent".to_owned(),
+                    prompt: "Analyze diagnostic abc123".to_owned(),
+                    conversation_id: None,
+                },
+                |_| {},
+            )
+            .await
+            .expect("completion");
+
+        assert_eq!(completion.conversation_id, "conv-123");
+        assert_eq!(completion.message, "Completed despite a future event");
     }
 
     #[tokio::test]
