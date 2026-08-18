@@ -13,19 +13,20 @@ published release notes, maintenance branches, and tagged history.
 ### Added
 
 - Added interactive `esdiag init` onboarding for securely configuring a local diagnostic user, output deployment, collect hosts, and default saved job (#377).
-- Added a portable ESDiag Agent Skill for Claude Code, Codex, and OpenCode that owns its executable helpers and references. Analysis runs through the diagnostic skill installed on the Elastic deployment and remains available in Kibana Agent Builder conversation history for continued investigation.
-- Added a read-only binding workflow that validates Kibana Agent Builder access and direct Elasticsearch diagnostic-data access without creating a model call or throwaway conversation.
-- Added a cluster-review workflow that selects or collects a diagnostic, guides first-job setup when needed, streams the cluster agent's progress, and reports which diagnostic was analyzed.
-- Added `ESDIAG_KIBANA_URL`, `ESDIAG_ELASTICSEARCH_URL`, `ESDIAG_KIBANA_APIKEY`, `ESDIAG_KIBANA_APIKEY_FILE`, `ESDIAG_AGENT_ID`, `ESDIAG_INFERENCE_ID`, `ESDIAG_JOB`, and `ESDIAG_DIAGNOSTIC_MAX_AGE` for configuring analysis against a deployment.
+- Added `esdiag agent ask` for finite Kibana Agent Builder questions with explicit conversation follow-ups and Kibana recovery links.
+- Added `esdiag process --ask` to start an Agent Builder conversation about a newly processed diagnostic with its identifier included automatically.
+- Added `esdiag agent skills` to install the running binary's offline, version-matched ESDiag skill for Claude Code, Codex, and OpenCode.
 - Added optional Elastic Upload Service forwarding to `esdiag-lite.sh` for newly collected and existing ZIP archives.
 - Added `esdiag-lite.ps1` for version-aware Elasticsearch diagnostic collection on Windows PowerShell.
 
 ### Changed
 
+- Changed Agent Builder commands and `process --ask` to require the Cargo `agent` feature; the default build continues to include them.
 - Replaced `min-diag.sh` with the collection-only, version-aware `esdiag-lite.sh`, using environment-based Elasticsearch authentication, optional ZIP output, and no `jq` runtime dependency.
+- Changed Agent Builder progress updates to identify the selected agent by name instead of the generic `Agent Builder` label.
 - Changed saved hosts to distinguish target applications from Cloud routing and unresolved URL templates, with clearer validation for legacy host records (#366).
 - Changed finite CLI commands to emit typed YAML outcomes on stdout by default, with `--format json` available for interoperability; command failures now return safe structured results and document streams retain their NDJSON-only stdout contract.
-- Removed the Agent Skill's prose-output parser; first-run onboarding and the remaining native agent CLI helpers are delivered by their successor changes.
+- Changed the portable Agent Skill to compose native ESDiag commands and output-deployment configuration, replacing external helper scripts and analysis-specific environment variables.
 - Changed omitted CLI output and diagnostic-user resolution to use saved non-secret application preferences after explicit command and environment configuration (#377).
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
 - Changed platform detection to identify Elastic Cloud Hosted bundles from a cluster license issued to `Elastic Cloud`, so API-only hosted bundles no longer report an unknown platform (#347).

@@ -40,7 +40,7 @@ Top-Level Layout
 - `docker/`: Container and Compose definitions for local and packaging-related workflows.
 - `docs/`: User-facing and maintainer-facing documentation.
 - `openspec/`: OpenSpec change proposals, archived changes, and repository specification artifacts.
-- `plugin/`: Distributable Agent Skill package with thin Claude Code and Codex manifests. Its bundled `SKILL.md`, `references/`, and `scripts/` under `plugin/skills/` are generated from `.agents/skills/esdiag/` by `bin/sync-plugin-skill.sh` and must not be edited directly. The repository-root `.claude-plugin/marketplace.json` publishes the Claude package; Codex and OpenCode discover the canonical `.agents/skills/` copy in a checkout.
+- `plugin/`: Distributable script-free Agent Skill package with thin Claude Code and Codex manifests. Its bundled `SKILL.md` and `references/` under `plugin/skills/` are generated from `.agents/skills/esdiag/` by `bin/sync-plugin-skill.sh` and must not be edited directly. The repository-root `.claude-plugin/marketplace.json` publishes the Claude package; Codex and OpenCode discover the canonical `.agents/skills/` copy in a checkout, while `esdiag agent skills` installs the matching embedded skill for binary users.
 - `src/`: Rust application and library source code.
 - `templates/`: Askama HTML templates that power the web UI.
 - `tests/`: Integration-style tests, CLI tests, runtime tests, and test fixtures.

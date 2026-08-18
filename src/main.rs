@@ -5,9 +5,11 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use clap::{ArgAction, Args, Parser, Subcommand, builder::BoolishValueParser, builder::styling};
+#[cfg(feature = "agent")]
+use esdiag::cli_output::{AgentRecovery, AgentSkillTargetResult, AgentSkillsFailureContext, AgentUsageResult};
 use esdiag::cli_output::{
-    BundleResult, CliFailure, CliFailureCategory, CliOutcome, CompletedStages, DiagnosticResult, FileCounts,
-    IncludedDiagnosticResult, JobInputResult, JobProcessResult, JobSaveResult, JobSendResult, JobStage,
+    AgentSkillsResult, BundleResult, CliFailure, CliFailureCategory, CliOutcome, CompletedStages, DiagnosticResult,
+    FileCounts, IncludedDiagnosticResult, JobInputResult, JobProcessResult, JobSaveResult, JobSendResult, JobStage,
     KeystoreOperation, OutputFormat, ProcessResult, SavedJobResult, SendResult, write_terminal_outcome,
 };
 use esdiag::job::{FailedStage, JobExecutionFailure, JobOutcome, SavedJobNotFound};
@@ -15,6 +17,14 @@ use esdiag::job::{FailedStage, JobExecutionFailure, JobOutcome, SavedJobNotFound
 use esdiag::server::{AuthProvider, RuntimeMode, Server, ServerStartOptions};
 #[cfg(feature = "setup")]
 use esdiag::setup;
+#[cfg(feature = "agent")]
+use esdiag::{
+    agent::{
+        builder::{AgentBuilderClient, AgentBuilderLocation, AgentFailure, AgentProgress, AgentRequest},
+        skills::{EmbeddedSkill, SkillEnvironment, SkillTarget, detected_targets, install},
+    },
+    client::KibanaClient,
+};
 use esdiag::{
     client::Client,
     data::{
@@ -54,6 +64,8 @@ const STYLES: styling::Styles = styling::Styles::styled()
     .usage(styling::AnsiColor::BrightWhite.on_default())
     .literal(styling::AnsiColor::Green.on_default())
     .placeholder(styling::AnsiColor::Cyan.on_default());
+#[cfg(feature = "agent")]
+const DEFAULT_AGENT_BUILDER_AGENT: &str = "elastic-ai-agent";
 
 // Define command line arguments
 #[derive(Debug, Parser)]
@@ -64,7 +76,7 @@ struct Cli {
     #[arg(global = true, long)]
     debug: bool,
     /// Enable agent-oriented low-noise CLI behavior
-    #[arg(global = true, long, short = 'a')]
+    #[arg(long, short = 'a')]
     agent: bool,
     /// Result representation for finite command outcomes
     #[arg(global = true, long, value_enum, default_value_t = OutputFormat::Yaml)]
@@ -176,6 +188,11 @@ enum Commands {
         )]
         output: Option<String>,
 
+        #[cfg(feature = "agent")]
+        /// Ask Agent Builder about the diagnostic after it is processed
+        #[arg(long, value_name = "PROMPT")]
+        ask: Option<String>,
+
         /// Diagnostic report account name
         #[arg(help = "Diagnostic report account name", long)]
         account: Option<String>,
@@ -225,12 +242,66 @@ enum Commands {
         )]
         host: Option<String>,
     },
+    #[cfg(feature = "agent")]
+    /// Ask Kibana Agent Builder or install the local ESDiag skill
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommands,
+    },
     /// Manage saved diagnostic jobs
     #[cfg(feature = "keystore")]
     Job {
         #[command(subcommand)]
         command: JobCommands,
     },
+}
+
+#[cfg(feature = "agent")]
+#[derive(Debug, Subcommand)]
+enum AgentCommands {
+    /// Submit one prompt to the configured Kibana Agent Builder agent
+    Ask {
+        /// Prompt passed unchanged to Agent Builder
+        prompt: String,
+        /// Agent Builder agent identifier
+        #[arg(long = "agent", default_value = DEFAULT_AGENT_BUILDER_AGENT)]
+        agent_id: String,
+        /// Continue this Kibana Agent Builder conversation
+        #[arg(long, conflicts_with = "new")]
+        conversation: Option<String>,
+        /// Explicitly start a new Kibana Agent Builder conversation
+        #[arg(long, conflicts_with = "conversation")]
+        new: bool,
+    },
+    /// Install the embedded ESDiag skill into supported coding agents
+    Skills {
+        /// Install into this user-scoped coding agent target
+        #[arg(long, value_enum)]
+        target: Vec<AgentSkillTarget>,
+        /// Replace locally modified or unrecognized ESDiag skill directories
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[cfg(feature = "agent")]
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum AgentSkillTarget {
+    Claude,
+    Codex,
+    #[value(name = "opencode")]
+    OpenCode,
+}
+
+#[cfg(feature = "agent")]
+impl From<AgentSkillTarget> for SkillTarget {
+    fn from(target: AgentSkillTarget) -> Self {
+        match target {
+            AgentSkillTarget::Claude => Self::Claude,
+            AgentSkillTarget::Codex => Self::Codex,
+            AgentSkillTarget::OpenCode => Self::OpenCode,
+        }
+    }
 }
 
 #[cfg(feature = "keystore")]
@@ -529,6 +600,23 @@ struct CommandResult {
     outcome: Option<CliOutcome>,
 }
 
+#[cfg(feature = "agent")]
+#[derive(Debug)]
+struct ProcessAskStdoutConflict;
+
+#[cfg(feature = "agent")]
+impl std::fmt::Display for ProcessAskStdoutConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "--ask cannot be used when process output is '-' because processed documents own stdout"
+        )
+    }
+}
+
+#[cfg(feature = "agent")]
+impl std::error::Error for ProcessAskStdoutConflict {}
+
 impl CommandResult {
     fn outcome(outcome: CliOutcome) -> Self {
         Self { outcome: Some(outcome) }
@@ -544,6 +632,16 @@ fn is_agent_mode(cli: &Cli) -> bool {
 }
 
 fn command_owns_stdout(cli: &Cli) -> bool {
+    #[cfg(feature = "agent")]
+    let direct_process_stream = matches!(
+        &cli.command,
+        Some(Commands::Process {
+            output: Some(output),
+            ask: None,
+            ..
+        }) if output == "-"
+    );
+    #[cfg(not(feature = "agent"))]
     let direct_process_stream = matches!(
         &cli.command,
         Some(Commands::Process {
@@ -680,9 +778,48 @@ fn http_response_details(error: &eyre::Report) -> Option<HttpResponseDetails> {
 }
 
 fn structured_failure(error: &eyre::Report) -> CliFailure {
+    #[cfg(feature = "agent")]
+    if let Some(conflict) = error.downcast_ref::<ProcessAskStdoutConflict>() {
+        return CliFailure::new(CliFailureCategory::InvalidInput, conflict.to_string());
+    }
     if let Some(missing_job) = error.downcast_ref::<SavedJobNotFound>() {
         return CliFailure::new(CliFailureCategory::NotFound, "saved job was not found")
             .resource(missing_job.name.clone());
+    }
+    #[cfg(feature = "agent")]
+    if let Some(agent_failure) = error.downcast_ref::<AgentFailure>() {
+        let category = match agent_failure {
+            AgentFailure::Http { status: 401 | 403 } => CliFailureCategory::AuthenticationFailed,
+            AgentFailure::Http { status: 404 } => CliFailureCategory::NotFound,
+            AgentFailure::Http { status: 500..=599 } | AgentFailure::Remote | AgentFailure::Protocol { .. } => {
+                CliFailureCategory::Internal
+            }
+            AgentFailure::Http { .. } | AgentFailure::Transport | AgentFailure::Interrupted { .. } => {
+                CliFailureCategory::InvalidInput
+            }
+        };
+        let mut failure = CliFailure::new(category, agent_failure.to_string());
+        if let AgentFailure::Http { status } = agent_failure {
+            failure = failure.http_status(*status);
+        }
+        if let AgentFailure::Interrupted {
+            conversation_id,
+            kibana_url,
+        } = agent_failure
+        {
+            failure = failure.recovery(AgentRecovery {
+                conversation_id: conversation_id.clone(),
+                kibana_url: kibana_url.clone(),
+                retry_safe: agent_failure.retry_safe(),
+            });
+        }
+        return failure;
+    }
+    #[cfg(feature = "agent")]
+    if let Some(skill_failure) = error.downcast_ref::<SkillInstallationFailure>() {
+        return CliFailure::new(CliFailureCategory::Internal, skill_failure.to_string())
+            .target_results(skill_failure.context.results.clone())
+            .agent_skills(skill_failure.context.clone());
     }
     let Some(job_failure) = error.downcast_ref::<JobExecutionFailure>() else {
         let mut failure = CliFailure::new(classify_failure(error), safe_failure_message(error));
@@ -1019,6 +1156,19 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 }
             }
             Commands::Init => run_init_wizard().await,
+            #[cfg(feature = "agent")]
+            Commands::Agent { command } => match command {
+                AgentCommands::Ask {
+                    prompt,
+                    agent_id,
+                    conversation,
+                    new,
+                } => {
+                    let _ = new;
+                    run_agent_ask(prompt, agent_id, conversation).await
+                }
+                AgentCommands::Skills { target, force } => run_agent_skills(target, force),
+            },
             Commands::Host { command } => match command {
                 HostCommands::Add {
                     name,
@@ -1252,6 +1402,8 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
             Commands::Process {
                 input,
                 output,
+                #[cfg(feature = "agent")]
+                ask,
                 account,
                 case,
                 opportunity,
@@ -1273,6 +1425,14 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 let stdout_owned = matches!(output_uri, Uri::Stream);
                 if has_explicit_output {
                     ensure_uri_role(&output_uri, HostRole::Send, "process output")?;
+                }
+                #[cfg(feature = "agent")]
+                if ask.is_some() && stdout_owned {
+                    return Err(eyre!(ProcessAskStdoutConflict));
+                }
+                #[cfg(feature = "agent")]
+                if ask.is_some() {
+                    OutputDeployment::resolve(output.as_deref(), true)?;
                 }
 
                 tracing::info!("input: {}", input_uri);
@@ -1337,6 +1497,16 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                     let diagnostic = process
                         .map(|result| result.diagnostic)
                         .ok_or_else(|| eyre!("Process completed without a diagnostic report"))?;
+                    #[cfg(feature = "agent")]
+                    if let Some(prompt) = ask {
+                        return run_agent_ask_for_output(
+                            process_ask_prompt(&diagnostic.id, &prompt),
+                            DEFAULT_AGENT_BUILDER_AGENT.to_string(),
+                            None,
+                            output.as_deref(),
+                        )
+                        .await;
+                    }
                     Ok(CommandResult::outcome(CliOutcome::DiagnosticProcessed { diagnostic }))
                 }
             }
@@ -1844,7 +2014,9 @@ async fn run_init_wizard() -> Result<CommandResult> {
         .and_then(|host| host.concrete_url().map(Url::to_string));
     let mut most_recent_collect_host = None;
     if initial.is_complete() && !prompt_confirm("A complete configuration already exists. Replace values? [y/N]: ")? {
-        return Ok(CommandResult::outcome(initialization_outcome()?));
+        return Ok(CommandResult::outcome(initialization_outcome(
+            initialization_skill_installation()?,
+        )?));
     }
 
     let config = esdiag::data::ApplicationConfig::load()?;
@@ -2017,10 +2189,12 @@ async fn run_init_wizard() -> Result<CommandResult> {
     if !readiness.is_complete() {
         return Err(eyre!("Initialization did not produce a complete reusable workflow."));
     }
-    Ok(CommandResult::outcome(initialization_outcome()?))
+    Ok(CommandResult::outcome(initialization_outcome(
+        initialization_skill_installation()?,
+    )?))
 }
 
-fn initialization_outcome() -> Result<CliOutcome> {
+fn initialization_outcome(skill_installation: Option<AgentSkillsResult>) -> Result<CliOutcome> {
     let config = esdiag::data::ApplicationConfig::load()?;
     Ok(CliOutcome::InitializationCompleted {
         user: config
@@ -2031,7 +2205,93 @@ fn initialization_outcome() -> Result<CliOutcome> {
             .job
             .default
             .ok_or_else(|| eyre!("Initialization completed without a default job"))?,
+        skill_installation,
     })
+}
+
+fn initialization_skill_installation() -> Result<Option<AgentSkillsResult>> {
+    #[cfg(feature = "agent")]
+    {
+        run_optional_agent_skill_stage().map(Some)
+    }
+    #[cfg(not(feature = "agent"))]
+    {
+        Ok(None)
+    }
+}
+
+#[cfg(feature = "agent")]
+fn run_optional_agent_skill_stage() -> Result<AgentSkillsResult> {
+    let environment = SkillEnvironment::current();
+    let detected = detected_targets(&environment);
+    let recovery_command = "esdiag agent skills [--target <claude|codex|opencode>]...";
+    let detected_names = detected.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+    let prompt = if detected_names.is_empty() {
+        "No supported coding-agent home was detected. Install the embedded ESDiag skill now? [y/N]: ".to_string()
+    } else {
+        format!("Install the embedded ESDiag skill for detected targets ({detected_names})? [y/N]: ")
+    };
+    if !prompt_confirm(&prompt)? {
+        return Ok(AgentSkillsResult {
+            selected_targets: vec![],
+            results: vec![],
+            recovery_command: recovery_command.to_string(),
+        });
+    }
+
+    let selected = prompt_agent_skill_targets(&detected)?;
+    let selected_names = selected.iter().map(ToString::to_string).collect();
+    match install_skill_targets(&environment, detected, selected, false) {
+        Ok(installation) => {
+            if installation.failed {
+                eprintln!("Some ESDiag skill targets could not be installed. Recover with `{recovery_command}`.");
+            }
+            Ok(AgentSkillsResult {
+                selected_targets: selected_names,
+                results: installation.results,
+                recovery_command: recovery_command.to_string(),
+            })
+        }
+        Err(error) => {
+            eprintln!("Could not prepare embedded ESDiag skill installation: {error}");
+            Ok(AgentSkillsResult {
+                selected_targets: selected_names,
+                results: vec![],
+                recovery_command: recovery_command.to_string(),
+            })
+        }
+    }
+}
+
+#[cfg(feature = "agent")]
+fn prompt_agent_skill_targets(detected: &[SkillTarget]) -> Result<Vec<SkillTarget>> {
+    let defaults = detected.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
+    print!(
+        "Agent skill targets [{}] (claude,codex,opencode; Enter accepts detected): ",
+        if defaults.is_empty() { "none" } else { &defaults }
+    );
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let targets = if line.trim().is_empty() {
+        detected.to_vec()
+    } else {
+        line.trim()
+            .split(',')
+            .map(|target| match target.trim().to_ascii_lowercase().as_str() {
+                "claude" => Ok(SkillTarget::Claude),
+                "codex" => Ok(SkillTarget::Codex),
+                "opencode" => Ok(SkillTarget::OpenCode),
+                target => Err(eyre!(
+                    "Unknown agent skill target '{target}'. Choose claude, codex, or opencode."
+                )),
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    let mut targets = targets;
+    targets.sort_unstable();
+    targets.dedup();
+    Ok(targets)
 }
 
 fn prompt_required(message: &str) -> Result<String> {
@@ -2171,6 +2431,250 @@ fn read_api_key_file(path: &str) -> Result<String> {
         return Err(eyre!("API key file must contain exactly one non-empty line"));
     }
     Ok(apikey)
+}
+
+#[cfg(feature = "agent")]
+#[derive(Debug)]
+struct SkillInstallationFailure {
+    context: AgentSkillsFailureContext,
+}
+
+#[cfg(feature = "agent")]
+impl std::fmt::Display for SkillInstallationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "one or more ESDiag skill targets could not be installed")
+    }
+}
+
+#[cfg(feature = "agent")]
+impl std::error::Error for SkillInstallationFailure {}
+
+#[cfg(feature = "agent")]
+struct SkillInstallationRun {
+    detected: Vec<SkillTarget>,
+    selected: Vec<SkillTarget>,
+    version: String,
+    digest: String,
+    results: Vec<AgentSkillTargetResult>,
+    failed: bool,
+}
+
+#[cfg(feature = "agent")]
+async fn run_agent_ask(prompt: String, agent: String, conversation: Option<String>) -> Result<CommandResult> {
+    run_agent_ask_for_output(prompt, agent, conversation, None).await
+}
+
+#[cfg(feature = "agent")]
+async fn run_agent_ask_for_output(
+    prompt: String,
+    agent: String,
+    conversation: Option<String>,
+    output_target: Option<&str>,
+) -> Result<CommandResult> {
+    let deployment = OutputDeployment::resolve(output_target, true)?;
+    let viewer = deployment
+        .kibana
+        .ok_or_else(|| eyre!("The configured output deployment has no Kibana viewer"))?;
+    let viewer_auth = deployment
+        .kibana_auth
+        .ok_or_else(|| eyre!("The configured output deployment has no Kibana viewer authentication"))?;
+    let viewer_url = viewer.get_url()?;
+    let location = AgentBuilderLocation::new(viewer_url.clone(), agent_builder_space(&viewer_url));
+    let client = KibanaClient::try_new(viewer_url, viewer_auth)?;
+    let agent_client = AgentBuilderClient::new(&client, location);
+    let agent_name = agent_client
+        .agent_name(&agent)
+        .await
+        .unwrap_or_else(|_| readable_agent_name(&agent));
+    let request = AgentRequest {
+        agent_id: agent,
+        prompt,
+        conversation_id: conversation,
+    };
+    let completion = agent_client
+        .ask(request, |progress| render_agent_progress(&agent_name, progress))
+        .await
+        .map_err(|error| eyre!(error))?;
+
+    Ok(CommandResult::outcome(CliOutcome::AgentResponse {
+        conversation_id: completion.conversation_id,
+        message: completion.message,
+        kibana_url: completion.kibana_url,
+        usage: completion.usage.map(|usage| AgentUsageResult {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+        }),
+    }))
+}
+
+#[cfg(feature = "agent")]
+fn process_ask_prompt(diagnostic_id: &str, prompt: &str) -> String {
+    format!("diagnostic.id: {diagnostic_id}\n{prompt}")
+}
+
+#[cfg(feature = "agent")]
+fn render_agent_progress(agent_name: &str, progress: AgentProgress) {
+    match progress {
+        AgentProgress::Reasoning(message) | AgentProgress::ToolProgress(message) => {
+            eprintln!("{agent_name}: {message}");
+        }
+        AgentProgress::ToolCall { tool_id } => eprintln!("{agent_name}: started tool {tool_id}"),
+        AgentProgress::ToolResult { tool_id } => eprintln!("{agent_name}: completed tool {tool_id}"),
+    }
+}
+
+#[cfg(feature = "agent")]
+fn readable_agent_name(agent_id: &str) -> String {
+    let words: Vec<_> = agent_id
+        .split(['-', '_'])
+        .filter(|word| !word.is_empty())
+        .map(|word| match word.to_ascii_lowercase().as_str() {
+            "ai" => "AI".to_string(),
+            "api" => "API".to_string(),
+            _ => {
+                let mut characters = word.chars();
+                let Some(first) = characters.next() else {
+                    return String::new();
+                };
+                format!("{}{}", first.to_uppercase(), characters.as_str())
+            }
+        })
+        .collect();
+    if words.is_empty() {
+        agent_id.to_string()
+    } else {
+        words.join(" ")
+    }
+}
+
+#[cfg(feature = "agent")]
+fn agent_builder_space(viewer: &Url) -> Option<String> {
+    match std::env::var("ESDIAG_KIBANA_SPACE") {
+        Ok(space) => {
+            let space = space.trim();
+            (!space.is_empty()).then(|| space.to_string())
+        }
+        Err(std::env::VarError::NotPresent) => {
+            let viewer_has_space = viewer.path_segments().is_some_and(|mut segments| {
+                while let Some(segment) = segments.next() {
+                    if segment == "s" {
+                        return segments.next().is_some();
+                    }
+                }
+                false
+            });
+            (!viewer_has_space).then(|| esdiag::env::ESDIAG_KIBANA_DEFAULT_SPACE.to_string())
+        }
+        Err(_) => Some(esdiag::env::ESDIAG_KIBANA_DEFAULT_SPACE.to_string()),
+    }
+}
+
+#[cfg(feature = "agent")]
+fn run_agent_skills(targets: Vec<AgentSkillTarget>, force: bool) -> Result<CommandResult> {
+    let environment = SkillEnvironment::current();
+    let detected = detected_targets(&environment);
+    let selected = if targets.is_empty() {
+        detected.clone()
+    } else {
+        let mut targets: Vec<_> = targets.into_iter().map(SkillTarget::from).collect();
+        targets.sort_unstable();
+        targets.dedup();
+        targets
+    };
+    let installation = install_skill_targets(&environment, detected, selected, force)?;
+
+    if installation.failed {
+        return Err(eyre!(SkillInstallationFailure {
+            context: AgentSkillsFailureContext {
+                detected_targets: installation.detected.iter().map(ToString::to_string).collect(),
+                selected_targets: installation.selected.iter().map(ToString::to_string).collect(),
+                version: installation.version,
+                digest: installation.digest,
+                results: installation.results,
+                reload_guidance: skill_reload_guidance().to_string(),
+            },
+        }));
+    }
+    Ok(CommandResult::outcome(CliOutcome::AgentSkills {
+        detected_targets: installation
+            .detected
+            .into_iter()
+            .map(|target| target.to_string())
+            .collect(),
+        selected_targets: installation
+            .selected
+            .into_iter()
+            .map(|target| target.to_string())
+            .collect(),
+        version: installation.version,
+        digest: installation.digest,
+        results: installation.results,
+        reload_guidance: skill_reload_guidance().to_string(),
+    }))
+}
+
+#[cfg(feature = "agent")]
+fn install_skill_targets(
+    environment: &SkillEnvironment,
+    detected: Vec<SkillTarget>,
+    selected: Vec<SkillTarget>,
+    force: bool,
+) -> Result<SkillInstallationRun> {
+    let embedded = EmbeddedSkill::current()?;
+    let mut results = Vec::with_capacity(selected.len());
+    let mut failed = false;
+
+    for target in &selected {
+        match target.destination(environment) {
+            Err(error) => {
+                failed = true;
+                results.push(AgentSkillTargetResult {
+                    target: target.to_string(),
+                    action: "failed".to_string(),
+                    destination: "<unavailable>".to_string(),
+                    error: Some(error.to_string()),
+                });
+            }
+            Ok(destination) => match install(&destination, &embedded, force) {
+                Ok(result) => {
+                    let conflict = result.action.as_str() == "conflict";
+                    failed |= conflict;
+                    results.push(AgentSkillTargetResult {
+                        target: target.to_string(),
+                        action: result.action.as_str().to_string(),
+                        destination: result.destination.display().to_string(),
+                        error: conflict.then(|| {
+                            "The existing skill is locally modified or unrecognized; rerun with --force to replace it."
+                                .to_string()
+                        }),
+                    });
+                }
+                Err(error) => {
+                    failed = true;
+                    results.push(AgentSkillTargetResult {
+                        target: target.to_string(),
+                        action: "failed".to_string(),
+                        destination: destination.display().to_string(),
+                        error: Some(error.to_string()),
+                    });
+                }
+            },
+        }
+    }
+
+    Ok(SkillInstallationRun {
+        detected,
+        selected,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        digest: embedded.digest().to_string(),
+        results,
+        failed,
+    })
+}
+
+#[cfg(feature = "agent")]
+const fn skill_reload_guidance() -> &'static str {
+    "Restart or reload running coding agents before using the installed skill."
 }
 
 fn default_diagnostic_user() -> String {
@@ -2368,6 +2872,11 @@ fn resolve_serve_exporter(output: Option<String>) -> Result<Exporter> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "agent")]
+    use super::{
+        AgentCommands, AgentSkillTarget, SkillInstallationFailure, agent_builder_space, install_skill_targets,
+        process_ask_prompt, readable_agent_name,
+    };
     use super::{
         Cli, Commands, HostCommands, KeystoreCommands, classify_failure, colorize_keystore_lock_status,
         command_owns_stdout, default_diagnostic_user_from, format_keystore_lock_status, format_keystore_lock_status_at,
@@ -2383,6 +2892,14 @@ mod tests {
     use esdiag::data::{Application, HostRole, KnownHost, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
+    #[cfg(feature = "agent")]
+    use esdiag::{
+        agent::{
+            builder::AgentFailure,
+            skills::{SkillEnvironment, SkillTarget},
+        },
+        cli_output::{AgentSkillTargetResult, AgentSkillsFailureContext},
+    };
     use esdiag::{
         cli_output::{CliFailureCategory, OutputFormat},
         receiver::{
@@ -2440,6 +2957,13 @@ mod tests {
         assert!(cli.agent, "short -a should enable agent mode");
     }
 
+    #[cfg(not(feature = "agent"))]
+    #[test]
+    fn agent_commands_require_the_agent_feature() {
+        assert!(Cli::try_parse_from(["esdiag", "agent", "ask", "Analyze"]).is_err());
+        assert!(Cli::try_parse_from(["esdiag", "process", "diagnostic.zip", "--ask", "Analyze"]).is_err());
+    }
+
     #[test]
     fn output_format_defaults_to_yaml_and_accepts_json() {
         let yaml = Cli::parse_from(["esdiag", "keystore", "status"]);
@@ -2447,6 +2971,214 @@ mod tests {
 
         let json = Cli::parse_from(["esdiag", "--format", "json", "keystore", "status"]);
         assert_eq!(json.format, OutputFormat::Json);
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn agent_ask_accepts_explicit_follow_up_or_new_conversation() {
+        let follow_up = Cli::parse_from([
+            "esdiag",
+            "agent",
+            "ask",
+            "--conversation",
+            "conv-123",
+            "Explain further",
+        ]);
+        assert!(matches!(
+            follow_up.command,
+            Some(Commands::Agent {
+                command: AgentCommands::Ask {
+                    conversation: Some(conversation),
+                    new: false,
+                    ..
+                }
+            }) if conversation == "conv-123"
+        ));
+
+        let new = Cli::parse_from(["esdiag", "agent", "ask", "--new", "Start a fresh analysis"]);
+        assert!(matches!(
+            new.command,
+            Some(Commands::Agent {
+                command: AgentCommands::Ask {
+                    conversation: None,
+                    new: true,
+                    ..
+                }
+            })
+        ));
+        let override_agent = Cli::parse_from(["esdiag", "agent", "ask", "--agent", "custom-agent", "Analyze"]);
+        assert!(matches!(
+            override_agent.command,
+            Some(Commands::Agent {
+                command: AgentCommands::Ask {
+                    agent_id,
+                    ..
+                }
+            }) if agent_id == "custom-agent"
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "esdiag",
+                "agent",
+                "ask",
+                "--new",
+                "--conversation",
+                "conv-123",
+                "invalid",
+            ])
+            .is_err()
+        );
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn process_ask_prefixes_the_completed_diagnostic_id() {
+        let cli = Cli::parse_from([
+            "esdiag",
+            "process",
+            "diagnostic.zip",
+            "output-es",
+            "--ask",
+            "What is the highest-risk finding?",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Process {
+                ask: Some(prompt),
+                ..
+            }) if prompt == "What is the highest-risk finding?"
+        ));
+        assert_eq!(
+            process_ask_prompt("prod-es@2026-08-18~a1b2", "What is the highest-risk finding?"),
+            "diagnostic.id: prod-es@2026-08-18~a1b2\nWhat is the highest-risk finding?"
+        );
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn unreadable_agent_names_fall_back_to_a_readable_agent_id() {
+        assert_eq!(readable_agent_name("diagnostic-agent"), "Diagnostic Agent");
+        assert_eq!(readable_agent_name("elastic-ai-agent"), "Elastic AI Agent");
+        assert_eq!(readable_agent_name("custom_api_agent"), "Custom API Agent");
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn agent_builder_space_requires_a_space_segment_pair() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::remove_var("ESDIAG_KIBANA_SPACE");
+        }
+
+        assert_eq!(
+            agent_builder_space(&Url::parse("https://kb.example/app/s").expect("url")),
+            Some("esdiag".to_string())
+        );
+        assert_eq!(
+            agent_builder_space(&Url::parse("https://kb.example/app/s/support").expect("url")),
+            None
+        );
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn agent_skills_allows_repeatable_explicit_targets() {
+        let cli = Cli::parse_from([
+            "esdiag", "agent", "skills", "--target", "claude", "--target", "opencode", "--force",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommands::Skills {
+                    target,
+                    force: true,
+                }
+            }) if matches!(target.as_slice(), [AgentSkillTarget::Claude, AgentSkillTarget::OpenCode])
+        ));
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn embedded_skill_installs_into_an_explicit_target_without_agent_detection() {
+        let temporary = tempfile::tempdir().expect("temporary home");
+        let environment = SkillEnvironment {
+            home: Some(temporary.path().to_path_buf()),
+            ..SkillEnvironment::default()
+        };
+
+        let installation = install_skill_targets(&environment, vec![], vec![SkillTarget::Codex], false)
+            .expect("embedded skill installation");
+
+        assert!(!installation.failed);
+        assert_eq!(installation.results.len(), 1);
+        assert_eq!(installation.results[0].action, "installed");
+        assert!(
+            temporary.path().join(".agents/skills/esdiag/SKILL.md").is_file(),
+            "explicit target must install even when it was not detected"
+        );
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn failed_agent_skill_installation_preserves_complete_structured_context() {
+        let error = eyre::Report::new(SkillInstallationFailure {
+            context: AgentSkillsFailureContext {
+                detected_targets: vec!["codex".to_string()],
+                selected_targets: vec!["claude".to_string(), "codex".to_string()],
+                version: "0.17.0-SNAPSHOT".to_string(),
+                digest: "a1b2".to_string(),
+                results: vec![
+                    AgentSkillTargetResult {
+                        target: "claude".to_string(),
+                        action: "installed".to_string(),
+                        destination: "/tmp/.claude/skills/esdiag".to_string(),
+                        error: None,
+                    },
+                    AgentSkillTargetResult {
+                        target: "codex".to_string(),
+                        action: "conflict".to_string(),
+                        destination: "/tmp/.agents/skills/esdiag".to_string(),
+                        error: Some("requires --force".to_string()),
+                    },
+                ],
+                reload_guidance: "Restart or reload running coding agents before using the installed skill."
+                    .to_string(),
+            },
+        });
+
+        let value = serde_json::to_value(structured_failure(&error)).expect("serialize failure");
+        let context = &value["agent_skills"];
+        assert_eq!(context["detected_targets"], serde_json::json!(["codex"]));
+        assert_eq!(context["selected_targets"], serde_json::json!(["claude", "codex"]));
+        assert_eq!(context["version"], "0.17.0-SNAPSHOT");
+        assert_eq!(context["digest"], "a1b2");
+        assert_eq!(context["results"][0]["action"], "installed");
+        assert_eq!(context["results"][1]["action"], "conflict");
+        assert_eq!(
+            context["reload_guidance"],
+            "Restart or reload running coding agents before using the installed skill."
+        );
+        assert_eq!(value["target_results"][0]["action"], "installed");
+        assert_eq!(value["target_results"][1]["action"], "conflict");
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn interrupted_agent_conversation_exposes_only_safe_recovery() {
+        let error = eyre::Report::new(AgentFailure::Interrupted {
+            conversation_id: Some("conv-123".to_string()),
+            kibana_url: Some("https://kb.example/app/agent_builder/conversations/conv-123".to_string()),
+        });
+
+        let failure = structured_failure(&error);
+        let value = serde_json::to_value(failure).expect("serialize failure");
+
+        assert_eq!(value["recovery"]["conversation_id"], "conv-123");
+        assert_eq!(value["recovery"]["retry_safe"], false);
+        assert_eq!(
+            value["recovery"]["kibana_url"],
+            "https://kb.example/app/agent_builder/conversations/conv-123"
+        );
     }
 
     #[test]
@@ -2551,6 +3283,12 @@ mod tests {
     fn direct_process_stdout_is_not_replaced_with_a_terminal_outcome() {
         let cli = Cli::parse_from(["esdiag", "process", "input.zip", "-"]);
         assert!(command_owns_stdout(&cli));
+
+        #[cfg(feature = "agent")]
+        {
+            let cli = Cli::parse_from(["esdiag", "process", "input.zip", "-", "--ask", "What changed?"]);
+            assert!(!command_owns_stdout(&cli));
+        }
     }
 
     #[cfg(feature = "keystore")]

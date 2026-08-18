@@ -24,6 +24,14 @@ The package also includes `.codex-plugin/plugin.json`, pointing at the same gene
 
 OpenCode discovers the same canonical skill directly at `.agents/skills/esdiag/`. No JavaScript or TypeScript OpenCode plugin is needed because this integration is an Agent Skill, not an OpenCode event hook.
 
+Any installed `esdiag` binary can instead install its matching offline skill in a supported user scope:
+
+```sh
+esdiag agent skills
+```
+
+Use `--target claude`, `--target codex`, or `--target opencode` for an explicit target. Existing locally modified skills are protected unless the user explicitly chooses `--force`.
+
 ## Two setups, not one
 
 These are separate problems with separate prerequisites and separate failure modes. Most users only need the second.
@@ -34,17 +42,15 @@ An Elastic deployment with the ESDiag assets installed (`esdiag setup`), a suita
 
 Model access is a deployment prerequisite that no `esdiag` command provisions. Satisfy it by activating the Elastic Inference Service through Cloud Connect with an Elastic Cloud account, or by configuring your own LLM provider and connector.
 
-### Binding this machine (once per user, per machine)
+### Configuring this machine (once per user, per machine)
 
-Needs Kibana and Elasticsearch URLs plus an API key. The `esdiag` CLI and saved hosts are needed only when this machine will collect or process diagnostics. No container runtime.
+Run the terminal-native initializer to configure a diagnostic user, encrypted credentials, linked Elasticsearch/Kibana output deployment, collection host, and first saved job. Do not provide secrets to an agent conversation.
 
 ```sh
-export ESDIAG_KIBANA_URL=https://your-deployment.kb.example.com
-export ESDIAG_ELASTICSEARCH_URL=https://your-deployment.es.example.com
-export ESDIAG_KIBANA_APIKEY_FILE=~/.config/apikey/esdiag
+esdiag init
 ```
 
-Then ask ESDiag to check the connection. Its `scripts/connect.sh` helper is read-only: it never creates, starts, or reconfigures a deployment.
+`esdiag agent ask` uses this same output deployment. It needs no analysis-specific URL, API-key, inference, job, freshness, or local conversation configuration.
 
 ## Invocation
 
@@ -56,37 +62,17 @@ Then ask ESDiag to check the connection. Its `scripts/connect.sh` helper is read
 
 For every host, natural requests work too: *"Check my ESDiag connection"* or *"How is my cluster looking today?"*
 
-## Settings
+## Asking Agent Builder
 
-The analysis settings are:
+Submit a finite question to the configured Agent Builder agent:
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `ESDIAG_KIBANA_URL` | — | Kibana base URL (required) |
-| `ESDIAG_ELASTICSEARCH_URL` | `ESDIAG_OUTPUT_URL` | Elasticsearch URL used for conversation-free metadata queries |
-| `ESDIAG_KIBANA_APIKEY` | — | API key value (prefer the file setting below when practical) |
-| `ESDIAG_KIBANA_APIKEY_FILE` | — | Path to a file holding the API key |
-| `ESDIAG_KIBANA_SPACE` | `esdiag` | Space holding the ESDiag assets |
-| `ESDIAG_AGENT_ID` | `elastic-ai-agent` | Agent carrying the diagnostic skill |
-| `ESDIAG_INFERENCE_ID` | — | Route analysis to a specific model endpoint |
-| `ESDIAG_JOB` | — | Saved job used to collect |
-| `ESDIAG_DIAGNOSTIC_MAX_AGE` | `24h` | Freshness window |
+```sh
+esdiag agent ask "Analyze diagnostic <diagnostic-id>"
+```
 
-The generated `skills/esdiag/references/env-vars.md` documents the `esdiag` CLI's own environment variables separately.
+The YAML outcome includes the answer, a conversation ID, and a Kibana handoff link. Use `--conversation <id>` for an explicit follow-up; omitting it starts a new Kibana conversation. An interrupted request that returns `retry_safe: false` must not be resent automatically: continue from the Kibana link instead.
 
-`ESDIAG_AGENT_ID` must name the agent that actually carries the diagnostic skill in your space. The default matches what `esdiag setup` configures, but a deployment can attach it elsewhere — and a wrong agent produces a plausible, worse answer rather than an error, so the binding check validates it.
-
-### API key privileges
-
-| Level | Privilege |
-|---|---|
-| Kibana, scoped to your space | `feature_agentBuilder.read`, `feature_actions.read` |
-| Elasticsearch cluster | `monitor_inference` (only when the connector uses the Elasticsearch Inference API) |
-| Elasticsearch indices | `read`, `view_index_metadata` on `metrics-*-esdiag*` and `settings-*-esdiag*` |
-
-The same API key is sent to Kibana for Agent Builder and directly to Elasticsearch for metadata lookups and access validation. The index privileges are not optional: Agent Builder tools query Elasticsearch **as the calling identity**, so a key with chat access but no data access can authenticate successfully yet return a degraded analysis.
-
-Freshness and access checks use Elasticsearch `POST /_query` directly. They never create Agent Builder conversations or consume inference tokens. Actual analysis always uses Agent Builder, and its returned conversation ID is retained for follow-ups and Kibana history.
+The agent ID defaults to `elastic-ai-agent` and can be overridden with `--agent`. Inference routing and Agent Builder tooling belong to the deployment configuration, not local environment variables.
 
 ## When a new diagnostic gets collected
 
@@ -98,7 +84,7 @@ Collection issues API calls against a live production cluster, so it follows the
 
 ## Development
 
-The bundled skill under `skills/` is generated from `.agents/skills/esdiag/`, including its `references/` and `scripts/` directories:
+The bundled skill under `skills/` is generated from `.agents/skills/esdiag/`, including its `references/` directory:
 
 ```sh
 ./bin/sync-plugin-skill.sh          # regenerate

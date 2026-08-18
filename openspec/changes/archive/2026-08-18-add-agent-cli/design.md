@@ -2,7 +2,7 @@
 
 The current portable skill uses Bash to resolve a second set of Agent Builder environment variables, call Kibana with `curl`, parse SSE with `jq` and `awk`, query Elasticsearch for diagnostic freshness, and persist a diagnostic-to-conversation map. This duplicates HTTP, authentication, configuration, and persistence behavior already owned by ESDiag and Agent Builder.
 
-The actual runtime value is narrower: a user or agent should be able to submit a prompt to the Agent Builder agent attached to the same Kibana deployment where ESDiag indexed the diagnostic. The request must remain a real Kibana conversation so its history and follow-up UX are preserved. Distribution has a similarly narrow boundary: every installed binary should be able to place its own exact portable skill into supported agent homes without downloading a plugin or finding a source checkout. ESDiag already has `KibanaClient` and `rust-embed`; `add-first-run-onboarding` defines canonical output-deployment resolution, and `standardize-cli-output` defines the finite YAML/JSON result boundary.
+The actual runtime value is narrower: a user or agent should be able to submit a prompt to the Agent Builder agent attached to the same Kibana deployment where ESDiag indexed the diagnostic. The request must remain a real Kibana conversation so its history and follow-up UX are preserved. Distribution has a similarly narrow boundary: every binary built with the Cargo `agent` feature should be able to place its own exact portable skill into supported agent homes without downloading a plugin or finding a source checkout. ESDiag already has `KibanaClient` and `rust-embed`; `add-first-run-onboarding` defines canonical output-deployment resolution, and `standardize-cli-output` defines the finite YAML/JSON result boundary.
 
 ## Goals / Non-Goals
 
@@ -14,7 +14,7 @@ The actual runtime value is narrower: a user or agent should be able to submit a
 - Consume Agent Builder SSE internally for progress and completion.
 - Preserve every request and follow-up in Kibana Agent Builder history.
 - Return a compact structured response with conversation and handoff information.
-- Embed the canonical portable skill in every binary and provide an offline, version-correct installer for supported local agents.
+- Embed the canonical portable skill in every binary built with the Cargo `agent` feature and provide an offline, version-correct installer for supported local agents.
 - Remove all shell helpers and external executable dependencies from the portable skill.
 
 **Non-Goals:**
@@ -40,6 +40,8 @@ esdiag agent ask [--agent <ID>] [--conversation <ID> | --new] <PROMPT>
 ```
 
 The prompt is opaque application input. ESDiag does not require a diagnostic identifier flag and does not infer diagnostic selection. The portable skill can include the exact `diagnostic.id` returned by a structured process/job outcome, while broader questions can let the configured Agent Builder agent discover existing diagnostics with its own installed tools.
+
+`esdiag process --ask <PROMPT>` is a convenience for a newly processed primary diagnostic: after successful processing, it starts a new generic ask whose prompt is exactly `diagnostic.id: <id>\n<PROMPT>`. It does not introduce diagnostic selection, local analysis, or conversation persistence. Because a document stream already owns stdout, `--ask` is incompatible with `process` output `-`.
 
 Without `--conversation`, the command starts a new Kibana conversation; `--new` makes that intent explicit and conflicts with `--conversation`. A follow-up supplies the returned conversation ID. No ambient or persisted local conversation is selected.
 
@@ -73,6 +75,8 @@ kibana_url: https://kibana.example/s/esdiag/app/agent_builder/conversations/4f7b
 
 Optional safe usage metadata may be included. Relative links in returned markdown are resolved against the configured Kibana viewer URL. No raw SSE is exposed and no `converse` output category is added.
 
+Before a request starts, ESDiag retrieves the selected agent's display name from Agent Builder through the same configured `KibanaClient`. Every stderr progress line uses that name as its prefix instead of the product-wide `Agent Builder` label. A failed name lookup is not a conversation failure: ESDiag falls back to a readable form of the explicitly selected agent ID.
+
 Alternative considered: proxy SSE to stdout. It would create a second public streaming protocol, tie callers to Kibana event versions, and overlap with the deliberately excluded `converse` command.
 
 ### Keep Kibana as the only durable conversation store
@@ -103,9 +107,9 @@ After the structured-output, onboarding, and agent-ask changes are implemented, 
 
 ### Embed one canonical script-free skill
 
-Add a dedicated `RustEmbed` asset type rooted at `.agents/skills/esdiag/`. The embedded set includes `SKILL.md`, `references/**`, and supported `agents/**` metadata and excludes `scripts/**` by construction. The Cargo package already includes the canonical directory, so crates.io builds, Homebrew builds, release binaries, and local builds compile the same files into the executable.
+Add a dedicated `RustEmbed` asset type rooted at `.agents/skills/esdiag/`. The embedded set includes `SKILL.md`, `references/**`, and supported `agents/**` metadata and excludes `scripts/**` by construction. The Cargo package already includes the canonical directory, so crates.io builds, Homebrew builds, release binaries, and local builds with the `agent` feature compile the same files into the executable.
 
-The embedded bytes are the installation source of truth. The command reports the running `CARGO_PKG_VERSION` and a deterministic content digest so installed state can be compared without a network lookup. The standalone plugin package remains a distribution option, but it is not required for binary users.
+The embedded bytes are the installation source of truth. Agent-enabled binaries report the running `CARGO_PKG_VERSION` and a deterministic content digest so installed state can be compared without a network lookup. The standalone plugin package remains a distribution option, but it is not required for binary users.
 
 Alternative considered: download the skill from GitHub or the plugin marketplace. That introduces network, release-discovery, and source/version skew into a command whose strongest property is that the correct asset is already beside the code that knows how to use it.
 
@@ -137,6 +141,14 @@ The marker contains only installer identity, ESDiag version, and content digest;
 After installation or update, the outcome notes that already-running agent processes may require restart or reload before discovering the new skill.
 
 Alternative considered: unconditionally replace the directory. Users may intentionally customize a skill, and package managers should not authorize destruction of unrelated user state.
+
+### Let initialization compose the installer without owning it
+
+`esdiag agent skills` owns target adapters, detection, preflight, conflict handling, installation, and structured per-target facts. `esdiag init` composes that same in-process service as an optional final stage after its required workflow configuration is valid; it does not spawn a second ESDiag process or reproduce installer decisions.
+
+The initialization UI presents detected targets, permits explicit additional target selection, and permits decline. Declining completes initialization normally. A conflict or installation failure is returned as a per-target fact with the standalone recovery command, but does not invalidate the configured keystore, output deployment, hosts, or job. No installation preference or target path is persisted in `esdiag.yml`; installed files and their ownership markers remain authoritative.
+
+Alternative considered: have onboarding own its own installer. That reverses the dependency, duplicates a security-sensitive mutation workflow, and prevents `agent skills` from being the standalone recovery path.
 
 ## Risks / Trade-offs
 

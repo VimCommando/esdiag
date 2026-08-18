@@ -14,7 +14,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_dir="${repo_root}/.agents/skills/esdiag"
 target_dir="${repo_root}/plugin/skills/esdiag"
 check_only=false
-entries=(SKILL.md references scripts)
+entries=(SKILL.md references)
 
 usage() {
     cat <<EOF

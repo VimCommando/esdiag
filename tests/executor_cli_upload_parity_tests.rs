@@ -8,7 +8,7 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, State},
-    http::StatusCode,
+    http::{StatusCode, header},
     response::IntoResponse,
     routing::{get, head, post},
 };
@@ -18,7 +18,7 @@ use std::{
     path::Path as FsPath,
     process::Command,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -29,6 +29,34 @@ struct UploadCalls {
     head: Arc<AtomicUsize>,
     put: Arc<AtomicUsize>,
     finalize: Arc<AtomicUsize>,
+}
+
+#[derive(Clone, Default)]
+struct AgentBuilderRequests(Arc<Mutex<Option<serde_json::Value>>>);
+
+async fn agent_builder_details() -> impl IntoResponse {
+    axum::Json(serde_json::json!({
+        "id": "elastic-ai-agent",
+        "name": "Diagnostic Agent"
+    }))
+}
+
+async fn agent_builder_ask(State(requests): State<AgentBuilderRequests>, body: Bytes) -> impl IntoResponse {
+    *requests.0.lock().expect("record Agent Builder request") =
+        Some(serde_json::from_slice(&body).expect("Agent Builder JSON request"));
+    (
+        [(header::CONTENT_TYPE, "text/event-stream")],
+        concat!(
+            "event: conversation_id_set\n",
+            "data: {\"data\":{\"conversation_id\":\"conv-123\"}}\n\n",
+            "event: reasoning\n",
+            "data: {\"data\":{\"reasoning\":\"Checking diagnostic\"}}\n\n",
+            "event: message_complete\n",
+            "data: {\"data\":{\"message_content\":\"Highest-risk finding\"}}\n\n",
+            "event: round_complete\n",
+            "data: {\"data\":{\"round\":{\"model_usage\":{\"input_tokens\":12,\"output_tokens\":3}}}}\n\n"
+        ),
+    )
 }
 
 async fn validate_upload(State(calls): State<UploadCalls>, Path(upload_id): Path<String>) -> StatusCode {
@@ -216,6 +244,129 @@ async fn process_uses_environment_output_when_output_is_omitted() {
         String::from_utf8_lossy(&output.stdout)
     );
     server.abort();
+}
+
+#[cfg(feature = "agent")]
+#[tokio::test(flavor = "multi_thread")]
+async fn process_ask_sends_the_completed_diagnostic_to_its_output_deployment_agent() {
+    async fn info() -> impl IntoResponse {
+        axum::Json(serde_json::json!({
+            "name": "mock-output",
+            "version": { "number": "9.4.2" }
+        }))
+    }
+
+    async fn bulk(body: Bytes) -> impl IntoResponse {
+        let documents = body.iter().filter(|byte| **byte == b'\n').count() / 2;
+        let items: Vec<_> = (0..documents)
+            .map(|_| serde_json::json!({ "create": { "status": 201 } }))
+            .collect();
+        axum::Json(serde_json::json!({ "errors": false, "items": items }))
+    }
+
+    let output_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind output Elasticsearch");
+    let output_address = output_listener.local_addr().expect("output address");
+    let output_server = tokio::spawn(async move {
+        axum::serve(
+            output_listener,
+            Router::new().route("/", get(info)).route("/{*path}", post(bulk)),
+        )
+        .await
+        .expect("serve output Elasticsearch");
+    });
+
+    let requests = AgentBuilderRequests::default();
+    let kibana_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind Kibana Agent Builder");
+    let kibana_address = kibana_listener.local_addr().expect("Kibana address");
+    let server_requests = requests.clone();
+    let kibana_server = tokio::spawn(async move {
+        axum::serve(
+            kibana_listener,
+            Router::new()
+                .route(
+                    "/s/esdiag/api/agent_builder/agents/elastic-ai-agent",
+                    get(agent_builder_details),
+                )
+                .route("/s/esdiag/api/agent_builder/converse/async", post(agent_builder_ask))
+                .with_state(server_requests),
+        )
+        .await
+        .expect("serve Kibana Agent Builder");
+    });
+
+    let home = tempfile::tempdir().expect("temporary home");
+    let esdiag_home = home.path().join(".esdiag");
+    fs::create_dir_all(&esdiag_home).expect("create ESDiag home");
+    let hosts = esdiag_home.join("hosts.yml");
+    fs::write(
+        &hosts,
+        format!(
+            "output-es:\n  auth: NoAuth\n  app: elasticsearch\n  roles:\n    - send\n  url: http://{output_address}\n  viewer: kibana\nkibana:\n  auth: NoAuth\n  app: kibana\n  roles:\n    - view\n  url: http://{kibana_address}\n"
+        ),
+    )
+    .expect("write linked output deployment");
+
+    let home_path = home.path().to_path_buf();
+    let request_state = requests.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_esdiag"))
+            .args([
+                "--format",
+                "json",
+                "process",
+                fixture_archive(),
+                "output-es",
+                "--ask",
+                "What is the highest-risk finding?",
+            ])
+            .env("HOME", &home_path)
+            .env("USERPROFILE", &home_path)
+            .env("ESDIAG_HOSTS", &hosts)
+            .env("ESDIAG_KEYSTORE", home_path.join(".esdiag").join("secrets.yml"))
+            .env_remove("ESDIAG_OUTPUT_URL")
+            .env_remove("ESDIAG_OUTPUT_APIKEY")
+            .env_remove("ESDIAG_OUTPUT_USERNAME")
+            .env_remove("ESDIAG_OUTPUT_PASSWORD")
+            .output()
+            .expect("run esdiag process --ask")
+    })
+    .await
+    .expect("join process --ask command");
+
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let outcome: serde_json::Value = serde_json::from_slice(&result.stdout).expect("Agent Builder outcome");
+    assert_eq!(outcome["result"], "agent_response");
+    assert_eq!(outcome["conversation_id"], "conv-123");
+    assert_eq!(outcome["message"], "Highest-risk finding");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("Diagnostic Agent: Checking diagnostic"),
+        "stderr: {stderr}"
+    );
+    assert!(!stderr.contains("Agent Builder:"), "stderr: {stderr}");
+
+    let request = request_state
+        .0
+        .lock()
+        .expect("read Agent Builder request")
+        .clone()
+        .expect("Agent Builder request");
+    assert_eq!(request["agent_id"], "elastic-ai-agent");
+    let prompt = request["input"].as_str().expect("Agent Builder prompt");
+    let (diagnostic, question) = prompt.split_once('\n').expect("diagnostic context and question");
+    assert!(diagnostic.starts_with("diagnostic.id: "));
+    assert_eq!(question, "What is the highest-risk finding?");
+
+    output_server.abort();
+    kibana_server.abort();
 }
 
 #[test]

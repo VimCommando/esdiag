@@ -11,8 +11,12 @@ Commands:
   collect
   serve
   host
+  init
+  keystore
+  agent
   process
   setup
+  job
   help
 
 Options:
@@ -100,6 +104,15 @@ Output resolution (in order):
 
 `--save-job <NAME>` persists a compatible known-host process invocation before execution. The input must be a saved host with the `collect` role, and `[OUTPUT]` must be explicit so the saved job has deterministic output.
 
+`--ask <PROMPT>` processes the primary diagnostic, then starts a new Agent Builder conversation with this exact prompt:
+
+```text
+diagnostic.id: <diagnostic-id>
+<PROMPT>
+```
+
+It returns the standard finite `agent_response` outcome. The selected process output must resolve to a Kibana-enabled output deployment: a saved Elasticsearch send host linked to a Kibana view host, or an omitted output with `ESDIAG_OUTPUT_URL`, `ESDIAG_KIBANA_URL`, and shared output authentication. `--ask` cannot be used with output `-`, which reserves stdout for processed document NDJSON.
+
 ## `collect`
 
 - `<HOST>` must be a saved host with the `collect` role.
@@ -122,6 +135,38 @@ Common collection/report flags:
 - Manage persisted jobs with `esdiag job list`, `esdiag job run <NAME>`, and `esdiag job delete <NAME>`.
 - Saved jobs store named `Job` values in `~/.esdiag/jobs.yml`.
 - Saved jobs reference known hosts and keystore secrets by name; they do not embed credentials.
+
+## `init`
+
+- Run `esdiag init` locally in an interactive terminal to configure a persistent diagnostic user, encrypted keystore, linked output deployment, collect host, and default saved job.
+- The wizard may offer to install the embedded ESDiag coding-agent skill after core configuration is valid.
+- It does not accept credentials through ordinary stdin and does not require an agent conversation.
+
+## `agent ask`
+
+```text
+Usage: esdiag agent ask [OPTIONS] <PROMPT>
+```
+
+- Sends one opaque prompt to the Agent Builder agent in the Kibana viewer linked to the configured output deployment.
+- `--agent <ID>` selects an agent; the default is `elastic-ai-agent`.
+- `--conversation <ID>` continues an existing Kibana conversation.
+- `--new` explicitly starts a new conversation and conflicts with `--conversation`.
+- Progress is stderr-only and prefixed with the selected agent's display name. The finite YAML/JSON outcome includes the returned message, conversation ID, and Kibana handoff URL.
+- An interrupted result that includes `recovery.retry_safe: false` must not be retried automatically; use its Kibana URL to recover.
+- `agent ask` has no public SSE/NDJSON stream, interactive chat loop, local conversation persistence, binding command, or freshness lookup.
+
+## `agent skills`
+
+```text
+Usage: esdiag agent skills [OPTIONS]
+```
+
+- Installs the running binary's embedded, version-matched skill without network access.
+- With no `--target`, it installs into detected user-scoped Claude Code, Codex, and OpenCode homes. No detected target means no filesystem changes.
+- Repeat `--target claude`, `--target codex`, or `--target opencode` to select a documented target explicitly.
+- Existing locally modified or unrecognized ESDiag skill directories report a conflict. `--force` is required to replace them.
+- Results report one action per target. Restart or reload running coding agents after installation.
 
 ## `setup`
 

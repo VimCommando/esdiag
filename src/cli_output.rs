@@ -114,6 +114,23 @@ pub enum CliOutcome {
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<String>,
         job: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        skill_installation: Option<AgentSkillsResult>,
+    },
+    AgentResponse {
+        conversation_id: String,
+        message: String,
+        kibana_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<AgentUsageResult>,
+    },
+    AgentSkills {
+        detected_targets: Vec<String>,
+        selected_targets: Vec<String>,
+        version: String,
+        digest: String,
+        results: Vec<AgentSkillTargetResult>,
+        reload_guidance: String,
     },
     SetupCompleted {
         targets: Vec<String>,
@@ -130,6 +147,41 @@ pub enum CliOutcome {
 pub struct FileCounts {
     pub successful: usize,
     pub total: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentUsageResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentSkillsResult {
+    pub selected_targets: Vec<String>,
+    pub results: Vec<AgentSkillTargetResult>,
+    pub recovery_command: String,
+}
+
+/// Context retained when an agent-skill installation partially fails.
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentSkillsFailureContext {
+    pub detected_targets: Vec<String>,
+    pub selected_targets: Vec<String>,
+    pub version: String,
+    pub digest: String,
+    pub results: Vec<AgentSkillTargetResult>,
+    pub reload_guidance: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentSkillTargetResult {
+    pub target: String,
+    pub action: String,
+    pub destination: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -259,6 +311,12 @@ pub struct CliFailure {
     pub retry_safe: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed: Option<CompletedStages>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<AgentRecovery>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_results: Option<Vec<AgentSkillTargetResult>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_skills: Option<AgentSkillsFailureContext>,
 }
 
 impl CliFailure {
@@ -274,6 +332,9 @@ impl CliFailure {
             failed_stage: None,
             retry_safe: None,
             completed: None,
+            recovery: None,
+            target_results: None,
+            agent_skills: None,
         }
     }
 
@@ -296,6 +357,30 @@ impl CliFailure {
         self.reason = Some(reason.into());
         self
     }
+
+    pub fn recovery(mut self, recovery: AgentRecovery) -> Self {
+        self.recovery = Some(recovery);
+        self
+    }
+
+    pub fn target_results(mut self, results: Vec<AgentSkillTargetResult>) -> Self {
+        self.target_results = Some(results);
+        self
+    }
+
+    pub fn agent_skills(mut self, context: AgentSkillsFailureContext) -> Self {
+        self.agent_skills = Some(context);
+        self
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentRecovery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kibana_url: Option<String>,
+    pub retry_safe: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -376,6 +461,31 @@ mod tests {
             String::from_utf8(json).expect("json"),
             "\n{\"result\":\"archive_collected\",\"path\":\"/tmp/diagnostic.zip\",\"files\":{\"successful\":2,\"total\":3}}\n"
         );
+    }
+
+    #[test]
+    fn agent_response_is_a_finite_yaml_and_json_outcome() {
+        let outcome = CliOutcome::AgentResponse {
+            conversation_id: "conv-123".to_string(),
+            message: "Cluster is healthy.".to_string(),
+            kibana_url: "https://kb.example/s/esdiag/app/agent_builder/conversations/conv-123".to_string(),
+            usage: Some(AgentUsageResult {
+                input_tokens: Some(42),
+                output_tokens: Some(7),
+            }),
+        };
+
+        for format in [OutputFormat::Yaml, OutputFormat::Json] {
+            let mut output = Vec::new();
+            write_outcome(&mut output, format, &outcome).expect("serialize agent response");
+            let value: serde_json::Value = match format {
+                OutputFormat::Yaml => yaml_serde::from_slice(&output).expect("parse YAML"),
+                OutputFormat::Json => serde_json::from_slice(&output).expect("parse JSON"),
+            };
+            assert_eq!(value["result"], "agent_response");
+            assert_eq!(value["conversation_id"], "conv-123");
+            assert_eq!(value["usage"]["input_tokens"], 42);
+        }
     }
 
     #[test]
@@ -494,6 +604,9 @@ mod tests {
                 }),
                 send: None,
             }),
+            recovery: None,
+            target_results: None,
+            agent_skills: None,
         };
 
         let value: serde_json::Value = serde_json::to_value(failure).expect("serialize failure");

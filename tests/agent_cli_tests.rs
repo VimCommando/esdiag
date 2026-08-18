@@ -148,6 +148,28 @@ fn finite_failures_emit_one_parseable_yaml_value() {
     );
 }
 
+#[cfg(feature = "agent")]
+#[test]
+fn process_ask_rejects_stdout_document_streams_before_processing() {
+    let home = setup_home();
+    let output = run_esdiag(
+        &["process", "missing-input.zip", "-", "--ask", "What changed?"],
+        &home,
+        &[],
+    );
+
+    assert!(
+        !output.status.success(),
+        "incompatible process invocation unexpectedly succeeded"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("--ask cannot be used when process output is '-' because processed documents own stdout"),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
 #[test]
 fn list_command_families_support_yaml_and_json_empty_collections() {
     for (command, result_key, collection_key) in [
