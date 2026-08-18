@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Portable Skill Is Embedded In The Binary
-The ESDiag binary SHALL embed the canonical script-free `.agents/skills/esdiag/` skill at compile time using `rust_embed`. The embedded assets SHALL include `SKILL.md`, `references/`, and supported `agents/` metadata, MUST exclude executable helper scripts, and SHALL identify the running ESDiag package version and a deterministic content digest.
+An ESDiag binary built with the Cargo `agent` feature SHALL embed the canonical script-free `.agents/skills/esdiag/` skill at compile time using `rust_embed`. The embedded assets SHALL include `SKILL.md`, `references/`, and supported `agents/` metadata, MUST exclude executable helper scripts, and SHALL identify the running ESDiag package version and a deterministic content digest.
 
 #### Scenario: Cargo-installed binary contains the skill
 - **WHEN** a user installs ESDiag with `cargo install esdiag`
@@ -83,6 +83,28 @@ The command SHALL emit one finite structured YAML outcome by default, or equival
 - **THEN** the command exits non-zero
 - **AND** its structured failure reports both the successful and failed target actions
 - **AND** it does not roll back or conceal the independently completed target
+
+### Requirement: Installer Is Composable By Onboarding
+The skill installer SHALL expose the same in-process target detection, preflight, and installation service for `esdiag init`; onboarding MUST NOT spawn another ESDiag process, download a skill, or duplicate host-specific path or ownership logic. Skill installation remains an optional final onboarding stage: declining it, or a target conflict or failure, MUST NOT invalidate already-completed ESDiag configuration.
+
+#### Scenario: User accepts detected or explicit targets during initialization
+- **GIVEN** initialization has completed its required diagnostic workflow stages
+- **AND** one or more supported agent homes are detected or explicitly selected
+- **WHEN** the user approves skill installation
+- **THEN** initialization invokes the embedded installer in process
+- **AND** its outcome contains each target action and restart/reload guidance
+
+#### Scenario: User declines optional skill installation
+- **WHEN** the user declines the agent-skill stage during initialization
+- **THEN** initialization completes successfully without modifying any agent home
+- **AND** identifies `esdiag agent skills` as the standalone installation command
+
+#### Scenario: Installation fails after core initialization succeeds
+- **GIVEN** initialization has completed its required ESDiag configuration stages
+- **WHEN** a selected agent target conflicts or cannot be written
+- **THEN** the configured identity, keystore, output deployment, hosts, and job remain valid
+- **AND** initialization reports the per-target failure and standalone recovery command
+- **AND** does not claim that core ESDiag configuration failed
 
 ### Requirement: Installed Skill Remains Portable And Script-Free
 Every installed target SHALL receive the same portable skill content used by repository and plugin packaging, without `scripts/`, provider-specific workflow duplication, or external executable runtime dependencies.

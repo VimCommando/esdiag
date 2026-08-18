@@ -15,6 +15,46 @@ The CLI SHALL provide `esdiag agent ask <PROMPT>` as a finite operation that sub
 - **THEN** the request targets `custom-agent`
 - **AND** omission of `--agent` targets `elastic-ai-agent`
 
+### Requirement: Agent CLI Capability Is Feature-Gated
+Agent Builder and coding-agent CLI capabilities SHALL require the Cargo `agent` feature. The default `full` feature set SHALL include `agent`. Builds without `agent` MUST omit `esdiag agent` and the Agent Builder-specific `esdiag process --ask` option from command parsing and help.
+
+#### Scenario: Minimal build omits Agent CLI commands
+- **GIVEN** ESDiag is built with `--no-default-features`
+- **WHEN** a user views CLI help or invokes `esdiag agent ask <PROMPT>`
+- **THEN** the `agent` command is absent
+- **AND** the invocation is rejected as an unknown command
+- **AND** `esdiag process --help` does not contain `--ask`
+
+#### Scenario: Full build retains Agent CLI commands
+- **GIVEN** ESDiag is built with its default `full` feature set
+- **WHEN** a user views CLI help
+- **THEN** `agent ask`, `agent skills`, and `process --ask` are available
+
+### Requirement: Process Can Ask About Its New Diagnostic
+The CLI SHALL accept `esdiag process ... --ask <PROMPT>`. After processing successfully produces a diagnostic identifier, it SHALL start a new Agent Builder conversation with a prompt exactly equivalent to:
+
+```text
+diagnostic.id: <diagnostic-id>
+<PROMPT>
+```
+
+This request SHALL otherwise follow `esdiag agent ask` behavior, including canonical output-deployment resolution, the default agent, finite structured response handling, and safe failure behavior. ESDiag MUST NOT submit an Agent Builder request when processing fails or produces no diagnostic identifier. Because processed document streams own stdout, `--ask` MUST reject `process` output `-` before processing begins.
+
+#### Scenario: Process asks about its completed diagnostic
+- **WHEN** `esdiag process <INPUT> --ask "What is the highest-risk finding?"` successfully produces diagnostic ID `prod-es@2026-08-18~a1b2`
+- **THEN** it starts a new Agent Builder conversation with the prompt `diagnostic.id: prod-es@2026-08-18~a1b2\nWhat is the highest-risk finding?`
+- **AND** the request uses the default `elastic-ai-agent` unless that default changes for `agent ask`
+- **AND** its completed response follows the standard finite Agent Builder outcome contract
+
+#### Scenario: Failed processing does not ask Agent Builder
+- **WHEN** `esdiag process <INPUT> --ask <PROMPT>` fails before producing a diagnostic identifier
+- **THEN** it does not submit an Agent Builder request
+
+#### Scenario: Process document streaming cannot ask Agent Builder
+- **WHEN** the user runs `esdiag process <INPUT> - --ask <PROMPT>`
+- **THEN** the command rejects the incompatible options before processing begins
+- **AND** it does not submit an Agent Builder request
+
 ### Requirement: Agent Ask Uses Canonical Output Deployment
 The command SHALL obtain Kibana URL, space, and authentication from the canonical processed-diagnostic output deployment. It MUST NOT resolve a separate analysis Elasticsearch URL, Kibana API key, Kibana API-key file, inference endpoint, saved job, or freshness-window configuration.
 
@@ -47,6 +87,15 @@ The command SHALL consume Agent Builder SSE internally, render reasoning and too
 - **THEN** progress appears only on stderr
 - **AND** stdout contains exactly one typed response with message, conversation ID, and Kibana conversation link
 - **AND** no SSE framing appears on stdout
+
+### Requirement: Agent Progress Identifies The Selected Agent
+Before rendering Agent Builder reasoning or tool-progress updates, the CLI SHALL resolve the selected agent's display name from the configured Kibana Agent Builder deployment and prefix every such stderr line with `<agent-name>:`. Failure to obtain that display name MUST NOT prevent the conversation request; in that case, the CLI SHALL use a readable rendering of the explicit agent identifier as the prefix.
+
+#### Scenario: Progress uses the configured agent name
+- **GIVEN** agent ID `diagnostic-agent` has Agent Builder name `Diagnostic Agent`
+- **WHEN** `esdiag agent ask` receives a reasoning or tool-progress event
+- **THEN** it writes the update to stderr with the prefix `Diagnostic Agent:`
+- **AND** it does not prefix the update with `Agent Builder:`
 
 #### Scenario: Relative message links are resolved
 - **GIVEN** the completed Agent Builder markdown contains a relative Kibana link

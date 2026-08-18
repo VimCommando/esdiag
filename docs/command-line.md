@@ -428,6 +428,9 @@ Arguments:
           Target to send the processed diagnostic documents to (known host, file, stdout, or env). Strings will be checked against the known hosts stored in `~/.esdiag/hosts.yml` and will fallback to a filename if not found. Use `-` for stdout. If nothing is provided, the output will try using the environment variables: ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, and ESDIAG_OUTPUT_PASSWORD.
 
 Options:
+      --ask <PROMPT>
+          Ask Agent Builder about the diagnostic after it is processed
+
   -a, --account <ACCOUNT>
           Diagnostic report account name
 
@@ -476,6 +479,19 @@ These annotate the generated report context:
 - `--opportunity`
 - `--user`
 
+### `--ask`
+
+Use `--ask <PROMPT>` to process a diagnostic and immediately start a new Agent Builder conversation about the resulting primary diagnostic. ESDiag sends Agent Builder this exact prompt:
+
+```text
+diagnostic.id: <diagnostic-id>
+<PROMPT>
+```
+
+The process output must resolve to a Kibana-enabled output deployment: use a saved Elasticsearch output host linked to a Kibana viewer, or omit `[OUTPUT]` and configure `ESDIAG_OUTPUT_URL`, `ESDIAG_KIBANA_URL`, and shared output authentication. The command returns the standard `agent_response` outcome after completion. `--ask` cannot be used with output `-`, because processed documents own stdout in that mode.
+
+Reasoning and tool updates appear on stderr prefixed with the selected Agent Builder agent's display name.
+
 ### `--save-job`
 
 - `--save-job <NAME>` stores a saved job before execution, then continues processing
@@ -498,6 +514,9 @@ esdiag process ~/Downloads/api-diagnostic-dir -
 
 # Process with an environment-driven output
 ESDIAG_OUTPUT_URL=http://localhost:9200 esdiag process ~/Downloads/api-diagnostic.zip
+
+# Process and ask Agent Builder about the new diagnostic
+esdiag process ~/Downloads/api-diagnostic.zip prod-es --ask "What is the highest-risk finding?"
 ```
 
 ## `collect`
