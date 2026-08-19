@@ -4,7 +4,7 @@
 
 use crate::{
     client::Client,
-    data::Product,
+    data::Application,
     embeds::{Assets, KIBANA_ASSETS_BUNDLE},
 };
 //use bytes::Bytes;
@@ -293,7 +293,7 @@ async fn send_asset_with_allowed_statuses(
 /// Submit saved assets to the client APIs
 pub async fn assets(client: &Client) -> Result<()> {
     let embedded_assets = EmbeddedAssets::new()?;
-    if Product::from(client) == Product::Kibana {
+    if Application::from(client) == Application::Kibana {
         return kibana_assets(client, &embedded_assets).await;
     }
 
@@ -647,12 +647,12 @@ async fn send_kibana_json_with_method(
 }
 
 /// Parses the assets YAML file for the given exporter. Currently only supports Elasticsearch.
-fn parse_assets_yml(product: Product, assets_store: &EmbeddedAssets) -> Result<Vec<Asset>> {
-    let filename = format!("{}/{}", product.to_string().to_lowercase(), ASSETS_FILE);
+fn parse_assets_yml(application: Application, assets_store: &EmbeddedAssets) -> Result<Vec<Asset>> {
+    let filename = format!("{}/{}", application.key(), ASSETS_FILE);
     let contents = assets_store
         .get_file(Path::new(&filename))
         .ok_or(eyre!("embedded assets did not contain expected file {filename}"))?;
-    let assets = serde_yaml::from_slice(&contents)?;
+    let assets = yaml_serde::from_slice(&contents)?;
     Ok(assets)
 }
 
@@ -790,7 +790,7 @@ mod tests {
   endpoint: "_ingest/pipeline"
   method: "PUT"
 "#;
-        let assets: Vec<Asset> = serde_yaml::from_str(yaml).unwrap();
+        let assets: Vec<Asset> = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(assets.len(), 2);
         assert_eq!(assets[0].name, "roles");
         assert!(assets[0].requires_security);

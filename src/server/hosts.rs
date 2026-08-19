@@ -1,7 +1,7 @@
 use super::{ServerState, get_theme_dark, template};
 use crate::data::{
-    Application, HostRole, KnownHost, KnownHostBuilder, Product, SecretAuth, Settings, keystore_exists,
-    list_secret_entries, remove_secret, resolve_secret_auth, upsert_secret_auth,
+    Application, HostRole, KnownHost, KnownHostBuilder, SecretAuth, Settings, keystore_exists, list_secret_entries,
+    remove_secret, resolve_secret_auth, upsert_secret_auth,
 };
 use askama::Template;
 use axum::{
@@ -741,7 +741,7 @@ fn host_row_from_known_host(name: String, host: KnownHost) -> template::HostsTab
         app: host
             .app()
             .map(|app| app.to_string())
-            .unwrap_or_else(|| "None".to_string()),
+            .unwrap_or_else(|| "Unresolved".to_string()),
         url: host.transport_display(),
         url_template: host.is_template(),
         roles: host
@@ -1149,6 +1149,9 @@ async fn apply_upsert_host(state: &Arc<ServerState>, form: HostUpsertForm) -> Re
     }
     let use_url_template = form.url_template.is_some();
     let app = parse_application(form.app.trim())?;
+    if !use_url_template && app.is_none() {
+        return Err("Concrete hosts require an application.".to_string());
+    }
     let roles = parse_roles(&form.roles)?;
     let viewer = to_opt(form.viewer);
     let secret = to_opt(form.secret);
@@ -1222,7 +1225,7 @@ async fn apply_upsert_cluster(state: &Arc<ServerState>, form: ClusterUpsertForm)
     let kibana_name = format!("{name}-kb");
     let elasticsearch_host = {
         let mut builder = KnownHostBuilder::new(elasticsearch_url)
-            .product(Product::Elasticsearch)
+            .application(Application::Elasticsearch)
             .accept_invalid_certs(accept_invalid_certs)
             .roles(vec![HostRole::Send])
             .viewer(Some(kibana_name.clone()));
@@ -1240,7 +1243,7 @@ async fn apply_upsert_cluster(state: &Arc<ServerState>, form: ClusterUpsertForm)
     };
     let kibana_host = {
         let mut builder = KnownHostBuilder::new(kibana_url)
-            .product(Product::Kibana)
+            .application(Application::Kibana)
             .accept_invalid_certs(accept_invalid_certs)
             .roles(vec![HostRole::View]);
         match auth.as_str() {
@@ -1677,7 +1680,7 @@ fn parse_roles(value: &str) -> Result<Vec<HostRole>, String> {
 
 fn parse_application(value: &str) -> Result<Option<Application>, String> {
     let normalized = value.trim().to_ascii_lowercase();
-    if normalized.is_empty() || normalized == "none" {
+    if normalized.is_empty() || normalized == "none" || normalized == "unresolved" {
         return Ok(None);
     }
     Application::from_str(&normalized)
@@ -1740,7 +1743,7 @@ mod tests {
     };
     use crate::{
         data::{
-            HostRole, KnownHost, KnownHostBuilder, Product, SecretAuth, Settings, authenticate, upsert_secret_auth,
+            Application, HostRole, KnownHost, KnownHostBuilder, SecretAuth, Settings, authenticate, upsert_secret_auth,
         },
         server::{template, test_server_state},
     };
@@ -1766,7 +1769,7 @@ mod tests {
         hosts.insert(
             "old-host".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -1839,11 +1842,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_upsert_can_persist_no_application_for_concrete_hosts() {
+    async fn host_upsert_rejects_concrete_host_without_application() {
         let _tmp = setup_env();
         let state = test_server_state();
 
-        apply_upsert_host(
+        let error = apply_upsert_host(
             &state,
             HostUpsertForm {
                 original_name: None,
@@ -1859,11 +1862,14 @@ mod tests {
             },
         )
         .await
-        .expect("save platform host");
+        .expect_err("concrete host without application must be rejected");
 
-        let saved_hosts = KnownHost::parse_hosts_yml().expect("reload hosts");
-        let saved = saved_hosts.get("platform-host").expect("saved host");
-        assert_eq!(saved.app(), None);
+        assert_eq!(error, "Concrete hosts require an application.");
+        assert!(
+            !KnownHost::parse_hosts_yml()
+                .expect("reload hosts")
+                .contains_key("platform-host")
+        );
     }
 
     #[tokio::test]
@@ -2080,7 +2086,7 @@ mod tests {
         hosts.insert(
             "servermore".to_string(),
             KnownHostBuilder::new(Url::parse("https://servermore.example:9200").expect("url"))
-                .product(Product::Elasticsearch)
+                .application(Application::Elasticsearch)
                 .roles(vec![HostRole::Send])
                 .secret(Some("servermore".to_string()))
                 .build()
@@ -2120,7 +2126,7 @@ mod tests {
         hosts.insert(
             "collector".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://collector:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -2130,7 +2136,7 @@ mod tests {
         hosts.insert(
             "prod".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("https://prod-es:9200").expect("url"),
                 vec![HostRole::Send],
                 Some("prod-kb".to_string()),
@@ -2142,7 +2148,7 @@ mod tests {
         hosts.insert(
             "prod-kb".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Kibana,
+                Application::Kibana,
                 Url::parse("https://prod-kb:5601").expect("url"),
                 vec![HostRole::View],
                 None,
@@ -2173,7 +2179,7 @@ mod tests {
         hosts.insert(
             "old-cluster".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://old-es:9200").expect("url"),
                 vec![HostRole::Send],
                 Some("old-cluster-kb".to_string()),
@@ -2183,7 +2189,7 @@ mod tests {
         hosts.insert(
             "old-cluster-kb".to_string(),
             KnownHost::new_no_auth(
-                Product::Kibana,
+                Application::Kibana,
                 Url::parse("http://old-kb:5601").expect("url"),
                 vec![HostRole::View],
                 None,

@@ -2,9 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use crate::data::Product;
-
-use super::{ElasticCloud, KnownHost, KnownHostBuilder};
+use super::{Application, ElasticCloud, KnownHost, KnownHostBuilder, OutputDeployment, ResolvedKnownHost};
 use eyre::{OptionExt, Report, Result, eyre};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -67,6 +65,13 @@ impl Uri {
         host.try_into()
     }
 
+    /// Resolve the default output deployment without mixing runtime and saved
+    /// configuration sources. Explicit command targets continue to take
+    /// precedence through [`TryFrom<Option<String>>`].
+    pub fn try_from_default_output() -> Result<Self> {
+        OutputDeployment::resolve(None, false)?.elasticsearch.try_into()
+    }
+
     /// Try creating a new Kibana Uri from the environment variables
     /// - `ESDIAG_KIBANA_URL` (required): The URL to use for Kibana.
     /// - `ESDIAG_OUTPUT_APIKEY` (optional): API key for authentication.
@@ -78,7 +83,7 @@ impl Uri {
         tracing::debug!("kibana: Env {}", url);
         let (apikey, username, password) = try_get_auth_env()?;
         let host = KnownHostBuilder::new(Url::parse(&url)?)
-            .product(Product::Kibana)
+            .application(Application::Kibana)
             .apikey(apikey)
             .username(username)
             .password(password)
@@ -147,11 +152,15 @@ impl TryFrom<KnownHost> for Uri {
     type Error = eyre::Report;
 
     fn try_from(host: KnownHost) -> Result<Self> {
-        if host.is_template() {
-            return Err(eyre!(
-                "Template-backed hosts must be resolved into a concrete URL before runtime use"
-            ));
-        }
+        host.resolve()?.try_into()
+    }
+}
+
+impl TryFrom<ResolvedKnownHost> for Uri {
+    type Error = eyre::Report;
+
+    fn try_from(host: ResolvedKnownHost) -> Result<Self> {
+        let host = host.into_known_host();
         let host_uri = match host.cloud_id() {
             Some(ElasticCloud::ElasticCloud) => Uri::KnownHost(host),
             Some(ElasticCloud::ElasticCloudAdmin) => Uri::ElasticCloudAdmin(host),
@@ -263,7 +272,7 @@ impl TryFrom<Option<String>> for Uri {
     fn try_from(uri: Option<String>) -> Result<Self> {
         match uri {
             Some(uri) => Uri::try_from(uri),
-            None => Uri::try_from_output_env(),
+            None => Uri::try_from_default_output(),
         }
     }
 }

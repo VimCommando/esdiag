@@ -1,7 +1,6 @@
 use super::ServerState;
 use crate::data::{
-    CollectSource, HostRole, Job, JobSignals, KnownHost, is_collectable_app, load_saved_jobs_async,
-    with_saved_jobs_async,
+    CollectSource, Job, JobSignals, KnownHost, is_collectable_app, load_saved_jobs_async, with_saved_jobs_async,
 };
 use crate::processor::Identifiers;
 use askama::Template;
@@ -179,9 +178,6 @@ fn validate_saved_job(signals: &SaveJobSignals) -> Result<(), &'static str> {
     let host = hosts
         .get(host_name)
         .ok_or("Saved jobs require a known host that exists in hosts.yml.")?;
-    if !host.has_role(HostRole::Collect) {
-        return Err("Saved jobs require a known host with the collect role.");
-    }
     if !is_collectable_app(host.app()) {
         return Err("Saved jobs require an Elasticsearch, Kibana, or Logstash collect host.");
     }
@@ -237,7 +233,7 @@ pub async fn delete_saved_job(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HostRole, Product, load_saved_jobs};
+    use crate::data::{Application, HostRole, load_saved_jobs};
     use crate::job::model::Input;
     use axum::body::to_bytes;
     use std::collections::BTreeMap;
@@ -270,7 +266,7 @@ mod tests {
         hosts.insert(
             "elasticsearch-local".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -285,14 +281,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_saved_job_rejects_known_hosts_without_collect_role() {
+    fn validate_saved_job_allows_known_hosts_without_collect_role() {
         let _tmp = setup_env();
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "send-only".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -303,9 +299,9 @@ mod tests {
 
         let result = validate_saved_job(&save_signals(CollectSource::KnownHost, "send-only"));
 
-        assert_eq!(
-            result.expect_err("send-only known hosts should be rejected"),
-            "Saved jobs require a known host with the collect role."
+        assert!(
+            result.is_ok(),
+            "a saved host should be collectable regardless of its visibility role"
         );
     }
 
@@ -358,7 +354,7 @@ mod tests {
         hosts.insert(
             "elasticsearch-local".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,

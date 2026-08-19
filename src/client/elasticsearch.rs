@@ -98,6 +98,7 @@ impl TryFrom<KnownHost> for ElasticsearchClient {
 }
 
 pub fn elasticsearch_client_from_input_host(host: KnownHost) -> Result<ElasticsearchClient> {
+    let host = host.resolve()?.into_known_host();
     let url = host.get_url()?;
     let ignore_certs = host.accept_invalid_certs();
     let auth = host.get_auth_for_direction(CredentialDirection::Input)?;
@@ -105,6 +106,7 @@ pub fn elasticsearch_client_from_input_host(host: KnownHost) -> Result<Elasticse
 }
 
 pub fn elasticsearch_client_from_output_host(host: KnownHost) -> Result<ElasticsearchClient> {
+    let host = host.resolve()?.into_known_host();
     let url = host.get_url()?;
     let ignore_certs = host.accept_invalid_certs();
     let auth = host.get_auth_for_direction(CredentialDirection::Output)?;

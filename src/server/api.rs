@@ -490,7 +490,7 @@ fn runtime_millis(runtime: u128) -> u64 {
 mod tests {
     use super::{diagnostic_result_entries, runtime_millis, status_for_outcome};
     use crate::{
-        data::{Application, Platform, Product},
+        data::{Application, Platform},
         job::{
             context::ExecutionIdentity,
             outcome::{ChildExecutionOutcome, ExecutionOutcome, Stage, StageStatus},
@@ -498,31 +498,45 @@ mod tests {
         processor::{DiagnosticManifest, DiagnosticOutcome, SkipKind, diagnostic::DiagnosticReportBuilder},
     };
 
-    fn report(product: Product, id_type: &str) -> crate::processor::DiagnosticReport {
-        DiagnosticReportBuilder::try_from(DiagnosticManifest::new(
+    fn report(
+        application: Option<Application>,
+        platform: Platform,
+        id_type: &str,
+    ) -> crate::processor::DiagnosticReport {
+        let mut manifest = DiagnosticManifest::new(
             "2024-01-01T00:00:00Z".to_string(),
             Some("esdiag-test".to_string()),
             None,
             None,
             Some("standard".to_string()),
-            product,
+            application,
             Some(id_type.to_string()),
             Some("esdiag".to_string()),
             Some("9.3.3".to_string()),
-        ))
-        .expect("report builder")
-        .receiver("Directory /tmp/diag".to_string())
-        .build()
-        .expect("report")
+        );
+        manifest.set_platform(platform);
+        DiagnosticReportBuilder::try_from(manifest)
+            .expect("report builder")
+            .receiver("Directory /tmp/diag".to_string())
+            .build()
+            .expect("report")
     }
 
     #[test]
     fn synchronous_api_results_include_parent_and_child_outcomes() {
-        let mut child_report = report(Product::Elasticsearch, "elasticsearch_diagnostic");
+        let mut child_report = report(
+            Some(Application::Elasticsearch),
+            Platform::Unknown,
+            "elasticsearch_diagnostic",
+        );
         child_report.add_kibana_link("https://kb.example/app/dashboards#/view/child".to_string());
-        let export_failed_report = report(Product::Elasticsearch, "elasticsearch_diagnostic");
+        let export_failed_report = report(
+            Some(Application::Elasticsearch),
+            Platform::Unknown,
+            "elasticsearch_diagnostic",
+        );
 
-        let mut parent_report = report(Product::ECK, "eck-diagnostics");
+        let mut parent_report = report(None, Platform::ECK, "eck-diagnostics");
         parent_report.diagnostic.processing_duration = 1_000;
         let mut outcome = ExecutionOutcome::new(ExecutionIdentity::new(1, "test"));
         outcome.report = Some(parent_report);
@@ -573,7 +587,6 @@ mod tests {
                 runtime: Some(250),
             },
         ];
-
         let entries = diagnostic_result_entries(&outcome);
         let entries = entries.as_array().expect("array response");
 

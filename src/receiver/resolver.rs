@@ -6,7 +6,7 @@
 
 use super::{Receiver, UploadServiceDownloader};
 use crate::{
-    data::{HostRole, KnownHost, Product, Uri, collect_product},
+    data::{Application, HostRole, KnownHost, Uri},
     job::model::{BindingKey, Input},
 };
 use eyre::{Result, eyre};
@@ -16,17 +16,17 @@ use std::{collections::HashMap, path::PathBuf};
 enum RuntimeInput {
     Receiver {
         receiver: Receiver,
-        product: Option<Product>,
+        application: Option<Application>,
         bundle_path: Option<PathBuf>,
     },
     Nested {
         parent: Receiver,
         path: String,
-        product: Option<Product>,
+        application: Option<Application>,
     },
     Uri {
         uri: Uri,
-        product: Option<Product>,
+        application: Option<Application>,
     },
 }
 
@@ -38,23 +38,29 @@ pub struct InputResolver {
 }
 
 impl InputResolver {
-    pub fn bind_receiver(&mut self, key: BindingKey, receiver: Receiver, product: Option<Product>) {
+    pub fn bind_receiver(&mut self, key: BindingKey, receiver: Receiver, application: Option<Application>) {
         self.bindings.insert(
             key,
             RuntimeInput::Receiver {
                 receiver,
-                product,
+                application,
                 bundle_path: None,
             },
         );
     }
 
-    pub fn bind_bundle(&mut self, key: BindingKey, receiver: Receiver, bundle_path: PathBuf, product: Option<Product>) {
+    pub fn bind_bundle(
+        &mut self,
+        key: BindingKey,
+        receiver: Receiver,
+        bundle_path: PathBuf,
+        application: Option<Application>,
+    ) {
         self.bindings.insert(
             key,
             RuntimeInput::Receiver {
                 receiver,
-                product,
+                application,
                 bundle_path: Some(bundle_path),
             },
         );
@@ -65,20 +71,20 @@ impl InputResolver {
         key: BindingKey,
         parent: Receiver,
         path: impl Into<String>,
-        product: Option<Product>,
+        application: Option<Application>,
     ) {
         self.bindings.insert(
             key,
             RuntimeInput::Nested {
                 parent,
                 path: path.into(),
-                product,
+                application,
             },
         );
     }
 
-    pub fn bind_uri(&mut self, key: BindingKey, uri: Uri, product: Option<Product>) {
-        self.bindings.insert(key, RuntimeInput::Uri { uri, product });
+    pub fn bind_uri(&mut self, key: BindingKey, uri: Uri, application: Option<Application>) {
+        self.bindings.insert(key, RuntimeInput::Uri { uri, application });
     }
 
     pub async fn resolve(
@@ -104,11 +110,17 @@ impl InputResolver {
             .get(host_key)
             .cloned()
             .ok_or_else(|| eyre!("Host '{host_key}' referenced by job not found in hosts.yml"))?;
-        if !host.has_role(HostRole::Collect) {
+        let resolved = host.resolve()?;
+        if !resolved.as_ref().has_role(HostRole::Collect) {
             return Err(eyre!("Collect host '{host_key}' is missing the collect role"));
         }
-        let product = collect_product(host.app())?;
-        Ok(ResolvedInput::new(Receiver::try_from(host)?, Some(product), None, None))
+        let application = resolved.application();
+        Ok(ResolvedInput::new(
+            Receiver::try_from(resolved.into_known_host())?,
+            Some(application),
+            None,
+            None,
+        ))
     }
 
     async fn resolve_stable_load(&self, uri: &Uri, materialize_remote: bool) -> Result<ResolvedInput> {
@@ -154,7 +166,7 @@ impl InputResolver {
         match binding {
             RuntimeInput::Receiver {
                 receiver,
-                product,
+                application,
                 bundle_path,
             } => {
                 if require_local_bundle && bundle_path.is_none() {
@@ -165,12 +177,16 @@ impl InputResolver {
                 }
                 Ok(ResolvedInput::new(
                     receiver.clone(),
-                    product.clone(),
+                    *application,
                     bundle_path.clone(),
                     None,
                 ))
             }
-            RuntimeInput::Nested { parent, path, product } => {
+            RuntimeInput::Nested {
+                parent,
+                path,
+                application,
+            } => {
                 if require_local_bundle {
                     return Err(eyre!(
                         "Nested runtime input binding '{}' is not a standalone local bundle",
@@ -179,14 +195,14 @@ impl InputResolver {
                 }
                 Ok(ResolvedInput::new(
                     parent.clone_for_subdir(path)?,
-                    product.clone(),
+                    *application,
                     None,
                     None,
                 ))
             }
-            RuntimeInput::Uri { uri, product } => {
+            RuntimeInput::Uri { uri, application } => {
                 let mut resolved = self.resolve_stable_load(uri, materialize_remote).await?;
-                resolved.product = product.clone();
+                resolved.application = *application;
                 if require_local_bundle && resolved.bundle_path.is_none() {
                     return Err(eyre!(
                         "Runtime URI binding '{}' did not materialize a local bundle",
@@ -201,7 +217,7 @@ impl InputResolver {
 
 pub struct ResolvedInput {
     pub receiver: Receiver,
-    pub product: Option<Product>,
+    pub application: Option<Application>,
     pub bundle_path: Option<PathBuf>,
     cleanup: Option<TempInputCleanup>,
 }
@@ -209,13 +225,13 @@ pub struct ResolvedInput {
 impl ResolvedInput {
     fn new(
         receiver: Receiver,
-        product: Option<Product>,
+        application: Option<Application>,
         bundle_path: Option<PathBuf>,
         cleanup: Option<TempInputCleanup>,
     ) -> Self {
         Self {
             receiver,
-            product,
+            application,
             bundle_path,
             cleanup,
         }
@@ -252,7 +268,7 @@ mod tests {
         let parent = Receiver::try_from(Uri::Directory(parent_dir.path().to_path_buf())).expect("parent receiver");
         let binding = BindingKey::try_new("child-es").expect("binding key");
         let mut resolver = InputResolver::default();
-        resolver.bind_nested(binding.clone(), parent, "children/es", Some(Product::Elasticsearch));
+        resolver.bind_nested(binding.clone(), parent, "children/es", Some(Application::Elasticsearch));
 
         let resolved = resolver
             .resolve(&Input::LoadBinding { binding }, false, false)
@@ -260,7 +276,7 @@ mod tests {
             .expect("nested input resolves");
 
         assert!(resolved.receiver.is_bundle());
-        assert_eq!(resolved.product, Some(Product::Elasticsearch));
+        assert_eq!(resolved.application, Some(Application::Elasticsearch));
         assert!(resolved.bundle_path.is_none());
     }
 
@@ -300,7 +316,7 @@ mod tests {
         let parent = Receiver::try_from(Uri::File(archive.path().to_path_buf())).expect("archive receiver");
         let binding = BindingKey::try_new("archive-child-es").expect("binding key");
         let mut resolver = InputResolver::default();
-        resolver.bind_nested(binding.clone(), parent, "children/es", Some(Product::Elasticsearch));
+        resolver.bind_nested(binding.clone(), parent, "children/es", Some(Application::Elasticsearch));
 
         let resolved = resolver
             .resolve(&Input::LoadBinding { binding }, false, false)
@@ -312,7 +328,7 @@ mod tests {
             .await
             .expect("read nested child manifest");
 
-        assert_eq!(manifest.product, Product::Elasticsearch);
+        assert_eq!(manifest.application(), Some(Application::Elasticsearch));
         assert!(!archive.path().with_file_name("children/es").exists());
     }
 

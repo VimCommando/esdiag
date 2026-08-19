@@ -7,7 +7,7 @@ use super::{
     ServerState, job_feed_event, replace_job_event, signal_event, template, template_event,
 };
 use crate::{
-    data::{Application, HostRole, Uri, collect_product},
+    data::{Application, HostRole, Uri},
     exporter::{DocumentExporter, Exporter},
     job::{
         context::{ExecutionContext, ExecutionIdentity, ExecutionObserver, RetentionPolicy},
@@ -201,10 +201,13 @@ async fn execute_unified_web_job(
             host, diagnostic_type, ..
         } => {
             let binding = BindingKey::try_new(format!("web-collect-{job_id}"))?;
-            let product = collect_product(host.app())?;
-            context
-                .inputs
-                .bind_receiver(binding.clone(), Receiver::try_from(host.clone())?, Some(product));
+            let resolved = host.clone().resolve()?;
+            let application = resolved.application();
+            context.inputs.bind_receiver(
+                binding.clone(),
+                Receiver::try_from(resolved.into_known_host())?,
+                Some(application),
+            );
             Input::CollectBinding {
                 binding,
                 diagnostic_type: diagnostic_type.clone(),
@@ -924,7 +927,7 @@ mod tests {
         skipped_child_reason, validate_job_request, validate_local_send_uri, validate_remote_send_uri,
     };
     use crate::{
-        data::{CollectMode, HostRole, JobDraft, KnownHostBuilder, Product, Uri},
+        data::{Application, CollectMode, HostRole, JobDraft, KnownHostBuilder, Uri},
         exporter::Exporter,
         processor::{DiagnosticOutcome, IncludedDiagnosticJobEvent, SkipKind},
         server::{
@@ -1168,7 +1171,7 @@ mod tests {
             path: "elasticsearch".to_string(),
             execution: Box::new(child_execution),
             diagnostic_outcome: DiagnosticOutcome::Failed,
-            application: Some(crate::data::Application::Elasticsearch),
+            application: Some(Application::Elasticsearch),
             platform: crate::data::Platform::ECK,
             runtime: None,
         });
@@ -1322,7 +1325,7 @@ mod tests {
     #[tokio::test]
     async fn remote_send_validation_rejects_collect_only_known_host() {
         let host = KnownHostBuilder::new(Url::parse("https://example.com:9200").unwrap())
-            .product(Product::Elasticsearch)
+            .application(Application::Elasticsearch)
             .roles(vec![HostRole::Collect])
             .build()
             .unwrap();

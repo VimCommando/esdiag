@@ -82,6 +82,7 @@ impl TryFrom<KnownHost> for KibanaClient {
     type Error = eyre::Report;
 
     fn try_from(host: KnownHost) -> Result<Self> {
+        let host = host.resolve()?.into_known_host();
         let url = host.get_url()?;
         let auth = host.get_auth_for_direction(CredentialDirection::Input)?;
         KibanaClient::try_new(url, auth)
@@ -107,7 +108,7 @@ fn to_kibana_sync_auth(auth: Auth) -> kibana_sync::Auth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HostRole, Product};
+    use crate::data::{Application, HostRole};
     use futures::future::join_all;
     use std::sync::{
         Arc,
@@ -136,7 +137,7 @@ mod tests {
     #[test]
     fn known_host_conversion_builds_shared_client_with_display_url() {
         let host = KnownHost::new_no_auth(
-            Product::Kibana,
+            Application::Kibana,
             Url::parse("http://localhost:5601").expect("url"),
             vec![HostRole::Collect],
             None,

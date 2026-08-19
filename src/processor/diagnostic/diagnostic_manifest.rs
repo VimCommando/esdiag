@@ -3,8 +3,8 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::Identifiers;
-use super::{DiagPath, Manifest};
-use crate::data::{Application, Platform, Product};
+use super::{DiagPath, Manifest, manifest::ManifestProduct};
+use crate::data::{Application, Platform};
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -36,7 +36,7 @@ pub struct DiagnosticManifest {
     /// Elastic Stack component name (legacy single-axis value; kept on the
     /// wire for read/write compatibility — see `platform`/`application`)
     #[serde(default = "unknown_product")]
-    pub product: Product,
+    product: ManifestProduct,
     /// Deployment platform the diagnostic was collected from (ADR-0001).
     /// Absent in older manifests; resolve through [`Self::platform`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,8 +77,8 @@ pub struct DiagnosticManifest {
     pub collected_apis: Option<Vec<String>>,
 }
 
-fn unknown_product() -> Product {
-    Product::Unknown
+fn unknown_product() -> ManifestProduct {
+    ManifestProduct::Unknown
 }
 
 impl Clone for DiagnosticManifest {
@@ -138,7 +138,7 @@ impl DiagnosticManifest {
         flags: Option<String>,
         included_diagnostics: Option<Vec<DiagPath>>,
         mode: Option<String>,
-        product: Product,
+        application: Option<Application>,
         r#type: Option<String>,
         runner: Option<String>,
         version: Option<String>,
@@ -150,10 +150,7 @@ impl DiagnosticManifest {
         let diagnostic_id = RwLock::new(None);
         let name = r#type.clone().unwrap_or("diagnostic".to_string());
 
-        let (platform, application) = product.split();
-        // Unknown is not an explicit platform: leave it unset so receiver-level
-        // detection (syscalls folder, cloud hints) can still resolve it.
-        let platform = (platform != Platform::Unknown).then_some(platform);
+        let product = ManifestProduct::from_classification(Platform::Unknown, application);
         Self {
             collection_date,
             collection_date_millis,
@@ -167,7 +164,7 @@ impl DiagnosticManifest {
             mode,
             name,
             product,
-            platform,
+            platform: None,
             application,
             r#type,
             runner,
@@ -195,8 +192,8 @@ impl DiagnosticManifest {
     /// value coherent for older readers of written manifests.
     pub fn set_platform(&mut self, platform: Platform) {
         self.platform = Some(platform);
-        if self.product == Product::Unknown && self.application.is_none() {
-            self.product = Product::from(platform);
+        if self.product == ManifestProduct::Unknown && self.application.is_none() {
+            self.product = ManifestProduct::from_classification(platform, None);
         }
     }
 
@@ -314,77 +311,91 @@ impl DiagnosticManifest {
 
 impl From<Manifest> for DiagnosticManifest {
     fn from(manifest: Manifest) -> Self {
-        let product = match manifest.diag_type.as_deref() {
-            Some("eck-diagnostics") => Product::ECK,
-            Some("k8s-platform-diagnostics") => Product::KubernetesPlatform,
-            _ => Product::Elasticsearch,
+        let (legacy_platform, legacy_application) = manifest.product.split();
+        let platform = match manifest.diag_type.as_deref() {
+            Some("eck-diagnostics") => Platform::ECK,
+            Some("k8s-platform-diagnostics") => Platform::KubernetesPlatform,
+            _ => legacy_platform,
         };
-        DiagnosticManifest::new(
+        let mut diagnostic = DiagnosticManifest::new(
             manifest.collection_date,
             manifest.diag_version,
             manifest.diagnostic_inputs,
             manifest.included_diagnostics,
             Some("compatible".to_string()),
-            product,
+            legacy_application,
             manifest.diag_type,
             manifest.runner,
             manifest
                 .product_version
                 .map(|v| v.original_value.map(|v| v.to_string()).unwrap_or_default()),
-        )
+        );
+        if platform != Platform::Unknown {
+            diagnostic.set_platform(platform);
+        }
+        diagnostic
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{DiagnosticManifest, Manifest, RequestedApi};
-    use crate::data::{Application, Platform, Product};
+    use crate::data::{Application, Platform};
     use std::collections::BTreeMap;
 
-    fn manifest_with(product: Product, r#type: Option<&str>, runner: Option<&str>) -> DiagnosticManifest {
-        DiagnosticManifest::new(
+    fn manifest_with(
+        application: Option<Application>,
+        platform: Option<Platform>,
+        r#type: Option<&str>,
+        runner: Option<&str>,
+    ) -> DiagnosticManifest {
+        let mut manifest = DiagnosticManifest::new(
             "2026-04-25T20:18:43.610Z".to_string(),
             Some("esdiag-test".to_string()),
             None,
             None,
             Some("support".to_string()),
-            product,
+            application,
             r#type.map(str::to_string),
             runner.map(str::to_string),
             Some("8.19.3".to_string()),
-        )
+        );
+        if let Some(platform) = platform {
+            manifest.set_platform(platform);
+        }
+        manifest
     }
 
     #[test]
     fn detects_ece_platform_from_runner_indicator() {
-        let manifest = manifest_with(Product::Unknown, Some("api"), Some("ece"));
+        let manifest = manifest_with(None, None, Some("api"), Some("ece"));
         assert_eq!(manifest.platform(), Platform::ECE);
         assert!(!manifest.has_explicit_platform());
     }
 
     #[test]
     fn detects_eck_platform_from_diag_type_indicator() {
-        let manifest = manifest_with(Product::Unknown, Some("eck-diagnostics"), Some("unknown"));
+        let manifest = manifest_with(None, None, Some("eck-diagnostics"), Some("unknown"));
         assert_eq!(manifest.platform(), Platform::ECK);
     }
 
     #[test]
     fn detects_kubernetes_platform_from_diag_type_indicator() {
-        let manifest = manifest_with(Product::Unknown, Some("k8s-platform-diagnostics"), Some("unknown"));
+        let manifest = manifest_with(None, None, Some("k8s-platform-diagnostics"), Some("unknown"));
         assert_eq!(manifest.platform(), Platform::KubernetesPlatform);
     }
 
     #[test]
     fn indeterminate_provenance_is_unknown() {
         // A legacy support-diagnostics bundle: no platform indicators at all
-        let manifest = manifest_with(Product::Elasticsearch, Some("api"), Some("unknown"));
+        let manifest = manifest_with(Some(Application::Elasticsearch), None, Some("api"), Some("unknown"));
         assert_eq!(manifest.platform(), Platform::Unknown);
         assert_eq!(manifest.application(), Some(Application::Elasticsearch));
     }
 
     #[test]
     fn platform_product_yields_platform_only_classification() {
-        let manifest = manifest_with(Product::ECK, Some("eck-diagnostics"), Some("esdiag"));
+        let manifest = manifest_with(None, Some(Platform::ECK), Some("eck-diagnostics"), Some("esdiag"));
         assert!(manifest.has_explicit_platform());
         assert_eq!(manifest.platform(), Platform::ECK);
         assert_eq!(manifest.application(), None);
@@ -393,7 +404,7 @@ mod tests {
 
     #[test]
     fn ece_manifest_carries_no_application_or_included_diagnostics() {
-        let manifest = manifest_with(Product::ECE, Some("diagnostic"), Some("ece"));
+        let manifest = manifest_with(None, Some(Platform::ECE), Some("diagnostic"), Some("ece"));
 
         assert_eq!(manifest.platform(), Platform::ECE);
         assert_eq!(manifest.application(), None);
@@ -402,7 +413,7 @@ mod tests {
 
     #[test]
     fn set_platform_overrides_detection_and_wins_for_children() {
-        let mut manifest = manifest_with(Product::Elasticsearch, Some("api"), Some("unknown"));
+        let mut manifest = manifest_with(Some(Application::Elasticsearch), None, Some("api"), Some("unknown"));
         manifest.set_platform(Platform::ECK);
         assert_eq!(manifest.platform(), Platform::ECK);
         // The application axis is untouched by platform propagation
@@ -412,7 +423,7 @@ mod tests {
 
     #[test]
     fn explicit_platform_round_trips_through_serde() {
-        let mut manifest = manifest_with(Product::Elasticsearch, Some("api"), Some("unknown"));
+        let mut manifest = manifest_with(Some(Application::Elasticsearch), None, Some("api"), Some("unknown"));
         manifest.set_platform(Platform::SelfManaged);
         let json = serde_json::to_string(&manifest).expect("serialize manifest");
         let parsed: DiagnosticManifest = serde_json::from_str(&json).expect("deserialize manifest");
@@ -455,10 +466,67 @@ mod tests {
         )
         .expect("older ESDiag manifest should deserialize");
 
-        assert_eq!(manifest.product, Product::Unknown);
         assert_eq!(manifest.platform(), Platform::Unknown);
         assert_eq!(manifest.application(), None);
         assert_eq!(manifest.collection_date_in_millis(), 1_706_933_106_000);
+    }
+
+    #[test]
+    fn historical_manifest_product_fixtures_preserve_wire_values_and_classification() {
+        let fixtures = [
+            ("agent", Platform::Unknown, Some(Application::Agent)),
+            ("ece", Platform::ECE, None),
+            ("eck", Platform::ECK, None),
+            ("elasticcloudhosted", Platform::ElasticCloudHosted, None),
+            ("elasticsearch", Platform::Unknown, Some(Application::Elasticsearch)),
+            ("kibana", Platform::Unknown, Some(Application::Kibana)),
+            ("kubernetesplatform", Platform::KubernetesPlatform, None),
+            ("logstash", Platform::Unknown, Some(Application::Logstash)),
+            ("unknown", Platform::Unknown, None),
+        ];
+
+        for (product, platform, application) in fixtures {
+            let manifest: DiagnosticManifest = serde_json::from_value(serde_json::json!({
+                "product": product,
+                "timestamp": "2026-04-25T20:52:09.948Z"
+            }))
+            .unwrap_or_else(|error| panic!("historical product {product} should deserialize: {error}"));
+
+            assert_eq!(manifest.platform(), platform, "unexpected platform for {product}");
+            assert_eq!(
+                manifest.application(),
+                application,
+                "unexpected application for {product}"
+            );
+
+            let serialized = serde_json::to_value(&manifest).expect("serialize manifest");
+            assert_eq!(
+                serialized["product"], product,
+                "product wire value changed for {product}"
+            );
+            assert!(serialized.get("platform").is_none());
+            assert!(serialized.get("application").is_none());
+        }
+    }
+
+    #[test]
+    fn historical_manifest_product_aliases_remain_accepted() {
+        for (product, application) in [
+            ("es", Some(Application::Elasticsearch)),
+            ("kb", Some(Application::Kibana)),
+            ("ls", Some(Application::Logstash)),
+            ("hosted", None),
+            ("elastic-cloud-hosted", None),
+            ("mki", None),
+        ] {
+            let manifest: DiagnosticManifest = serde_json::from_value(serde_json::json!({
+                "product": product,
+                "timestamp": "2026-04-25T20:52:09.948Z"
+            }))
+            .unwrap_or_else(|error| panic!("legacy product alias {product} should deserialize: {error}"));
+
+            assert_eq!(manifest.application(), application);
+        }
     }
 
     #[test]
@@ -517,7 +585,7 @@ mod tests {
             None,
             None,
             Some("support".to_string()),
-            Product::Elasticsearch,
+            Some(Application::Elasticsearch),
             Some("elasticsearch_diagnostic".to_string()),
             Some("esdiag".to_string()),
             Some("8.19.3".to_string()),
@@ -542,7 +610,7 @@ mod tests {
             None,
             None,
             Some("support".to_string()),
-            Product::Elasticsearch,
+            Some(Application::Elasticsearch),
             Some("elasticsearch_diagnostic".to_string()),
             Some("esdiag".to_string()),
             Some("8.19.3".to_string()),
@@ -560,7 +628,7 @@ mod tests {
             None,
             None,
             Some("support".to_string()),
-            Product::Elasticsearch,
+            Some(Application::Elasticsearch),
             Some("elasticsearch_diagnostic".to_string()),
             Some("esdiag".to_string()),
             Some("8.19.3".to_string()),
@@ -578,7 +646,7 @@ mod tests {
             None,
             None,
             Some("support".to_string()),
-            Product::Elasticsearch,
+            Some(Application::Elasticsearch),
             Some("elasticsearch_diagnostic".to_string()),
             Some("esdiag".to_string()),
             Some("8.19.3".to_string()),
@@ -661,7 +729,7 @@ mod tests {
             None,
             None,
             Some("support".to_string()),
-            Product::Elasticsearch,
+            Some(Application::Elasticsearch),
             Some("elasticsearch_diagnostic".to_string()),
             Some("esdiag".to_string()),
             Some("8.19.3".to_string()),

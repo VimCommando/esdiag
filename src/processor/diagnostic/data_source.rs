@@ -2,7 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use crate::data::Product;
+use crate::data::Application;
 use eyre::{Result, eyre};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -101,12 +101,14 @@ pub trait DataSource {
     }
 }
 
-pub fn source_product_key(product: &Product) -> Result<&'static str> {
-    match product {
-        Product::Elasticsearch => Ok("elasticsearch"),
-        Product::Kibana => Ok("kibana"),
-        Product::Logstash => Ok("logstash"),
-        _ => Err(eyre!("sources.yml overrides are not supported for product {}", product)),
+pub fn source_application_key(application: Application) -> Result<&'static str> {
+    match application {
+        Application::Elasticsearch => Ok("elasticsearch"),
+        Application::Kibana => Ok("kibana"),
+        Application::Logstash => Ok("logstash"),
+        Application::Agent => Err(eyre!(
+            "sources.yml overrides are not supported for application {application}"
+        )),
     }
 }
 
@@ -240,7 +242,7 @@ fn required_source_keys(product: &str) -> &'static [&'static str] {
 }
 
 fn parse_sources_content(label: &str, content: &str) -> Result<HashMap<String, Source>> {
-    serde_yaml::from_str(content).map_err(|e| eyre!("Failed to parse {}: {}", label, e))
+    yaml_serde::from_str(content).map_err(|e| eyre!("Failed to parse {}: {}", label, e))
 }
 
 fn validate_sources_product(product: &str, sources: &HashMap<String, Source>, label: &str) -> Result<()> {

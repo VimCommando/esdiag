@@ -2,6 +2,11 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+/// Native Agent Builder and coding-agent integrations.
+#[cfg(feature = "agent")]
+pub mod agent;
+/// Stable, structured finite-command output projections.
+pub mod cli_output;
 /// Shared client libraries for remote connections
 pub mod client;
 /// Data structures and types for serializing and deserializing
@@ -14,6 +19,8 @@ pub mod env;
 pub mod exporter;
 /// Shared job runner for saved diagnostic jobs
 pub mod job;
+/// Flow-neutral first-run onboarding operations
+pub mod onboarding;
 /// Data transformation and processing logic
 pub mod processor;
 /// Receive data from various sources

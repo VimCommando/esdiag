@@ -536,7 +536,7 @@ fn default_downloads_dir() -> PathBuf {
 mod tests {
     use super::job_host_options;
     use crate::{
-        data::{Application, HostRole, KnownHost, KnownHostBuilder, Product},
+        data::{Application, HostRole, KnownHost, KnownHostBuilder},
         server::test_server_state,
     };
     use std::collections::BTreeMap;
@@ -549,7 +549,7 @@ mod tests {
         hosts.insert(
             "es-remote".to_string(),
             KnownHostBuilder::new(Url::parse("https://es.example.com:9200").expect("es url"))
-                .product(Product::Elasticsearch)
+                .application(Application::Elasticsearch)
                 .roles(vec![HostRole::Send])
                 .build()
                 .expect("es host"),
@@ -557,7 +557,7 @@ mod tests {
         hosts.insert(
             "es-local".to_string(),
             KnownHostBuilder::new(Url::parse("http://localhost:9200").expect("local es url"))
-                .product(Product::Elasticsearch)
+                .application(Application::Elasticsearch)
                 .roles(vec![HostRole::Send])
                 .build()
                 .expect("local es host"),
@@ -565,7 +565,7 @@ mod tests {
         hosts.insert(
             "kb-collect".to_string(),
             KnownHostBuilder::new(Url::parse("https://kb.example.com:5601").expect("kb url"))
-                .product(Product::Kibana)
+                .application(Application::Kibana)
                 .roles(vec![HostRole::Collect])
                 .build()
                 .expect("kb host"),

@@ -24,6 +24,7 @@ esdiag <command> --help
 - Configure and validate saved hosts with `esdiag host`
 - Manage encrypted credentials with `esdiag keystore`
 - Install Elasticsearch and Kibana assets with `esdiag setup`
+- Initialize a repeatable local diagnostic workflow with `esdiag init`
 - Collect fresh API diagnostics from a saved host with `esdiag collect`
 - Process diagnostic input into Elasticsearch documents with `esdiag process`
 - Run a local upload/UI service with `esdiag serve`
@@ -40,6 +41,7 @@ Commands:
   collect   Collect a diagnostic bundle from a known host's API endpoints, writes output to a directory
   serve     Start a web server to receive diagnostic bundle uploads
   host      Configure, test and save a remote host connection to `~/.esdiag/hosts.yml`
+  init      Interactively configure a repeatable local diagnostic workflow
   keystore  Manage encrypted secrets in the local keystore
   process   Receives a diagnostic from the input, processes it, and sends processed docs to the output
   upload    Upload a raw diagnostic archive to Elastic Upload Service
@@ -57,8 +59,29 @@ Options:
 ### Global options
 
 - `--debug` enables debug logging for any command.
+- `--format yaml|json` selects the terminal result representation for finite commands. YAML is the default; JSON is a compact interoperability format.
 - `--help` and `--version` work at the top level.
 - Logging defaults to `info` unless overridden by `--debug` or `LOG_LEVEL`.
+
+### Structured command outcomes
+
+Finite commands write exactly one typed outcome to stdout. The default YAML
+uses a stable snake_case `result` discriminator; use `--format json` when a
+consumer needs JSON. Operational logs, warnings, progress, and detailed error
+causes remain on stderr. HTTP failures retain the CLI's stable `category` and
+also expose the server response `status`, error `type`, and error `reason` when
+available, so callers can troubleshoot the remote response directly.
+
+Successful outcomes expose durable facts such as archive paths, diagnostic IDs,
+document counts, Kibana links, and upload destinations. Commands that fail
+after execution begins write a `command_failed` outcome to stdout and exit
+non-zero. A saved job failure can include prior completed `save` and `process`
+facts plus `failed_stage` and `retry_safe`.
+
+`process ... -` and saved jobs whose process export is stdout retain their
+NDJSON document stream; ESDiag never appends a YAML, JSON, or prose terminal
+outcome to that stream. `serve` writes one readiness outcome after binding
+unless its configured exporter owns stdout.
 
 ### No-command behavior
 
@@ -74,6 +97,7 @@ By default, `esdiag` stores local state under `~/.esdiag/`:
 
 - `hosts.yml`: saved host definitions
 - `secrets.yml`: encrypted keystore backing `--secret` references
+- `esdiag.yml`: non-secret CLI preferences, including the default user, output host, and saved job
 - `settings.yml`: saved UI/runtime settings such as active target selection
 - `last_run/`: debug artifacts from processing and related commands
 
@@ -92,7 +116,20 @@ These environment variables change where local state is read and written:
 - `ESDIAG_OUTPUT_APIKEY`: default output API key
 - `ESDIAG_OUTPUT_USERNAME`: default output username
 - `ESDIAG_OUTPUT_PASSWORD`: default output password
-- `ESDIAG_KIBANA_URL`: Kibana URL used by `serve`, processing metadata, and host-omitted setup flows
+- `ESDIAG_KIBANA_URL`: default Kibana viewer URL paired with an environment-defined output deployment
+
+`esdiag init` is terminal-only. It creates or unlocks the keystore, validates a
+linked Elasticsearch output and Kibana viewer, optionally installs output assets
+after confirmation, saves one or more collect hosts, and creates a default saved
+job. Credentials are entered without echo and are stored only in `secrets.yml`;
+`esdiag.yml` retains names and preferences, never credential material.
+
+When an output is omitted, ESDiag resolves one complete deployment in this
+order: an explicit command target, complete `ESDIAG_OUTPUT_*` plus
+`ESDIAG_KIBANA_URL` environment configuration, then `esdiag.yml`. It does not
+combine endpoints or credentials from different sources. The existing
+desktop-only `settings.yml` remains unchanged; a later GUI onboarding flow will
+migrate it.
 - `ESDIAG_KIBANA_SPACE`: optional Kibana space appended to generated Kibana links
 - `ESDIAG_MODE`: runtime mode for `serve` when `--mode` is omitted; valid values are `user` and `service`
 - `ESDIAG_AUTH_PROVIDER`: authentication provider for `serve` when `--auth-provider` is omitted; valid values are `google-iap` and `none`
@@ -185,7 +222,8 @@ Use `esdiag host remove <NAME>` to delete a saved host. Removing an unknown host
 
 ### `host list`
 
-Use `esdiag host list` to print a compact saved-host table with columns `name`, `app`, and `secret`. When no hosts are saved, the command prints `No saved hosts`.
+Use `esdiag host list` to return a `hosts_listed` outcome containing typed host
+entries. When no hosts are saved, it returns `hosts: []`.
 
 ### `host auth`
 
@@ -199,6 +237,7 @@ Role validation rules enforced by the saved host model:
 - `send` is valid only for Elasticsearch hosts
 - `view` is valid only for Kibana hosts
 - omitted roles default to `collect`
+- `collect` controls visibility in collection pickers; any saved host can still be used as a CLI or saved-job collection input
 
 ### Migration from legacy syntax
 
@@ -389,6 +428,9 @@ Arguments:
           Target to send the processed diagnostic documents to (known host, file, stdout, or env). Strings will be checked against the known hosts stored in `~/.esdiag/hosts.yml` and will fallback to a filename if not found. Use `-` for stdout. If nothing is provided, the output will try using the environment variables: ESDIAG_OUTPUT_URL, ESDIAG_OUTPUT_APIKEY, ESDIAG_OUTPUT_USERNAME, and ESDIAG_OUTPUT_PASSWORD.
 
 Options:
+      --ask <PROMPT>
+          Ask Agent Builder about the diagnostic after it is processed
+
   -a, --account <ACCOUNT>
           Diagnostic report account name
 
@@ -437,6 +479,19 @@ These annotate the generated report context:
 - `--opportunity`
 - `--user`
 
+### `--ask`
+
+Use `--ask <PROMPT>` to process a diagnostic and immediately start a new Agent Builder conversation about the resulting primary diagnostic. ESDiag sends Agent Builder this exact prompt:
+
+```text
+diagnostic.id: <diagnostic-id>
+<PROMPT>
+```
+
+The process output must resolve to a Kibana-enabled output deployment: use a saved Elasticsearch output host linked to a Kibana viewer, or omit `[OUTPUT]` and configure `ESDIAG_OUTPUT_URL`, `ESDIAG_KIBANA_URL`, and shared output authentication. The command returns the standard `agent_response` outcome after completion. `--ask` cannot be used with output `-`, because processed documents own stdout in that mode.
+
+Reasoning and tool updates appear on stderr prefixed with the selected Agent Builder agent's display name.
+
 ### `--save-job`
 
 - `--save-job <NAME>` stores a saved job before execution, then continues processing
@@ -459,6 +514,9 @@ esdiag process ~/Downloads/api-diagnostic-dir -
 
 # Process with an environment-driven output
 ESDIAG_OUTPUT_URL=http://localhost:9200 esdiag process ~/Downloads/api-diagnostic.zip
+
+# Process and ask Agent Builder about the new diagnostic
+esdiag process ~/Downloads/api-diagnostic.zip prod-es --ask "What is the highest-risk finding?"
 ```
 
 ## `collect`

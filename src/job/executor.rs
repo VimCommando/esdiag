@@ -17,7 +17,7 @@ use super::{
     outcome::{ChildExecutionOutcome, ExecutionEvent, ExecutionOutcome, Lifecycle, Stage, StageStatus, UploadResult},
 };
 use crate::{
-    data::{Platform, Product, Uri},
+    data::{Application, Platform, Uri},
     exporter::BundleExporter,
     processor::{
         CollectOptions, DiagnosticOutcome, Identifiers,
@@ -31,7 +31,7 @@ use futures::{StreamExt, stream::FuturesUnordered};
 use std::{path::PathBuf, sync::Arc};
 
 /// What one job execution produced.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct JobOutcome {
     /// A retained local bundle archive path available after execution.
     ///
@@ -41,10 +41,85 @@ pub struct JobOutcome {
     /// Whether `bundle_path` points at a retained archive-file bundle as
     /// opposed to a temporary staging bundle.
     pub bundle_retained: bool,
+    /// Whether the retained bundle was produced by this job's collection stage.
+    pub bundle_created: bool,
     /// The upload slug returned by the Elastic Uploader for a `Send` stage.
     pub upload_slug: Option<String>,
     /// Whether a `Process` stage ran to completion.
     pub processed: bool,
+    /// The complete execution outcome used to report saved-job results.
+    pub execution: Option<ExecutionOutcome>,
+}
+
+/// The stage that failed after a job may already have produced durable output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailedStage {
+    Collect,
+    Process,
+    Send,
+}
+
+/// Preserves the safe, completed portion of a failed saved-job execution.
+pub struct JobExecutionFailure {
+    pub stage: FailedStage,
+    pub outcome: JobOutcome,
+    message: String,
+    source: eyre::Report,
+}
+
+impl std::fmt::Debug for JobExecutionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("JobExecutionFailure")
+            .field("stage", &self.stage)
+            .field("message", &self.message)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Display for JobExecutionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for JobExecutionFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+fn job_outcome(outcome: ExecutionOutcome) -> JobOutcome {
+    JobOutcome {
+        bundle_path: outcome.retained_bundle.clone(),
+        bundle_retained: outcome.retained_bundle.is_some(),
+        bundle_created: outcome.collection.is_some(),
+        upload_slug: outcome.upload.as_ref().map(|upload| upload.slug.clone()),
+        processed: outcome.report.is_some(),
+        execution: Some(outcome),
+    }
+}
+
+fn failed_stage(outcome: &ExecutionOutcome) -> FailedStage {
+    outcome
+        .stages
+        .iter()
+        .find(|stage| stage.status.is_unsuccessful())
+        .map(|stage| match stage.stage {
+            Stage::Send => FailedStage::Send,
+            Stage::Process | Stage::Export => FailedStage::Process,
+            Stage::Collect | Stage::Load | Stage::Save => FailedStage::Collect,
+        })
+        .unwrap_or(FailedStage::Process)
+}
+
+fn failed(stage: FailedStage, outcome: JobOutcome, error: eyre::Report) -> eyre::Report {
+    eyre::Report::new(JobExecutionFailure {
+        stage,
+        outcome,
+        message: error.to_string(),
+        source: error,
+    })
 }
 
 /// Execute one job: resolve the Phase-1 input, honor the derived mode
@@ -62,14 +137,14 @@ pub async fn execute(job: Job) -> Result<JobOutcome> {
             })
             .collect::<Vec<_>>()
             .join("; ");
-        return Err(eyre!("Job execution failed: {failures}"));
+        let stage = failed_stage(&outcome);
+        return Err(failed(
+            stage,
+            job_outcome(outcome),
+            eyre!("Job execution failed: {failures}"),
+        ));
     }
-    Ok(JobOutcome {
-        bundle_path: outcome.retained_bundle,
-        bundle_retained: true,
-        upload_slug: outcome.upload.map(|upload| upload.slug),
-        processed: outcome.report.is_some(),
-    })
+    Ok(job_outcome(outcome))
 }
 
 pub async fn execute_with_context(job: Job, context: ExecutionContext) -> ExecutionOutcome {
@@ -116,7 +191,7 @@ pub async fn execute_with_context(job: Job, context: ExecutionContext) -> Execut
         job.process()
             .map(|process| {
                 collect_process_selection(
-                    resolved.product.as_ref().unwrap_or(&Product::Unknown),
+                    resolved.application.as_ref().unwrap_or(&Application::Agent),
                     collect_diagnostic_type(job.input()),
                     collect_include(job.input()),
                     collect_exclude(job.input()),
@@ -200,14 +275,14 @@ pub async fn execute_with_context(job: Job, context: ExecutionContext) -> Execut
             Stage::Save,
             Lifecycle::Started,
         ));
-        let Some(product) = resolved.product.clone() else {
+        let Some(application) = resolved.application else {
             record_stage(
                 &context,
                 &mut outcome,
                 Stage::Collect,
-                StageStatus::Failed("Collect input did not resolve a product".to_string()),
+                StageStatus::Failed("Collect input did not resolve an application".to_string()),
             );
-            record_blocked_outputs(&context, &job, &mut outcome, "Collect product resolution failed");
+            record_blocked_outputs(&context, &job, &mut outcome, "Collect application resolution failed");
             return outcome;
         };
         let exporter = match BundleExporter::archive(output_dir) {
@@ -227,7 +302,7 @@ pub async fn execute_with_context(job: Job, context: ExecutionContext) -> Execut
             resolved.receiver,
             exporter,
             CollectOptions {
-                product,
+                application,
                 r#type: collect_diagnostic_type(job.input()).to_string(),
                 include: collect_include(job.input()).cloned(),
                 exclude: collect_exclude(job.input()).cloned(),
@@ -646,15 +721,15 @@ fn canonicalize_process_selection(selection: ProcessSelection) -> Result<Process
 }
 
 fn collect_process_selection(
-    product: &Product,
+    application: &Application,
     diagnostic_type: &str,
     include: Option<&Vec<String>>,
     exclude: Option<&Vec<String>>,
     process: &Process,
 ) -> Result<Option<ProcessSelection>> {
-    let product = match product {
-        Product::Elasticsearch => "elasticsearch",
-        Product::Logstash => "logstash",
+    let product = match application {
+        Application::Elasticsearch => "elasticsearch",
+        Application::Logstash => "logstash",
         _ => return Ok(None),
     };
     if let Some(selection) = &process.selection {
@@ -706,6 +781,17 @@ mod tests {
         sync::{Arc, Mutex},
     };
     use zip::ZipArchive;
+
+    #[derive(Debug)]
+    struct SourceError;
+
+    impl std::fmt::Display for SourceError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("source error")
+        }
+    }
+
+    impl std::error::Error for SourceError {}
 
     fn fixture_archive(name: &str) -> PathBuf {
         PathBuf::from(format!("{}/tests/archives/{name}", env!("CARGO_MANIFEST_DIR")))
@@ -791,7 +877,7 @@ mod tests {
         let address = listener.local_addr().expect("listener address");
         drop(listener);
         let host = crate::data::KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             url::Url::parse(&format!("http://{address}")).expect("output URL"),
             vec![crate::data::HostRole::Send],
             None,
@@ -910,7 +996,7 @@ mod tests {
             .with_observer(observer.clone())
             .with_sender(TestSender { fail: false });
         let host = crate::data::KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             url::Url::parse(&format!("http://{address}")).expect("mock URL"),
             vec![crate::data::HostRole::Collect],
             None,
@@ -919,7 +1005,7 @@ mod tests {
         context.inputs.bind_receiver(
             binding,
             Receiver::try_from(host).expect("source receiver"),
-            Some(Product::Elasticsearch),
+            Some(Application::Elasticsearch),
         );
 
         let outcome = execute_with_context(job, context).await;
@@ -963,7 +1049,7 @@ mod tests {
             axum::serve(listener, app).await.expect("mock server");
         });
         crate::data::KnownHost::new_no_auth(
-            Product::Elasticsearch,
+            Application::Elasticsearch,
             url::Url::parse(&format!("http://{address}")).expect("mock URL"),
             vec![crate::data::HostRole::Collect],
             None,
@@ -1091,7 +1177,7 @@ mod tests {
             child.diagnostic_outcome,
             DiagnosticOutcome::Skipped(crate::processor::SkipKind::NotImplemented)
         );
-        assert_eq!(child.application(), Some(crate::data::Application::Kibana));
+        assert_eq!(child.application(), Some(Application::Kibana));
         assert_eq!(
             child.execution_error(),
             Some("Kibana processing is not yet implemented")
@@ -1394,5 +1480,20 @@ mod tests {
         assert!(selection.selected.contains(&"logstash_node".to_string()));
         // `logstash_version` is a collect-only prerequisite with no processor.
         assert!(!selection.selected.contains(&"logstash_version".to_string()));
+    }
+
+    #[test]
+    fn failed_job_preserves_source_error_for_downcasting() {
+        let report = failed(
+            FailedStage::Process,
+            JobOutcome::default(),
+            eyre::Report::new(SourceError),
+        );
+
+        assert!(
+            report
+                .chain()
+                .any(|cause| cause.downcast_ref::<SourceError>().is_some())
+        );
     }
 }

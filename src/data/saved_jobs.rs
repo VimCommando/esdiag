@@ -9,7 +9,7 @@ use std::{
 };
 use tokio::task;
 
-use super::{HostRole, KnownHost, Uri};
+use super::{KnownHost, Uri};
 use crate::{
     job::model::{Input, Process, SaveTarget, SendTarget},
     processor::{
@@ -706,13 +706,8 @@ impl JobBuilder<NeedsCollect> {
     pub fn collect_from(self, host: impl Into<String>) -> Result<JobBuilder<NeedsAction>> {
         let host = host.into();
         let host_name = host.trim();
-        let known_host = KnownHost::get_known(&host_name.to_string())
+        KnownHost::get_known(&host_name.to_string())
             .ok_or_else(|| eyre!("Jobs require a saved known host name as input"))?;
-        if !known_host.has_role(HostRole::Collect) {
-            return Err(eyre!(
-                "Host role validation failed for job input: required role 'collect' not present"
-            ));
-        }
         Ok(JobBuilder {
             identifiers: self.identifiers,
             collect: Some(CollectDraft {
@@ -870,7 +865,7 @@ fn load_saved_jobs_from_path(path: &Path) -> Result<SavedJobs> {
     let version = schema_version(&content)?;
     match version {
         None => {
-            let legacy_jobs: IndexMap<String, LegacyJob> = serde_yaml::from_str(&content)?;
+            let legacy_jobs: IndexMap<String, LegacyJob> = yaml_serde::from_str(&content)?;
             let should_rewrite = !legacy_jobs.is_empty();
             let jobs = legacy_jobs
                 .into_iter()
@@ -882,7 +877,7 @@ fn load_saved_jobs_from_path(path: &Path) -> Result<SavedJobs> {
             Ok(jobs)
         }
         Some(CURRENT_SCHEMA_VERSION) => {
-            let document: SavedJobsDocument = serde_yaml::from_str(&content)?;
+            let document: SavedJobsDocument = yaml_serde::from_str(&content)?;
             Ok(document.jobs)
         }
         Some(version) => Err(eyre!("Unsupported saved jobs schema_version {version}")),
@@ -890,18 +885,18 @@ fn load_saved_jobs_from_path(path: &Path) -> Result<SavedJobs> {
 }
 
 fn schema_version(content: &str) -> Result<Option<u32>> {
-    let value: serde_yaml::Value = serde_yaml::from_str(content)?;
+    let value: yaml_serde::Value = yaml_serde::from_str(content)?;
     let Some(mapping) = value.as_mapping() else {
         return Err(eyre!("Saved jobs file must be a YAML mapping"));
     };
-    let key = serde_yaml::Value::String("schema_version".to_string());
+    let key = yaml_serde::Value::String("schema_version".to_string());
     let Some(version) = mapping.get(&key) else {
         return Ok(None);
     };
-    let has_jobs_key = mapping.get(serde_yaml::Value::String("jobs".to_string())).is_some();
+    let has_jobs_key = mapping.get(yaml_serde::Value::String("jobs".to_string())).is_some();
 
     match version {
-        serde_yaml::Value::Number(number) => number
+        yaml_serde::Value::Number(number) => number
             .as_u64()
             .and_then(|version| u32::try_from(version).ok())
             .map(Some)
@@ -909,7 +904,7 @@ fn schema_version(content: &str) -> Result<Option<u32>> {
         // A v1 file may hold a job literally named `schema_version`, whose value is
         // the job mapping. A versioned document instead pairs `schema_version` with
         // `jobs`, so that pairing means the version itself is malformed.
-        serde_yaml::Value::Mapping(_) if !has_jobs_key => Ok(None),
+        yaml_serde::Value::Mapping(_) if !has_jobs_key => Ok(None),
         _ => Err(eyre!("Invalid saved jobs schema_version value")),
     }
 }
@@ -973,7 +968,7 @@ fn get_jobs_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_env_lock;
+    use crate::{data::Application, data::HostRole, test_env_lock};
     use tempfile::TempDir;
 
     fn setup_env() -> TempDir {
@@ -987,7 +982,7 @@ mod tests {
 
     fn save_collect_host(name: &str) {
         crate::data::KnownHostBuilder::new(url::Url::parse("http://localhost:9200/").expect("url"))
-            .product(crate::data::Product::Elasticsearch)
+            .application(Application::Elasticsearch)
             .roles(vec![HostRole::Collect, HostRole::Send])
             .build()
             .expect("host")
@@ -1115,7 +1110,7 @@ mod tests {
 
     #[test]
     fn job_serializes_phase_shape() {
-        let yaml = serde_yaml::to_string(&test_job("prod")).expect("serialize job");
+        let yaml = yaml_serde::to_string(&test_job("prod")).expect("serialize job");
 
         assert!(yaml.contains("input:"));
         assert!(yaml.contains("type: collect"));
@@ -1554,7 +1549,7 @@ collect-job:
         )
         .expect("valid job");
 
-        let yaml = serde_yaml::to_string(&job).expect("serialize job");
+        let yaml = yaml_serde::to_string(&job).expect("serialize job");
 
         assert!(yaml.contains("dir: /tmp/retain-bundle"));
         assert!(yaml.contains("type: directory"));
