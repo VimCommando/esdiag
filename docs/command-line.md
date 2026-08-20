@@ -105,9 +105,9 @@ Several commands accept an optional output target. The current resolution rules 
 - `-` means stdout
 - A string matching a saved host name resolves to that known host
 - Any other non-empty string is treated as a local filesystem target
-- If output is omitted entirely, `esdiag` falls back to `ESDIAG_OUTPUT_URL` plus optional auth env vars
-- In the web workflow, the `Default` remote output sends no explicit target and uses the same environment fallback
-- If neither an explicit target nor a valid environment output is available, processing fails instead of using stdout
+- `process` falls back to `ESDIAG_OUTPUT_URL` plus optional auth environment variables when output is omitted
+- `serve` requires either an explicit output or `ESDIAG_OUTPUT_*` when it starts; its web workflow `Default` output uses that active server target
+- `process` and `serve` fail instead of using stdout when neither an explicit target nor a valid environment output is available
 
 This applies to:
 
