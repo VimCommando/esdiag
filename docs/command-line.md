@@ -612,8 +612,8 @@ The Job Builder flag only controls web UI routes. CLI saved-job commands such as
 
 `serve` uses the same output target rules as `process`. User mode does not add
 an implicit stdout fallback: omit the output only when `ESDIAG_OUTPUT_*` defines
-a valid target. The web workflow represents an omitted explicit output as
-`Default` and resolves it through those environment variables.
+a valid target. The web workflow uses the output configured when the server
+started; `Default` resolves to that active target.
 
 ### Examples
 
