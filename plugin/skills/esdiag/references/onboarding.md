@@ -1,27 +1,77 @@
 # First-run ESDiag setup
 
-ESDiag initialization is a local, interactive workflow. Ask the human to run:
+Initialization is local and interactive. Check whether `esdiag` is available:
+
+```sh
+command -v esdiag
+```
+
+## Native binary
+
+When the binary is available, ask the human to run:
 
 ```sh
 esdiag init
 ```
 
-It securely configures the diagnostic user, encrypted keystore, linked Elasticsearch and Kibana output deployment, collection host, and default saved job. It may also offer to install the embedded ESDiag Agent Skill.
+The wizard configures the workflow they select. For local processing it can
+start `esdiag local up --stack=core`; for a remote deployment it configures the
+selected output.
 
-Do not request passwords, API keys, or keystore values in an agent conversation. Do not write `esdiag.yml`, `hosts.yml`, `secrets.yml`, or `jobs.yml` manually.
-
-If initialization is complete but a coding agent needs the skill, use the standalone offline installer:
-
-```sh
-esdiag agent skills
-```
-
-Specify a target when automatic detection is insufficient:
+When `esdiag` is unavailable, check for Homebrew and Cargo:
 
 ```sh
-esdiag agent skills --target claude
-esdiag agent skills --target codex
-esdiag agent skills --target opencode
+command -v brew
+command -v cargo
 ```
 
-The installer protects locally modified or unrecognized ESDiag skill directories. A human may explicitly decide to replace one with `--force`. Running coding agents can require restart or reload before the skill appears.
+If either is available, ask whether the human wants a local binary. If both are
+available, ask which installer they prefer. After consent, install with the
+chosen method:
+
+```sh
+brew install elastic/tools/esdiag
+```
+
+```sh
+cargo install --locked esdiag
+```
+
+Confirm `esdiag --version`, then direct the human to run `esdiag init` in their
+terminal. Do not run the initializer for them.
+
+## Script-first container stack
+
+When neither installer is available, ask whether the human wants a
+containerized ESDiag stack. On approval, download and verify `esdiag-local`,
+then start the full stack:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+curl -fsSL https://github.com/elastic/esdiag/releases/latest/download/esdiag-local \
+  -o "$HOME/.local/bin/esdiag-local"
+curl -fsSL https://github.com/elastic/esdiag/releases/latest/download/esdiag-local.sha256 \
+  -o "$HOME/.local/bin/esdiag-local.sha256"
+chmod 755 "$HOME/.local/bin/esdiag-local"
+(
+  cd "$HOME/.local/bin"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum --check esdiag-local.sha256
+  else
+    shasum -a 256 -c esdiag-local.sha256
+  fi
+)
+"$HOME/.local/bin/esdiag-local" up --stack=full
+```
+
+This path needs Podman or Docker with Compose support. It provides the web UI
+and containerized ESDiag runtime; `esdiag init`, native commands, and core mode
+need a native binary.
+
+## Guardrails
+
+Keep credentials in the interactive wizard. Do not request passwords, API keys,
+or keystore values in chat, and do not write ESDiag state files manually.
+
+For a shared hosted `esdiag serve` service, use the administrator-provided URL.
+Install local tools only when the human also wants a local workflow.

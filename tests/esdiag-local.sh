@@ -4,7 +4,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 script="${root}/bin/esdiag-local"
-real_podman=$(command -v podman || true)
+real_runtime=$(command -v podman || command -v docker || true)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -18,7 +18,7 @@ assert_mode() {
 }
 digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
 run_local() {
-    PATH="$fake_bin:$PATH" ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
+    PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY=/nonexistent ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
         "$script" "$@"
 }
 
@@ -29,14 +29,25 @@ cat >"$fake_bin/podman" <<'EOF'
 printf '%s\n' "$*" >>"${FAKE_LOG}"
 if [[ "$1 $2" == "volume inspect" ]]; then [[ -f "${FAKE_VOLUMES}/$3" ]]; exit; fi
 if [[ "$1" == compose ]]; then
-  project=""; action=""
+  project=""; compose_file=""; action=""
   while [[ $# -gt 0 ]]; do
-    case "$1" in --project-name) project=$2; shift 2 ;; up|down|run|ps|logs|version) action=$1; shift; break ;; *) shift ;; esac
+    case "$1" in --project-name) project=$2; shift 2 ;; --file) compose_file=$2; shift 2 ;; up|down|run|ps|logs|version) action=$1; shift; break ;; *) shift ;; esac
   done
-  if [[ "$action" == up ]]; then touch "${FAKE_VOLUMES}/${project}_elasticsearch-data" "${FAKE_VOLUMES}/${project}_kibana-data" "${FAKE_VOLUMES}/${project}_esdiag-data"; fi
+  if [[ "$action" == up ]]; then
+    touch "${FAKE_VOLUMES}/${project}_elasticsearch-data" "${FAKE_VOLUMES}/${project}_kibana-data"
+    grep -q '^  esdiag:$' "$compose_file" && touch "${FAKE_VOLUMES}/${project}_esdiag-data"
+  fi
   if [[ "$action" == down && "$*" == *--volumes* ]]; then rm -f "${FAKE_VOLUMES}/${project}_elasticsearch-data" "${FAKE_VOLUMES}/${project}_kibana-data" "${FAKE_VOLUMES}/${project}_esdiag-data"; fi
 fi
 exit 0
+EOF
+cat >"$fake_bin/esdiag" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  --version) printf 'esdiag %s\n' "${FAKE_ESDIAG_VERSION:-0.17.0-SNAPSHOT}" ;;
+  setup) printf 'setup\n' >>"${FAKE_ESDIAG_LOG}" ;;
+  serve) printf 'serve %s\n' "$*" >>"${FAKE_ESDIAG_LOG}"; while :; do sleep 60; done ;;
+esac
 EOF
 cat >"$fake_bin/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -68,7 +79,7 @@ EOF
 done
 chmod +x "$fake_bin/"*
 
-export FAKE_LOG="$tmp/runtime.log" FAKE_VOLUMES="$tmp/volumes" FAKE_BUSY_PORT=none
+export FAKE_LOG="$tmp/runtime.log" FAKE_VOLUMES="$tmp/volumes" FAKE_BUSY_PORT=none FAKE_ESDIAG_LOG="$tmp/native-esdiag.log"
 export FAKE_CLIPBOARD="$tmp/clipboard" FAKE_UI_LOG="$tmp/ui.log"
 
 # Shell, help, platform adapters, and repository-independent execution.
@@ -105,6 +116,25 @@ assert_contains "$tmp/secure/compose.yml" '  esdiag-data:'
 [[ "$(grep -c "LOG_LEVEL: \${LOG_LEVEL}" "$tmp/secure/compose.yml")" == 2 ]] || fail 'log level is not passed to ESDiag services'
 assert_contains "$tmp/secure/.env" 'LOG_LEVEL=info'
 [[ "$(grep -c "image: \${ESDIAG_IMAGE}" "$tmp/secure/compose.yml")" == 2 ]] || fail 'setup/service image mismatch'
+
+# Matching native binaries select core mode, omit ESDiag containers, and own the web service.
+: >"$FAKE_LOG"; : >"$FAKE_ESDIAG_LOG"
+PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
+    "$script" up --runtime podman --state-dir "$tmp/core" --pull always --open-browser=false
+assert_contains "$tmp/core/.env" 'STACK_MODE=core'
+assert_not_contains "$tmp/core/compose.yml" '^  esdiag:'
+assert_not_contains "$tmp/core/compose.yml" 'esdiag-data:'
+assert_not_contains "$FAKE_LOG" 'esdiag/esdiag:'
+core_project_id=$(printf '%s' "$tmp/core" | cksum | cut -d' ' -f1)
+[[ ! -f "$tmp/volumes/esdiag-local-${core_project_id}_esdiag-data" ]] || fail 'core created ESDiag volume'
+assert_contains "$FAKE_ESDIAG_LOG" 'setup'
+assert_contains "$FAKE_ESDIAG_LOG" 'serve'
+PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" "$script" restart esdiag --runtime podman --state-dir "$tmp/core"
+PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" "$script" down --runtime podman --state-dir "$tmp/core"
+PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" "$script" reset --runtime podman --state-dir "$tmp/core" --force
+FAKE_ESDIAG_VERSION=0.0.0 PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" \
+    "$script" up --runtime podman --state-dir "$tmp/mismatched-core" --stack=core --pull never --open-browser=false 2>"$tmp/mismatched-core.err" && fail 'mismatched core binary was accepted'
+assert_contains "$tmp/mismatched-core.err" 'requires an ESDiag 0.17.0-SNAPSHOT binary'
 
 # Idempotence, status/auth/log secrecy, raw secrets, setup, down, and reset.
 password=$(sed -n 's/^ELASTIC_PASSWORD=//p' "$tmp/secure/.env")
@@ -174,7 +204,7 @@ sed -i.bak 's/^STATE_SCHEMA_VERSION=.*/STATE_SCHEMA_VERSION=1/' "$tmp/schema-one
 schema_one_project_id=$(printf '%s' "$tmp/schema-one" | cksum | cut -d' ' -f1)
 touch "$tmp/volumes/esdiag-local-${schema_one_project_id}_elasticsearch-data" "$tmp/volumes/esdiag-local-${schema_one_project_id}_kibana-data"
 run_local up --runtime podman --state-dir "$tmp/schema-one" --pull never --upgrade --open-browser=false
-assert_contains "$tmp/schema-one/.env" 'STATE_SCHEMA_VERSION=2'
+assert_contains "$tmp/schema-one/.env" 'STATE_SCHEMA_VERSION=3'
 [[ -f "$tmp/volumes/esdiag-local-${schema_one_project_id}_esdiag-data" ]] || fail 'schema migration did not add ESDiag volume'
 rm -f "$tmp/volumes/esdiag-local-${schema_one_project_id}_esdiag-data"
 run_local up --runtime podman --state-dir "$tmp/schema-one" --pull never --open-browser=false
@@ -188,11 +218,11 @@ run_local up --runtime podman --state-dir "$tmp/overrides" --pull never --upgrad
 
 # Clipboard ordering and opt-out.
 : >"$tmp/clipboard"; : >"$tmp/ui.log"
-PATH="$fake_bin:$PATH" ESDIAG_TEST_OS=Darwin ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
+PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY=/nonexistent ESDIAG_TEST_OS=Darwin ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
     "$script" up --runtime podman --state-dir "$tmp/clipboard-state" --pull never --open-browser=true
 [[ -s "$tmp/clipboard" ]] || fail 'password was not copied'
 : >"$tmp/clipboard"
-PATH="$fake_bin:$PATH" ESDIAG_TEST_OS=Darwin ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
+PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY=/nonexistent ESDIAG_TEST_OS=Darwin ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
     "$script" up --runtime podman --state-dir "$tmp/clipboard-state" --pull never --open-browser=true --copy-password=false
 [[ ! -s "$tmp/clipboard" ]] || fail 'password copied despite opt-out'
 
@@ -233,8 +263,12 @@ if bash -c 'source "$1" update' _ "$install_dir/esdiag-local" >/dev/null 2>"$tmp
 [[ "$repo_hash" == "$(digest "$script")" ]] || fail 'repository script changed'
 
 if [[ "${ESDIAG_TEST_COMPOSE_VALIDATE:-false}" == true ]]; then
-    [[ -n "$real_podman" ]] || fail 'real Podman is unavailable for Compose validation'
-    "$real_podman" compose --project-name esdiag-local-test --env-file "$tmp/overrides/.env" --file "$tmp/overrides/compose.yml" config >/dev/null
+    [[ -n "$real_runtime" ]] || fail 'real Podman or Docker is unavailable for Compose validation'
+    "$real_runtime" compose --project-name esdiag-local-full-test --env-file "$tmp/overrides/.env" --file "$tmp/overrides/compose.yml" config >/dev/null
+    PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
+        "$script" up --runtime podman --state-dir "$tmp/compose-core" --stack=core --pull never --open-browser=false
+    "$real_runtime" compose --project-name esdiag-local-core-test --env-file "$tmp/compose-core/.env" --file "$tmp/compose-core/compose.yml" config >/dev/null
+    PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" "$script" reset --runtime podman --state-dir "$tmp/compose-core" --force
 fi
 
 printf 'esdiag-local tests passed\n'

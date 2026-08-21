@@ -11,6 +11,7 @@ use std::fs;
 
 fn main() {
     println!("cargo:rerun-if-changed=assets");
+    println!("cargo:rerun-if-changed=bin/esdiag-local");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=about.hbs");
@@ -20,6 +21,7 @@ fn main() {
     if setup_feature_enabled() {
         build_kibana_assets_bundle();
     }
+    build_local_launcher();
 
     let notice_path = Path::new("NOTICE.txt");
     let sbom_path = Path::new("esdiag.spdx.json");
@@ -106,6 +108,20 @@ fn main() {
         )
         .expect("failed to build desktop Tauri context");
     }
+}
+
+fn build_local_launcher() {
+    let out_dir = env::var("OUT_DIR").expect("missing OUT_DIR");
+    let version = env::var("CARGO_PKG_VERSION").expect("missing CARGO_PKG_VERSION");
+    let source = std::fs::read_to_string("bin/esdiag-local").expect("failed to read local launcher");
+    let marker = "readonly ESDIAG_VERSION=\"";
+    let start = source.find(marker).expect("local launcher is missing ESDIAG_VERSION") + marker.len();
+    let end = source[start..]
+        .find('"')
+        .map(|offset| start + offset)
+        .expect("local launcher ESDIAG_VERSION is unterminated");
+    let rendered = format!("{}{}{}", &source[..start], version, &source[end..]);
+    std::fs::write(Path::new(&out_dir).join("esdiag-local"), rendered).expect("failed to render local launcher");
 }
 
 fn build_kibana_assets_bundle() {

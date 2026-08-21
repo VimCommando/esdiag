@@ -1,83 +1,92 @@
 ---
 type: Maintainer Guide
-title: "Collection-definition reconciliation"
+title: Collection definition reconciliation
 tags: [repository, reconciliation]
 ---
 
-# Collection-definition reconciliation
+# Collection definition reconciliation
 
-ESDiag owns its per-product collection definitions
-(`assets/<product>/sources.yml`); [`support-diagnostics`](https://github.com/elastic/support-diagnostics)
-is a **reconciliation input**, not a runtime authority (ADR-0006). The
-genuinely valuable upstream asset is its per-version compatibility knowledge,
-plus the OS-command catalogue that will matter once ESDiag has command-source
-collection. We reconcile the supported inputs without mirroring upstream shape
-or content verbatim.
+ESDiag owns `assets/<product>/sources.yml`. It reads
+[`support-diagnostics`](https://github.com/elastic/support-diagnostics) to
+update version support and request details. It does not load upstream files at
+runtime. ADR-0006 explains why.
 
-## How
+## Run the reconciler
+
+Check for drift:
 
 ```sh
-# report drift (CI-friendly, non-zero exit on changes)
-cargo run --bin reconcile-sources -- --support-diagnostics ../support-diagnostics --check
-
-# apply the overlay
-cargo run --bin reconcile-sources -- --support-diagnostics ../support-diagnostics
+cargo run --bin reconcile-sources -- \
+  --support-diagnostics ../support-diagnostics --check
 ```
 
-The overlay is a **field-level merge**:
+Apply the upstream fields:
 
-| owner | fields |
+```sh
+cargo run --bin reconcile-sources -- \
+  --support-diagnostics ../support-diagnostics
+```
+
+Run `cargo test` afterward. The tests validate source keys, version ranges, and
+required fields.
+
+## What the tool changes
+
+The tool updates these fields from upstream:
+
+| Field | Source |
 |---|---|
-| upstream (refreshed) | `versions`, `extension`, `subdir`, `retry` |
-| ESDiag (preserved) | `tags`, `source_weight`, `processing_weight`, `streamable`, `processable`, `required`, `dependencies`, `collect_dependencies` |
+| `versions` | Upstream compatibility range |
+| `extension` | Upstream request suffix |
+| `subdir` | Upstream bundle path |
+| `retry` | Upstream retry setting |
 
-The expected upstream layout has been verified against
-`elastic/support-diagnostics`:
+It keeps ESDiag-owned fields:
 
-| product/input | upstream path |
+```text
+tags
+source_weight
+processing_weight
+streamable
+processable
+required
+dependencies
+collect_dependencies
+```
+
+The reconciler reads these upstream files:
+
+| Product or input | Path |
 |---|---|
 | Elasticsearch REST APIs | `src/main/resources/elastic-rest.yml` |
 | Kibana REST APIs | `src/main/resources/kibana-rest.yml` |
 | Logstash REST APIs | `src/main/resources/logstash-rest.yml` |
-| OS-command catalog | `src/main/resources/diags.yml` |
+| OS commands | `src/main/resources/diags.yml` |
 
-Today the reconciliation tool overlays the REST API files. It verifies `diags.yml` is present
-so upstream layout drift is visible, but it does not merge OS-command entries
-until ESDiag has a command-source transport model; adding those entries to the
-HTTP registry now would make broad collection modes try to collect shell
-commands as REST paths.
+It updates the three REST API files. It only checks that `diags.yml` exists.
+ESDiag does not collect shell commands yet, so merging them into the HTTP
+registry would make normal collection try to call shell commands as REST paths.
 
-Upstream-backed REST sources are tagged during reconciliation so ESDiag bundles
-stay compatible with support-diagnostics coverage. Elasticsearch and Logstash
-sources default to `support`; Kibana sources default to `standard,light,support`
-so Kibana standard/light collection remains full-catalog until curated subsets
-exist.
+The tool adds collection tags for upstream REST sources:
 
-Upstream semver4j/NPM-dialect ranges are normalized into native Rust `semver`
-form at this boundary, so the runtime resolves versions with stock
-`semver::VersionReq` — there is no runtime compatibility shim.
+- Elasticsearch and Logstash default to `support`.
+- Kibana defaults to `standard,light,support`.
 
-Deliberate divergences (renames such as `internal_health` → `health_report`,
-removals, ESDiag-only sources) are recorded in
-`assets/<product>/sources-divergences.yml` and are never reverted by the
-tool.
+It converts upstream semver4j and NPM-style ranges to Rust `semver` ranges.
+The runtime then uses `semver::VersionReq` directly.
 
-After applying, run `cargo test` — the registry is validated at startup and in
-tests (key alignment, native-semver ranges, required keys).
+## Intentional differences
 
-## Cadence and ownership
+Keep deliberate differences in
+`assets/<product>/sources-divergences.yml`. Examples include renamed endpoints,
+removed upstream sources, and ESDiag-only sources. The reconciler does not
+overwrite that file.
 
-Reconciliation is a required, recurring discipline (ADR-0006), performed on:
+## When to run it
 
-- **every application release** — a new Elasticsearch / Kibana / Logstash
-  version can add or change endpoints and their version gating;
-- **every support-diagnostics release** — upstream may revise definitions or
-  OS commands.
+Run the drift check for every ESDiag release and every
+support-diagnostics release. New product versions can change endpoints or
+version ranges. If nobody runs the check, those changes stay unnoticed.
 
-Without this cadence, version gating silently goes stale (new endpoints
-missed, changed queries not updated) — the primary risk the
-own-and-reconcile posture accepts.
-
-**Owner:** ESDiag maintainers. The release DRI for each Elasticsearch, Kibana,
-Logstash, or support-diagnostics release owns running `--check` until this is
-backed by CI or a scheduled reminder tied to both release cadences.
+The ESDiag release owner runs the check until CI or a scheduled reminder takes
+over.

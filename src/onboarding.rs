@@ -5,8 +5,8 @@
 //! Flow-neutral operations used by terminal and future GUI onboarding.
 
 use crate::data::{
-    Application, ApplicationConfig, HostRole, Job, JobOutput, KnownHost, KnownHostBuilder, SavedJobs, SecretAuth,
-    keystore_exists, save_saved_jobs, upsert_secret_auth,
+    Application, ApplicationConfig, HostRole, Job, JobOutput, KnownHost, KnownHostBuilder, OnboardingWorkflow,
+    SavedJobs, SecretAuth, keystore_exists, save_saved_jobs, upsert_secret_auth,
 };
 use eyre::{Result, eyre};
 use url::Url;
@@ -15,6 +15,7 @@ use url::Url;
 pub struct OnboardingReadiness {
     pub user_configured: bool,
     pub keystore_ready: bool,
+    pub workflow: Option<OnboardingWorkflow>,
     pub output_configured: bool,
     pub collect_host_configured: bool,
     pub default_job_configured: bool,
@@ -22,7 +23,15 @@ pub struct OnboardingReadiness {
 
 impl OnboardingReadiness {
     pub fn is_complete(&self) -> bool {
-        self.user_configured && self.collect_host_configured && self.default_job_configured
+        self.user_configured
+            && match self.workflow {
+                Some(OnboardingWorkflow::CollectOnly) => self.collect_host_configured && self.default_job_configured,
+                Some(OnboardingWorkflow::ProcessExisting) => self.output_configured,
+                Some(OnboardingWorkflow::CollectAndProcess) => {
+                    self.output_configured && self.collect_host_configured && self.default_job_configured
+                }
+                None => false,
+            }
     }
 }
 
@@ -61,6 +70,7 @@ pub fn inspect() -> Result<OnboardingReadiness> {
     Ok(OnboardingReadiness {
         user_configured: config.user.as_deref().is_some_and(|user| !user.trim().is_empty()),
         keystore_ready: keystore_exists()?,
+        workflow: config.workflow,
         output_configured,
         collect_host_configured,
         default_job_configured,
@@ -74,6 +84,13 @@ pub fn save_user(user: String) -> Result<ApplicationConfig> {
     }
     let mut config = ApplicationConfig::load()?;
     config.user = Some(user.to_string());
+    config.save()?;
+    Ok(config)
+}
+
+pub fn save_workflow(workflow: OnboardingWorkflow) -> Result<ApplicationConfig> {
+    let mut config = ApplicationConfig::load()?;
+    config.workflow = Some(workflow);
     config.save()?;
     Ok(config)
 }
@@ -197,12 +214,12 @@ fn validate_name(name: &str, kind: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CollectHostInput, OnboardingReadiness, OutputDeploymentInput, inspect, save_collect_host,
-        save_default_processing_job, save_output_deployment, save_user,
+        CollectHostInput, OnboardingReadiness, OutputDeploymentInput, inspect, save_collect_host, save_default_job,
+        save_default_processing_job, save_output_deployment, save_user, save_workflow,
     };
     use crate::data::{
-        Application, ApplicationConfig, HostRole, KnownHost, KnownHostBuilder, SecretAuth, create_keystore,
-        resolve_secret_auth, upsert_secret_auth,
+        Application, ApplicationConfig, HostRole, Job, KnownHost, KnownHostBuilder, OnboardingWorkflow, SecretAuth,
+        create_keystore, resolve_secret_auth, upsert_secret_auth,
     };
     use std::collections::BTreeMap;
     use url::Url;
@@ -276,9 +293,82 @@ mod tests {
         assert!(!inspect().expect("partial readiness").is_complete());
 
         save_user("operator@example.com".to_string()).expect("save user");
+        save_workflow(OnboardingWorkflow::CollectAndProcess).expect("save workflow");
         save_default_processing_job("default".to_string(), "collect-es".to_string()).expect("save default job");
 
         assert!(inspect().expect("completed readiness").is_complete());
+    }
+
+    #[test]
+    fn readiness_matches_the_selected_workflow() {
+        let _env = crate::TestEnv::new();
+        save_user("operator@example.com".to_string()).expect("save user");
+
+        save_workflow(OnboardingWorkflow::ProcessExisting).expect("save process-existing workflow");
+        assert!(!inspect().expect("missing output").is_complete());
+
+        create_keystore("pw").expect("create keystore");
+        save_output_deployment(
+            OutputDeploymentInput {
+                output_name: "output-es".to_string(),
+                output_url: Url::parse("https://es.example:9200").expect("url"),
+                viewer_name: "output-kibana".to_string(),
+                viewer_url: Url::parse("https://kb.example:5601").expect("url"),
+                secret_id: "output-auth".to_string(),
+                auth: SecretAuth::apikey("secret"),
+            },
+            "pw",
+        )
+        .expect("save output");
+        assert!(inspect().expect("process-existing readiness").is_complete());
+
+        save_workflow(OnboardingWorkflow::CollectAndProcess).expect("save collect-and-process workflow");
+        assert!(!inspect().expect("missing collection readiness").is_complete());
+
+        save_collect_host(
+            CollectHostInput {
+                name: "collect-es".to_string(),
+                app: Application::Elasticsearch,
+                url: Url::parse("https://collect.example:9200").expect("url"),
+                secret_id: None,
+                auth: None,
+            },
+            None,
+        )
+        .expect("save collect host");
+        save_default_processing_job("default".to_string(), "collect-es".to_string()).expect("save default job");
+        assert!(inspect().expect("collect-and-process readiness").is_complete());
+    }
+
+    #[test]
+    fn collect_only_readiness_does_not_require_an_output() {
+        let _env = crate::TestEnv::new();
+        save_user("operator@example.com".to_string()).expect("save user");
+        save_workflow(OnboardingWorkflow::CollectOnly).expect("save collect-only workflow");
+        save_collect_host(
+            CollectHostInput {
+                name: "collect-es".to_string(),
+                app: Application::Elasticsearch,
+                url: Url::parse("https://collect.example:9200").expect("url"),
+                secret_id: None,
+                auth: None,
+            },
+            None,
+        )
+        .expect("save collect host");
+        save_default_job(
+            "default".to_string(),
+            Job::builder()
+                .collect_from("collect-es".to_string())
+                .expect("collect source")
+                .collect_to("diagnostics/collect-es".to_string())
+                .expect("collect destination"),
+        )
+        .expect("save default job");
+
+        let readiness = inspect().expect("collect-only readiness");
+        assert!(!readiness.output_configured);
+        assert!(readiness.is_complete());
     }
 
     #[test]

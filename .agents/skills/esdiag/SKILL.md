@@ -5,25 +5,17 @@ description: Collect, process, or analyze Elasticsearch, Kibana, and Logstash di
 
 # ESDiag
 
-Use native `esdiag` commands. Do not call helper scripts, `curl`, `jq`, or another executable to configure or analyze ESDiag.
+Use `esdiag` for diagnostic work. When it is unavailable, read
+`references/onboarding.md` before suggesting setup.
 
 ## First-time setup
 
-First-run configuration, including secrets, belongs to a human at an interactive terminal:
+Read `references/onboarding.md` when `esdiag` is missing or a user needs
+first-run setup. It covers native installation, the script-first container
+fallback, and the boundary around `esdiag init`.
 
-```sh
-esdiag init
-```
-
-Do not ask a user to paste API keys or passwords into this conversation, write ESDiag state files manually, or reconstruct the initialization workflow. See `references/onboarding.md` when configuration is missing.
-
-Install this skill from any ESDiag binary without a source checkout:
-
-```sh
-esdiag agent skills
-```
-
-Use `esdiag agent skills --target claude`, `--target codex`, or `--target opencode` when automatic detection does not find the intended coding agent. Installation is user-scoped and may require an agent restart or reload.
+Keep credentials in the interactive wizard. Do not write ESDiag state files in
+an agent conversation.
 
 ## Check local prerequisites
 

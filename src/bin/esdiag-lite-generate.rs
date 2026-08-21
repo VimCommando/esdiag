@@ -396,9 +396,9 @@ fn render_powershell_source(name: &str, output_path: &str, rules: &[Rule]) -> Re
     Ok(result)
 }
 
-fn lite_source_names<'a>(
-    sources: &'a std::collections::HashMap<String, esdiag::processor::diagnostic::data_source::Source>,
-) -> Result<Vec<&'a String>> {
+fn lite_source_names(
+    sources: &std::collections::HashMap<String, esdiag::processor::diagnostic::data_source::Source>,
+) -> Result<Vec<&String>> {
     let mut names: Vec<&String> = sources
         .iter()
         .filter_map(|(name, source)| source.has_tag("lite").then_some(name))
@@ -428,7 +428,7 @@ fn source_rules(name: &str, source: &esdiag::processor::diagnostic::data_source:
 fn render_bash() -> Result<String> {
     let sources =
         get_product_sources("elasticsearch").ok_or_else(|| eyre!("embedded Elasticsearch sources are unavailable"))?;
-    let names = lite_source_names(&sources)?;
+    let names = lite_source_names(sources)?;
 
     let mut output = String::new();
     writeln!(
@@ -472,7 +472,7 @@ fn render_bash() -> Result<String> {
 fn render_powershell() -> Result<String> {
     let sources =
         get_product_sources("elasticsearch").ok_or_else(|| eyre!("embedded Elasticsearch sources are unavailable"))?;
-    let names = lite_source_names(&sources)?;
+    let names = lite_source_names(sources)?;
     let mut output = String::new();
     writeln!(
         output,

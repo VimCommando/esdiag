@@ -12,6 +12,7 @@ Commands:
   serve
   host
   init
+  local
   keystore
   agent
   process
@@ -141,6 +142,19 @@ Common collection/report flags:
 - Run `esdiag init` locally in an interactive terminal to configure a persistent diagnostic user, encrypted keystore, linked output deployment, collect host, and default saved job.
 - The wizard may offer to install the embedded ESDiag coding-agent skill after core configuration is valid.
 - It does not accept credentials through ordinary stdin and does not require an agent conversation.
+
+## `local`
+
+- `esdiag local <command>` manages a local Elasticsearch, Kibana, and ESDiag
+  deployment through the running binary's embedded version-matched launcher.
+- `esdiag local up --stack=auto|core|full` selects a retained stack mode. Core
+  mode uses the native binary's managed `serve --mode user` process; full mode
+  uses the ESDiag container.
+- `esdiag local open` opens the local web UI without restarting the stack.
+- `esdiag-local up --stack=full` is the script-first path when no native binary
+  is available. It requires Podman or Docker with Compose support.
+- `esdiag local update` is intentionally unavailable. Update the ESDiag binary
+  through its installation channel instead.
 
 ## `agent ask`
 
