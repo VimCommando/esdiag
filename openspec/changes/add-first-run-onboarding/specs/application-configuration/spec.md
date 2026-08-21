@@ -1,15 +1,29 @@
 ## ADDED Requirements
 
 ### Requirement: General Application Configuration
-The system SHALL persist local non-secret preferences in a versioned `~/.esdiag/esdiag.yml` file. The configuration SHALL contain `user`, an `output` section with `default`, `authenticated_on`, and `assets_version` when applicable, and a `job` section with `default` when configured. `output.default` SHALL be the output-host reference, and `job.default` SHALL be the default saved-job reference. The configuration MUST NOT contain endpoint credentials, decrypted secrets, authorization headers, or embedded host and job definitions.
+The system SHALL persist local non-secret preferences in a versioned
+`~/.esdiag/esdiag.yml` file. The configuration SHALL contain `user`, the
+selected initialization `workflow`, an `output` section with `default`,
+`authenticated_on`, and `assets_version` when applicable, and a `job` section
+with `default` when configured. `output.default` SHALL be the output-host
+reference, and `job.default` SHALL be the default saved-job reference. The
+configuration MUST NOT contain endpoint credentials, decrypted secrets,
+authorization headers, or embedded host and job definitions.
 
 #### Scenario: Configuration contains references only
 - **GIVEN** initialization configured an output deployment and default saved job
 - **WHEN** `esdiag.yml` is serialized
-- **THEN** it contains the output host name at `output.default` and default job name at `job.default`
+- **THEN** it contains the selected workflow and, when configured, the output
+  host name at `output.default` and default job name at `job.default`
 - **AND** successful endpoint authentication and asset setup are recorded, when applicable, at `output.authenticated_on` and `output.assets_version`
 - **AND** the referenced host and job bodies remain in `hosts.yml` and `jobs.yml`
 - **AND** credential material remains only in `secrets.yml`
+
+#### Scenario: Existing configuration has no workflow
+- **GIVEN** an existing version-one `esdiag.yml` has no workflow field
+- **WHEN** the running application loads the configuration
+- **THEN** it remains readable
+- **AND** initialization requests workflow selection before claiming readiness
 
 #### Scenario: Unknown configuration version is rejected
 - **GIVEN** `esdiag.yml` declares a schema version newer than the running binary supports

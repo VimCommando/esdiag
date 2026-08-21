@@ -1,19 +1,38 @@
 ## ADDED Requirements
 
 ### Requirement: Interactive First-Run Workflow
-The CLI SHALL provide `esdiag init` as an interactive staged workflow covering default user identity, keystore creation or unlock, output deployment configuration, the first collect host, optional additional collect hosts, and the first saved job. The workflow SHALL use in-process domain APIs and MUST NOT invoke another `esdiag` process or an external helper executable.
+The CLI SHALL provide `esdiag init` as an interactive staged workflow. It SHALL
+first determine whether the user will process diagnostics or only collect them.
+Processing workflows SHALL then determine whether the user will collect new
+diagnostics, process existing diagnostics, or do both. The workflow SHALL
+configure only the identity, keystore, output deployment, collect host, and
+default job stages required by that selection.
 
-#### Scenario: New user completes initialization
+The workflow SHALL use in-process domain APIs and MUST NOT invoke another
+unrelated `esdiag` process or arbitrary external helper executable. It MAY
+dispatch the binary-owned embedded local-stack launcher and its same-version
+managed native web-service child only to start a user-approved local core
+deployment for a local processing workflow.
+
+#### Scenario: User initializes collection-only workflow
 - **GIVEN** no ESDiag local state exists
-- **WHEN** the user completes `esdiag init`
-- **THEN** a keystore, linked output hosts, at least one collect host, a default saved job, and `esdiag.yml` are persisted
-- **AND** the final result identifies the configured references without exposing credentials
+- **WHEN** the user selects only collecting diagnostics and completes `esdiag init`
+- **THEN** a collect host, default collection job, and `esdiag.yml` are persisted
+- **AND** no output deployment or output asset setup is requested
 
-#### Scenario: User adds multiple collection hosts
-- **WHEN** the first collect host has been saved and the user elects to add another
-- **THEN** initialization repeats the collect-host stage
-- **AND** each accepted host is validated and saved independently
-- **AND** the user can finish the loop without adding another host
+#### Scenario: User initializes existing-diagnostic processing
+- **GIVEN** no ESDiag local state exists
+- **WHEN** the user selects processing existing diagnostics and completes
+  `esdiag init`
+- **THEN** a keystore, linked output hosts, and `esdiag.yml` are persisted
+- **AND** no collect host or default saved job is requested
+
+#### Scenario: User initializes collection and processing
+- **GIVEN** no ESDiag local state exists
+- **WHEN** the user selects collecting and processing diagnostics
+- **THEN** a keystore, linked output hosts, a collect host, a default
+  collect-and-process job, and `esdiag.yml` are persisted
+- **AND** the final result identifies the configured references without exposing credentials
 
 ### Requirement: Initialization Is Resumable And Non-Destructive
 Initialization SHALL inspect existing state before each stage, reuse valid completed state by default, and require explicit confirmation before replacing a configured user preference, host, secret, or saved job. It SHALL persist only validated domain values and SHALL write each applicable `esdiag.yml` field after its corresponding stage validates. Initialization readiness SHALL be derived from validated configuration references and referenced domain state, not from configuration-file existence alone.
@@ -76,8 +95,12 @@ Initialization SHALL inspect whether the configured output deployment has the ES
 - **THEN** the configured endpoints remain saved
 - **AND** initialization reports that processing or Agent Builder use is not yet ready
 
-### Requirement: First Saved Job Produces A Repeatable Workflow
-Initialization SHALL create or select a valid first saved job after at least one collect host and an output deployment are configured. The default processing-job path SHALL use the configured collect host and output send host so a run indexes a diagnostic; an explicitly selected collect-only job SHALL remain supported.
+### Requirement: Required Saved Job Matches Workflow
+Initialization SHALL create a valid default saved job only for workflows that
+collect diagnostics. A collect-and-process job SHALL use the configured collect
+host and output send host so a run indexes a diagnostic. A collection-only job
+SHALL remain supported. Processing existing diagnostics SHALL not require a
+saved job.
 
 #### Scenario: Default processing job is created
 - **WHEN** the user accepts the default job shape
@@ -86,7 +109,12 @@ Initialization SHALL create or select a valid first saved job after at least one
 - **AND** its name becomes `job.default` in `esdiag.yml`
 
 #### Scenario: Collect-only job is explicit
-- **WHEN** the user selects a collect-only first job
+- **WHEN** the user selects a collection-only workflow
 - **THEN** initialization identifies that the job produces an archive rather than indexed diagnostic data
-- **AND** persists it only after explicit confirmation
+- **AND** persists it as the default job
+
+#### Scenario: Existing diagnostic processing has no default job
+- **WHEN** the user selects processing existing diagnostics
+- **THEN** initialization completes after the output deployment is configured
+- **AND** no default job reference is persisted
 
