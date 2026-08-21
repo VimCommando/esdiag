@@ -680,7 +680,11 @@ fn command_owns_stdout(cli: &Cli) -> bool {
     let local_raw_stdout = matches!(
         &cli.command,
         Some(Commands::Local { args })
-            if matches!(args.first().and_then(|argument| argument.to_str()), Some("help" | "version" | "secrets"))
+            if args
+                .first()
+                .and_then(|argument| argument.to_str())
+                .map(|command| matches!(command, "help" | "version" | "secrets"))
+                .unwrap_or(true)
     );
     direct_process_stream || saved_job_stream || local_raw_stdout
 }
@@ -718,17 +722,21 @@ fn run_local_launcher(args: Vec<OsString>) -> Result<CommandResult> {
     launcher
         .write_all(esdiag::embeds::LOCAL_STACK_LAUNCHER)
         .wrap_err("failed to write the embedded local launcher")?;
+    launcher
+        .sync_all()
+        .wrap_err("failed to sync the temporary local launcher")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
             .wrap_err("failed to secure the temporary local launcher")?;
     }
+    drop(launcher);
 
     let mut command_process = Command::new("bash");
     command_process
         .arg(&path)
-        .args(args)
+        .args(&args)
         .env("ESDIAG_LOCAL_BINARY", executable)
         .stdin(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -759,7 +767,7 @@ fn run_local_launcher(args: Vec<OsString>) -> Result<CommandResult> {
     if raw_stdout {
         return Ok(CommandResult::stream());
     }
-    Ok(CommandResult::outcome(local_stack_outcome(command)))
+    Ok(CommandResult::outcome(local_stack_outcome(command, &args)))
 }
 
 fn classify_failure(error: &eyre::Report) -> CliFailureCategory {
@@ -2513,9 +2521,21 @@ struct EsdiagLocalPreset {
     apikey: Option<String>,
 }
 
-fn local_stack_outcome(command: String) -> CliOutcome {
-    let state_dir = std::env::var_os("ESDIAG_LOCAL_DIR")
-        .map(PathBuf::from)
+fn local_stack_outcome(command: String, args: &[OsString]) -> CliOutcome {
+    let state_dir = args
+        .iter()
+        .enumerate()
+        .find_map(|(index, argument)| {
+            if argument == "--state-dir" {
+                args.get(index + 1).cloned().map(PathBuf::from)
+            } else {
+                argument
+                    .to_str()
+                    .and_then(|argument| argument.strip_prefix("--state-dir="))
+                    .map(PathBuf::from)
+            }
+        })
+        .or_else(|| std::env::var_os("ESDIAG_LOCAL_DIR").map(PathBuf::from))
         .or_else(default_esdiag_local_state_dir);
     let values = state_dir
         .and_then(|dir| std::fs::read_to_string(dir.join(".env")).ok())
@@ -3506,6 +3526,12 @@ mod tests {
         }
     }
 
+    #[test]
+    fn local_help_stdout_is_not_replaced_with_a_terminal_outcome() {
+        let cli = Cli::parse_from(["esdiag", "local"]);
+        assert!(command_owns_stdout(&cli));
+    }
+
     #[cfg(feature = "keystore")]
     #[test]
     fn saved_job_stdout_is_not_replaced_with_a_terminal_outcome() {
@@ -3615,11 +3641,35 @@ mod tests {
         assert_eq!(preset.elasticsearch_url, "http://localhost:19200");
         assert_eq!(preset.kibana_url, "http://localhost:15601");
         assert_eq!(preset.apikey.as_deref(), Some("local-key"));
-        let outcome =
-            serde_json::to_string(&local_stack_outcome("status".to_string())).expect("serialize local outcome");
+        let outcome = serde_json::to_string(&local_stack_outcome("status".to_string(), &[OsString::from("status")]))
+            .expect("serialize local outcome");
         assert!(outcome.contains("\"mode\":\"core\""));
         assert!(outcome.contains("http://127.0.0.1:12501"));
         assert!(!outcome.contains("local-key"));
+
+        let forwarded_state = TempDir::new().expect("temporary forwarded local state");
+        std::fs::write(
+            forwarded_state.path().join(".env"),
+            "STACK_MODE=full\nESDIAG_PORT=22501\nESDIAG_KIBANA_PORT=25601\n",
+        )
+        .expect("write forwarded local state");
+        for args in [
+            vec![
+                OsString::from("status"),
+                OsString::from("--state-dir"),
+                forwarded_state.path().as_os_str().to_os_string(),
+            ],
+            vec![
+                OsString::from("status"),
+                OsString::from(format!("--state-dir={}", forwarded_state.path().display())),
+            ],
+        ] {
+            let outcome = serde_json::to_string(&local_stack_outcome("status".to_string(), &args))
+                .expect("serialize forwarded local outcome");
+            assert!(outcome.contains("\"mode\":\"full\""));
+            assert!(outcome.contains("http://127.0.0.1:22501"));
+            assert!(outcome.contains("http://127.0.0.1:25601"));
+        }
 
         std::fs::write(state.path().join(".env"), "STACK_MODE=unknown\n").expect("write unsupported state");
         assert!(detected_esdiag_local_preset().is_none());
