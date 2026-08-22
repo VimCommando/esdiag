@@ -537,13 +537,13 @@ get_api_ilm_policies() {
   fi
 }
 
-get_api_settings() {
+get_api_indices_settings() {
   if version_at_least 0 9 0 && version_less_than 7 7 0; then
-    get_api "/_settings?human" "settings.json"
+    get_api "/_settings?human" "indices_settings.json"
   elif version_at_least 7 7 0; then
-    get_api "/_settings?human&expand_wildcards=all" "settings.json"
+    get_api "/_settings?human&expand_wildcards=all" "indices_settings.json"
   else
-    skip_api "settings"
+    skip_api "indices_settings"
   fi
 }
 
@@ -623,7 +623,7 @@ collect_lite_apis() {
   get_api_data_stream || status=1
   get_api_ilm_explain || status=1
   get_api_ilm_policies || status=1
-  get_api_settings || status=1
+  get_api_indices_settings || status=1
   get_api_indices_stats || status=1
   get_api_licenses || status=1
   get_api_nodes || status=1

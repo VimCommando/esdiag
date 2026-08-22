@@ -8,6 +8,9 @@ ESDiag persists hosts, secrets, and jobs, but a newly installed CLI user must di
 - Capture a default user name or email for diagnostic `Identifiers` when `--user` and `ESDIAG_USER` are absent.
 - Create or unlock the encrypted keystore through terminal-native secret prompts that do not expose credentials to an agent conversation or structured output.
 - Configure and validate the diagnostic output deployment as one Elasticsearch send host linked to one Kibana view host, sharing one keystore secret when their authentication is the same.
+- Treat user approval to provision a new local core stack as approval for that
+  lifecycle's required ESDiag assets; retain a separate asset-installation
+  confirmation for existing local and remote output deployments.
 - Create the first collect host, optionally add more collect hosts, and configure the first saved collection or processing job.
 - Introduce `~/.esdiag/esdiag.yml` as the general non-secret application configuration containing preference values and references such as the default user, output host, and saved job.
 - Keep `ESDIAG_OUTPUT_*` and `ESDIAG_KIBANA_URL` as runtime/deployment overrides for the same output deployment, with shared output credentials, rather than creating analysis-specific URL or credential variables.

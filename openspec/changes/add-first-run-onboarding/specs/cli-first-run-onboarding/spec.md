@@ -1,19 +1,38 @@
 ## ADDED Requirements
 
 ### Requirement: Interactive First-Run Workflow
-The CLI SHALL provide `esdiag init` as an interactive staged workflow covering default user identity, keystore creation or unlock, output deployment configuration, the first collect host, optional additional collect hosts, and the first saved job. The workflow SHALL use in-process domain APIs and MUST NOT invoke another `esdiag` process or an external helper executable.
+The CLI SHALL provide `esdiag init` as an interactive staged workflow. It SHALL
+first determine whether the user will process diagnostics or only collect them.
+Processing workflows SHALL then determine whether the user will collect new
+diagnostics, process existing diagnostics, or do both. The workflow SHALL
+configure only the identity, keystore, output deployment, collect host, and
+default job stages required by that selection.
 
-#### Scenario: New user completes initialization
+The workflow SHALL use in-process domain APIs and MUST NOT invoke an unrelated
+ESDiag executable, the standalone `esdiag-local` script, or arbitrary external
+helper executable. It MAY invoke the binary-owned Rust local-stack lifecycle
+and its managed native web-service child only to start a user-approved local
+core deployment for a local processing workflow.
+
+#### Scenario: User initializes collection-only workflow
 - **GIVEN** no ESDiag local state exists
-- **WHEN** the user completes `esdiag init`
-- **THEN** a keystore, linked output hosts, at least one collect host, a default saved job, and `esdiag.yml` are persisted
-- **AND** the final result identifies the configured references without exposing credentials
+- **WHEN** the user selects only collecting diagnostics and completes `esdiag init`
+- **THEN** a collect host, default collection job, and `esdiag.yml` are persisted
+- **AND** no output deployment or output asset setup is requested
 
-#### Scenario: User adds multiple collection hosts
-- **WHEN** the first collect host has been saved and the user elects to add another
-- **THEN** initialization repeats the collect-host stage
-- **AND** each accepted host is validated and saved independently
-- **AND** the user can finish the loop without adding another host
+#### Scenario: User initializes existing-diagnostic processing
+- **GIVEN** no ESDiag local state exists
+- **WHEN** the user selects processing existing diagnostics and completes
+  `esdiag init`
+- **THEN** a keystore, linked output hosts, and `esdiag.yml` are persisted
+- **AND** no collect host or default saved job is requested
+
+#### Scenario: User initializes collection and processing
+- **GIVEN** no ESDiag local state exists
+- **WHEN** the user selects collecting and processing diagnostics
+- **THEN** a keystore, linked output hosts, a collect host, a default
+  collect-and-process job, and `esdiag.yml` are persisted
+- **AND** the final result identifies the configured references without exposing credentials
 
 ### Requirement: Initialization Is Resumable And Non-Destructive
 Initialization SHALL inspect existing state before each stage, reuse valid completed state by default, and require explicit confirmation before replacing a configured user preference, host, secret, or saved job. It SHALL persist only validated domain values and SHALL write each applicable `esdiag.yml` field after its corresponding stage validates. Initialization readiness SHALL be derived from validated configuration references and referenced domain state, not from configuration-file existence alone.
@@ -61,23 +80,43 @@ The output stage SHALL create or select an Elasticsearch send host and a Kibana 
 - **THEN** initialization does not set the output as active
 - **AND** preserves any previously active valid output reference
 
-### Requirement: Asset Setup Requires Explicit Approval
-Initialization SHALL inspect whether the configured output deployment has the ESDiag assets needed for processing and Agent Builder use. When setup is needed, it SHALL offer the existing setup operation, describe its privilege and license implications, and MUST NOT provision assets unless the user explicitly approves.
+### Requirement: Asset Setup Follows Deployment Ownership
+For an existing local or remote deployment, initialization SHALL ask whether
+the diagnostic cluster needs ESDiag dashboards and agents. On approval, it
+SHALL run the existing version-compatible setup operation. It MUST NOT
+provision assets unless the user explicitly approves.
 
-#### Scenario: User approves missing asset setup
-- **GIVEN** output endpoints validate but required ESDiag assets are absent
+When the user approves starting a new binary-owned local core stack,
+initialization SHALL treat that approval as approval for the lifecycle's
+required ESDiag assets. It SHALL not ask a redundant asset question after the
+stack is ready.
+
+#### Scenario: User approves setup for an existing or remote deployment
+- **GIVEN** an existing local or remote output deployment validates but required
+  ESDiag assets are absent
 - **WHEN** the user approves setup
 - **THEN** initialization runs the existing setup behavior against the configured deployment
-- **AND** revalidates readiness before continuing
+- **AND** records the running ESDiag asset version
 
-#### Scenario: User declines setup
-- **GIVEN** required assets are absent
+#### Scenario: User declines setup for an existing or remote deployment
+- **GIVEN** an existing local or remote output deployment has required assets absent
 - **WHEN** the user declines setup
 - **THEN** the configured endpoints remain saved
 - **AND** initialization reports that processing or Agent Builder use is not yet ready
 
-### Requirement: First Saved Job Produces A Repeatable Workflow
-Initialization SHALL create or select a valid first saved job after at least one collect host and an output deployment are configured. The default processing-job path SHALL use the configured collect host and output send host so a run indexes a diagnostic; an explicitly selected collect-only job SHALL remain supported.
+#### Scenario: New local stack implies required assets
+- **GIVEN** local processing is selected and no usable local stack exists
+- **WHEN** the user approves starting a binary-owned core stack
+- **THEN** its Rust lifecycle installs the required ESDiag assets before it
+  reports ready
+- **AND** initialization records the asset version without a second asset prompt
+
+### Requirement: Required Saved Job Matches Workflow
+Initialization SHALL create a valid default saved job only for workflows that
+collect diagnostics. A collect-and-process job SHALL use the configured collect
+host and output send host so a run indexes a diagnostic. A collection-only job
+SHALL remain supported. Processing existing diagnostics SHALL not require a
+saved job.
 
 #### Scenario: Default processing job is created
 - **WHEN** the user accepts the default job shape
@@ -86,7 +125,12 @@ Initialization SHALL create or select a valid first saved job after at least one
 - **AND** its name becomes `job.default` in `esdiag.yml`
 
 #### Scenario: Collect-only job is explicit
-- **WHEN** the user selects a collect-only first job
+- **WHEN** the user selects a collection-only workflow
 - **THEN** initialization identifies that the job produces an archive rather than indexed diagnostic data
-- **AND** persists it only after explicit confirmation
+- **AND** persists it as the default job
+
+#### Scenario: Existing diagnostic processing has no default job
+- **WHEN** the user selects processing existing diagnostics
+- **THEN** initialization completes after the output deployment is configured
+- **AND** no default job reference is persisted
 

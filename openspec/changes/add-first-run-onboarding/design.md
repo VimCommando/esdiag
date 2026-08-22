@@ -24,7 +24,9 @@ The runtime environment also already represents one output deployment: `ESDIAG_O
 - Replacing `hosts.yml`, `secrets.yml`, or `jobs.yml`.
 - Persisting user configuration in service mode.
 - Automatically provisioning licenses, inference services, connectors, or third-party model credentials.
-- Automatically running `esdiag setup` without explicit user approval.
+- Automatically running `esdiag setup` without explicit user approval, except
+  for the lifecycle-owned assets implied by approval to create a new local core
+  stack.
 - Providing a non-interactive bootstrap language in the first iteration; existing commands and environment variables remain available for automation.
 - Performing Agent Builder conversations or diagnostic analysis.
 - Downloading agent skills or requiring any supported coding agent to be installed.
@@ -108,7 +110,19 @@ The output step creates or selects:
 - A `viewer` reference from the send host to the view host.
 - One shared secret reference by default, with distinct existing secrets allowed when explicitly selected.
 
-Both clients are tested before the configuration becomes active. Initialization also checks whether ESDiag assets required for processing and Agent Builder use are available. If setup is needed, the wizard offers to run the existing setup operation and explains the privilege/license implications; declining preserves the configured endpoints and reports setup as incomplete.
+Both clients are tested before the configuration becomes active. Initialization
+checks whether ESDiag assets required for processing and Agent Builder use are
+available. For an existing local or remote deployment, the wizard offers to run
+the existing setup operation and explains the privilege/license implications;
+declining preserves the configured endpoints and reports setup as incomplete.
+
+Starting a new local core stack is different: the user's approval to provision
+that stack also approves its required local ESDiag assets. The Rust
+local-stack lifecycle installs those assets as part of reaching a ready local
+deployment, so `init` records the asset version without asking the same
+question again. The standalone full-stack path likewise owns setup during
+stack startup; `esdiag-local exec -- init` configures only container-owned
+user state.
 
 Alternative considered: add a new deployment inventory type. The existing host-role and viewer relationship already models the pair and is consumed by exporter link generation, so a parallel type would add migration and synchronization costs.
 
@@ -151,4 +165,6 @@ Rollback leaves `settings.yml`, `hosts.yml`, `secrets.yml`, and `jobs.yml` uncha
 
 ## Open Questions
 
-None. Asset setup is an explicit offer rather than an automatic initialization side effect, and the first version is intentionally interactive.
+None. Asset setup is an explicit offer for existing and remote deployments;
+approval to create a new local core stack implies its lifecycle-owned assets.
+The first version is intentionally interactive.

@@ -20,10 +20,38 @@ pub struct ApplicationConfig {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<OnboardingWorkflow>,
     #[serde(default, skip_serializing_if = "OutputConfig::is_empty")]
     pub output: OutputConfig,
     #[serde(default, skip_serializing_if = "JobConfig::is_empty")]
     pub job: JobConfig,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnboardingWorkflow {
+    CollectOnly,
+    ProcessExisting,
+    CollectAndProcess,
+}
+
+impl OnboardingWorkflow {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CollectOnly => "collection only",
+            Self::ProcessExisting => "process existing diagnostics",
+            Self::CollectAndProcess => "collect and process diagnostics",
+        }
+    }
+
+    pub fn collects_diagnostics(self) -> bool {
+        matches!(self, Self::CollectOnly | Self::CollectAndProcess)
+    }
+
+    pub fn processes_diagnostics(self) -> bool {
+        matches!(self, Self::ProcessExisting | Self::CollectAndProcess)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,7 +171,7 @@ impl ApplicationConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApplicationConfig, JobConfig, OutputConfig};
+    use super::{ApplicationConfig, JobConfig, OnboardingWorkflow, OutputConfig};
     use crate::data::{Application, HostRole, KnownHostBuilder};
     use std::collections::BTreeMap;
     use url::Url;
@@ -172,6 +200,7 @@ mod tests {
         let config = ApplicationConfig {
             version: 1,
             user: Some("reno@example.com".to_string()),
+            workflow: Some(OnboardingWorkflow::CollectAndProcess),
             output: OutputConfig {
                 default: Some("output-elasticsearch".to_string()),
                 ..OutputConfig::default()
@@ -188,6 +217,7 @@ mod tests {
         assert_eq!(loaded, config);
         assert!(written.contains("default: output-elasticsearch"));
         assert!(written.contains("default: production-standard"));
+        assert!(written.contains("workflow: collect-and-process"));
         for forbidden in ["apikey", "password", "authorization", "https://es.example"] {
             assert!(!written.contains(forbidden), "{forbidden} must not be serialized");
         }
@@ -211,6 +241,18 @@ mod tests {
                 .contains("Unsupported application configuration version 2")
         );
         assert_eq!(std::fs::read_to_string(path).expect("read original config"), content);
+    }
+
+    #[test]
+    fn configuration_without_a_workflow_remains_readable() {
+        let _env = crate::TestEnv::new();
+        let path = ApplicationConfig::path().expect("config path");
+        std::fs::write(&path, "version: 1\nuser: existing@example.com\n").expect("write old configuration");
+
+        let config = ApplicationConfig::load().expect("load old configuration");
+
+        assert_eq!(config.user.as_deref(), Some("existing@example.com"));
+        assert_eq!(config.workflow, None);
     }
 
     #[test]

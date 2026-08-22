@@ -113,7 +113,8 @@ pub enum CliOutcome {
         user: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<String>,
-        job: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        job: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_installation: Option<AgentSkillsResult>,
     },
@@ -134,6 +135,17 @@ pub enum CliOutcome {
     },
     SetupCompleted {
         targets: Vec<String>,
+    },
+    LocalStack {
+        command: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        native_service: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        esdiag_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kibana_url: Option<String>,
     },
     ServerReady {
         address: String,

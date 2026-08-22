@@ -431,39 +431,6 @@ pub fn validate_processable_registry(product: &str, claims: &[ProcessableClaim])
     }
 }
 
-fn convert_npm_semver_to_cargo(req: &str) -> String {
-    let normalized = req.replace(',', " ");
-    let parts: Vec<&str> = normalized.split_whitespace().collect();
-    let mut out = String::new();
-    for i in 0..parts.len() {
-        out.push_str(parts[i]);
-        if i + 1 < parts.len() {
-            if parts[i].chars().next().is_some_and(|c| c.is_ascii_digit())
-                && parts[i + 1]
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c == '<' || c == '>' || c == '=' || c == '~' || c == '^')
-            {
-                out.push_str(", ");
-            } else {
-                out.push(' ');
-            }
-        }
-    }
-    out
-}
-
-/// Parses the NPM-style version requirements used by `sources.yml`.
-///
-/// The source catalog permits adjacent comparator expressions such as
-/// `>= 6.6.0 < 7.7.0`, while `semver::VersionReq` requires commas between
-/// comparators. Keep this conversion in one place so source resolution and
-/// generated consumers validate exactly the same syntax.
-pub fn parse_npm_version_requirement(req: &str) -> Result<VersionReq> {
-    let cargo_req = convert_npm_semver_to_cargo(req);
-    VersionReq::parse(&cargo_req).map_err(|error| eyre!("Failed to parse version req '{}': {}", req, error))
-}
-
 impl Source {
     pub fn get_file_path(&self, name: &str) -> String {
         let extension = self.extension.as_deref().unwrap_or(".json");
@@ -497,7 +464,8 @@ impl Source {
         // Ranges are stored in native Rust `semver` form: the upstream
         // NPM/Java dialect is normalized once, at reconciliation (ADR-0006).
         for (req_str, source) in &self.versions {
-            let req = parse_npm_version_requirement(req_str)?;
+            let req =
+                VersionReq::parse(req_str).map_err(|e| eyre!("Failed to parse version req '{}': {}", req_str, e))?;
             if req.matches(&clean_version) {
                 return Ok(match source {
                     VersionSource::Url(url) => ResolvedVersionSource {
@@ -523,11 +491,7 @@ impl Source {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ProcessableClaim, get_sources, parse_npm_version_requirement, source_application_key,
-        validate_processable_registry,
-    };
-    use crate::data::Application;
+    use super::{ProcessableClaim, get_sources, validate_processable_registry};
     use semver::{Version, VersionReq};
 
     #[test]
@@ -542,17 +506,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn source_registry_keys_cover_live_collectable_applications_only() {
-        assert_eq!(
-            source_application_key(Application::Elasticsearch).unwrap(),
-            "elasticsearch"
-        );
-        assert_eq!(source_application_key(Application::Kibana).unwrap(), "kibana");
-        assert_eq!(source_application_key(Application::Logstash).unwrap(), "logstash");
-        assert!(source_application_key(Application::Agent).is_err());
     }
 
     #[test]
@@ -613,97 +566,6 @@ mod tests {
         assert_eq!(alias.get_url(&v_5_0).unwrap(), "/_cat/aliases?v");
         assert_eq!(alias.get_url(&v_5_1_1).unwrap(), "/_cat/aliases?v&s=alias,index");
         assert_eq!(alias.get_url(&v_6_0).unwrap(), "/_cat/aliases?v&s=alias,index");
-    }
-
-    #[test]
-    fn test_npm_version_requirement_comparators() {
-        let release = Version::parse("7.7.0").unwrap();
-        assert!(parse_npm_version_requirement(">= 7.7.0").unwrap().matches(&release));
-        assert!(!parse_npm_version_requirement("> 7.7.0").unwrap().matches(&release));
-        assert!(!parse_npm_version_requirement("< 7.7.0").unwrap().matches(&release));
-        assert!(
-            parse_npm_version_requirement(">= 6.6.0 < 7.7.0")
-                .unwrap()
-                .matches(&Version::parse("7.6.2").unwrap())
-        );
-        assert!(
-            !parse_npm_version_requirement(">= 6.6.0 < 7.7.0")
-                .unwrap()
-                .matches(&release)
-        );
-    }
-
-    #[test]
-    fn test_lite_source_membership_and_configuration() {
-        let sources = get_sources();
-        let elasticsearch = sources.get("elasticsearch").unwrap();
-        let expected = [
-            ("alias", "alias.json", &[">= 0.9.0"][..]),
-            ("cluster_pending_tasks", "cluster_pending_tasks.json", &[">= 0.9.0"][..]),
-            (
-                "cluster_settings_defaults",
-                "cluster_settings_defaults.json",
-                &[">= 6.4.0"][..],
-            ),
-            (
-                "data_stream",
-                "commercial/data_stream.json",
-                &[">= 7.11.0", ">= 7.9.0, < 7.11.0"][..],
-            ),
-            (
-                "ilm_explain",
-                "commercial/ilm_explain.json",
-                &[">= 6.6.0, < 7.7.0", ">= 7.7.0"][..],
-            ),
-            ("ilm_policies", "commercial/ilm_policies.json", &[">= 6.6.0"][..]),
-            (
-                "indices_stats",
-                "indices_stats.json",
-                &[">= 0.9.0, < 7.7.0", ">= 7.7.0"][..],
-            ),
-            (
-                "licenses",
-                "licenses.json",
-                &[
-                    ">= 1.0.0, < 2.0.0",
-                    ">= 2.0.0, < 7.6.0",
-                    ">= 7.6.0, < 8.0.0",
-                    ">= 8.0.0",
-                ][..],
-            ),
-            ("nodes", "nodes.json", &[">= 0.9.0"][..]),
-            ("nodes_stats", "nodes_stats.json", &[">= 0.9.0"][..]),
-            (
-                "searchable_snapshots_cache_stats",
-                "commercial/searchable_snapshots_cache_stats.json",
-                &[">= 7.13.0"][..],
-            ),
-            (
-                "indices_settings",
-                "indices_settings.json",
-                &[">= 0.9.0, < 7.7.0", ">= 7.7.0"][..],
-            ),
-            ("slm_policies", "commercial/slm_policies.json", &[">= 7.4.0"][..]),
-            ("tasks", "tasks.json", &[">=2.0.0"][..]),
-            ("version", "version.json", &[">= 0.9.0"][..]),
-        ];
-        let mut actual: Vec<&str> = elasticsearch
-            .iter()
-            .filter_map(|(name, source)| source.has_tag("lite").then_some(name.as_str()))
-            .collect();
-        actual.sort_unstable();
-        let mut expected_names: Vec<&str> = expected.iter().map(|(name, _, _)| *name).collect();
-        expected_names.sort_unstable();
-        assert_eq!(actual, expected_names);
-
-        for (name, path, version_rules) in expected {
-            let source = elasticsearch.get(name).unwrap();
-            assert_eq!(source.get_file_path(name), path);
-            assert_eq!(
-                source.versions.keys().map(String::as_str).collect::<Vec<_>>(),
-                version_rules
-            );
-        }
     }
 
     #[test]

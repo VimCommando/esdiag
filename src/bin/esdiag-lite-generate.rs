@@ -4,8 +4,9 @@
 
 //! Maintainer utility for generated regions in the ESDiag Lite scripts.
 
-use esdiag::processor::diagnostic::data_source::{VersionSource, get_product_sources, parse_npm_version_requirement};
+use esdiag::processor::diagnostic::data_source::{VersionSource, get_product_sources};
 use eyre::{Result, bail, eyre};
+use semver::VersionReq;
 use std::cmp::Ordering;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -106,11 +107,36 @@ fn parse_version(value: &str, source_name: &str, expression: &str) -> Result<Ver
 }
 
 fn parse_rule(source_name: &str, expression: &str, url: &str) -> Result<Rule> {
-    // This also verifies the generated subset and runtime source resolution use
-    // the same NPM-style parsing rules.
-    parse_npm_version_requirement(expression)?;
+    let normalized_expression = expression.replace(',', "");
+    let mut semver_clauses = Vec::new();
+    let mut semver_tokens = normalized_expression.split_whitespace().peekable();
+    while let Some(token) = semver_tokens.next() {
+        if matches!(token, ">=" | ">" | "<=" | "<" | "=") {
+            let version = semver_tokens.next().ok_or_else(|| {
+                eyre!(
+                    "lite source '{}' has incomplete version rule '{}'",
+                    source_name,
+                    expression
+                )
+            })?;
+            semver_clauses.push(format!("{token} {version}"));
+        } else {
+            semver_clauses.push(token.to_string());
+        }
+    }
+    let semver_expression = semver_clauses.join(", ");
+    VersionReq::parse(&semver_expression).map_err(|error| {
+        eyre!(
+            "lite source '{}' uses invalid native semver rule '{}': {}",
+            source_name,
+            expression,
+            error
+        )
+    })?;
 
-    let normalized_expression = expression.replace(',', " ");
+    // Native Rust semver uses commas between comparator clauses; the lite
+    // generator only needs the individual bounds, so discard that separator
+    // after validating the complete expression.
     let mut tokens = normalized_expression.split_whitespace().peekable();
     let mut lower = None;
     let mut upper = None;
@@ -385,13 +411,6 @@ fn lite_source_names(
     Ok(names)
 }
 
-fn lite_script_name(name: &str) -> &str {
-    match name {
-        "indices_settings" => "settings",
-        other => other,
-    }
-}
-
 fn source_rules(name: &str, source: &esdiag::processor::diagnostic::data_source::Source) -> Result<Vec<Rule>> {
     source
         .versions
@@ -420,12 +439,7 @@ fn render_bash() -> Result<String> {
     for name in names.iter().filter(|name| name.as_str() != "version") {
         let source = sources.get(name.as_str()).expect("source key from map");
         let rules = source_rules(name, source)?;
-        let script_name = lite_script_name(name.as_str());
-        output.push_str(&render_bash_source(
-            script_name,
-            &source.get_file_path(script_name),
-            &rules,
-        )?);
+        output.push_str(&render_bash_source(name, &source.get_file_path(name), &rules)?);
         writeln!(output)?;
     }
 
@@ -448,7 +462,7 @@ fn render_bash() -> Result<String> {
     writeln!(output, "collect_lite_apis() {{")?;
     writeln!(output, "  local status=0")?;
     for name in names.iter().filter(|name| name.as_str() != "version") {
-        writeln!(output, "  get_api_{} || status=1", lite_script_name(name.as_str()))?;
+        writeln!(output, "  get_api_{} || status=1", name)?;
     }
     writeln!(output, "  return \"$status\"")?;
     writeln!(output, "}}")?;
@@ -468,12 +482,7 @@ fn render_powershell() -> Result<String> {
     for name in names.iter().filter(|name| name.as_str() != "version") {
         let source = sources.get(name.as_str()).expect("source key from map");
         let rules = source_rules(name, source)?;
-        let script_name = lite_script_name(name.as_str());
-        output.push_str(&render_powershell_source(
-            script_name,
-            &source.get_file_path(script_name),
-            &rules,
-        )?);
+        output.push_str(&render_powershell_source(name, &source.get_file_path(name), &rules)?);
         writeln!(output)?;
     }
 
@@ -499,7 +508,7 @@ fn render_powershell() -> Result<String> {
         writeln!(
             output,
             "  if (-not ({})) {{ $failed = $true }}",
-            powershell_function_name(lite_script_name(name.as_str()))?
+            powershell_function_name(name)?
         )?;
     }
     writeln!(output, "  return (-not $failed)")?;

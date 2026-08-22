@@ -330,15 +330,15 @@ function Get-ApiIlmPolicies {
   }
 }
 
-function Get-ApiSettings {
+function Get-ApiIndicesSettings {
   if ((Test-VersionAtLeast 0 9 0) -and (Test-VersionLessThan 7 7 0)) {
-    return Invoke-Api '/_settings?human' 'settings.json'
+    return Invoke-Api '/_settings?human' 'indices_settings.json'
   }
   elseif ((Test-VersionAtLeast 7 7 0)) {
-    return Invoke-Api '/_settings?human&expand_wildcards=all' 'settings.json'
+    return Invoke-Api '/_settings?human&expand_wildcards=all' 'indices_settings.json'
   }
   else {
-    Skip-Api 'settings'
+    Skip-Api 'indices_settings'
     return $true
   }
 }
@@ -437,7 +437,7 @@ function Invoke-LiteApis {
   if (-not (Get-ApiDataStream)) { $failed = $true }
   if (-not (Get-ApiIlmExplain)) { $failed = $true }
   if (-not (Get-ApiIlmPolicies)) { $failed = $true }
-  if (-not (Get-ApiSettings)) { $failed = $true }
+  if (-not (Get-ApiIndicesSettings)) { $failed = $true }
   if (-not (Get-ApiIndicesStats)) { $failed = $true }
   if (-not (Get-ApiLicenses)) { $failed = $true }
   if (-not (Get-ApiNodes)) { $failed = $true }

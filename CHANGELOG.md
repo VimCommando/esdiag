@@ -12,22 +12,17 @@ published release notes, maintenance branches, and tagged history.
 
 ### Added
 
+- Added role- and deployment-based onboarding guides for collection and sharing, processing and analysis, local and remote diagnostic clusters, Agent Skills, and shared services.
 - Added interactive `esdiag init` onboarding for securely configuring a local diagnostic user, output deployment, collect hosts, and default saved job (#377).
-- Added `esdiag agent ask` for finite Kibana Agent Builder questions with explicit conversation follow-ups and Kibana recovery links.
-- Added `esdiag process --ask` to start an Agent Builder conversation about a newly processed diagnostic with its identifier included automatically.
-- Added `esdiag agent skills` to install the running binary's offline, version-matched ESDiag skill for Claude Code, Codex, and OpenCode.
+- Added `esdiag agent ask` for finite Kibana Agent Builder questions with explicit conversation follow-ups and Kibana recovery links (#379).
+- Added `esdiag process --ask` to start an Agent Builder conversation about a newly processed diagnostic with its identifier included automatically (#379).
+- Added `esdiag agent skills` to install the running binary's offline, version-matched ESDiag skill for Claude Code, Codex, and OpenCode (#379).
+- Added `esdiag local` to provision and manage a local Elastic Stack through a Rust-owned lifecycle, with core as the default and an explicit full-container override.
 - Added optional Elastic Upload Service forwarding to `esdiag-lite.sh` for newly collected and existing ZIP archives.
 - Added `esdiag-lite.ps1` for version-aware Elasticsearch diagnostic collection on Windows PowerShell.
 
 ### Changed
 
-- Changed Agent Builder commands and `process --ask` to require the Cargo `agent` feature; the default build continues to include them.
-- Replaced `min-diag.sh` with the collection-only, version-aware `esdiag-lite.sh`, using environment-based Elasticsearch authentication, optional ZIP output, and no `jq` runtime dependency.
-- Changed Agent Builder progress updates to identify the selected agent by name instead of the generic `Agent Builder` label.
-- Changed saved hosts to distinguish target applications from Cloud routing and unresolved URL templates, with clearer validation for legacy host records (#366).
-- Changed finite CLI commands to emit typed YAML outcomes on stdout by default, with `--format json` available for interoperability; command failures now return safe structured results and document streams retain their NDJSON-only stdout contract.
-- Changed the portable Agent Skill to compose native ESDiag commands and output-deployment configuration, replacing external helper scripts and analysis-specific environment variables.
-- Changed omitted CLI output and diagnostic-user resolution to use saved non-secret application preferences after explicit command and environment configuration (#377).
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
 - Changed platform detection to identify Elastic Cloud Hosted bundles from a cluster license issued to `Elastic Cloud`, so API-only hosted bundles no longer report an unknown platform (#347).
 - Changed collection and processing source selection to use canonical registry keys and added a maintainer reconciliation utility for upstream support-diagnostics sources (#348).
@@ -39,16 +34,24 @@ published release notes, maintenance branches, and tagged history.
 - Changed saved jobs to rewrite legacy `jobs.yml` definitions into the versioned phase-based schema on first read (#353).
 - Scoped live `Collect` to Elasticsearch, Kibana, and Logstash; Agent and platform diagnostics now direct users to `Load`/`read` product-provided bundles (#355).
 - Changed CLI, web, and synchronous API diagnostics to use one staged execution workflow, including independent processed-document export and raw-bundle upload targets.
-- Changed `esdiag job run` to report the retained archive, upload destination, and processed diagnostic identifier and Kibana link produced by the selected phases, rather than only reporting that execution completed.
-- Changed the `collect` host role to control collection-picker visibility only; direct and saved-job collection accepts any saved host.
-- Changed HTTP collection failures to retain their response status, type, and reason instead of reporting a missing source version.
-- Changed empty diagnostic source files to be skipped rather than reported as processing errors.
-- Changed diagnostic source lookup to skip empty candidate files and continue to legacy or aliased paths (#376).
-- Changed staged job failures to retain their underlying error chain, so structured output preserves HTTP status, type, and reason (#376).
-- Changed stdout document exports to write complete NDJSON records atomically when processors run concurrently.
+- Changed Agent Builder commands and `process --ask` to require the Cargo `agent` feature; the default build continues to include them (#379).
+- Replaced `min-diag.sh` with the collection-only, version-aware `esdiag-lite.sh`, using environment-based Elasticsearch authentication, optional ZIP output, and no `jq` runtime dependency.
+- Changed Agent Builder progress updates to identify the selected agent by name instead of the generic `Agent Builder` label (#379).
+- Changed saved hosts to distinguish target applications from Cloud routing and unresolved URL templates, with clearer validation for legacy host records (#366).
+- Changed finite CLI commands to emit typed YAML outcomes on stdout by default, with `--format json` available for interoperability; command failures now return safe structured results and document streams retain their NDJSON-only stdout contract.
+- Changed the portable Agent Skill to compose native ESDiag commands and output-deployment configuration, replacing external helper scripts and analysis-specific environment variables (#379).
+- Changed omitted CLI output and diagnostic-user resolution to use saved non-secret application preferences after explicit command and environment configuration (#377).
+- Changed `esdiag init` to configure only the collection, processing, and asset-installation stages selected by the user.
+- Changed `esdiag init` to offer a binary-owned core local stack when local
+  processing has no existing deployment.
+- Changed `esdiag init` to defer opening a newly created local-stack web UI until every onboarding stage completes.
+- Changed `esdiag-local` to retain `auto`, `core`, or `full` stack mode per
+  deployment. Core mode uses the matching native binary and avoids an ESDiag
+  container; full mode preserves the containerized runtime.
 
 ### Fixed
 
+- Fixed `esdiag local` launcher execution and structured outcomes for help output and forwarded state directories (#382).
 - Fixed compilation of every `server`, `setup`, and `keystore` feature combination, including `--no-default-features` (#347).
 - Fixed the file, stream, and directory exporters reporting a fabricated HTTP `200` request status; they now report the reserved `0` that means "no HTTP transport", so a real Elasticsearch response is distinguishable from a local write (#350).
 - Fixed legacy `jobs.yml` migration failing the whole file when one saved job selected a source the current registry no longer knows; such a selection now migrates as authored and is reported when that job runs (#353).

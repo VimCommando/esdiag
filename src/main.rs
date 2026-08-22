@@ -1,5 +1,6 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+mod local;
 // Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
@@ -28,17 +29,17 @@ use esdiag::{
 use esdiag::{
     client::Client,
     data::{
-        Application, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, OutputDeployment, SecretAuth, Settings,
-        Uri, add_secret, clear_unlock_lease, collect_application, create_keystore, default_unlock_ttl,
-        get_keystore_path, get_password_for_secret_commands, get_unlock_status, keystore_exists, parse_unlock_ttl,
-        remove_secret, resolve_secret_auth, rotate_keystore_password, update_secret, upsert_secret_auth,
-        validate_existing_keystore_password, write_unlock_lease,
+        Application, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, OnboardingWorkflow, OutputDeployment,
+        SecretAuth, Settings, Uri, add_secret, clear_unlock_lease, collect_application, create_keystore,
+        default_unlock_ttl, get_keystore_path, get_password_for_secret_commands, get_unlock_status, keystore_exists,
+        list_secret_names, parse_unlock_ttl, remove_secret, resolve_secret_auth, rotate_keystore_password,
+        update_secret, validate_existing_keystore_password, write_unlock_lease,
     },
     env::LOG_LEVEL,
     exporter::Exporter,
     onboarding::{
         CollectHostInput, OutputDeploymentInput, inspect as inspect_onboarding, save_collect_host, save_default_job,
-        save_default_processing_job, save_output_deployment, save_user,
+        save_default_processing_job, save_output_deployment, save_user, save_workflow,
     },
     processor::{CollectionResult, DiagnosticOutcome, Identifiers, default_collect_archive_name},
     receiver::{
@@ -49,7 +50,9 @@ use esdiag::{
 use eyre::{Result, eyre};
 use redact::Secret;
 use std::{
+    ffi::OsString,
     io::{IsTerminal, Write},
+    net::Ipv4Addr,
     path::PathBuf,
     process::ExitCode,
     str::FromStr,
@@ -70,7 +73,7 @@ const DEFAULT_AGENT_BUILDER_AGENT: &str = "elastic-ai-agent";
 // Define command line arguments
 #[derive(Debug, Parser)]
 #[command(name = "esdiag", version, styles = STYLES)]
-#[command(about = "Elastic Stack Diagnostics (esdiag) - collect diagnostics and import into Elasticsearch", long_about = None)]
+#[command(about = "Elastic Stack Diagnostics (esdiag) - easily collect, share, process and analyze diagnostics", long_about = None)]
 struct Cli {
     /// Enable debug logging
     #[arg(global = true, long)]
@@ -139,6 +142,9 @@ enum Commands {
     /// Start a web server to receive diagnostic bundle uploads
     #[cfg(feature = "server")]
     Serve {
+        /// IPv4 address to bind the server to
+        #[arg(long, default_value = "0.0.0.0")]
+        bind: Ipv4Addr,
         /// The port to bind the server to
         #[arg(help = "The port to bind the server to", long, short, default_value = "2501")]
         port: u16,
@@ -170,6 +176,12 @@ enum Commands {
     },
     /// Interactively configure a repeatable local diagnostic workflow
     Init,
+    /// Manage a local Elasticsearch, Kibana, and ESDiag deployment
+    Local {
+        /// Local-stack command and options
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<OsString>,
+    },
     /// Manage encrypted secrets in the local keystore
     #[command(alias = "secret")]
     Keystore {
@@ -665,7 +677,16 @@ fn command_owns_stdout(cli: &Cli) -> bool {
     );
     #[cfg(not(feature = "keystore"))]
     let saved_job_stream = false;
-    direct_process_stream || saved_job_stream
+    let local_raw_stdout = matches!(
+        &cli.command,
+        Some(Commands::Local { args })
+            if args
+                .first()
+                .and_then(|argument| argument.to_str())
+                .map(|command| matches!(command, "help" | "--help" | "-h" | "version" | "--version" | "secrets"))
+                .unwrap_or(true)
+    );
+    direct_process_stream || saved_job_stream || local_raw_stdout
 }
 
 fn resolve_tracing_filter(cli: &Cli) -> EnvFilter {
@@ -676,6 +697,20 @@ fn resolve_tracing_filter(cli: &Cli) -> EnvFilter {
     } else {
         EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new(LOG_LEVEL))
     }
+}
+
+async fn run_local_lifecycle(args: Vec<OsString>) -> Result<CommandResult> {
+    let raw_stdout = args
+        .first()
+        .and_then(|argument| argument.to_str())
+        .map(|command| matches!(command, "help" | "--help" | "-h" | "version" | "--version" | "secrets"))
+        .unwrap_or(true);
+    let outcome = local::run(&args).await?;
+    Ok(if raw_stdout {
+        CommandResult::stream()
+    } else {
+        CommandResult::outcome(outcome)
+    })
 }
 
 fn classify_failure(error: &eyre::Report) -> CliFailureCategory {
@@ -1029,6 +1064,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
         match command {
             #[cfg(feature = "server")]
             Commands::Serve {
+                bind,
                 port,
                 output,
                 mode,
@@ -1048,7 +1084,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 });
 
                 let (mut server, bound_addr) = Server::start_with_options(
-                    [0, 0, 0, 0],
+                    bind.octets(),
                     port,
                     exporter,
                     kibana_url,
@@ -1156,6 +1192,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 }
             }
             Commands::Init => run_init_wizard().await,
+            Commands::Local { args } => run_local_lifecycle(args).await,
             #[cfg(feature = "agent")]
             Commands::Agent { command } => match command {
                 AgentCommands::Ask {
@@ -1929,6 +1966,49 @@ fn normalize_optional_secret_arg(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputLocation {
+    Local,
+    Remote,
+}
+
+fn prompt_onboarding_workflow() -> Result<OnboardingWorkflow> {
+    loop {
+        println!("Will you be processing diagnostics, or only collecting?");
+        println!("  1. Process diagnostics");
+        println!("  2. Only collect diagnostics");
+        match prompt_with_default("Selection", "1")?.to_ascii_lowercase().as_str() {
+            "1" | "process" | "processing" => {
+                println!("Will you collect new diagnostics, process existing diagnostics, or both?");
+                println!("  1. Collect and process new diagnostics");
+                println!("  2. Process existing diagnostics");
+                println!("  3. Both new and existing diagnostics");
+                match prompt_with_default("Selection", "3")?.to_ascii_lowercase().as_str() {
+                    "1" | "collect" => return Ok(OnboardingWorkflow::CollectAndProcess),
+                    "2" | "existing" => return Ok(OnboardingWorkflow::ProcessExisting),
+                    "3" | "both" => return Ok(OnboardingWorkflow::CollectAndProcess),
+                    _ => println!("Choose 1, 2, or 3."),
+                }
+            }
+            "2" | "collect" | "collect-only" => return Ok(OnboardingWorkflow::CollectOnly),
+            _ => println!("Choose 1 or 2."),
+        }
+    }
+}
+
+fn prompt_output_location() -> Result<OutputLocation> {
+    loop {
+        println!("Will processed diagnostics be stored locally or remotely?");
+        println!("  1. Local ESDiag deployment");
+        println!("  2. Remote Elasticsearch and Kibana deployment");
+        match prompt_with_default("Selection", "2")?.to_ascii_lowercase().as_str() {
+            "1" | "local" => return Ok(OutputLocation::Local),
+            "2" | "remote" => return Ok(OutputLocation::Remote),
+            _ => println!("Choose 1 or 2."),
+        }
+    }
+}
+
 fn prompt_missing_secret_value(prompt: &str) -> Result<String> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(eyre!(
@@ -2013,6 +2093,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
         .and_then(KnownHost::get_known)
         .and_then(|host| host.concrete_url().map(Url::to_string));
     let mut most_recent_collect_host = None;
+    let mut started_local_stack = false;
     if initial.is_complete() && !prompt_confirm("A complete configuration already exists. Replace values? [y/N]: ")? {
         return Ok(CommandResult::outcome(initialization_outcome(
             initialization_skill_installation()?,
@@ -2034,103 +2115,183 @@ async fn run_init_wizard() -> Result<CommandResult> {
         )?)?;
     }
 
-    let config = esdiag::data::ApplicationConfig::load()?;
-    let configure_cluster = if config.output.default.is_some() {
-        prompt_confirm("Reconfigure the default diagnostics cluster? [y/N]: ")?
-    } else {
-        prompt_confirm_default_yes("Configure a diagnostics cluster now? [Y/n]: ")?
+    let workflow = match config.workflow {
+        Some(workflow) if prompt_confirm_default_yes(&format!("Resume workflow: {} [Y/n]: ", workflow.as_str()))? => {
+            workflow
+        }
+        _ => prompt_onboarding_workflow()?,
     };
-    if configure_cluster {
-        unlock_keystore(default_unlock_ttl())?;
-        let keystore_password = get_password_for_secret_commands()?;
-        let local_preset = detected_esdiag_local_preset();
-        let output_name = prompt_with_default("Output host name", "localhost")?;
-        let output_url = prompt_url_with_default(
-            "Output Elasticsearch URL",
-            local_preset
-                .as_ref()
-                .map_or("http://localhost:9200", |preset| preset.elasticsearch_url.as_str()),
-        )?;
-        let viewer_name = format!("{output_name}-kb");
-        let viewer_url = prompt_url_with_default(
-            "Output Kibana URL",
-            local_preset
-                .as_ref()
-                .map_or("http://localhost:5601", |preset| preset.kibana_url.as_str()),
-        )?;
-        let secret_id = prompt_with_default("Shared output credential name", &output_name)?;
-        let auth = prompt_api_key("Output", local_preset.as_ref())?;
-        upsert_secret_auth(&secret_id, auth.clone(), &keystore_password)?;
-        let output_candidate = KnownHostBuilder::new(output_url.clone())
-            .application(Application::Elasticsearch)
-            .roles(vec![HostRole::Send])
-            .viewer(Some(viewer_name.clone()))
-            .secret(Some(secret_id.clone()))
-            .build_with_secret_auth(auth.clone())?;
-        let viewer_candidate = KnownHostBuilder::new(viewer_url.clone())
-            .application(Application::Kibana)
-            .roles(vec![HostRole::View])
-            .secret(Some(secret_id.clone()))
-            .build_with_secret_auth(auth.clone())?;
-        let output_client = Client::try_from(Uri::try_from(output_candidate)?)?;
-        let output_valid = match output_client.test_connection().await {
-            Ok(_) => true,
-            Err(err) => {
-                tracing::warn!("Output Elasticsearch validation failed: {err}");
-                false
-            }
-        };
-        let viewer_client = Client::try_from(Uri::try_from(viewer_candidate)?)?;
-        let viewer_valid = match viewer_client.test_connection().await {
-            Ok(_) => true,
-            Err(err) => {
-                tracing::warn!("Output Kibana validation failed: {err}");
-                false
-            }
-        };
-        output_name_for_defaults = Some(output_name.clone());
-        output_url_for_defaults = Some(output_url.to_string());
-        save_output_deployment(
-            OutputDeploymentInput {
-                output_name,
-                output_url,
-                viewer_name,
-                viewer_url,
-                secret_id,
-                auth,
-            },
-            &keystore_password,
-        )?;
-
-        let mut output_config = esdiag::data::ApplicationConfig::load()?;
-        output_config.output.authenticated_on = (output_valid && viewer_valid).then(|| chrono::Utc::now().to_rfc3339());
-        #[cfg(feature = "setup")]
-        if output_valid && viewer_valid && prompt_confirm("Install or update ESDiag output assets now? [y/N]: ")? {
-            setup::assets(&output_client).await?;
-            setup::ensure_agent_builder_license(&output_client).await?;
-            setup::assets(&viewer_client).await?;
-            output_config.output.assets_version = Some(env!("CARGO_PKG_VERSION").to_string());
-        } else if !output_valid || !viewer_valid {
-            output_config.output.assets_version = None;
-            tracing::warn!("Skipping output asset setup until both endpoints validate successfully");
+    if config.workflow != Some(workflow) {
+        save_workflow(workflow)?;
+    }
+    if workflow == OnboardingWorkflow::ProcessExisting
+        && let Some(job) = esdiag::data::ApplicationConfig::load()?.job.default
+    {
+        if !prompt_confirm(&format!(
+            "Processing existing diagnostics does not use a default job. Clear '{job}' as the default? [y/N]: "
+        ))? {
+            return Err(eyre!("Default job removal was declined."));
         }
-        #[cfg(not(feature = "setup"))]
-        if !output_valid || !viewer_valid {
-            tracing::warn!("Output asset setup is unavailable and endpoint validation did not complete successfully");
-        }
-        output_config.save()?;
+        let mut config = esdiag::data::ApplicationConfig::load()?;
+        config.job.default = None;
+        config.save()?;
     }
 
-    if !initial.collect_host_configured || prompt_confirm("Add or replace a collect host? [y/N]: ")? {
-        loop {
+    if workflow.processes_diagnostics() {
+        let reuse_output = initial.output_configured
+            && config.workflow == Some(workflow)
+            && prompt_confirm_default_yes(&format!(
+                "Resume configured output deployment: {} [Y/n]: ",
+                output_name_for_defaults.as_deref().unwrap_or("diagnostics")
+            ))?;
+        if !reuse_output {
+            unlock_keystore(default_unlock_ttl())?;
+            let keystore_password = get_password_for_secret_commands()?;
+            let (output_name, output_url, viewer_url, viewer_api_url, secret_id, auth) = match prompt_output_location()?
+            {
+                OutputLocation::Local => {
+                    let local_output = |preset: EsdiagLocalPreset| -> Result<_> {
+                        let apikey = preset.apikey.ok_or_else(|| {
+                        eyre!(
+                            "The local ESDiag deployment has no usable output API key. Run `esdiag local up` first, or select remote processing."
+                        )
+                    })?;
+                        Ok((
+                            "localhost".to_string(),
+                            Url::parse(&preset.elasticsearch_url)?,
+                            Url::parse(&preset.kibana_url)?,
+                            Url::parse(&preset.kibana_api_url)?,
+                            "localhost".to_string(),
+                            SecretAuth::apikey(apikey),
+                        ))
+                    };
+                    let existing = detected_esdiag_local_preset();
+                    let runtime_available = if existing.is_none() {
+                        match local::detected_runtime() {
+                            Some(runtime) => {
+                                println!("Detected container runtime: {runtime}");
+                                true
+                            }
+                            None => {
+                                println!("No container runtime detected; cannot configure a local stack.");
+                                false
+                            }
+                        }
+                    } else {
+                        true
+                    };
+                    let start_core = should_start_local_core_stack(existing.is_none(), runtime_available, || {
+                        prompt_confirm("No local ESDiag deployment was detected. Start a local core stack now? [y/N]: ")
+                    })?;
+                    let local_preset = match existing {
+                        Some(preset) => Some(preset),
+                        None if start_core => {
+                            run_local_lifecycle(local_core_stack_start_args()).await?;
+                            started_local_stack = true;
+                            detected_esdiag_local_preset()
+                        }
+                        None => None,
+                    };
+                    match local_preset {
+                        Some(preset) => local_output(preset)?,
+                        None => {
+                            if !prompt_confirm_default_yes("Configure a remote output deployment instead? [Y/n]: ")? {
+                                return Err(eyre!(
+                                    "Local stack startup was declined. Select local output again to start it, or configure a remote output."
+                                ));
+                            }
+                            let output_name = prompt_with_default("Remote output host name", "diagnostics")?;
+                            let output_url =
+                                prompt_url_with_default("Remote output Elasticsearch URL", "https://localhost:9200")?;
+                            let viewer_url =
+                                prompt_url_with_default("Remote output Kibana URL", "https://localhost:5601")?;
+                            let secret_id = prompt_with_default("Remote output credential name", &output_name)?;
+                            let auth = prompt_api_key("Remote output", None)?;
+                            (output_name, output_url, viewer_url.clone(), viewer_url, secret_id, auth)
+                        }
+                    }
+                }
+                OutputLocation::Remote => {
+                    let output_name = prompt_with_default("Remote output host name", "diagnostics")?;
+                    let output_url =
+                        prompt_url_with_default("Remote output Elasticsearch URL", "https://localhost:9200")?;
+                    let viewer_url = prompt_url_with_default("Remote output Kibana URL", "https://localhost:5601")?;
+                    let secret_id = prompt_with_default("Remote output credential name", &output_name)?;
+                    let auth = prompt_api_key("Remote output", None)?;
+                    (output_name, output_url, viewer_url.clone(), viewer_url, secret_id, auth)
+                }
+            };
+            let viewer_name = format!("{output_name}-kb");
+            let output_candidate = KnownHostBuilder::new(output_url.clone())
+                .application(Application::Elasticsearch)
+                .roles(vec![HostRole::Send])
+                .viewer(Some(viewer_name.clone()))
+                .secret(Some(secret_id.clone()))
+                .build_with_secret_auth(auth.clone())?;
+            let viewer_candidate = KnownHostBuilder::new(viewer_api_url)
+                .application(Application::Kibana)
+                .roles(vec![HostRole::View])
+                .secret(Some(secret_id.clone()))
+                .build_with_secret_auth(auth.clone())?;
+            let output_client = Client::try_from(Uri::try_from(output_candidate)?)?;
+            let output_valid = output_client.test_connection().await.is_ok();
+            let viewer_client = Client::try_from(Uri::try_from(viewer_candidate)?)?;
+            let viewer_valid = viewer_client.test_connection().await.is_ok();
+            ensure_output_deployment_valid(output_valid, viewer_valid)?;
+            confirm_output_replacement(&output_name, &viewer_name, &secret_id, &keystore_password)?;
+            output_name_for_defaults = Some(output_name.clone());
+            output_url_for_defaults = Some(output_url.to_string());
+            save_output_deployment(
+                OutputDeploymentInput {
+                    output_name,
+                    output_url,
+                    viewer_name,
+                    viewer_url,
+                    secret_id,
+                    auth,
+                },
+                &keystore_password,
+            )?;
+
+            let mut output_config = esdiag::data::ApplicationConfig::load()?;
+            output_config.output.authenticated_on = Some(chrono::Utc::now().to_rfc3339());
+            #[cfg(feature = "setup")]
+            let run_output_setup = should_run_output_setup(started_local_stack, || {
+                prompt_confirm("Does the diagnostic cluster need ESDiag's dashboards and agents installed? [y/N]: ")
+            })?;
+            #[cfg(feature = "setup")]
+            if started_local_stack {
+                output_config.output.assets_version = Some(env!("CARGO_PKG_VERSION").to_string());
+            } else if run_output_setup {
+                setup::assets(&output_client).await?;
+                setup::ensure_agent_builder_license(&output_client).await?;
+                setup::assets(&viewer_client).await?;
+                output_config.output.assets_version = Some(env!("CARGO_PKG_VERSION").to_string());
+            } else {
+                eprintln!(
+                    "ESDiag assets were not installed. Processing and Agent Builder are unavailable until you run `esdiag setup {}`.",
+                    output_config.output.default.as_deref().unwrap_or("diagnostics")
+                );
+            }
+            output_config.save()?;
+        }
+    }
+
+    if workflow.collects_diagnostics() {
+        let existing_collect_host = default_collect_host_name();
+        if let Some(name) = existing_collect_host
+            && prompt_confirm_default_yes(&format!("Resume collection host: {name} [Y/n]: "))?
+        {
+            most_recent_collect_host = Some(name);
+        } else {
             let collect_name_default = output_name_for_defaults.clone().unwrap_or_else(|| "source".to_string());
-            let name = prompt_with_default("Collect host name", &collect_name_default)?;
+            let name = prompt_with_default("Collection host name", &collect_name_default)?;
             let url = prompt_url_with_default(
-                "Collect Elasticsearch URL",
+                "Collection Elasticsearch URL",
                 output_url_for_defaults.as_deref().unwrap_or("http://localhost:9200"),
             )?;
             let reuse_output_secret = output_name_for_defaults.is_some()
-                && prompt_confirm_default_yes("Reuse the output credential for this host? [Y/n]: ")?;
+                && prompt_confirm_default_yes("Reuse the processing credential for this host? [Y/n]: ")?;
             let secret_id = if reuse_output_secret {
                 esdiag::data::ApplicationConfig::load()?
                     .output
@@ -2138,12 +2299,12 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     .and_then(|output| KnownHost::get_known(&output))
                     .and_then(|host| host.secret)
             } else {
-                Some(prompt_with_default("Collect-host credential name", &name)?)
+                Some(prompt_with_default("Collection credential name", &name)?)
             };
             let auth = if reuse_output_secret {
                 None
             } else {
-                Some(prompt_api_key("Collect-host", detected_esdiag_local_preset().as_ref())?)
+                Some(prompt_api_key("Collection", detected_esdiag_local_preset().as_ref())?)
             };
             let keystore_password = if auth.is_some() {
                 unlock_keystore(default_unlock_ttl())?;
@@ -2151,6 +2312,11 @@ async fn run_init_wizard() -> Result<CommandResult> {
             } else {
                 None
             };
+            if KnownHost::get_known(&name).is_some()
+                && !prompt_confirm(&format!("Add the collect role to existing host '{name}'? [y/N]: "))?
+            {
+                return Err(eyre!("Collection host replacement was declined."));
+            }
             save_collect_host(
                 CollectHostInput {
                     name: name.clone(),
@@ -2162,25 +2328,26 @@ async fn run_init_wizard() -> Result<CommandResult> {
                 keystore_password.as_deref(),
             )?;
             most_recent_collect_host = Some(name);
-            if !prompt_confirm("Add another collect host? [y/N]: ")? {
-                break;
-            }
         }
     }
 
-    let config = esdiag::data::ApplicationConfig::load()?;
-    if config.job.default.is_none() || prompt_confirm("Replace the default saved job? [y/N]: ")? {
-        let collect_host_default = most_recent_collect_host
-            .or_else(first_saved_collect_host)
-            .ok_or_else(|| eyre!("Add a collect host before creating the default job"))?;
+    if workflow.collects_diagnostics() {
+        let collect_host_default =
+            most_recent_collect_host.ok_or_else(|| eyre!("Add a collect host before creating the default job"))?;
         let collect_host = prompt_with_default("Collect host for the default job", &collect_host_default)?;
         let collect_job_name = format!("{collect_host}-collect");
         let collect_job = esdiag::data::Job::builder()
             .collect_from(collect_host.clone())?
             .collect_to(format!("diagnostics/{collect_host}"))?;
+        confirm_default_job_replacement(&collect_job_name)?;
         save_default_job(collect_job_name, collect_job)?;
-        if let Some(output) = esdiag::data::ApplicationConfig::load()?.output.default {
+        if workflow.processes_diagnostics() {
+            let output = esdiag::data::ApplicationConfig::load()?
+                .output
+                .default
+                .ok_or_else(|| eyre!("A processing workflow requires an output deployment"))?;
             let process_job_name = format!("{collect_host}-process-{output}");
+            confirm_default_job_replacement(&process_job_name)?;
             save_default_processing_job(process_job_name, collect_host)?;
         }
     }
@@ -2189,9 +2356,115 @@ async fn run_init_wizard() -> Result<CommandResult> {
     if !readiness.is_complete() {
         return Err(eyre!("Initialization did not produce a complete reusable workflow."));
     }
-    Ok(CommandResult::outcome(initialization_outcome(
-        initialization_skill_installation()?,
-    )?))
+    let outcome = initialization_outcome(initialization_skill_installation()?)?;
+    if started_local_stack {
+        run_local_lifecycle(vec![OsString::from("open")]).await?;
+    }
+    Ok(CommandResult::outcome(outcome))
+}
+
+fn should_start_local_core_stack(
+    no_existing_stack: bool,
+    runtime_available: bool,
+    approved: impl FnOnce() -> Result<bool>,
+) -> Result<bool> {
+    if no_existing_stack && runtime_available {
+        approved()
+    } else {
+        Ok(false)
+    }
+}
+
+fn ensure_output_deployment_valid(elasticsearch_valid: bool, kibana_valid: bool) -> Result<()> {
+    match (elasticsearch_valid, kibana_valid) {
+        (true, true) => Ok(()),
+        (false, false) => Err(eyre!(
+            "The selected Elasticsearch and Kibana output endpoints could not be validated. Existing output configuration was not changed."
+        )),
+        (false, true) => Err(eyre!(
+            "The selected Elasticsearch output endpoint could not be validated. Existing output configuration was not changed."
+        )),
+        (true, false) => Err(eyre!(
+            "The selected Kibana output endpoint could not be validated. Existing output configuration was not changed."
+        )),
+    }
+}
+
+fn confirm_output_replacement(
+    output_name: &str,
+    viewer_name: &str,
+    secret_id: &str,
+    keystore_password: &str,
+) -> Result<()> {
+    let hosts = KnownHost::parse_hosts_yml()?;
+    let replaces_output = hosts.contains_key(output_name);
+    let replaces_viewer = hosts.contains_key(viewer_name);
+    let replaces_secret = list_secret_names(keystore_password)?
+        .iter()
+        .any(|name| name == secret_id);
+    let replaces_default = esdiag::data::ApplicationConfig::load()?
+        .output
+        .default
+        .is_some_and(|name| name != output_name);
+    if replaces_output || replaces_viewer || replaces_secret || replaces_default {
+        let mut replaced = Vec::new();
+        if replaces_output {
+            replaced.push(format!("output host '{output_name}'"));
+        }
+        if replaces_viewer {
+            replaced.push(format!("Kibana viewer '{viewer_name}'"));
+        }
+        if replaces_secret {
+            replaced.push(format!("secret '{secret_id}'"));
+        }
+        if replaces_default {
+            replaced.push("the configured default output".to_string());
+        }
+        if !prompt_confirm(&format!("Replace {}? [y/N]: ", replaced.join(", ")))? {
+            return Err(eyre!("Output deployment replacement was declined."));
+        }
+    }
+    Ok(())
+}
+
+fn default_collect_host_name() -> Option<String> {
+    KnownHost::parse_hosts_yml()
+        .ok()?
+        .into_iter()
+        .find_map(|(name, host)| host.has_role(HostRole::Collect).then_some(name))
+}
+
+fn confirm_default_job_replacement(name: &str) -> Result<()> {
+    let jobs = esdiag::data::load_saved_jobs()?;
+    let config = esdiag::data::ApplicationConfig::load()?;
+    let replaces_job = jobs.contains_key(name);
+    let replaces_default = config.job.default.as_deref().is_some_and(|current| current != name);
+    if (replaces_job || replaces_default)
+        && !prompt_confirm(&format!(
+            "Replace {}? [y/N]: ",
+            match (replaces_job, replaces_default) {
+                (true, true) => format!("existing job '{name}' and configured default job"),
+                (true, false) => format!("existing job '{name}'"),
+                (false, true) => "the configured default job".to_string(),
+                (false, false) => unreachable!(),
+            }
+        ))?
+    {
+        return Err(eyre!("Default job replacement was declined."));
+    }
+    Ok(())
+}
+
+fn should_run_output_setup(started_local_stack: bool, approved: impl FnOnce() -> Result<bool>) -> Result<bool> {
+    if started_local_stack { Ok(false) } else { approved() }
+}
+
+fn local_core_stack_start_args() -> Vec<OsString> {
+    vec![
+        OsString::from("up"),
+        OsString::from("--stack=core"),
+        OsString::from("--open-browser=false"),
+    ]
 }
 
 fn initialization_outcome(skill_installation: Option<AgentSkillsResult>) -> Result<CliOutcome> {
@@ -2201,10 +2474,7 @@ fn initialization_outcome(skill_installation: Option<AgentSkillsResult>) -> Resu
             .user
             .ok_or_else(|| eyre!("Initialization completed without a configured user"))?,
         output: config.output.default,
-        job: config
-            .job
-            .default
-            .ok_or_else(|| eyre!("Initialization completed without a default job"))?,
+        job: config.job.default,
         skill_installation,
     })
 }
@@ -2323,22 +2593,77 @@ fn prompt_url_with_default(message: &str, default: &str) -> Result<Url> {
     Url::parse(&prompt_with_default(message, default)?).map_err(Into::into)
 }
 
-fn first_saved_collect_host() -> Option<String> {
-    KnownHost::parse_hosts_yml()
-        .ok()?
-        .into_iter()
-        .find(|(_, host)| host.has_role(HostRole::Collect))
-        .map(|(name, _)| name)
-}
-
 #[derive(Clone)]
 struct EsdiagLocalPreset {
     elasticsearch_url: String,
     kibana_url: String,
+    kibana_api_url: String,
     apikey: Option<String>,
 }
 
+#[cfg(test)]
+fn local_stack_outcome(command: String, args: &[OsString]) -> CliOutcome {
+    let state_dir = args
+        .iter()
+        .enumerate()
+        .find_map(|(index, argument)| {
+            if argument == "--state-dir" {
+                args.get(index + 1).cloned().map(PathBuf::from)
+            } else {
+                argument
+                    .to_str()
+                    .and_then(|argument| argument.strip_prefix("--state-dir="))
+                    .map(PathBuf::from)
+            }
+        })
+        .or_else(|| std::env::var_os("ESDIAG_LOCAL_DIR").map(PathBuf::from))
+        .or_else(default_esdiag_local_state_dir);
+    let values = state_dir
+        .and_then(|dir| std::fs::read_to_string(dir.join(".env")).ok())
+        .map(|contents| {
+            contents
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<std::collections::HashMap<_, _>>()
+        });
+    let mode = values
+        .as_ref()
+        .and_then(|values| values.get("STACK_MODE"))
+        .map(ToString::to_string);
+    let esdiag_url = values
+        .as_ref()
+        .and_then(|values| values.get("ESDIAG_PORT"))
+        .map(|port| format!("http://127.0.0.1:{port}"));
+    let kibana_url = values
+        .as_ref()
+        .and_then(|values| values.get("ESDIAG_KIBANA_PORT"))
+        .map(|port| format!("http://127.0.0.1:{port}"));
+    CliOutcome::LocalStack {
+        command,
+        mode,
+        native_service: None,
+        esdiag_url,
+        kibana_url,
+    }
+}
+
 fn detected_esdiag_local_preset() -> Option<EsdiagLocalPreset> {
+    if std::env::var("ESDIAG_CONTAINER_LOCAL_STACK").ok().as_deref() == Some("full") {
+        let elasticsearch_url = std::env::var("ESDIAG_OUTPUT_URL").ok()?;
+        let kibana_api_url = std::env::var("ESDIAG_KIBANA_INTERNAL_URL")
+            .or_else(|_| std::env::var("ESDIAG_KIBANA_URL"))
+            .ok()?;
+        let kibana_url = std::env::var("ESDIAG_KIBANA_PUBLIC_URL").ok()?;
+        return Some(EsdiagLocalPreset {
+            elasticsearch_url,
+            kibana_url,
+            kibana_api_url,
+            apikey: std::env::var("ESDIAG_OUTPUT_APIKEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty() && value != "pending"),
+        });
+    }
     let state_dir = std::env::var_os("ESDIAG_LOCAL_DIR")
         .map(PathBuf::from)
         .or_else(default_esdiag_local_state_dir)?;
@@ -2352,11 +2677,18 @@ fn detected_esdiag_local_preset() -> Option<EsdiagLocalPreset> {
                 .flatten()
         })
         .collect::<std::collections::HashMap<_, _>>();
+    if values
+        .get("STACK_MODE")
+        .is_some_and(|mode| !matches!(mode.trim(), "full" | "core"))
+    {
+        return None;
+    }
     let elasticsearch_port = values.get("ESDIAG_ELASTICSEARCH_PORT").copied().unwrap_or("9200");
     let kibana_port = values.get("ESDIAG_KIBANA_PORT").copied().unwrap_or("5601");
     Some(EsdiagLocalPreset {
         elasticsearch_url: format!("http://localhost:{elasticsearch_port}"),
         kibana_url: format!("http://localhost:{kibana_port}"),
+        kibana_api_url: format!("http://localhost:{kibana_port}"),
         apikey: values
             .get("ESDIAG_OUTPUT_APIKEY")
             .map(|value| value.trim())
@@ -2480,7 +2812,16 @@ async fn run_agent_ask_for_output(
         .ok_or_else(|| eyre!("The configured output deployment has no Kibana viewer authentication"))?;
     let viewer_url = viewer.get_url()?;
     let location = AgentBuilderLocation::new(viewer_url.clone(), agent_builder_space(&viewer_url));
-    let client = KibanaClient::try_new(viewer_url, viewer_auth)?;
+    let client_url = if std::env::var("ESDIAG_CONTAINER_LOCAL_STACK").ok().as_deref() == Some("full") {
+        std::env::var("ESDIAG_KIBANA_INTERNAL_URL")
+            .ok()
+            .map(|url| Url::parse(&url))
+            .transpose()?
+            .unwrap_or_else(|| viewer_url.clone())
+    } else {
+        viewer_url.clone()
+    };
+    let client = KibanaClient::try_new(client_url, viewer_auth)?;
     let agent_client = AgentBuilderClient::new(&client, location);
     let agent_name = agent_client
         .agent_name(&agent)
@@ -2879,9 +3220,11 @@ mod tests {
     };
     use super::{
         Cli, Commands, HostCommands, KeystoreCommands, classify_failure, colorize_keystore_lock_status,
-        command_owns_stdout, default_diagnostic_user_from, format_keystore_lock_status, format_keystore_lock_status_at,
-        format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode, resolve_host_secret_auth,
-        resolve_secret_input_with_prompt, resolve_tracing_filter, should_error_for_missing_subcommand,
+        command_owns_stdout, default_diagnostic_user_from, detected_esdiag_local_preset,
+        ensure_output_deployment_valid, format_keystore_lock_status, format_keystore_lock_status_at,
+        format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode, local_core_stack_start_args,
+        local_stack_outcome, resolve_host_secret_auth, resolve_secret_input_with_prompt, resolve_tracing_filter,
+        should_error_for_missing_subcommand, should_run_output_setup, should_start_local_core_stack,
         structured_failure,
     };
     #[cfg(feature = "keystore")]
@@ -2911,7 +3254,7 @@ mod tests {
         job::model::{ExportTarget, Input, Job, Process},
         processor::Identifiers,
     };
-    use std::sync::Mutex;
+    use std::{ffi::OsString, sync::Mutex};
     use tempfile::TempDir;
     use url::Url;
 
@@ -3291,6 +3634,12 @@ mod tests {
         }
     }
 
+    #[test]
+    fn local_help_stdout_is_not_replaced_with_a_terminal_outcome() {
+        let cli = Cli::parse_from(["esdiag", "local"]);
+        assert!(command_owns_stdout(&cli));
+    }
+
     #[cfg(feature = "keystore")]
     #[test]
     fn saved_job_stdout_is_not_replaced_with_a_terminal_outcome() {
@@ -3346,6 +3695,166 @@ mod tests {
         let cli = Cli::try_parse_from(["esdiag", "init"]).expect("parse init");
 
         assert!(matches!(cli.command, Some(Commands::Init)));
+    }
+
+    #[test]
+    fn local_command_preserves_lifecycle_arguments() {
+        let cli = Cli::try_parse_from(["esdiag", "local", "up", "--stack=core", "--pull", "never"])
+            .expect("parse local command");
+
+        match cli.command {
+            Some(Commands::Local { args }) => {
+                assert_eq!(
+                    args,
+                    vec![
+                        OsString::from("up"),
+                        OsString::from("--stack=core"),
+                        OsString::from("--pull"),
+                        OsString::from("never")
+                    ]
+                );
+            }
+            other => panic!("expected local command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn init_only_starts_the_rust_core_lifecycle_after_explicit_approval() {
+        assert!(should_start_local_core_stack(true, true, || Ok(true)).expect("approved start"));
+        assert!(!should_start_local_core_stack(true, true, || Ok(false)).expect("declined start"));
+        let prompted = std::cell::Cell::new(false);
+        assert!(
+            !should_start_local_core_stack(false, true, || {
+                prompted.set(true);
+                Ok(true)
+            })
+            .expect("existing stack skips prompt")
+        );
+        assert!(!prompted.get());
+        assert!(
+            !should_start_local_core_stack(true, false, || {
+                prompted.set(true);
+                Ok(true)
+            })
+            .expect("missing runtime skips prompt")
+        );
+        assert!(!prompted.get());
+        assert_eq!(
+            local_core_stack_start_args(),
+            vec![
+                OsString::from("up"),
+                OsString::from("--stack=core"),
+                OsString::from("--open-browser=false"),
+            ]
+        );
+    }
+
+    #[test]
+    fn init_skips_redundant_setup_for_a_new_local_stack() {
+        assert!(
+            !should_run_output_setup(true, || { panic!("new local stack must not repeat the asset prompt") })
+                .expect("local stack setup is complete")
+        );
+        assert!(should_run_output_setup(false, || Ok(true)).expect("existing stack approval"));
+        assert!(!should_run_output_setup(false, || Ok(false)).expect("existing stack decline"));
+    }
+
+    #[test]
+    fn invalid_output_endpoints_are_rejected_before_persistence() {
+        assert!(ensure_output_deployment_valid(true, true).is_ok());
+        for (elasticsearch, kibana) in [(false, false), (false, true), (true, false)] {
+            let error = ensure_output_deployment_valid(elasticsearch, kibana).expect_err("invalid output");
+            assert!(
+                error
+                    .to_string()
+                    .contains("Existing output configuration was not changed.")
+            );
+        }
+    }
+
+    #[test]
+    fn local_preset_accepts_shared_core_state_and_rejects_unknown_modes() {
+        let _guard = env_lock().lock().expect("environment lock");
+        let state = TempDir::new().expect("temporary local state");
+        std::fs::write(
+            state.path().join(".env"),
+            "STACK_MODE=core\nESDIAG_ELASTICSEARCH_PORT=19200\nESDIAG_KIBANA_PORT=15601\nESDIAG_PORT=12501\nESDIAG_OUTPUT_APIKEY=local-key\n",
+        )
+        .expect("write local state");
+        unsafe {
+            std::env::set_var("ESDIAG_LOCAL_DIR", state.path());
+        }
+
+        let preset = detected_esdiag_local_preset().expect("read core local state");
+        assert_eq!(preset.elasticsearch_url, "http://localhost:19200");
+        assert_eq!(preset.kibana_url, "http://localhost:15601");
+        assert_eq!(preset.kibana_api_url, "http://localhost:15601");
+        assert_eq!(preset.apikey.as_deref(), Some("local-key"));
+        let outcome = serde_json::to_string(&local_stack_outcome("status".to_string(), &[OsString::from("status")]))
+            .expect("serialize local outcome");
+        assert!(outcome.contains("\"mode\":\"core\""));
+        assert!(outcome.contains("http://127.0.0.1:12501"));
+        assert!(!outcome.contains("local-key"));
+
+        let forwarded_state = TempDir::new().expect("temporary forwarded local state");
+        std::fs::write(
+            forwarded_state.path().join(".env"),
+            "STACK_MODE=full\nESDIAG_PORT=22501\nESDIAG_KIBANA_PORT=25601\n",
+        )
+        .expect("write forwarded local state");
+        for args in [
+            vec![
+                OsString::from("status"),
+                OsString::from("--state-dir"),
+                forwarded_state.path().as_os_str().to_os_string(),
+            ],
+            vec![
+                OsString::from("status"),
+                OsString::from(format!("--state-dir={}", forwarded_state.path().display())),
+            ],
+        ] {
+            let outcome = serde_json::to_string(&local_stack_outcome("status".to_string(), &args))
+                .expect("serialize forwarded local outcome");
+            assert!(outcome.contains("\"mode\":\"full\""));
+            assert!(outcome.contains("http://127.0.0.1:22501"));
+            assert!(outcome.contains("http://127.0.0.1:25601"));
+        }
+
+        std::fs::write(state.path().join(".env"), "STACK_MODE=unknown\n").expect("write unsupported state");
+        assert!(detected_esdiag_local_preset().is_none());
+        unsafe {
+            std::env::remove_var("ESDIAG_LOCAL_DIR");
+        }
+    }
+
+    #[test]
+    fn managed_full_container_preset_separates_internal_and_public_kibana_urls() {
+        let _guard = env_lock().lock().expect("environment lock");
+        unsafe {
+            std::env::set_var("ESDIAG_CONTAINER_LOCAL_STACK", "full");
+            std::env::set_var("ESDIAG_OUTPUT_URL", "http://elasticsearch:9200");
+            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "container-key");
+            std::env::set_var("ESDIAG_KIBANA_INTERNAL_URL", "http://kibana:5601/s/esdiag");
+            std::env::set_var("ESDIAG_KIBANA_PUBLIC_URL", "http://127.0.0.1:5601/s/esdiag");
+        }
+
+        let preset = detected_esdiag_local_preset().expect("read full container state");
+        assert_eq!(preset.elasticsearch_url, "http://elasticsearch:9200");
+        assert_eq!(preset.kibana_api_url, "http://kibana:5601/s/esdiag");
+        assert_eq!(preset.kibana_url, "http://127.0.0.1:5601/s/esdiag");
+        assert_eq!(preset.apikey.as_deref(), Some("container-key"));
+
+        for variable in [
+            "ESDIAG_CONTAINER_LOCAL_STACK",
+            "ESDIAG_OUTPUT_URL",
+            "ESDIAG_OUTPUT_APIKEY",
+            "ESDIAG_KIBANA_INTERNAL_URL",
+            "ESDIAG_KIBANA_PUBLIC_URL",
+        ] {
+            unsafe {
+                std::env::remove_var(variable);
+            }
+        }
     }
 
     #[test]
