@@ -43,10 +43,9 @@ esdiag local auth
 esdiag init
 ```
 
-On a new state directory, `--stack=auto` uses core mode when the installed
-binary matches the embedded launcher. Core mode runs Elasticsearch and Kibana
-in containers and starts native `esdiag serve --mode user`. Full mode runs the
-ESDiag web service in a container.
+On a new state directory, `--stack=auto` uses core mode. Core mode runs
+Elasticsearch and Kibana in containers and starts native `esdiag serve --mode
+user`. Full mode runs the ESDiag web service in a container.
 
 ```sh
 esdiag local up --stack=core
@@ -54,8 +53,10 @@ esdiag local up --stack=full
 ```
 
 `init` can offer to start a core stack when you select local processing and no
-stack exists. If you decline, it returns to remote setup without creating local
-state.
+stack exists. Its approval includes the assets needed by that new local
+deployment. If you decline, it returns to remote setup without creating local
+state. Existing local stacks and remote deployments ask separately before
+installing assets.
 
 Core and full modes keep separate ESDiag user state. Switching modes does not
 move hosts, jobs, settings, or secrets between the native user directory and
@@ -80,7 +81,7 @@ esdiag init
 ```
 
 Choose processing, then choose **remote**. The initializer saves the output
-host, optional Kibana viewer, and encrypted credentials. It also offers to
+host, linked Kibana viewer, and encrypted credentials. It also offers to
 install output assets.
 
 To configure the destination yourself:

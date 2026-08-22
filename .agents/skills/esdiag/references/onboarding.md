@@ -1,50 +1,65 @@
-# First-run ESDiag setup
+# First-run setup
 
-Initialization is local and interactive. Check whether `esdiag` is available:
+Ask one question first: will the user only collect and share diagnostics, or
+will they also process them?
+
+Then check for a native binary:
 
 ```sh
 command -v esdiag
 ```
 
-## Native binary
+An installed binary skips installation. Move to [choose an interface](#choose-an-interface).
 
-When the binary is available, ask the user to run:
+## Collect and share only
+
+Ask whether the user can install a native binary.
+
+If they can, use [install a native binary](#install-a-native-binary). A native
+binary is the route to saved jobs, processing, and the Agent Skill later.
+
+If they cannot, use ESDiag Lite. It collects Elasticsearch diagnostics and can
+upload a ZIP archive. It does not process diagnostics, run a web UI, or call
+Agent Builder.
+
+- Linux and macOS use `esdiag-lite.sh`.
+- Windows uses `esdiag-lite.ps1`.
+
+Provide the script through the user's approved source. Do not invent a raw
+download URL or ask for Elasticsearch credentials in chat. The user supplies
+connection details in their terminal.
+
+Collection ends this branch. The user can decide how to share the archive after
+collection.
+
+## Process diagnostics
+
+Ask which runtime the user can use: a native binary, a local container stack,
+or an administrator-provided hosted service.
+
+### Native binary
+
+Use [install a native binary](#install-a-native-binary), then [choose an
+interface](#choose-an-interface).
+
+### Local container stack
+
+Check for a usable container runtime and Compose support:
 
 ```sh
-esdiag init
+if command -v podman >/dev/null 2>&1; then
+  podman compose version
+elif command -v docker >/dev/null 2>&1; then
+  docker compose version
+else
+  exit 1
+fi
 ```
 
-The wizard configures the workflow they select. For local processing it can
-start `esdiag local up --stack=core`; for a remote deployment it configures the
-selected output.
+If neither runtime works, return to the native-binary choice. Do not offer a
+local container workflow that cannot run.
 
-When `esdiag` is unavailable, check for Homebrew and Cargo:
-
-```sh
-command -v brew
-command -v cargo
-```
-
-If either is available, ask whether the user wants a local binary. If both are
-available, ask which installer they prefer. After consent, install with the
-chosen method:
-
-```sh
-brew install elastic/tools/esdiag
-```
-
-```sh
-cargo install --locked esdiag
-```
-
-Confirm `esdiag --version`, then direct the user to run `esdiag init` in their
-terminal. Do not run the initializer for them.
-
-## Script-first container stack
-
-When neither installer is available, ask whether the user wants a
-containerized ESDiag stack. On approval, download and verify `esdiag-local`,
-then start the full stack:
+Download, verify, and start the full stack:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
@@ -64,14 +79,84 @@ chmod 755 "$HOME/.local/bin/esdiag-local"
 "$HOME/.local/bin/esdiag-local" up --stack=full
 ```
 
-This path needs Podman or Docker with Compose support. It provides the web UI
-and containerized ESDiag runtime; `esdiag init`, native commands, and core mode
-need a native binary.
+For a web-first workflow, direct the user to:
+
+```sh
+"$HOME/.local/bin/esdiag-local" open
+```
+
+For CLI-first container work, initialize and run commands through the
+full-mode service:
+
+```sh
+"$HOME/.local/bin/esdiag-local" exec -- init
+"$HOME/.local/bin/esdiag-local" exec -- process ./diagnostic.zip
+```
+
+`exec` is full-mode-only. It preserves the container-owned ESDiag state and
+mounts the current directory for relative paths. Add `--mount /path` before
+`--` for an archive outside the working directory.
+
+### Hosted service
+
+Use the administrator-provided ESDiag and Kibana URLs. Do not install a local
+stack unless the user also wants one. A CLI or Agent Skill workflow still needs
+a native binary or an administrator-provided runner.
+
+## Install a native binary
+
+Check which installation method the user can use:
+
+```sh
+command -v brew
+command -v cargo
+```
+
+Ask which method they prefer when both are present. With their approval:
+
+```sh
+brew install elastic/tools/esdiag
+```
+
+```sh
+cargo install --locked esdiag
+```
+
+GitHub release archives are another native-install path on platforms with a
+published archive. Direct the user to the official release page and their
+platform's matching asset. Do not guess an asset name.
+
+Confirm the installation:
+
+```sh
+esdiag --version
+```
+
+## Choose an interface
+
+Ask whether the user will mainly use the CLI, including the Agent Skill, or the
+web interface.
+
+For CLI-first work, direct the user to run this in their own terminal:
+
+```sh
+esdiag init
+```
+
+The wizard keeps credentials local. It can configure collection-only work,
+remote processing, or a local core stack.
+
+For web-first local processing, direct the user to start and open the core
+stack:
+
+```sh
+esdiag local up --stack=core
+esdiag local open
+```
+
+For a hosted workflow, use the URL provided by the administrator.
 
 ## Guardrails
 
-Keep credentials in the interactive wizard. Do not request passwords, API keys,
-or keystore values in chat, and do not write ESDiag state files manually.
-
-For a shared hosted `esdiag serve` service, use the administrator-provided URL.
-Install local tools only when the user also wants a local workflow.
+Keep passwords, API keys, and keystore values in the user's terminal. Do not
+request them in chat. Do not write ESDiag state files by hand.

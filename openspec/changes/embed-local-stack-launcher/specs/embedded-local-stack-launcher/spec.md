@@ -8,10 +8,9 @@ separate script installation while preserving explicit containerized operation.
 ### Requirement: Binary-Owned Local Stack Command
 
 The ESDiag binary SHALL provide `esdiag local <command> [options]` for local
-stack lifecycle operations. It SHALL execute a version-matched launcher owned
-by the running binary without requiring a persistent `esdiag-local` file,
-repository checkout, or release download. The dispatched launcher SHALL inherit
-the user's terminal input, output, error streams, and exit status.
+stack lifecycle operations. It SHALL execute the lifecycle through Rust code
+owned by the running binary without requiring a persistent `esdiag-local` file,
+repository checkout, release download, or Bash interpreter.
 
 #### Scenario: Binary-first user starts a stack
 
@@ -20,16 +19,15 @@ the user's terminal input, output, error streams, and exit status.
 - **WHEN** the user executes `esdiag local up`
 - **THEN** the local stack lifecycle starts without downloading or installing a
   standalone script
-- **AND** the command reports launcher output and completion status to the same
-  terminal
+- **AND** the command reports structured lifecycle completion and progress
+  without executing the standalone script
 
-### Requirement: Embedded Launcher Version Coherence
+### Requirement: Standalone Native Compatibility
 
-The launcher dispatched by `esdiag local` SHALL identify the same ESDiag
-version as the running binary. A standalone launcher selecting host-native mode
-SHALL do so only when the discovered `esdiag` executable reports that exact
-version; an absent, unreadable, failing, or mismatched executable MUST NOT
-select native mode.
+A standalone launcher selecting host-native mode SHALL do so only when the
+discovered `esdiag` executable reports that exact version; an absent, unreadable,
+failing, or mismatched executable MUST NOT select native mode. `esdiag local`
+SHALL use its own running binary for core mode.
 
 #### Scenario: Matching binary selects native mode
 
@@ -50,8 +48,9 @@ select native mode.
 ### Requirement: Explicit Local Stack Modes
 
 `esdiag local up` and the standalone launcher SHALL accept
-`--stack=auto|full|core`. `auto` SHALL resolve a new deployment to core mode
-when a compatible native binary is available and to full mode otherwise.
+`--stack=auto|full|core`. Native `auto` SHALL resolve a new deployment to core.
+Standalone `auto` SHALL resolve to core when a compatible native binary is
+available and to full mode otherwise.
 `full` SHALL force the ESDiag setup and web-service containers. `core` SHALL
 force a deployment containing only Elasticsearch and Kibana. The resolved mode
 for a managed state directory SHALL remain stable on later automatic starts
@@ -199,26 +198,25 @@ mode, and safe failure guidance without exposing credentials.
 - **AND** the outcome identifies the same mode and endpoints the standalone
   launcher reports for the shared deployment
 
-### Requirement: Initialization Can Provision a Core Stack
+### Requirement: Native Initialization Can Provision a Core Stack
 
-When an interactive `esdiag init` processing workflow selects a local output
+When an interactive native `esdiag init` processing workflow selects a local output
 deployment and no usable local stack exists, initialization SHALL offer to start
-the binary-owned launcher in core mode. Accepting SHALL return to the same
+the binary-owned Rust lifecycle in core mode. Accepting SHALL return to the same
 interactive workflow after Elasticsearch and Kibana are ready, using the
 generated local deployment state. Declining SHALL leave no new local stack
 running and SHALL let the user choose a different output deployment.
 
-This narrowly permits initialization to dispatch the binary-owned embedded
-launcher and its same-version managed native web-service child. Initialization
-MUST NOT download a launcher, invoke an unrelated ESDiag executable, or invoke
-an arbitrary external helper.
+Native initialization MUST NOT download a launcher, invoke an unrelated ESDiag
+executable, execute the standalone script, or invoke an arbitrary external
+helper.
 
 #### Scenario: Initialization starts a requested local core stack
 
 - **GIVEN** a user selected local processing during initialization
 - **AND** no usable local stack exists
 - **WHEN** the user accepts the offer to start one
-- **THEN** initialization starts a core deployment through the embedded launcher
+- **THEN** initialization starts a core deployment through the Rust lifecycle
 - **AND** resumes local output configuration without asking for a standalone
   launcher installation
 
@@ -229,16 +227,16 @@ an arbitrary external helper.
 - **THEN** initialization does not create containers or deployment state
 - **AND** offers the remote output path
 
-### Requirement: Embedded Launcher Updates Follow Binary Updates
+### Requirement: Native Lifecycle Updates Follow Binary Updates
 
-`esdiag local update` SHALL not self-replace a transient embedded launcher. It
+`esdiag local update` SHALL not self-replace binary-owned lifecycle code. It
 MUST direct users to update the ESDiag binary through its installation channel.
 The downloaded standalone launcher SHALL retain its explicit self-update
 behavior.
 
-#### Scenario: User requests an embedded launcher update
+#### Scenario: User requests a native lifecycle update
 
 - **WHEN** a user executes `esdiag local update`
 - **THEN** the command does not download or replace a launcher file
-- **AND** it explains that updating the ESDiag binary updates the embedded
-  launcher
+- **AND** it explains that updating the ESDiag binary updates its local
+  lifecycle

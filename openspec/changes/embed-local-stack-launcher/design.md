@@ -18,41 +18,29 @@ local-stack state for local output configuration.
 
 **Non-Goals:**
 
-- Port the Bash launcher to Rust.
 - Remove the standalone release asset or its self-update behavior.
 - Migrate container ESDiag user state into host-native ESDiag state.
 
 ## Decisions
 
-### Render and embed the launcher with the binary version
+### Own native lifecycle in Rust
 
-The build pipeline will render `bin/esdiag-local` into the build output with
-the package version, then the CLI will embed those bytes. This avoids a
-version-skewed launcher when a release workflow renders the standalone asset.
-The binary will write the embedded launcher to a restrictive temporary file,
-run it with Bash while inheriting the caller's terminal streams, map its exit
-status, and remove the temporary file.
+`esdiag local` parses, validates, and executes its lifecycle in Rust. It owns
+state reads and writes, Compose file generation, runtime invocation, readiness,
+asset setup, browser launch, and native `serve` supervision. It does not render,
+write, or execute `bin/esdiag-local`.
 
-The command dispatcher will reject `esdiag local update` with binary-update
-guidance because a transient launcher has no safe self-replacement target.
-
-Alternatives considered:
-
-- Download a release asset on first use: rejected because it adds network,
-  checksum, and release-availability dependencies to binary-first onboarding.
-- Reimplement launcher orchestration in Rust: rejected because it duplicates a
-  mature portable Bash lifecycle implementation.
-- Persist a script beside the binary: deferred because it recreates a second
-  installed artifact and its update ownership problem.
+The standalone Bash artifact remains a script-first entry point. Both
+implementations consume the same documented stack-state schema and conformance
+fixtures, but neither invokes the other.
 
 ### Resolve stack mode once per state directory
 
-`--stack=auto|full|core` is parsed by the launcher. On a new deployment,
-`auto` checks a discovered host `esdiag --version` against the launcher
-version. An exact match resolves to `core`; all other outcomes resolve to
-`full`. The resolved mode is stored in the protected managed state and later
-automatic starts retain it. Explicit `full` or `core` changes the stored mode
-after the requested deployment reaches its ready state.
+`--stack=auto|full|core` is parsed by each entry point. For `esdiag local`,
+`auto` resolves to `core`; `full` remains an explicit container-runtime
+override. The standalone launcher selects core only for an exact matching
+native binary and otherwise resolves auto to full. Both persist the resolved
+mode after readiness and retain it on later automatic starts.
 
 This prevents installation, removal, or replacement of a PATH binary from
 silently changing an already-running deployment. A mode transition removes
@@ -79,6 +67,33 @@ the recorded process still identifies as the expected version-matched ESDiag
 service before signaling it; stale or mismatched records are removed without
 signaling the referenced process. `status`, `logs`, `restart esdiag`, `down`,
 and `reset` use that same ownership check.
+
+### Execute commands through the full-mode service
+
+`esdiag-local exec [launcher-options] -- <esdiag-arguments>` is the sole
+container-only replacement for a native `esdiag` command. It is available only
+when valid managed state records full mode and the full service dependencies are
+running. It uses the state-derived Compose invocation to run an ephemeral
+command in the `esdiag` service definition, preserving the selected image,
+service network, environment, and `esdiag-data` volume. It never downloads a
+second wrapper artifact or infers credentials from a caller's shell.
+
+The delimiter separates launcher options from opaque ESDiag arguments. The
+subcommand preserves terminal input, output, error, and process exit status so
+both a human and an Agent Skill can use interactive `init` and finite commands
+such as `process`, `job run`, and `agent ask`.
+
+The wrapper mounts the current working directory for relative input paths and
+accepts explicit additional host-path mounts. It rejects paths that cannot be
+made visible to the command container rather than silently processing a
+different path.
+
+The invoked ESDiag command needs network-internal Elasticsearch and Kibana
+addresses, while browser handoffs must use host-published loopback addresses.
+Full-mode state therefore distinguishes an internal Kibana service URL from a
+public Kibana viewer URL. Container initialization recognizes the managed full
+stack and uses its container-owned user state; it MUST NOT offer or attempt to
+start a nested core stack.
 
 ### Treat stack state as shared and ESDiag user state as mode-owned
 
@@ -111,20 +126,14 @@ an intentional presentation difference, not a lifecycle or state divergence.
 
 During local processing setup, `esdiag init` first checks for usable local-stack
 state. If none exists, it asks whether to start a core deployment. On approval,
-it calls the same in-process embedded-launcher dispatch path used by
-`esdiag local up --stack=core`, waits for completion, then resumes local output
-setup. On decline, it returns to remote-output selection without creating
-state.
-
-This is the sole exception to the initialization rule against external helpers:
-the binary owns the dispatched launcher bytes and the version-matched native
-web-service child. Initialization does not download code, invoke an unrelated
-ESDiag binary, or run arbitrary commands.
+it calls the same Rust lifecycle used by `esdiag local up --stack=core`, waits
+for completion, then resumes local output setup. On decline, it returns to
+remote-output selection without creating state.
 
 ## Risks / Trade-offs
 
-- [Bash is unavailable or too old] → Detect it before dispatch and provide
-  supported-platform guidance; retain the launcher’s Bash 3.2 contract.
+- [Bash is unavailable or too old] → The Rust binary path remains available;
+  the standalone launcher documents and validates its Bash 3.2 requirement.
 - [Native and full modes have separate ESDiag user state] → Persist stack mode,
   never migrate implicitly, and document that switching modes does not transfer
   host settings, jobs, or secrets.
@@ -135,6 +144,12 @@ ESDiag binary, or run arbitrary commands.
   an exact version match and fall back to full mode with a reason.
 - [Core users expect the web UI] → Status and startup output explicitly state
   that core mode serves the same local web UI through the managed native binary.
+- [Container CLI starts a nested stack] → `exec init` receives an explicit
+  managed-full-stack marker and container-network output configuration.
+- [Container Agent Builder returns an unreachable link] → Store distinct
+  internal service and host-published viewer URLs and return the latter.
+- [Container CLI cannot see an archive] → Mount the working directory and
+  require explicit mounts for paths outside it.
 - [A stale PID targets an unrelated process] → Verify executable identity,
   command role, and managed service metadata before sending a signal; otherwise
   remove only the stale record.

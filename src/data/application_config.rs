@@ -37,6 +37,14 @@ pub enum OnboardingWorkflow {
 }
 
 impl OnboardingWorkflow {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CollectOnly => "collection only",
+            Self::ProcessExisting => "process existing diagnostics",
+            Self::CollectAndProcess => "collect and process diagnostics",
+        }
+    }
+
     pub fn collects_diagnostics(self) -> bool {
         matches!(self, Self::CollectOnly | Self::CollectAndProcess)
     }

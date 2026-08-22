@@ -8,6 +8,7 @@ use crate::data::{
     Application, ApplicationConfig, HostRole, Job, JobOutput, KnownHost, KnownHostBuilder, OnboardingWorkflow,
     SavedJobs, SecretAuth, keystore_exists, save_saved_jobs, upsert_secret_auth,
 };
+use crate::job::model::Input;
 use eyre::{Result, eyre};
 use url::Url;
 
@@ -26,9 +27,12 @@ impl OnboardingReadiness {
         self.user_configured
             && match self.workflow {
                 Some(OnboardingWorkflow::CollectOnly) => self.collect_host_configured && self.default_job_configured,
-                Some(OnboardingWorkflow::ProcessExisting) => self.output_configured,
+                Some(OnboardingWorkflow::ProcessExisting) => self.keystore_ready && self.output_configured,
                 Some(OnboardingWorkflow::CollectAndProcess) => {
-                    self.output_configured && self.collect_host_configured && self.default_job_configured
+                    self.keystore_ready
+                        && self.output_configured
+                        && self.collect_host_configured
+                        && self.default_job_configured
                 }
                 None => false,
             }
@@ -65,7 +69,12 @@ pub fn inspect() -> Result<OnboardingReadiness> {
         .as_ref()
         .is_some_and(|name| hosts.get(name).is_some_and(valid_output_host));
     let collect_host_configured = hosts.values().any(|host| host.has_role(HostRole::Collect));
-    let default_job_configured = config.job.default.as_ref().is_some_and(|name| jobs.contains_key(name));
+    let default_job_configured = config
+        .job
+        .default
+        .as_ref()
+        .and_then(|name| jobs.get(name))
+        .is_some_and(|job| workflow_job_is_valid(job, &hosts, config.workflow, config.output.default.as_deref()));
 
     Ok(OnboardingReadiness {
         user_configured: config.user.as_deref().is_some_and(|user| !user.trim().is_empty()),
@@ -75,6 +84,27 @@ pub fn inspect() -> Result<OnboardingReadiness> {
         collect_host_configured,
         default_job_configured,
     })
+}
+
+fn workflow_job_is_valid(
+    job: &Job,
+    hosts: &std::collections::BTreeMap<String, KnownHost>,
+    workflow: Option<OnboardingWorkflow>,
+    output: Option<&str>,
+) -> bool {
+    let Input::Collect { host, .. } = job.input() else {
+        return false;
+    };
+    if !hosts.get(host).is_some_and(|host| host.has_role(HostRole::Collect)) {
+        return false;
+    }
+    match workflow {
+        Some(OnboardingWorkflow::CollectOnly) => job.process().is_none(),
+        Some(OnboardingWorkflow::CollectAndProcess) => {
+            matches!(job.process().map(|process| &process.export), Some(JobOutput::KnownHost { name }) if Some(name.as_str()) == output)
+        }
+        Some(OnboardingWorkflow::ProcessExisting) | None => false,
+    }
 }
 
 pub fn save_user(user: String) -> Result<ApplicationConfig> {

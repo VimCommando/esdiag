@@ -21,10 +21,10 @@
 ## 4. Initialization State Machine
 
 - [x] 4.1 Add the `esdiag init` Clap surface and explicit inspect, identity, keystore, output, collection-host, default-job, and complete stages.
-- [x] 4.2 Implement resumable existing-state inspection and explicit replacement confirmations, writing `ApplicationConfig` only after required stages validate and deriving readiness from validated references rather than file existence.
+- [x] 4.2 Implement resumable existing-state inspection and output/workflow reuse, require explicit confirmation before replacing a default job, write `ApplicationConfig` only after required stages validate, and derive readiness from validated references rather than file existence.
 - [x] 4.3 Implement hidden controlling-terminal prompts for keystore passwords and host credentials using existing keystore APIs, including non-TTY failure behavior and redaction tests.
 - [x] 4.4 Implement output deployment creation/selection as a send-role Elasticsearch host linked to a view-role Kibana host, with shared-secret default and existing distinct-secret selection.
-- [x] 4.5 Validate both output clients, inspect required ESDiag assets, and offer the existing setup operation only after explicit approval.
+- [x] 4.5 Validate both output clients, treating approval to provision a new local core stack as approval for its lifecycle-owned assets while offering existing setup only after explicit approval for existing local and remote deployments.
 - [x] 4.6 Implement the repeatable collect-host loop and first saved-job creation, defaulting to `Collect` plus `Process` with the configured send-role Elasticsearch host as its export target while retaining explicit collect-and-save-only selection.
 - [x] 4.7 Emit the standard safe initialization outcome when structured CLI output is available and add interrupted/resumed end-to-end wizard tests.
 
@@ -39,3 +39,9 @@
 - [x] 6.2 Run `cargo clippy --all-targets --all-features -- -D warnings`.
 - [x] 6.3 Run `cargo test --all-features`.
 - [x] 6.4 Run strict OpenSpec validation for `add-first-run-onboarding`.
+
+## 7. Verification Follow-ups
+
+- [x] 7.1 Resume valid collection hosts by default, require confirmation before modifying existing collection, output, secret, default-output, or default-job state, and preserve configured state when replacement is declined.
+- [x] 7.2 Require a keystore for processing readiness, validate default-job workflow shape, and report declined asset setup with recovery guidance.
+- [x] 7.3 Correct persisted-output and linked-viewer documentation and add regression coverage for resumed readiness.

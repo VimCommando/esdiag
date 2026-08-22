@@ -146,3 +146,68 @@ MUST NOT create or depend on that volume.
 - **WHEN** the user executes `esdiag-local reset --force`
 - **THEN** the ESDiag user-state volume is removed with the Elasticsearch and
   Kibana data volumes
+
+### Requirement: Full-Mode Container CLI Execution
+
+The standalone launcher SHALL provide
+`esdiag-local exec [launcher-options] -- <esdiag-arguments>` as the
+container-only ESDiag CLI path. It SHALL require valid managed full-mode state
+and running full-stack dependencies. It MUST reject core mode and missing,
+incompatible, or stopped full-mode state without changing the deployment.
+
+The command SHALL derive the Compose runtime, project, image, service network,
+environment, and `esdiag-data` user-state volume from the managed state. It
+SHALL execute the supplied ESDiag arguments in an ephemeral `esdiag` service
+container, preserve terminal input/output/error and exit status, and MUST NOT
+download or require a separate wrapper artifact.
+
+#### Scenario: Container-only user initializes ESDiag state
+
+- **GIVEN** a healthy full-mode deployment created by `esdiag-local`
+- **WHEN** the user executes `esdiag-local exec -- init`
+- **THEN** the initializer runs interactively in the full-mode ESDiag user
+  state volume
+- **AND** it recognizes the managed full stack as its local output deployment
+- **AND** it does not offer or attempt to create a nested local stack
+
+#### Scenario: Core mode rejects container CLI execution
+
+- **GIVEN** a managed deployment is in core mode
+- **WHEN** the user executes `esdiag-local exec -- agent ask "Summarize"`
+- **THEN** the command exits without creating a container
+- **AND** explains that core mode requires the native ESDiag binary
+
+### Requirement: Opaque Arguments and Host File Visibility
+
+`exec` SHALL require `--` before ESDiag arguments so launcher options cannot
+be confused with child-command options. It SHALL treat all arguments after the
+delimiter as opaque ESDiag arguments.
+
+The command SHALL make the caller's working directory available to the
+container command for relative paths and SHALL provide an explicit,
+repeatable mount option for approved paths outside that directory. It MUST
+fail before executing when a referenced host path cannot be made visible to
+the container.
+
+#### Scenario: Container CLI processes a working-directory archive
+
+- **GIVEN** a diagnostic archive exists beneath the caller's working directory
+- **WHEN** the user executes `esdiag-local exec -- process ./diagnostic.zip`
+- **THEN** the command container receives the archive at the corresponding
+  path
+- **AND** ESDiag processes that archive using the full-mode user state
+
+### Requirement: Internal and Public Kibana Addresses
+
+Container CLI execution SHALL use the Compose-network Kibana address for
+service API calls and a separately recorded host-published Kibana viewer URL
+for browser handoffs. It SHALL not persist an internal-only Compose hostname as
+the user-facing Kibana URL.
+
+#### Scenario: Container Agent Builder returns a browser-reachable link
+
+- **GIVEN** a full-mode deployment is running with Kibana published on a local
+  port
+- **WHEN** `esdiag-local exec -- agent ask "Summarize"` completes
+- **THEN** the Agent Builder request uses the internal Kibana service address
+- **AND** the returned Kibana URL uses the host-published local address

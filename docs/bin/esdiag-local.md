@@ -13,9 +13,9 @@ Use the installed binary for a local stack:
 esdiag local up
 ```
 
-`esdiag local` writes its version-matched embedded launcher to a temporary file
-for the command, then removes it. Update the binary through Homebrew, Cargo, or
-its release archive. `esdiag local update` cannot replace a temporary file.
+`esdiag local` owns its stack lifecycle directly in Rust. Update the binary
+through Homebrew, Cargo, or its release archive; `esdiag local update` cannot
+replace binary-owned code.
 
 Use the standalone `esdiag-local` script when a script is your entry point. It
 needs Bash 3.2 or later and Podman or Docker with Compose support.
@@ -33,7 +33,7 @@ For installation and first use, see
 
 | Mode | Services |
 |---|---|
-| `auto` | Uses core on a new state directory only when it finds a matching native binary. Otherwise uses full. |
+| `auto` | `esdiag local` uses core for a new state directory. `esdiag-local` uses core only with a matching native binary and otherwise uses full. |
 | `core` | Runs Elasticsearch and Kibana containers, plus native `esdiag serve --mode user`. |
 | `full` | Runs Elasticsearch, Kibana, and ESDiag containers. |
 
@@ -49,6 +49,9 @@ The directory is private and `.env` has mode `0600`.
 
 The stack binds Elasticsearch to `127.0.0.1:9200`, Kibana to
 `127.0.0.1:5601`, and the ESDiag web UI to `127.0.0.1:2501` by default.
+`esdiag local up` and `esdiag local open` copy the generated Elastic password
+to the clipboard when a platform clipboard helper is available; pass
+`--copy-password=false` to opt out.
 
 The stack stores generated Elasticsearch credentials and API keys in `.env`.
 Do not copy them into `hosts.yml`, `settings.yml`, or `secrets.yml`.
@@ -63,7 +66,7 @@ esdiag local status
 esdiag local auth
 esdiag local logs
 esdiag local setup
-esdiag local restart esdiag --log-level debug
+esdiag local restart esdiag
 esdiag local restart elasticsearch kibana
 esdiag local down
 ```

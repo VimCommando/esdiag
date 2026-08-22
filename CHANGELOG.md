@@ -17,7 +17,7 @@ published release notes, maintenance branches, and tagged history.
 - Added `esdiag agent ask` for finite Kibana Agent Builder questions with explicit conversation follow-ups and Kibana recovery links (#379).
 - Added `esdiag process --ask` to start an Agent Builder conversation about a newly processed diagnostic with its identifier included automatically (#379).
 - Added `esdiag agent skills` to install the running binary's offline, version-matched ESDiag skill for Claude Code, Codex, and OpenCode (#379).
-- Added `esdiag local` to provision and manage a local Elastic Stack with the binary's version-matched embedded launcher.
+- Added `esdiag local` to provision and manage a local Elastic Stack through a Rust-owned lifecycle, with core as the default and an explicit full-container override.
 - Added optional Elastic Upload Service forwarding to `esdiag-lite.sh` for newly collected and existing ZIP archives.
 - Added `esdiag-lite.ps1` for version-aware Elasticsearch diagnostic collection on Windows PowerShell.
 

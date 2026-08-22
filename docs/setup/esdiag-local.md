@@ -22,9 +22,9 @@ esdiag local up
 esdiag local auth
 ```
 
-On a new state directory, `--stack=auto` starts core mode when the installed
-binary matches the embedded launcher. Core mode runs Elasticsearch and Kibana
-in containers and starts native `esdiag serve --mode user`.
+On a new state directory, `--stack=auto` starts core mode. Core mode runs
+Elasticsearch and Kibana in containers and starts native `esdiag serve --mode
+user`.
 
 Choose a mode only when you need to:
 
@@ -61,9 +61,10 @@ esdiag init
 ```
 
 Choose local processing. If the stack already exists, the initializer reads its
-generated endpoints. If it does not, the initializer can start a core stack.
-When it starts one, it opens the local web UI only after every onboarding
-question has been completed.
+generated endpoints and asks before installing assets. If it does not, the
+initializer can start a core stack; that approval includes the new stack's
+required assets. When it starts one, it opens the local web UI only after every
+onboarding question has been completed.
 
 The initializer creates native user configuration. The local stack keeps its
 generated credentials separately under `~/.esdiag/local`.

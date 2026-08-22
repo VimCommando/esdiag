@@ -37,6 +37,7 @@ if [[ "$1" == compose ]]; then
     touch "${FAKE_VOLUMES}/${project}_elasticsearch-data" "${FAKE_VOLUMES}/${project}_kibana-data"
     grep -q '^  esdiag:$' "$compose_file" && touch "${FAKE_VOLUMES}/${project}_esdiag-data"
   fi
+  if [[ "$action" == ps ]]; then printf '%s\n' fixture-container; fi
   if [[ "$action" == down && "$*" == *--volumes* ]]; then rm -f "${FAKE_VOLUMES}/${project}_elasticsearch-data" "${FAKE_VOLUMES}/${project}_kibana-data" "${FAKE_VOLUMES}/${project}_esdiag-data"; fi
 fi
 exit 0
@@ -108,9 +109,10 @@ assert_not_contains "$tmp/secure/compose.yml" 'settings.yml'
 assert_not_contains "$tmp/secure/compose.yml" 'secrets.yml'
 assert_contains "$tmp/secure/compose.yml" "ESDIAG_MODE: user"
 assert_contains "$tmp/secure/compose.yml" 'ESDIAG_KIBANA_URL: http://kibana:5601/s/${ESDIAG_KIBANA_SPACE}'
-assert_contains "$tmp/secure/compose.yml" 'ESDIAG_KIBANA_URL: http://localhost:${ESDIAG_KIBANA_PORT}/s/${ESDIAG_KIBANA_SPACE}'
-[[ "$(grep -c 'ESDIAG_KIBANA_URL: http://kibana:5601' "$tmp/secure/compose.yml")" == 1 ]] || fail 'internal Kibana URL leaked into web configuration'
-[[ "$(grep -c 'ESDIAG_KIBANA_URL: http://localhost:${ESDIAG_KIBANA_PORT}' "$tmp/secure/compose.yml")" == 1 ]] || fail 'browser Kibana URL is not unique to web configuration'
+assert_contains "$tmp/secure/compose.yml" 'ESDIAG_KIBANA_PUBLIC_URL: ${ESDIAG_KIBANA_PUBLIC_URL}'
+[[ "$(grep -c 'ESDIAG_KIBANA_URL: http://kibana:5601' "$tmp/secure/compose.yml")" == 2 ]] || fail 'container services do not use the internal Kibana URL'
+assert_contains "$tmp/secure/.env" 'ESDIAG_KIBANA_PUBLIC_URL=http://127.0.0.1:5601/s/esdiag'
+assert_contains "$tmp/secure/compose.yml" 'ESDIAG_CONTAINER_LOCAL_STACK: full'
 assert_contains "$tmp/secure/compose.yml" 'esdiag-data:/root/.esdiag'
 assert_contains "$tmp/secure/compose.yml" '  esdiag-data:'
 [[ "$(grep -c "LOG_LEVEL: \${LOG_LEVEL}" "$tmp/secure/compose.yml")" == 2 ]] || fail 'log level is not passed to ESDiag services'
@@ -140,6 +142,33 @@ assert_contains "$tmp/mismatched-core.err" 'requires an ESDiag 0.17.0-SNAPSHOT b
 password=$(sed -n 's/^ELASTIC_PASSWORD=//p' "$tmp/secure/.env")
 run_local up --runtime podman --state-dir "$tmp/secure" --pull never --open-browser=false
 [[ "$password" == "$(sed -n 's/^ELASTIC_PASSWORD=//p' "$tmp/secure/.env")" ]] || fail 'password rotated'
+
+# Full-mode exec preserves opaque arguments, reuses the container state, and mounts only approved host paths.
+: >"$tmp/runtime.log"
+(cd "$tmp/work" && run_local exec --runtime podman --state-dir "$tmp/secure" -- init)
+assert_contains "$tmp/runtime.log" 'run --rm --no-deps'
+assert_contains "$tmp/runtime.log" 'esdiag init'
+printf 'diagnostic fixture\n' >"$tmp/outside.zip"
+if (cd "$tmp/work" && run_local exec --runtime podman --state-dir "$tmp/secure" -- process "$tmp/outside.zip") 2>"$tmp/exec-path-error"; then
+    fail 'exec accepted an unmounted external path'
+fi
+assert_contains "$tmp/exec-path-error" 'Path is outside the working directory'
+(cd "$tmp/work" && run_local exec --runtime podman --state-dir "$tmp/secure" --mount "$tmp" -- process "$tmp/outside.zip" --ask 'Summarize')
+canonical_tmp=$(cd "$tmp" && pwd -P)
+assert_contains "$tmp/runtime.log" "--volume $canonical_tmp:$tmp"
+assert_contains "$tmp/runtime.log" "esdiag process $tmp/outside.zip --ask Summarize"
+touch "$tmp/work/local-job"
+(cd "$tmp/work" && run_local exec --runtime podman --state-dir "$tmp/secure" -- job run local-job)
+assert_contains "$tmp/runtime.log" 'esdiag job run local-job'
+
+# Container execution is never available to core mode.
+PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
+    "$script" up --runtime podman --state-dir "$tmp/core-exec" --stack=core --pull never --open-browser=false
+if PATH="$fake_bin:$PATH" "$script" exec --runtime podman --state-dir "$tmp/core-exec" -- agent ask Summarize 2>"$tmp/core-exec-error"; then
+    fail 'core mode accepted container CLI execution'
+fi
+assert_contains "$tmp/core-exec-error" 'requires full mode'
+
 run_local setup --runtime podman --state-dir "$tmp/secure" >"$tmp/setup.out" 2>"$tmp/setup.err"
 run_local status --runtime podman --state-dir "$tmp/secure" >"$tmp/status" 2>&1
 run_local auth --state-dir "$tmp/secure" >"$tmp/auth" 2>&1

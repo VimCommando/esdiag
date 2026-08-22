@@ -84,7 +84,7 @@ keystore password for non-interactive use.
 | `-` | Write processed documents to stdout. |
 | Saved host name | Send to that host. |
 | Other non-empty string | Write to a local file or directory. |
-| Omitted | Use `ESDIAG_OUTPUT_*`. |
+| Omitted | Use a complete `ESDIAG_OUTPUT_*` deployment, then the default linked output in `esdiag.yml`. |
 
 Save HTTP URLs as hosts before using them as outputs. A raw `http://` or
 `https://` argument is a file path, not an Elasticsearch destination.
@@ -143,19 +143,20 @@ legacy plaintext host credentials into the keystore.
 - A collection host and default collection job.
 - A local or remote output and linked Kibana viewer.
 - A default collect-and-process job.
-- Output assets when you approve installation.
+- Output assets when you approve installation for an existing local or remote
+  deployment.
 
 It stores credentials in `secrets.yml`, not `esdiag.yml`.
 
 When you select local processing and no stack exists, `init` can start a
-binary-owned core stack. Declining returns to remote output setup.
+binary-owned core stack. Its approval includes that new stack's required
+assets; declining returns to remote output setup.
 
 See [Configure ESDiag](setup/configuration.md) for the prompts and paths.
 
 ## `local`
 
-`esdiag local <command>` runs the embedded, version-matched local-stack
-launcher:
+`esdiag local <command>` runs the binary's Rust-owned local-stack lifecycle:
 
 ```sh
 esdiag local up
@@ -167,7 +168,7 @@ esdiag local down
 
 `up` accepts `--stack=auto|core|full`.
 
-- `auto` picks core only when the installed binary matches the launcher.
+- `auto` defaults to core.
 - `core` runs Elasticsearch and Kibana in containers and starts native
   `esdiag serve --mode user`.
 - `full` runs the ESDiag web service in a container.
@@ -176,7 +177,7 @@ The state directory records the chosen mode. Changing modes does not move
 hosts, jobs, settings, or secrets between the native user directory and the
 full-mode container volume.
 
-`esdiag local update` cannot update a temporary embedded launcher. Update the
+`esdiag local update` cannot update binary-owned lifecycle code. Update the
 binary through Homebrew, Cargo, or its release archive.
 
 See [Run a local diagnostic cluster](setup/esdiag-local.md) for local setup and

@@ -4,9 +4,6 @@
 
 use rust_embed::RustEmbed;
 
-/// Version-matched standalone local-stack launcher rendered during the build.
-pub static LOCAL_STACK_LAUNCHER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/esdiag-local"));
-
 /// Assets in the `assets/` directory (e.g. setup assets, `marked.js`)
 #[derive(RustEmbed)]
 #[folder = "assets/"]

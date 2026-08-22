@@ -141,6 +141,8 @@ pub enum CliOutcome {
         #[serde(skip_serializing_if = "Option::is_none")]
         mode: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        native_service: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         esdiag_url: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         kibana_url: Option<String>,

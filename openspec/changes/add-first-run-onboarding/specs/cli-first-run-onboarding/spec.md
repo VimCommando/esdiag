@@ -8,11 +8,11 @@ diagnostics, process existing diagnostics, or do both. The workflow SHALL
 configure only the identity, keystore, output deployment, collect host, and
 default job stages required by that selection.
 
-The workflow SHALL use in-process domain APIs and MUST NOT invoke another
-unrelated `esdiag` process or arbitrary external helper executable. It MAY
-dispatch the binary-owned embedded local-stack launcher and its same-version
-managed native web-service child only to start a user-approved local core
-deployment for a local processing workflow.
+The workflow SHALL use in-process domain APIs and MUST NOT invoke an unrelated
+ESDiag executable, the standalone `esdiag-local` script, or arbitrary external
+helper executable. It MAY invoke the binary-owned Rust local-stack lifecycle
+and its managed native web-service child only to start a user-approved local
+core deployment for a local processing workflow.
 
 #### Scenario: User initializes collection-only workflow
 - **GIVEN** no ESDiag local state exists
@@ -80,20 +80,36 @@ The output stage SHALL create or select an Elasticsearch send host and a Kibana 
 - **THEN** initialization does not set the output as active
 - **AND** preserves any previously active valid output reference
 
-### Requirement: Asset Setup Requires Explicit Approval
-Initialization SHALL inspect whether the configured output deployment has the ESDiag assets needed for processing and Agent Builder use. When setup is needed, it SHALL offer the existing setup operation, describe its privilege and license implications, and MUST NOT provision assets unless the user explicitly approves.
+### Requirement: Asset Setup Follows Deployment Ownership
+For an existing local or remote deployment, initialization SHALL ask whether
+the diagnostic cluster needs ESDiag dashboards and agents. On approval, it
+SHALL run the existing version-compatible setup operation. It MUST NOT
+provision assets unless the user explicitly approves.
 
-#### Scenario: User approves missing asset setup
-- **GIVEN** output endpoints validate but required ESDiag assets are absent
+When the user approves starting a new binary-owned local core stack,
+initialization SHALL treat that approval as approval for the lifecycle's
+required ESDiag assets. It SHALL not ask a redundant asset question after the
+stack is ready.
+
+#### Scenario: User approves setup for an existing or remote deployment
+- **GIVEN** an existing local or remote output deployment validates but required
+  ESDiag assets are absent
 - **WHEN** the user approves setup
 - **THEN** initialization runs the existing setup behavior against the configured deployment
-- **AND** revalidates readiness before continuing
+- **AND** records the running ESDiag asset version
 
-#### Scenario: User declines setup
-- **GIVEN** required assets are absent
+#### Scenario: User declines setup for an existing or remote deployment
+- **GIVEN** an existing local or remote output deployment has required assets absent
 - **WHEN** the user declines setup
 - **THEN** the configured endpoints remain saved
 - **AND** initialization reports that processing or Agent Builder use is not yet ready
+
+#### Scenario: New local stack implies required assets
+- **GIVEN** local processing is selected and no usable local stack exists
+- **WHEN** the user approves starting a binary-owned core stack
+- **THEN** its Rust lifecycle installs the required ESDiag assets before it
+  reports ready
+- **AND** initialization records the asset version without a second asset prompt
 
 ### Requirement: Required Saved Job Matches Workflow
 Initialization SHALL create a valid default saved job only for workflows that
