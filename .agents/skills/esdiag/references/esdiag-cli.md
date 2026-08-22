@@ -36,8 +36,14 @@ Upload newly collected diagnostics to Elastic Upload Service:
 esdiag collect <host> <directory> --upload <upload-id>
 ```
 
-The native CLI has no command that uploads an arbitrary existing archive.
-Use ESDiag Lite for that case, or process the archive into a configured output
+Upload an existing archive directly:
+
+```sh
+esdiag upload <archive> <upload-id>
+```
+
+Use ESDiag Lite when collecting from an Elasticsearch cluster without a full
+ESDiag installation, or process the archive into a configured output
 deployment.
 
 ## Process
