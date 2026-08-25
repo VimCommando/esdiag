@@ -15,6 +15,7 @@ published release notes, maintenance branches, and tagged history.
 - Added `esdiag completions` to print or install bash, zsh, fish, and PowerShell completion scripts for the running binary.
 - Added `esdiag-lite.sh` and `esdiag-lite.ps1`, each with a SHA-256 checksum, to every GitHub release.
 - Added pull-request checks for the ESDiag Lite scripts, including the Windows PowerShell tests.
+- Added processing for Kibana diagnostic bundles, including status, settings, security, Fleet, alerting, spaces, monitoring, synthetics, and detection-engine data.
 
 ### Changed
 
