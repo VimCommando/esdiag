@@ -1099,6 +1099,32 @@ mod tests {
         assert_eq!(completed.state.report.outcome(), DiagnosticOutcome::Complete);
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn kibana_processing() {
+        let root = tempfile::tempdir().expect("bundle directory");
+        extract_archive("kibana-api-diagnostics-8.19.3.zip", root.path());
+
+        let receiver = Arc::new(Receiver::try_from(Uri::Directory(root.path().to_path_buf())).expect("receiver"));
+        let output = tempfile::tempdir().expect("output directory");
+        let exporter = Arc::new(Exporter::try_from(Uri::Directory(output.path().to_path_buf())).expect("exporter"));
+        let processor = Processor::try_new(receiver, exporter, Identifiers::default())
+            .await
+            .expect("ready processor");
+        let processing = processor
+            .start()
+            .await
+            .map_err(|failed| failed.state.error)
+            .expect("processing processor");
+        let completed = processing
+            .process()
+            .await
+            .map_err(|failed| failed.state.error)
+            .expect("completed processor");
+
+        assert_eq!(completed.state.report.diagnostic.application, Some(Application::Kibana));
+        assert!(completed.state.report.diagnostic.docs.created > 0);
+    }
+
     /// A child diagnostic ESDiag recognizes but has no processor for. Written as
     /// a manifest rather than extracted from a fixture archive because dispatch
     /// happens on the declared application, before any product diagnostic is

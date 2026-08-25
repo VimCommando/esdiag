@@ -43,7 +43,7 @@ use super::{
     diagnostic::{DataSource, DiagnosticManifest, DiagnosticReport, DiagnosticReportBuilder},
 };
 use crate::{
-    data::{self, Product},
+    data::{self, Application},
     exporter::Exporter,
     receiver::Receiver,
 };
@@ -113,7 +113,7 @@ impl DiagnosticProcessor for KibanaDiagnostic {
         let kibana_version = receiver.get::<version::Version>().await?;
         let metadata = KibanaMetadata::try_new(manifest, kibana_version)?;
         let report = DiagnosticReportBuilder::from(metadata.diagnostic.clone())
-            .product(Product::Kibana)
+            .application(Application::Kibana)
             .receiver(receiver.to_string())
             .build()?;
 
