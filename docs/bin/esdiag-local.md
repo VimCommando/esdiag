@@ -23,6 +23,9 @@ chmod +x esdiag-local
 
 The stack uses pinned official images, binds Elasticsearch (`9200`), Kibana
 (`5601`), and ESDiag (`2501`) to `127.0.0.1`, and always enables security.
+Setup reaches Kibana through the internal Compose hostname, while links returned
+by ESDiag use `http://localhost:5601` (or the configured published Kibana port)
+so they are reachable from the host browser.
 The script attempts to copy the Kibana password immediately before opening the browser; disable that with
 `--copy-password=false` or browser launch with `--open-browser=false`.
 
@@ -32,10 +35,15 @@ State and lifecycle
 Generated `.env`, `compose.yml`, and failure logs live in
 `${ESDIAG_LOCAL_DIR:-~/.esdiag/local}`. Override this with `--state-dir`. The
 directory is private and `.env` is mode `0600`. Edit the three documented port
-values in `.env` before `up`; ports must be in range, unique, and available.
+values or `LOG_LEVEL` in `.env` before `up`; ports must be in range, unique, and available.
 Initialized credentials and volumes are treated as one deployment state. If
 either side is missing, startup fails closed and requires restoring the missing
 state or running a confirmed reset.
+
+Elasticsearch, Kibana, and ESDiag User-mode state use separate named volumes.
+The `esdiag-data` volume is mounted at `/root/.esdiag` and preserves saved hosts,
+settings, jobs, keystore data, and unlock state when the ESDiag container is
+recreated.
 
 Image defaults are version-pinned. Use `--image` for a complete ESDiag image
 override, `--esdiag-registry` or `--elastic-registry` for registry overrides,
@@ -46,6 +54,8 @@ Pull behavior is selected with `--pull always|missing|never`.
 ```sh
 ./esdiag-local status
 ./esdiag-local logs
+./esdiag-local restart esdiag --log-level debug
+./esdiag-local restart elasticsearch kibana
 ./esdiag-local setup
 ./esdiag-local auth
 ./esdiag-local down
@@ -53,6 +63,24 @@ Pull behavior is selected with `--pull always|missing|never`.
 
 `down` keeps configuration, credentials, and volumes. `reset` destroys all of
 them and prompts for confirmation; automation must pass `reset --force`.
+`restart` recreates only the named `elasticsearch`, `kibana`, or `esdiag`
+services so persisted configuration changes take effect. `--log-level` stores
+an ESDiag log filter such as `debug` in the deployment state. The `LOG_LEVEL`
+environment variable provides the same setting; the CLI option takes precedence.
+
+Default diagnostic output
+-------------------------
+
+The ESDiag service runs explicitly in User mode. Its generated
+`ESDIAG_OUTPUT_URL` and `ESDIAG_OUTPUT_APIKEY` point to the local Elasticsearch
+service and remain in the protected deployment `.env`; they are not copied into
+`hosts.yml`, `settings.yml`, or `secrets.yml`.
+
+In the web workflow, the remote output selector displays `Default` when no
+saved output is selected. `Default` sends no explicit exporter, so processing
+uses the deployment's `ESDIAG_OUTPUT_*` values without creating or unlocking an
+ESDiag keystore. Selecting a saved secret-backed output continues to require
+the normal keystore unlock flow.
 
 Credentials
 -----------

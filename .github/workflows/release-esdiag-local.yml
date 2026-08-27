@@ -2,7 +2,7 @@ name: Release esdiag-local
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["[0-9]*.[0-9]*.[0-9]*"]
 
 permissions:
   contents: write
@@ -12,12 +12,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          # Set this on a release branch when the previous release tag is not
+          # an ancestor of the tagged commit.
+          RELEASE_NOTES_START_TAG: ""
         run: |
+          previous_tag="$RELEASE_NOTES_START_TAG"
+          if [ -z "$previous_tag" ]; then
+            previous_tag="$(git tag --merged HEAD --sort=-v:refname | sed -n '2p')"
+          fi
+          if [ -z "$previous_tag" ]; then
+            echo "::error::Unable to determine the release-notes baseline. Set RELEASE_NOTES_START_TAG on the release branch."
+            exit 1
+          fi
           gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
-            gh release create "${{ github.ref_name }}" --draft --verify-tag --generate-notes
+            gh release create "${{ github.ref_name }}" --draft --verify-tag --generate-notes \
+              --notes-start-tag "$previous_tag"
           test "$(gh release view "${{ github.ref_name }}" --json isDraft --jq .isDraft)" = true
       - name: Verify published image manifests
         env:
@@ -59,7 +73,10 @@ jobs:
             --pattern esdiag-local --pattern esdiag-local.sha256
           cd target/release-assets/verification
           sha256sum --check esdiag-local.sha256
-      - name: Publish release
+      - name: Leave release draft for human approval
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "${{ github.ref_name }}" --draft=false
+        run: |
+          test "$(gh release view "${{ github.ref_name }}" --json isDraft --jq .isDraft)" = true
+          echo "Release ${{ github.ref_name }} is verified and remains a draft pending human approval." \
+            >> "$GITHUB_STEP_SUMMARY"
