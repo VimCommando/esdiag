@@ -64,8 +64,9 @@ Read only the target references required by the release:
    becomes public. Never change those assets after publication.
 7. Stop for explicit approval before publishing crates.io or changing a GitHub
    release from draft to public. A human publishes the GitHub release.
-8. Update the Homebrew Formula only after the GitHub release is public, stable,
-   complete, and immutable.
+8. Complete the Homebrew target only after the GitHub release is public,
+   stable, complete, and immutable. Follow its reference through the checked
+   tap PR and include that PR in the release handoff.
 
 ## Shared Invariants
 
