@@ -19,6 +19,10 @@ published release notes, maintenance branches, and tagged history.
 - Added optional Elastic Upload Service forwarding to `esdiag-lite.sh` for newly collected and existing ZIP archives.
 - Added `esdiag-lite.ps1` for version-aware Elasticsearch diagnostic collection on Windows PowerShell.
 
+### Fixed
+
+- Fixed the Lifecycle Overview dashboard resetting the global time filter to the default 15-minute window on cold load, which hid diagnostic data; it now stores a 90-day range so lifecycle data is visible by default (#365).
+
 ## [0.16.0] - 2026-07-11
 
 ### Added

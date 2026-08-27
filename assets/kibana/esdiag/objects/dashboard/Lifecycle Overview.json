@@ -2187,7 +2187,9 @@ a:link { text-decoration: none; }""",
         "type": "lens"
       }
     ],
-    "timeRestore": false,
+    "timeFrom": "now-90d/d",
+    "timeRestore": true,
+    "timeTo": "now",
     "title": "Lifecycle Overview",
     "version": 3
   },
