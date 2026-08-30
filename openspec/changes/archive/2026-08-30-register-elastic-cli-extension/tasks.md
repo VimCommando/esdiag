@@ -36,14 +36,14 @@
 - [x] 3.18 Emit inline-secret permission warnings when config files contain inline secrets and loose permissions.
 - [x] 3.19 Add `elasticrc` crate tests for discovery, parsing, validation, expression resolution, platform-specific secret resolvers, inline secrets, permission warnings, redaction, and upstream schema drift fixtures.
 - [x] 3.20 Add ESDiag integration tests for `.prod.es`, `.prod.elasticsearch`, `.prod.kb`, `.prod.cloud`, dotted context names, missing contexts, unsupported services, Elastic config precedence over saved hosts, and transient target conversion.
-- [ ] 3.21 Add registry metadata, package inclusion rules, and a standalone README with public `elasticrc` loading and resolution examples.
-- [ ] 3.22 Audit the public API so `elasticrc` has no dependency on ESDiag domain types and secret-bearing types retain explicit redaction boundaries.
-- [ ] 3.23 Add a compatible registry version alongside the workspace path in ESDiag's optional `elasticrc` dependency.
-- [ ] 3.24 Verify `cargo package -p elasticrc` and `cargo publish --dry-run -p elasticrc` from a clean workspace.
-- [ ] 3.25 Add an external-consumer fixture that compiles and exercises the packaged crate without depending on unpublished workspace files.
-- [ ] 3.26 Build public API documentation and run doctests for the supported discovery, load, and lazy service-resolution workflow.
-- [ ] 3.27 Test the packaged crate and default dependency set with the declared minimum Rust version.
-- [ ] 3.28 Document semantic-versioning and publication procedures for the initial `elasticrc` registry release.
+- [x] 3.21 Add registry metadata, package inclusion rules, and a standalone README with public `elasticrc` loading and resolution examples.
+- [x] 3.22 Audit the public API so `elasticrc` has no dependency on ESDiag domain types and secret-bearing types retain explicit redaction boundaries.
+- [x] 3.23 Add a compatible registry version alongside the workspace path in ESDiag's optional `elasticrc` dependency.
+- [x] 3.24 Verify `cargo package -p elasticrc` and `cargo publish --dry-run -p elasticrc` from a clean workspace.
+- [x] 3.25 Add an external-consumer fixture that compiles and exercises the packaged crate without depending on unpublished workspace files.
+- [x] 3.26 Build public API documentation and run doctests for the supported discovery, load, and lazy service-resolution workflow.
+- [x] 3.27 Test the packaged crate and default dependency set with the declared minimum Rust version.
+- [x] 3.28 Document semantic-versioning expectations and the declared minimum Rust version for the initial `elasticrc` registry release.
 
 ## 4. Extension Entrypoint
 
@@ -84,34 +84,34 @@ Sections 1–7 record the completed prototype. Sections 8–11 supersede its con
 
 ## 8. Native Extension Profile
 
-- [ ] 8.1 Add the Elastic CLI invocation profile to the shared Rust execution layer.
-- [ ] 8.2 Select the extension profile from the executable name while retaining `ESDIAG_ELASTIC_CLI=1` as a development compatibility override.
-- [ ] 8.3 Add the extension-specific command profile for `collect`, `process`, `send`, `setup`, `job`, `output`, `help`, and `version`; omit standalone administration commands.
-- [ ] 8.4 Rename outbound bundle transfer to `send` in the extension profile while preserving standalone compatibility as needed.
+- [x] 8.1 Add the Elastic CLI invocation profile to the shared Rust execution layer.
+- [x] 8.2 Select the extension profile from the executable name while retaining `ESDIAG_ELASTIC_CLI=1` as a development compatibility override.
+- [x] 8.3 Add the extension-specific command profile for `collect`, `process`, `send`, `setup`, `job`, `output`, `help`, and `version`; omit standalone administration commands.
+- [x] 8.4 Standardize outbound bundle transfer on `send` across the extension, standalone CLI, structured outcomes, documentation, and helper scripts.
 
 ## 9. Multi-Context Job and Output Deployment Model
 
-- [ ] 9.1 Add typed symbolic Elastic CLI context references to Collect inputs, Export targets, saved Jobs, and application output configuration.
-- [ ] 9.2 Implement `elastic diag output set|show|clear` without mutating `.elasticrc` or persisting credentials.
-- [ ] 9.3 Resolve a configured output context as one deployment with Elasticsearch for Export and optional Kibana for View, preserving separate authentication.
-- [ ] 9.4 Resolve `.context.app` in the existing output positional as an explicit output deployment without adding an output-context option.
-- [ ] 9.5 Prevent the active input context from becoming an implicit output fallback.
-- [ ] 9.6 Reject bare `elastic diag process` and require `.es`, `.kb`, or another explicit application-bearing input reference.
-- [ ] 9.7 Preserve backward-compatible deserialization and behavior for existing saved-host output configuration and saved Jobs.
-- [ ] 9.8 Add end-to-end tests for active `prod` input with configured `monitoring` output, positional `.monitoring.es` overrides, named input changes, saved Job re-resolution, missing services, credential rotation, and legacy persisted data.
+- [x] 9.1 Add typed symbolic Elastic CLI context references to Collect inputs, Export targets, saved Jobs, and application output configuration.
+- [x] 9.2 Implement `elastic diag output set|show|clear` without mutating `.elasticrc` or persisting credentials.
+- [x] 9.3 Resolve a configured output context as one deployment with Elasticsearch for Export and optional Kibana for View, preserving separate authentication.
+- [x] 9.4 Resolve `.context.app` in the existing output positional as an explicit output deployment without adding an output-context option.
+- [x] 9.5 Prevent the active input context from becoming an implicit output fallback.
+- [x] 9.6 Reject bare `elastic diag process` and require `.es`, `.kb`, or another explicit application-bearing input reference.
+- [x] 9.7 Preserve backward-compatible deserialization and behavior for existing saved-host output configuration and saved Jobs.
+- [x] 9.8 Add end-to-end tests for active `prod` input with configured `monitoring` output, positional `.monitoring.es` overrides, named input changes, saved Job re-resolution, missing services, credential rotation, and legacy persisted data.
 
 ## 10. Stage-Aware Context and Cloud-Admin Resolution
 
-- [ ] 10.1 Replace generic context-to-`Uri` conversion with stage-aware transient resolved hosts and output deployments.
-- [ ] 10.2 Parse active `.cloud/<deployment-id>/<application>` and named `.context.cloud/<deployment-id>/<application>` references.
-- [ ] 10.3 Require the Cloud proxy application explicitly, initially accept only `es` and `elasticsearch`, and reject omitted or unsupported applications clearly.
-- [ ] 10.4 Construct Cloud-admin proxy targets with Elasticsearch as the application, the Cloud admin route, and an `ElasticCloudHosted` platform hint.
-- [ ] 10.5 Remove bare `.cloud` and `.context.cloud` as directly collectable targets while retaining existing saved-host template URI syntax.
-- [ ] 10.6 Strip inherited `ELASTIC_*` credentials from command-backed resolver child environments.
-- [ ] 10.7 Add parser, resolver, route, precedence, redaction, and saved-template compatibility tests for the revised target grammar.
+- [x] 10.1 Replace generic context-to-`Uri` conversion with stage-aware transient resolved hosts and output deployments.
+- [x] 10.2 Parse active `.cloud/<deployment-id>/<application>` and named `.context.cloud/<deployment-id>/<application>` references.
+- [x] 10.3 Require the Cloud proxy application explicitly, initially accept only `es` and `elasticsearch`, and reject omitted or unsupported applications clearly.
+- [x] 10.4 Construct Cloud-admin proxy targets with Elasticsearch as the application, the Cloud admin route, and an `ElasticCloudHosted` platform hint.
+- [x] 10.5 Remove bare `.cloud` and `.context.cloud` as directly collectable targets while retaining existing saved-host template URI syntax.
+- [x] 10.6 Strip inherited `ELASTIC_*` credentials from command-backed resolver child environments.
+- [x] 10.7 Add parser, resolver, route, precedence, redaction, and saved-template compatibility tests for the revised target grammar.
 
 ## 11. Revised Documentation and Verification
 
-- [ ] 11.1 Update command-line documentation for the extension subset, mandatory application selection, configured output contexts, and Cloud-admin resource references.
-- [ ] 11.2 Add contract tests against a supported native Elastic CLI release for naming, help, argument forwarding, and context propagation.
-- [ ] 11.3 Run OpenSpec verification after the revised implementation and keep this change unarchived until all new tasks are complete.
+- [x] 11.1 Update command-line documentation for the extension subset, mandatory application selection, configured output contexts, and Cloud-admin resource references.
+- [x] 11.2 Add contract tests against a supported native Elastic CLI release for naming, help, argument forwarding, and context propagation.
+- [x] 11.3 Run OpenSpec verification after the revised implementation and keep this change unarchived until all new tasks are complete.

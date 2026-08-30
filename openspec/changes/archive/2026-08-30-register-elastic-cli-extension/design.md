@@ -9,7 +9,7 @@ ESDiag is currently a Rust binary named `esdiag`. It already supports environmen
 **Goals:**
 
 - Make ESDiag invokable as `elastic diag <args...>` through the Elastic CLI extension system.
-- Keep the existing `esdiag` binary, command grammar, saved hosts, keystore, Job model, and diagnostic stages intact.
+- Keep the existing `esdiag` binary, saved hosts, keystore, Job model, and diagnostic stages intact while intentionally renaming the standalone `upload` command and `--upload` flag to `send` and `--send`.
 - Provide a focused `elastic diag` command profile from the same native Rust binary.
 - Allow Elastic CLI-provided Elasticsearch and Kibana context to drive transient Collect targets without saved host setup.
 - Support `.service` active-context target references from extension-provided environment variables.
@@ -49,7 +49,9 @@ This change defines the Rust command profile and context behavior consumed by an
 
 The initial extension profile exposes `collect`, `process`, `send`, `setup`, `job`, `output`, `help`, and `version`. Standalone deployment and credential administration remain under `esdiag`: `local`, `serve`, `init`, `host`, `keystore`, and `agent` are omitted from extension help and parsing.
 
-The extension uses `send` for transmitting a bundle to Elastic Uploader because that operation is the Send stage. It must not label outbound bundle transfer as upload.
+The extension uses `send` for transmitting a bundle to Elastic Upload Service
+because that operation is the Send stage. The same terminology leaves room for
+future Send adapters such as object storage.
 
 ### Keep context mapping in ESDiag core
 
@@ -201,7 +203,7 @@ Alternative considered: implement `.elasticrc` support inside `src/data`. That w
 
 `elasticrc` is a reusable integration boundary rather than an ESDiag-internal module. Its public API owns Elastic CLI config discovery, raw typed configuration, context and service selection, lazy resolver evaluation, redacted authentication, and errors. It must not expose or depend on `KnownHost`, `Uri`, `OutputDeployment`, Job stages, or other ESDiag domain types; callers perform those adaptations.
 
-The crate manifest includes registry metadata, a README with a minimal load-and-resolve example, repository and documentation links, license and Rust-version declarations, and registry versions for every runtime dependency. ESDiag uses a combined path-and-version dependency so workspace development uses local source while packaged ESDiag resolves the published crate.
+The crate is licensed under Apache-2.0 independently of the Elastic-2.0 `esdiag` package. Its manifest includes registry metadata, a focused README with a minimal load-and-resolve example, repository and documentation links, license and Rust-version declarations, and registry versions for every runtime dependency. ESDiag uses a combined path-and-version dependency so workspace development uses local source while packaged ESDiag resolves the published crate.
 
 Publication readiness is verified with `cargo package -p elasticrc`, `cargo publish --dry-run -p elasticrc`, public documentation tests, and an external-consumer fixture that depends only on the packaged crate. CI also checks the declared minimum Rust version.
 
@@ -211,7 +213,7 @@ Alternative considered: keep `elasticrc` private until ESDiag stabilizes its con
 
 ### Make help context-aware for Elastic CLI invocations
 
-When `ESDIAG_ELASTIC_CLI=1` is present, ESDiag help output may include Elastic CLI-specific examples such as `elastic diag collect .es ./out` and mention `.service` target references. A bare `elastic diag` invocation can therefore provide extension-specific guidance. Current Elastic CLI releases consume `--help` before extension dispatch, so users must use `elastic diag help [COMMAND]` for delegated Clap help. This keeps normal `esdiag --help` focused on standalone usage while improving discoverability for extension users. Shell completions remain out of scope.
+When the extension profile is active through the `elastic-diag` executable name or the development marker, help output includes Elastic CLI-specific examples such as `elastic diag collect .es ./out` and mentions `.service` target references. A bare `elastic diag` invocation can therefore provide extension-specific guidance. Current Elastic CLI releases consume `--help` before extension dispatch, so users must use `elastic diag help [COMMAND]` for delegated Clap help. This keeps normal `esdiag --help` focused on standalone usage while improving discoverability for extension users. Shell completions remain out of scope.
 
 ## Risks / Trade-offs
 

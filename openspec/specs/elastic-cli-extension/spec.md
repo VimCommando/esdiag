@@ -1,4 +1,10 @@
-## ADDED Requirements
+# elastic-cli-extension Specification
+
+## Purpose
+
+Define how ESDiag integrates with Elastic CLI through a context-aware `elastic diag` command profile while preserving standalone `esdiag` behavior apart from the intentional `upload`-to-`send` terminology change.
+
+## Requirements
 
 ### Requirement: Elastic CLI Extension Entrypoint
 The shared ESDiag Rust execution layer SHALL support an Elastic CLI invocation profile named `elastic-diag` so the Elastic CLI can invoke it as the intentionally shortened command `elastic diag`. Distribution and self-contained installation of the native binary are specified separately.
@@ -23,10 +29,10 @@ The shared ESDiag Rust execution layer SHALL support an Elastic CLI invocation p
 The `elastic diag` surface SHALL expose only commands appropriate to context-backed diagnostic execution. The initial profile SHALL expose `collect`, `process`, `send`, `setup`, `job`, `output`, `help`, and `version`. It SHALL NOT expose standalone deployment or credential-administration commands including `local`, `serve`, `init`, `host`, `keystore`, or `agent`.
 
 #### Scenario: Outbound bundle transfer uses Send vocabulary
-- **WHEN** a user transmits an existing bundle to Elastic Uploader through the extension
+- **WHEN** a user transmits an existing bundle to Elastic Upload Service through the extension
 - **THEN** the command is `elastic diag send`
 - **AND** the operation maps to the Send stage
-- **AND** the extension does not describe that outbound operation as an upload
+- **AND** the extension consistently describes that outbound operation as Send
 
 #### Scenario: Standalone administration remains available
 - **WHEN** a user needs to manage saved hosts, the keystore, local deployments, or the web server
@@ -164,7 +170,7 @@ When the extension profile is active, help output SHALL use the `elastic diag` c
 
 #### Scenario: Delegated command help uses the Clap help subcommand
 - **WHEN** the user runs `elastic diag help process`
-- **THEN** the extension displays help for `esdiag process`
+- **THEN** the extension displays help for `elastic diag process`
 - **AND** documentation does not require `elastic diag --help`, because current Elastic CLI releases consume `--help` before extension dispatch
 
 #### Scenario: Standalone help remains focused on esdiag

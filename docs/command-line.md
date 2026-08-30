@@ -15,21 +15,22 @@ esdiag --help
 esdiag <command> --help
 ```
 
-The same command surface is available as `elastic diag <args...>` when ESDiag
-is registered as an experimental Elastic CLI extension.
+The same execution layer is available through a smaller
+`elastic diag <args...>` command profile when ESDiag is registered as an
+experimental Elastic CLI extension.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `collect` | Collects an archive from a saved source. |
-| `serve` | Starts the upload web service. |
+| `serve` | Starts the diagnostic submission web service. |
 | `host` | Saves, tests, and removes host definitions. |
 | `init` | Runs interactive user setup. |
 | `local` | Manages a local Elasticsearch, Kibana, and ESDiag stack. |
 | `keystore` | Manages encrypted credentials. |
-| `process` | Processes an archive, directory, saved host, or upload URL. |
-| `upload` | Sends a raw archive to Elastic Upload Service. |
+| `process` | Processes an archive, directory, saved host, or Elastic Upload Service URL. |
+| `send` | Sends a raw archive to Elastic Upload Service. |
 | `setup` | Installs ESDiag assets in Elasticsearch and Kibana. |
 | `agent` | Asks Kibana Agent Builder or installs the ESDiag Skill. |
 | `job` | Runs, lists, and deletes saved jobs. |
@@ -89,15 +90,17 @@ elastic extension create diag --path "$PWD"
 elastic diag help
 ```
 
-The repository contains the `elastic-diag` entrypoint, which delegates
-`elastic diag <args...>` to `esdiag <args...>` and marks the child process as
-an Elastic CLI invocation. Use `elastic diag help [COMMAND]` for extension
-help; current Elastic CLI releases consume `--help` before dispatching an
-extension. The current GitHub installer derives extension
-names from repository names, so installing `elastic/esdiag` directly would
-register `elastic esdiag`, not `elastic diag`. Remote publication under the
-required `diag` name is tracked separately in
-[issue #342](https://github.com/elastic/esdiag/issues/342).
+The native binary selects its Elastic CLI profile when invoked as
+`elastic-diag`; `ESDIAG_ELASTIC_CLI=1` remains available for the repository's
+development wrapper. Both profiles use the same Rust execution layer. The
+extension profile exposes `collect`, `process`, `send`, `setup`, `job`,
+`output`, `help`, and `version`. Host, keystore, local-stack, server, and agent
+administration remain under `esdiag`.
+
+Use `elastic diag help [COMMAND]` for extension help. Current Elastic CLI
+releases consume `--help` before dispatching an extension. Self-contained
+publication under the required `diag` name is specified separately; installing
+`elastic/esdiag` directly currently derives the wrong command name.
 
 The extension accepts the active context values supplied by Elastic CLI:
 
@@ -113,13 +116,42 @@ Arguments that resolve remote targets also accept these references:
 |---|---|
 | `.es`, `.elasticsearch` | Elasticsearch in the active context. |
 | `.kb`, `.kibana` | Kibana in the active context. |
-| `.cloud` | Elastic Cloud in the active context. |
-| `.context.service` | A service in a named Elastic CLI context. |
+| `.context.es`, `.context.elasticsearch` | Elasticsearch in a named context. |
+| `.context.kb`, `.context.kibana` | Kibana in a named context. |
+| `.cloud/<deployment-id>/es` | Elasticsearch through the active context's Cloud admin API. |
+| `.context.cloud/<deployment-id>/es` | Elasticsearch through a named context's Cloud admin API. |
 
 Named references are loaded read-only from `ELASTIC_CLI_CONFIG_FILE` or the
 supported `.elasticrc` files in the user's home directory. The rightmost
 segment is the service, so `.prod.us-west.es` selects context `prod.us-west`.
 Use an explicit filesystem prefix such as `./.es` for a local hidden path.
+Cloud references require both the deployment ID and application. The Cloud
+management endpoint is never treated as an application endpoint, and the
+proxy currently accepts only `es` or `elasticsearch`.
+
+The extension never guesses a process input. Select an application explicitly:
+
+```sh
+elastic diag process .es
+elastic diag process .customer.kb .monitoring.es
+elastic diag process .prod.cloud/415715723947/es .monitoring.es
+```
+
+Configure a stable named output context while changing input contexts between
+commands:
+
+```sh
+elastic diag output set monitoring
+elastic diag output show
+elastic diag output clear
+```
+
+Only the context name and optional config-file path are saved in `esdiag.yml`.
+Endpoints and credentials are resolved from Elastic CLI configuration when a
+job runs. Saved jobs likewise retain symbolic context references.
+
+Use `elastic diag send <archive> <upload-id>` to transmit a raw bundle to the
+Elastic Upload Service.
 
 Resolver expressions are supported for Elastic CLI config compatibility,
 including environment, file, OS credential store, `pass`, and command-backed
@@ -136,7 +168,10 @@ and with bounded time and output; use them only with config files you trust.
 | `.service` or `.context.service` | Use an Elastic CLI context target. |
 | Saved host name | Send to that host. |
 | Other non-empty string | Write to a local file or directory. |
-| Omitted | Use a complete `ESDIAG_OUTPUT_*` or Elastic CLI Elasticsearch deployment, then the default linked output in `esdiag.yml`. |
+| Omitted | Use the configured named Elastic CLI output context, a complete standalone `ESDIAG_OUTPUT_*` deployment, or the saved-host default in `esdiag.yml`. |
+
+An active input context is never an implicit output. An explicit output
+positional takes precedence over the configured output context.
 
 Save HTTP URLs as hosts before using them as outputs. A raw `http://` or
 `https://` argument is a file path, not an Elasticsearch destination.
@@ -269,10 +304,10 @@ Common options:
 - `--include` and `--exclude` for API selection
 - `--sources <PATH>` for a product-matching sources file
 - `--account`, `--case`, `--opportunity`, and `--user` for report metadata
-- `--upload <ID_OR_URL>` to forward the collected archive
+- `--send <ID_OR_URL>` to send the collected archive to Elastic Upload Service
 - `--save-job <NAME>` to save the command before it runs
 
-`--upload` does not delete the local archive.
+`--send` does not delete the local archive.
 
 ## `process`
 
@@ -316,10 +351,10 @@ request authentication. Use `none` only for controlled local testing.
 
 See [Use a shared ESDiag service](setup/shared-service.md).
 
-## `upload`
+## `send`
 
 ```sh
-esdiag upload <FILE_NAME> <UPLOAD_ID>
+esdiag send <FILE_NAME> <UPLOAD_ID>
 ```
 
 `<UPLOAD_ID>` can be an Elastic Upload Service ID or URL. `--api-url` changes
