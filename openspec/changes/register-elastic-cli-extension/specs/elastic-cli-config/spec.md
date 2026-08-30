@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Elasticrc Workspace Crate
-The system SHALL provide native Elastic CLI config support through a dedicated Rust library crate named `elasticrc` in the ESDiag Cargo workspace. The crate SHALL own Elastic CLI config discovery, parsing, validation, resolver expressions, OS secret resolution, and inline-secret permission warnings. The main `esdiag` crate SHALL consume `elasticrc` outputs to construct transient ESDiag targets.
+The system SHALL provide native Elastic CLI config support through a dedicated Rust library crate named `elasticrc` in the ESDiag Cargo workspace. The crate SHALL own Elastic CLI config discovery, parsing, validation, resolver expressions, OS secret resolution, and inline-secret permission warnings. It SHALL NOT depend on ESDiag domain types. The main `esdiag` crate SHALL consume `elasticrc` outputs to construct transient ESDiag targets.
 
 #### Scenario: Workspace exposes elasticrc library
 - **WHEN** the project is built
@@ -11,8 +11,49 @@ The system SHALL provide native Elastic CLI config support through a dedicated R
 #### Scenario: ESDiag converts resolved service block
 - **GIVEN** `elasticrc` resolves a context service block containing URL and authentication data
 - **WHEN** ESDiag consumes that resolved service block
-- **THEN** ESDiag constructs a transient target for collection or output
+- **THEN** ESDiag constructs a stage-aware transient Collect target or output deployment
 - **AND** ESDiag does not persist that target to host storage only because it came from `elasticrc`
+
+### Requirement: Publishable Elasticrc Library
+The `elasticrc` package SHALL be publishable to a Rust package registry and consumable by Rust projects outside the ESDiag workspace. Its manifest SHALL declare a stable package name and version, license, description, repository, documentation or README, Rust version, and only registry-publishable runtime dependencies.
+
+#### Scenario: Package builds independently
+- **WHEN** a maintainer runs `cargo package -p elasticrc`
+- **THEN** Cargo creates a registry-ready package from the workspace
+- **AND** package verification compiles the packaged source without access to unpublished workspace files
+
+#### Scenario: Registry publication dry run succeeds
+- **WHEN** a maintainer runs `cargo publish --dry-run -p elasticrc`
+- **THEN** Cargo validates the package for registry publication
+- **AND** no path-only or unpublished dependency prevents publication
+
+#### Scenario: External Rust project consumes elasticrc
+- **GIVEN** a Rust project does not depend on ESDiag
+- **WHEN** it adds the published `elasticrc` crate at a compatible version
+- **THEN** it can discover, load, and resolve supported Elastic CLI contexts through the public API
+- **AND** no ESDiag application types are exposed as required dependencies
+
+#### Scenario: ESDiag supports workspace and registry packaging
+- **WHEN** ESDiag depends on the workspace copy of `elasticrc`
+- **THEN** its dependency declaration includes both the local path and compatible registry version
+- **AND** packaging ESDiag can resolve `elasticrc` from the registry
+
+### Requirement: Elasticrc Public API and Compatibility
+The published crate SHALL expose documented typed APIs for config discovery, parsing, shape validation, context and service lookup, lazy resolver evaluation, and redacted resolved authentication. Public API changes SHALL follow semantic versioning, and the crate SHALL declare and test its minimum supported Rust version.
+
+#### Scenario: Documentation builds from public API
+- **WHEN** maintainers build package documentation with private items excluded
+- **THEN** external consumers can identify the supported loading and resolution workflow
+- **AND** public secret-bearing types document their redaction and exposure boundaries
+
+#### Scenario: Resolver remains lazy for library consumers
+- **WHEN** an external consumer loads an Elastic CLI config
+- **THEN** loading does not execute command, file, environment, or keyring resolvers
+- **AND** only explicit service resolution evaluates resolver expressions needed by that service
+
+#### Scenario: Minimum Rust version is verified
+- **WHEN** CI tests `elasticrc` with its declared `rust-version`
+- **THEN** the package and its enabled default dependencies compile successfully
 
 ### Requirement: Elasticrc Feature Gate
 The main ESDiag crate SHALL expose native Elastic CLI config support behind an `elasticrc` Cargo feature. The `elasticrc` feature SHALL be enabled by the default feature set.
@@ -107,7 +148,6 @@ The system SHALL support leading-dot named-context target references for command
 The service aliases MUST resolve as follows:
 - `es` resolves to `elasticsearch`
 - `kb` resolves to `kibana`
-- `cloud` resolves to `cloud`
 
 #### Scenario: Process resolves explicit source and output contexts
 - **GIVEN** Elastic CLI configuration contains contexts named `prod` and `diag`
@@ -126,12 +166,6 @@ The service aliases MUST resolve as follows:
 - **GIVEN** Elastic CLI configuration contains a Kibana service
 - **WHEN** a command resolves `.prod.kb`
 - **THEN** the target service is interpreted as `kibana`
-
-#### Scenario: Resolver supports Cloud service
-- **GIVEN** Elastic CLI configuration contains a Cloud service
-- **WHEN** a command resolves `.prod.cloud`
-- **THEN** the target service is interpreted as `cloud`
-- **AND** ESDiag uses the existing Cloud API key target path for that transient target
 
 #### Scenario: Unsupported service alias falls through
 - **GIVEN** Elastic CLI configuration does not define Logstash as a supported service type
@@ -157,6 +191,72 @@ The service aliases MUST resolve as follows:
 - **GIVEN** a local hidden file path would otherwise look like a context target reference
 - **WHEN** the user provides the path with an explicit filesystem prefix such as `./.es`
 - **THEN** the system resolves the argument through local filesystem handling instead of Elastic context target handling
+
+### Requirement: Stage-Aware Context Resolution
+ESDiag SHALL resolve Elastic CLI context references according to their Job stage and credential direction rather than converting every service into a generic URI. A Collect source SHALL resolve to a concrete host with the selected `Application` and Collect role. An output context SHALL resolve to one `OutputDeployment` with Elasticsearch for Export and optional Kibana for View.
+
+#### Scenario: Same Elasticsearch context resolves for different directions
+- **GIVEN** context `prod` contains an Elasticsearch service
+- **WHEN** `.prod.es` is used as a Collect source
+- **THEN** the transient resolved host has the Collect role and input credentials
+- **WHEN** `.prod.es` is used as an explicit Export destination
+- **THEN** the transient resolved host has the output role and output credentials
+
+#### Scenario: Output context keeps service credentials separate
+- **GIVEN** context `monitoring` has distinct Elasticsearch and Kibana authentication
+- **WHEN** ESDiag resolves it as an output deployment
+- **THEN** Elasticsearch authentication is used only for Export
+- **AND** Kibana authentication is used only for View or setup
+
+### Requirement: Symbolic Output Context Persistence
+ESDiag application configuration SHALL support a typed output deployment reference for a named Elastic CLI context. The persisted reference SHALL contain the context name and, when needed, the non-secret config-file identity. It SHALL NOT contain resolved endpoints or credentials.
+
+#### Scenario: Resolve configured output at Job execution
+- **GIVEN** ESDiag configuration names `monitoring` as the default Elastic CLI output context
+- **AND** the credentials backing `monitoring` have changed since configuration
+- **WHEN** a Job starts
+- **THEN** `elasticrc` resolves the current context values and credentials
+- **AND** the stale credential value is not retained by ESDiag
+
+#### Scenario: Saved Job preserves context references
+- **GIVEN** a Job Collects from `.prod.es` and Exports to context `monitoring`
+- **WHEN** the Job is saved
+- **THEN** the saved definition retains typed symbolic context references
+- **AND** it does not serialize resolved URLs or credentials
+
+#### Scenario: Existing saved-host output configuration remains readable
+- **GIVEN** application configuration created before typed Elastic context references existed
+- **AND** its default output is a saved-host name
+- **WHEN** ESDiag loads the configuration after the schema change
+- **THEN** the saved-host output retains its existing meaning
+- **AND** no migration is required before the user can run existing workflows
+
+#### Scenario: Existing saved Job remains readable
+- **GIVEN** a saved Job created before typed Elastic context references existed
+- **WHEN** ESDiag loads the Job after the schema change
+- **THEN** existing input and output variants deserialize with their original semantics
+- **AND** only newly saved Elastic context targets use the new typed reference variant
+
+### Requirement: Cloud Admin Resource Resolution
+The `elasticrc` boundary SHALL resolve a Cloud service only when a target reference also supplies a deployment identifier and application. It SHALL combine the selected context's Cloud URL and credentials with the resource selector to construct a concrete Cloud admin route. Initially, only the Elasticsearch application aliases `es` and `elasticsearch` SHALL be supported.
+
+#### Scenario: Cloud service and deployment without application are insufficient
+- **GIVEN** context `prod` contains a Cloud service
+- **WHEN** ESDiag attempts to resolve `.prod.cloud/415715723947` without an application
+- **THEN** resolution fails before client construction
+- **AND** the error requires an explicit application
+
+#### Scenario: Cloud resource resolves without a saved host
+- **GIVEN** context `prod` contains a properly scoped Cloud API key
+- **WHEN** ESDiag resolves `.prod.cloud/415715723947/es`
+- **THEN** no ESDiag saved host or keystore entry is required
+- **AND** the result is a concrete Elasticsearch host using the Cloud admin route
+
+#### Scenario: Existing saved template syntax remains independent
+- **GIVEN** ESDiag has a template-backed saved host named `elastic-cloud`
+- **WHEN** the user resolves `elastic-cloud://415715723947/elasticsearch`
+- **THEN** the saved-host template resolution behavior remains supported
+- **AND** it does not require an Elastic CLI context reference
 
 ### Requirement: Elastic CLI Config Authentication
 The system SHALL translate supported Elastic CLI service authentication blocks into transient ESDiag remote targets without writing those credentials to `~/.esdiag/hosts.yml` or the ESDiag keystore.
@@ -201,6 +301,7 @@ The system SHALL resolve Elastic CLI config expressions before validating a name
 - **WHEN** ESDiag resolves `.prod.es`
 - **THEN** the system executes the command with a bounded timeout
 - **AND** the system executes the command without shell interpretation
+- **AND** the child environment omits all inherited `ELASTIC_*` context credentials
 - **AND** the transient target uses the trimmed command output as the API key
 
 #### Scenario: Command resolver rejects shell-only syntax
@@ -272,7 +373,7 @@ The system SHALL support Elastic CLI config files that store secrets inline, inc
 - **THEN** the system does not warn merely because secret fields are present
 
 ### Requirement: Elastic CLI Context Selection Parity
-The system SHALL respect Elastic CLI context selection semantics for config loading. The default active context SHALL come from `current_context`, and an explicit context in `.context.service` SHALL select that named context without changing the active context.
+The system SHALL respect Elastic CLI context selection semantics for config loading. The default active context SHALL come from Elastic CLI-provided environment values when available and otherwise from `current_context`. An explicit context in `.context.service`, a Cloud-admin resource reference, or the configured output context SHALL select that named context without changing the active context.
 
 #### Scenario: Active context is available for native config workflows
 - **GIVEN** Elastic CLI configuration sets `current_context: local`
@@ -286,6 +387,14 @@ The system SHALL respect Elastic CLI context selection semantics for config load
 - **WHEN** ESDiag resolves `.prod.es`
 - **THEN** the resolver uses context `prod`
 - **AND** the config file's `current_context` remains unchanged
+
+#### Scenario: Active input and named output resolve independently
+- **GIVEN** Elastic CLI's active context is `prod`
+- **AND** ESDiag's configured output context is `monitoring`
+- **WHEN** the user runs `elastic diag process .es`
+- **THEN** input resolution uses the active `prod` environment values
+- **AND** output resolution reads named context `monitoring` from `.elasticrc`
+- **AND** neither context selection mutates `.elasticrc`
 
 ### Requirement: Experimental Schema Drift Coverage
 The `elasticrc` crate SHALL include fixture-based tests for the Elastic CLI config shapes it supports so schema drift in the experimental upstream Elastic CLI can be detected during ESDiag development.
