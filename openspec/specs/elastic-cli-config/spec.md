@@ -1,4 +1,10 @@
-## ADDED Requirements
+# elastic-cli-config Specification
+
+## Purpose
+
+Define native, secure, and publishable Elastic CLI configuration support for context-aware ESDiag target resolution.
+
+## Requirements
 
 ### Requirement: Elasticrc Workspace Crate
 The system SHALL provide native Elastic CLI config support through a dedicated Rust library crate named `elasticrc` in the ESDiag Cargo workspace. The crate SHALL own Elastic CLI config discovery, parsing, validation, resolver expressions, OS secret resolution, and inline-secret permission warnings. It SHALL NOT depend on ESDiag domain types. The main `esdiag` crate SHALL consume `elasticrc` outputs to construct transient ESDiag targets.
@@ -15,7 +21,7 @@ The system SHALL provide native Elastic CLI config support through a dedicated R
 - **AND** ESDiag does not persist that target to host storage only because it came from `elasticrc`
 
 ### Requirement: Publishable Elasticrc Library
-The `elasticrc` package SHALL be publishable to a Rust package registry and consumable by Rust projects outside the ESDiag workspace. Its manifest SHALL declare a stable package name and version, license, description, repository, documentation or README, Rust version, and only registry-publishable runtime dependencies.
+The `elasticrc` package SHALL be publishable to a Rust package registry and consumable by Rust projects outside the ESDiag workspace. It SHALL be licensed under Apache-2.0 independently of the Elastic-2.0 `esdiag` package. Its manifest SHALL declare a stable package name and version, license, description, repository, documentation or README, Rust version, and only registry-publishable runtime dependencies.
 
 #### Scenario: Package builds independently
 - **WHEN** a maintainer runs `cargo package -p elasticrc`
