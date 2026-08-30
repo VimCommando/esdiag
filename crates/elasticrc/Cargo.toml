@@ -3,7 +3,23 @@ name = "elasticrc"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-license = "Elastic-2.0"
+license = "Apache-2.0"
+description = "Read and resolve Elastic CLI context configuration"
+repository = "https://github.com/elastic/esdiag"
+homepage = "https://github.com/elastic/esdiag/tree/main/crates/elasticrc"
+documentation = "https://docs.rs/elasticrc"
+readme = "README.md"
+keywords = ["elastic", "configuration", "keyring", "cli"]
+categories = ["config", "authentication"]
+include = [
+    "src/**",
+    "tests/*.rs",
+    "tests/fixtures/**",
+    "examples/**",
+    "LICENSE",
+    "NOTICE.txt",
+    "README.md",
+]
 
 [dependencies]
 keyring-core = "1.0.0"

@@ -62,6 +62,17 @@ pub fn get_string_with_fallback(primary: &str, fallback: &str) -> std::io::Resul
 
 pub fn is_elastic_cli_invocation() -> bool {
     std::env::var("ESDIAG_ELASTIC_CLI").is_ok_and(|value| value == "1")
+        || std::env::args_os()
+            .next()
+            .as_deref()
+            .is_some_and(is_elastic_cli_executable)
+}
+
+pub fn is_elastic_cli_executable(path: &std::ffi::OsStr) -> bool {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, "elastic-diag" | "elastic-diag.exe"))
 }
 
 pub fn get_kibana_space() -> Option<String> {

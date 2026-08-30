@@ -43,7 +43,7 @@ fn elastic_diag_process_help_reaches_esdiag_command_surface() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout");
-    assert!(stdout.contains("Usage: esdiag process"));
+    assert!(stdout.contains("Usage: elastic diag process"));
     assert!(stdout.contains("Source to read diagnostic data from"));
 }
 
