@@ -9,14 +9,14 @@ ESDiag is currently a Rust binary named `esdiag`. It already supports environmen
 **Goals:**
 
 - Make ESDiag invokable as `elastic diag <args...>` through the Elastic CLI extension system.
-- Keep the existing `esdiag` binary, command grammar, host file, keystore, and diagnostics pipeline intact.
+- Keep the existing `esdiag` binary, command grammar, saved hosts, keystore, Job model, and diagnostic stages intact.
 - Allow Elastic CLI-provided Elasticsearch, Kibana, and Cloud context to drive env-backed ESDiag workflows without saved host setup.
 - Support `.service` active-context target references from extension-provided environment variables.
 - Support `.context.service` named-context target references through native Elastic CLI config loading.
 - Keep native Elastic CLI config support read-only for this change.
 - Support Elastic Cloud service targets where ESDiag can map the Cloud API key path into its existing known-host model.
 - Keep root `cargo install --path .` and repo-root build/test workflows functional after introducing the workspace.
-- Provide an installation/discovery shape compatible with the Elastic CLI extension installer.
+- Provide an entrypoint that can be registered explicitly as the Elastic CLI `diag` extension.
 - Preserve cross-platform behavior for macOS, Linux, and Windows.
 
 **Non-Goals:**
@@ -33,21 +33,21 @@ ESDiag is currently a Rust binary named `esdiag`. It already supports environmen
 
 ### Use `elastic-diag` as the extension entrypoint
 
-The extension-facing executable will be named `elastic-diag`, which the Elastic CLI derives to the short command `diag`. The entrypoint will forward all arguments to the existing ESDiag execution layer so commands such as `elastic diag process`, `elastic diag setup`, and `elastic diag serve` preserve the same behavior as `esdiag process`, `esdiag setup`, and `esdiag serve`.
+The extension-facing executable will be named `elastic-diag`. Local registration will explicitly select the short name with `elastic extension create diag --path <checkout>`. The entrypoint will forward all arguments to the existing ESDiag execution layer so commands such as `elastic diag process`, `elastic diag setup`, and `elastic diag serve` preserve the same behavior as `esdiag process`, `esdiag setup`, and `esdiag serve`.
 
-Alternative considered: install the existing `elastic/esdiag` repository directly. This would derive the short name `esdiag`, producing `elastic esdiag`, and would not satisfy the issue's requested `elastic diag` UX.
+The short name is an intentional override of the repository and binary name. The current GitHub installer derives a command from the repository name before inspecting package metadata, so `elastic extension install elastic/esdiag` registers `elastic esdiag`. Remote publication under a source named `elastic-diag`, or upstream support for an explicit name override, is deferred to issue #342.
 
 ### Package the extension from the existing ESDiag repository
 
-The first extension packaging path will live in the existing ESDiag repository. It will not require a separate `elastic/elastic-diag` repository, and npm publication is deferred until the extension has been tested locally. The repository will provide an installer-compatible `elastic-diag` entrypoint and metadata for local/GitHub extension installation.
+The first extension packaging path will live in the existing ESDiag repository. It will not require a separate `elastic/elastic-diag` repository, and npm publication is deferred until the extension has been tested locally. The repository will provide a discoverable `elastic-diag` entrypoint and metadata for explicit local-path registration.
 
 Alternative considered: create a dedicated extension repository or publish an npm package immediately. That would make command naming and installation cleaner, but it adds release surface before the extension behavior is proven locally.
 
 ### Require `esdiag` on PATH for the initial wrapper
 
-The initial `elastic-diag` wrapper will require an `esdiag` executable to be available on `PATH`. If it is missing, the wrapper will fail gracefully with installation guidance that points users to the current Cargo-based install flow for this repository, such as `cargo install --git https://github.com/elastic/esdiag.git`. Once ESDiag publishes precompiled release binaries, the extension packaging can change to download or bundle the binary.
+The initial `elastic-diag` wrapper will require an `esdiag` executable to be available on `PATH`. If it is missing, the wrapper will fail gracefully with installation guidance. Users can install the binary through a release package, Homebrew, or Cargo. The extension packaging can later bundle or locate a matching released binary.
 
-Alternative considered: compile or download `esdiag` during extension install. The current release flow does not yet provide precompiled binaries, and the Elastic CLI GitHub installer does not build Rust projects automatically.
+Alternative considered: compile or download `esdiag` during extension install. Keeping installation separate makes local validation simpler, but leaves version matching and self-contained remote publication for follow-up work.
 
 ### Keep context mapping in ESDiag core, not only in the wrapper
 
@@ -168,17 +168,17 @@ Alternative considered: implement `.elasticrc` support inside `src/data`. That w
 
 ### Make help context-aware for Elastic CLI invocations
 
-When `ESDIAG_ELASTIC_CLI=1` is present, ESDiag help output may include Elastic CLI-specific examples such as `elastic diag collect .es ./out` and mention `.service` target references. This keeps normal `esdiag --help` focused on standalone usage while improving discoverability for extension users. Shell completions remain out of scope.
+When `ESDIAG_ELASTIC_CLI=1` is present, ESDiag help output may include Elastic CLI-specific examples such as `elastic diag collect .es ./out` and mention `.service` target references. A bare `elastic diag` invocation can therefore provide extension-specific guidance. Current Elastic CLI releases consume `--help` before extension dispatch, so users must use `elastic diag help [COMMAND]` for delegated Clap help. This keeps normal `esdiag --help` focused on standalone usage while improving discoverability for extension users. Shell completions remain out of scope.
 
 ### Treat install packaging as separate from diagnostic runtime
 
-The extension package/repository will provide metadata that the Elastic CLI installer can discover, such as a `package.json` `bin` entry or an executable in an expected location. The diagnostic runtime remains the Rust ESDiag binary. If the package needs to fetch or locate a released binary, that logic belongs in package installation scripts or release packaging rather than in the diagnostic processing path.
+The repository will provide metadata that Elastic CLI can use to discover `elastic-diag` during explicit local registration. The diagnostic runtime remains the Rust ESDiag binary. If a future remote package needs to fetch or locate a released binary, that logic belongs in package installation scripts or release packaging rather than in the diagnostic processing path.
 
-Alternative considered: require users to preinstall `esdiag` and register a local extension path only. That is useful for development, but not sufficient for a first-class install flow.
+Remote installation and publication are tracked independently in issue #342 because the current GitHub source name cannot produce the required `diag` command.
 
 ## Risks / Trade-offs
 
-- Extension install cannot build arbitrary Rust repositories → Provide installer-compatible metadata and document whether the extension expects a bundled, downloaded, or preinstalled `esdiag` binary.
+- Extension registration does not rename `elastic/esdiag` to `diag` → Register the local checkout with an explicit `diag` name and treat remote publication as separate follow-up work.
 - Two environment variable families can diverge → Preserve `ESDIAG_*` precedence and document the fallback order.
 - Invocation marker could be confused with Elastic CLI-provided context → Use `ESDIAG_ELASTIC_CLI=1` only as an invocation marker and continue to use `ELASTIC_*` only for service context.
 - Leading-dot references can resemble hidden local files → Reserve the leading-dot grammar only when the service segment is a known service name or alias, and document `./.name` for local hidden paths.

@@ -1,6 +1,6 @@
 {
   "name": "elastic-diag",
-  "version": "0.16.0-SNAPSHOT",
+  "version": "0.17.0-SNAPSHOT",
   "private": true,
   "description": "Elastic CLI extension wrapper for Elastic Stack Diagnostics",
   "license": "Elastic-2.0",

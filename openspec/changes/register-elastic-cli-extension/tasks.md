@@ -49,7 +49,7 @@
 
 ## 5. Installation Metadata
 
-- [x] 5.1 Add installer-compatible metadata so the Elastic CLI can discover the `elastic-diag` entrypoint from a GitHub clone.
+- [x] 5.1 Add installer-compatible metadata so the Elastic CLI can discover the `elastic-diag` entrypoint from an explicitly named local checkout.
 - [x] 5.2 Keep packaging in the existing ESDiag repository without creating a separate extension repository.
 - [x] 5.3 Document npm publication as deferred until local extension testing is complete.
 - [x] 5.4 Document the initial PATH-based `esdiag` binary requirement and future precompiled-binary follow-up.
@@ -60,7 +60,7 @@
 - [x] 6.2 Document the mapping between `elastic diag <args...>` and `esdiag <args...>`.
 - [x] 6.3 Document Elastic CLI context environment variables and the `ESDIAG_*` precedence rule.
 - [x] 6.4 Document active `.service` references, named `.context.service` references, and supported service aliases.
-- [x] 6.5 Use a remote Git repository install command in extension installation examples.
+- [x] 6.5 Document explicit `diag` local registration and defer remote publication because `elastic/esdiag` derives the wrong short name.
 - [x] 6.6 Document resolver safety behavior, including no shell interpretation for command-backed resolvers and Elastic CLI-style trust warnings.
 - [x] 6.7 Update `CHANGELOG.md` for the user-visible extension support.
 
@@ -69,5 +69,5 @@
 - [x] 7.1 Run focused Rust tests for environment resolution, context target resolution, config loading, and CLI forwarding.
 - [x] 7.2 Run `cargo test`.
 - [x] 7.3 Run `cargo clippy`.
-- [x] 7.4 Verify local Elastic CLI extension registration and `elastic diag --help`.
+- [x] 7.4 Verify local Elastic CLI extension registration, `elastic diag`, and `elastic diag help`.
 - [x] 7.5 Verify `cargo install --git https://github.com/elastic/esdiag.git` works for the documented initial binary install path when network access is available.

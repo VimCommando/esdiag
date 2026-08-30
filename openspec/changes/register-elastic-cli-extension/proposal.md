@@ -1,6 +1,6 @@
 ## Why
 
-The Elastic CLI now includes an experimental extension system, and ESDiag should be invokable as `elastic diag ...` without forcing users to duplicate Elastic CLI context into `~/.esdiag/hosts.yml` and the ESDiag keystore. Registering ESDiag as a first-class extension gives diagnostics collection and processing a natural home in the new `elastic` workflow while preserving the existing standalone `esdiag` CLI.
+The Elastic CLI now includes an experimental extension system, and ESDiag should be invokable as `elastic diag ...` without forcing users to duplicate Elastic CLI context into `~/.esdiag/hosts.yml` and the ESDiag keystore. Registering ESDiag as a first-class extension gives the Collect and Process stages a natural home in the new `elastic` command surface while preserving the existing standalone `esdiag` CLI.
 
 ## What Changes
 

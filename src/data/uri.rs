@@ -163,7 +163,7 @@ fn uri_from_elasticrc_service(service: elasticrc::ResolvedService) -> Result<Uri
         }
         elasticrc::ResolvedAuth::None => {}
     }
-    Ok(builder.build()?.try_into()?)
+    builder.build()?.try_into()
 }
 
 #[cfg(feature = "elasticrc")]
@@ -263,7 +263,7 @@ impl Uri {
             "ELASTIC_KIBANA_PASSWORD",
         );
         let host = KnownHostBuilder::new(Url::parse(&url)?)
-            .product(Product::Kibana)
+            .application(Application::Kibana)
             .apikey(apikey)
             .username(username)
             .password(password)
@@ -579,7 +579,7 @@ impl std::fmt::Display for Uri {
 #[cfg(test)]
 mod tests {
     use super::Uri;
-    use crate::data::{Auth, ElasticCloud, HostRole, KnownHost, Product};
+    use crate::data::{Application, Auth, ElasticCloud, HostRole, KnownHost};
     use std::{collections::BTreeMap, path::Path};
     use tempfile::TempDir;
 
@@ -668,7 +668,7 @@ mod tests {
         };
 
         assert_eq!(host.get_url().expect("url").as_str(), "https://elastic.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "elastic-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "elastic-key"));
         clear_env();
     }
 
@@ -688,7 +688,7 @@ mod tests {
 
         assert!(matches!(
             host.get_auth().expect("auth"),
-            Auth::Basic(user, password) if user == "elastic" && password == "changeme"
+            Auth::Basic(user, password) if user == "elastic" && password.expose_secret() == "changeme"
         ));
         clear_env();
     }
@@ -750,7 +750,7 @@ mod tests {
 
         assert!(matches!(
             host.get_auth().expect("auth"),
-            Auth::Basic(user, password) if user == "elastic" && password == "changeme"
+            Auth::Basic(user, password) if user == "elastic" && password.expose_secret() == "changeme"
         ));
         clear_env();
     }
@@ -770,7 +770,7 @@ mod tests {
             panic!("expected known host");
         };
 
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "esdiag-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "esdiag-key"));
         clear_env();
     }
 
@@ -790,7 +790,7 @@ mod tests {
         };
 
         assert_eq!(host.get_url().expect("url").as_str(), "https://esdiag.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "esdiag-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "esdiag-key"));
         clear_env();
     }
 
@@ -808,11 +808,11 @@ mod tests {
             panic!("expected known host");
         };
 
-        assert_eq!(host.app(), &Product::Kibana);
+        assert_eq!(host.app(), Some(Application::Kibana));
         assert_eq!(host.get_url().expect("url").as_str(), "https://kibana.example:5601/");
         assert!(matches!(
             host.get_auth().expect("auth"),
-            Auth::Basic(user, password) if user == "elastic" && password == "changeme"
+            Auth::Basic(user, password) if user == "elastic" && password.expose_secret() == "changeme"
         ));
         clear_env();
     }
@@ -838,7 +838,7 @@ mod tests {
             host.get_url().expect("url").as_str(),
             "https://cloud.elastic.co/api/v1/deployments/deployment-123/elasticsearch/_main/proxy/"
         );
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "cloud-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "cloud-key"));
         clear_env();
     }
 
@@ -851,7 +851,7 @@ mod tests {
         hosts.insert(
             ".es".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 url::Url::parse("https://saved.example:9200").expect("saved url"),
                 vec![HostRole::Collect],
                 None,
@@ -870,7 +870,7 @@ mod tests {
         };
 
         assert_eq!(host.get_url().expect("url").as_str(), "https://active.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "active-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "active-key"));
         clear_env();
     }
 
@@ -891,7 +891,7 @@ mod tests {
         };
 
         assert_eq!(host.get_url().expect("url").as_str(), "https://active.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "active-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "active-key"));
         clear_env();
     }
 
@@ -906,7 +906,7 @@ mod tests {
         hosts.insert(
             ".es".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 url::Url::parse("https://saved.example:9200").expect("saved url"),
                 vec![HostRole::Collect],
                 None,
@@ -947,7 +947,7 @@ mod tests {
             panic!("expected known host");
         };
 
-        assert_eq!(host.app(), &Product::Kibana);
+        assert_eq!(host.app(), Some(Application::Kibana));
         assert_eq!(host.get_url().expect("url").as_str(), "https://active-kb.example:5601/");
         clear_env();
     }
@@ -970,7 +970,7 @@ mod tests {
         };
 
         assert_eq!(host.cloud_id(), Some(&ElasticCloud::ElasticCloud));
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "cloud-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "cloud-key"));
         clear_env();
     }
 
@@ -1023,7 +1023,7 @@ contexts:
         };
 
         assert_eq!(host.get_url().expect("url").as_str(), "https://prod.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "prod-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "prod-key"));
         clear_env();
     }
 
@@ -1049,7 +1049,7 @@ contexts:
         };
 
         assert_eq!(host.get_url().expect("url").as_str(), "https://prod.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "prod-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "prod-key"));
         clear_env();
     }
 
@@ -1118,7 +1118,7 @@ contexts:
             panic!("expected known host");
         };
 
-        assert_eq!(host.app(), &Product::Kibana);
+        assert_eq!(host.app(), Some(Application::Kibana));
         assert_eq!(host.get_url().expect("url").as_str(), "https://kb.example:5601/");
         clear_env();
     }
@@ -1149,7 +1149,7 @@ contexts:
             host.get_url().expect("url").as_str(),
             "https://cloud.elastic.co/api/v1/deployments/deployment-123/elasticsearch/_main/proxy/"
         );
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key == "cloud-key"));
+        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "cloud-key"));
         clear_env();
     }
 
@@ -1172,7 +1172,7 @@ contexts:
         hosts.insert(
             ".prod.es".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 url::Url::parse("https://saved.example:9200").expect("saved url"),
                 vec![HostRole::Collect],
                 None,
@@ -1201,7 +1201,7 @@ contexts:
         hosts.insert(
             ".prod.es".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 url::Url::parse("https://saved.example:9200").expect("saved url"),
                 vec![HostRole::Collect],
                 None,

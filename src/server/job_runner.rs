@@ -1245,6 +1245,10 @@ mod tests {
             std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
             std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
             std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
+            std::env::remove_var("ELASTIC_ES_URL");
+            std::env::remove_var("ELASTIC_ES_API_KEY");
+            std::env::remove_var("ELASTIC_ES_USERNAME");
+            std::env::remove_var("ELASTIC_ES_PASSWORD");
         }
 
         let state = Arc::new(test_state(RuntimeMode::User));
@@ -1256,7 +1260,10 @@ mod tests {
             Ok(_) => panic!("missing UI target and environment must fail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("ESDIAG_OUTPUT_URL is not defined"));
+        assert!(
+            err.to_string()
+                .contains("ESDIAG_OUTPUT_URL and ELASTIC_ES_URL are not defined")
+        );
     }
 
     #[tokio::test]
@@ -1268,6 +1275,10 @@ mod tests {
             std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
             std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
             std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
+            std::env::remove_var("ELASTIC_ES_URL");
+            std::env::remove_var("ELASTIC_ES_API_KEY");
+            std::env::remove_var("ELASTIC_ES_USERNAME");
+            std::env::remove_var("ELASTIC_ES_PASSWORD");
         }
 
         let host = KnownHostBuilder::new(Url::parse("http://cluster.example:9200").unwrap())
@@ -1312,7 +1323,7 @@ mod tests {
                 if selector == "#job-42"
                     && html.contains("id=\"job-42\"")
                     && html.contains("Processing Failed")
-                    && html.contains("ESDIAG_OUTPUT_URL is not defined")
+                    && html.contains("ESDIAG_OUTPUT_URL and ELASTIC_ES_URL are not defined")
         )));
         assert!(events.iter().any(|event| matches!(
             event,
