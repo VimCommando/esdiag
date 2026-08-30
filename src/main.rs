@@ -5,9 +5,7 @@ mod local;
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use clap::{
-    ArgAction, Args, Parser, Subcommand, builder::BoolishValueParser, builder::styling, error::ErrorKind,
-};
+use clap::{ArgAction, Args, Parser, Subcommand, builder::BoolishValueParser, builder::styling, error::ErrorKind};
 #[cfg(feature = "agent")]
 use esdiag::cli_output::{AgentRecovery, AgentSkillTargetResult, AgentSkillsFailureContext, AgentUsageResult};
 use esdiag::cli_output::{
@@ -637,7 +635,7 @@ fn main() -> ExitCode {
 async fn async_main() -> Result<ExitCode> {
     // Parse CLI early to configure execution mode and logging.
     let Some(cli) = parse_cli()? else {
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     };
     init_tracing(resolve_tracing_filter(&cli), resolve_log_file_filter(&cli));
     let stdout_owned = command_owns_stdout(&cli);
@@ -4077,10 +4075,9 @@ mod tests {
         colorize_keystore_lock_status, command_owns_stdout, configured_default_job, default_diagnostic_user_from,
         detected_esdiag_local_preset, elastic_cli_help_text, ensure_output_deployment_valid,
         format_keystore_lock_status, format_keystore_lock_status_at, format_remaining_duration_from,
-        host_connection_uses_receiver, is_agent_mode, is_elastic_cli_invocation, keep_default_job,
-        local_core_stack_start_args, local_stack_outcome, needs_processing_default_job, resolve_add_host_secret_auth,
-        resolve_host_secret_auth, resolve_log_file_filter, resolve_secret_input_with_prompt, resolve_tracing_filter,
-        saved_job_fits_workflow,
+        host_connection_uses_receiver, is_agent_mode, keep_default_job, local_core_stack_start_args,
+        local_stack_outcome, needs_processing_default_job, resolve_add_host_secret_auth, resolve_host_secret_auth,
+        resolve_log_file_filter, resolve_secret_input_with_prompt, resolve_tracing_filter, saved_job_fits_workflow,
         should_error_for_missing_subcommand, should_run_output_setup, should_start_local_core_stack,
         structured_failure,
     };

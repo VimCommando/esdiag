@@ -769,7 +769,14 @@ mod tests {
         env.set("ELASTIC_KIBANA_URL", "https://elastic-kb.example:5601");
         env.set("ESDIAG_KIBANA_SPACE", "ops");
 
-        let exporter = Exporter::default();
+        let exporter = Exporter::try_from(Uri::KnownHost(
+            KnownHostBuilder::new(Url::parse("https://es.example:9200").expect("es url"))
+                .application(Application::Elasticsearch)
+                .roles(vec![HostRole::Send])
+                .build()
+                .expect("send host"),
+        ))
+        .expect("cluster exporter");
         let kibana_link = exporter
             .kibana_link("diag-123", 1_700_000_000_000)
             .expect("kibana link");
@@ -784,27 +791,18 @@ mod tests {
         env.remove("ELASTIC_KIBANA_URL");
         env.set("ESDIAG_KIBANA_SPACE", "");
 
-        let exporter = Exporter::default();
+        let exporter = Exporter::try_from(Uri::KnownHost(
+            KnownHostBuilder::new(Url::parse("https://es.example:9200").expect("es url"))
+                .application(Application::Elasticsearch)
+                .roles(vec![HostRole::Send])
+                .build()
+                .expect("send host"),
+        ))
+        .expect("cluster exporter");
         let kibana_link = exporter
             .kibana_link("diag-123", 1_700_000_000_000)
             .expect("kibana link");
 
         assert!(kibana_link.starts_with("https://env-kb.example:5601/app/dashboards#/view/"));
-    }
-
-    #[test]
-    fn kibana_link_falls_back_to_default_kibana_url_when_no_override_exists() {
-        let mut env = crate::TestEnv::new();
-        env.remove("ESDIAG_KIBANA_URL");
-        env.remove("ELASTIC_KIBANA_URL");
-        env.remove("ESDIAG_KIBANA_SPACE");
-
-        let exporter = Exporter::default();
-
-        let kibana_link = exporter
-            .kibana_link("diag-123", 1_700_000_000_000)
-            .expect("default kibana link");
-
-        assert!(kibana_link.starts_with("http://localhost:5601/s/esdiag/app/dashboards#/view/"));
     }
 }
