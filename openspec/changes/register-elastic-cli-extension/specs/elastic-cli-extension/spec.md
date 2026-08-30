@@ -32,14 +32,14 @@ The system SHALL accept Elastic CLI context environment variables as fallbacks f
 - **GIVEN** `ESDIAG_OUTPUT_URL` is not set
 - **AND** `ELASTIC_ES_URL` is set
 - **AND** `ELASTIC_ES_API_KEY` is set
-- **WHEN** a command resolves an omitted Elasticsearch output target
+- **WHEN** a command resolves an omitted Elasticsearch output deployment
 - **THEN** the system uses `ELASTIC_ES_URL` as the Elasticsearch URL
 - **AND** the system authenticates using `ELASTIC_ES_API_KEY`
 
 #### Scenario: Elasticsearch output preserves ESDiag precedence
 - **GIVEN** `ESDIAG_OUTPUT_URL` is set
 - **AND** `ELASTIC_ES_URL` is set to a different value
-- **WHEN** a command resolves an omitted Elasticsearch output target
+- **WHEN** a command resolves an omitted Elasticsearch output deployment
 - **THEN** the system uses `ESDIAG_OUTPUT_URL`
 - **AND** the Elastic CLI URL fallback is ignored for that resolution
 
@@ -53,7 +53,7 @@ The system SHALL accept Elastic CLI context environment variables as fallbacks f
 - **GIVEN** no ESDiag output authentication variables are set
 - **AND** `ELASTIC_ES_USERNAME` is set
 - **AND** `ELASTIC_ES_PASSWORD` is set
-- **WHEN** a command resolves an omitted Elasticsearch output target
+- **WHEN** a command resolves an omitted Elasticsearch output deployment
 - **THEN** the system authenticates using the Elastic CLI username and password values
 
 #### Scenario: Cloud API key resolves from Elastic CLI context
@@ -102,12 +102,15 @@ The service aliases MUST resolve as follows:
 - **THEN** the system resolves the argument through local filesystem handling instead of Elastic context target handling
 
 ### Requirement: Extension-Compatible Installation Metadata
-The system SHALL include extension installation metadata or files that allow the Elastic CLI installer to discover an executable entrypoint for the `diag` extension.
+The system SHALL include extension installation metadata or files that allow Elastic CLI to discover an executable entrypoint when the repository is explicitly registered as the `diag` extension.
 
-#### Scenario: GitHub extension install discovers entrypoint
-- **WHEN** the Elastic CLI installs the extension from a GitHub source named `elastic-diag`
-- **THEN** the cloned extension contents expose an executable entrypoint named `elastic-diag` through an installer-supported location or package metadata
+#### Scenario: Local registration discovers entrypoint under overridden name
+- **WHEN** the user registers the repository with `elastic extension create diag --path <checkout>`
+- **THEN** Elastic CLI discovers the executable entrypoint named `elastic-diag` through package metadata
 - **AND** the registered extension name is `diag`
+- **AND** the command is invoked as `elastic diag`
+
+Remote publication SHALL remain separate from this change because the current GitHub installer derives `esdiag` from the `elastic/esdiag` repository name before inspecting entrypoint metadata.
 
 ### Requirement: Extension Documentation
 The system SHALL document how to install and use ESDiag through the Elastic CLI extension system, including the relationship between `elastic diag` and `esdiag`.
@@ -123,8 +126,13 @@ When `ESDIAG_ELASTIC_CLI=1` is present, ESDiag help output MAY include Elastic C
 
 #### Scenario: Help includes Elastic CLI examples under extension invocation
 - **GIVEN** `ESDIAG_ELASTIC_CLI=1` is set
-- **WHEN** the user runs `elastic diag --help`
+- **WHEN** the user runs `elastic diag` without a subcommand
 - **THEN** help output includes Elastic CLI-specific examples or target reference guidance
+
+#### Scenario: Delegated command help uses the Clap help subcommand
+- **WHEN** the user runs `elastic diag help process`
+- **THEN** the extension displays help for `esdiag process`
+- **AND** documentation does not require `elastic diag --help`, because current Elastic CLI releases consume `--help` before extension dispatch
 
 #### Scenario: Standalone help remains focused on esdiag
 - **GIVEN** `ESDIAG_ELASTIC_CLI` is not set

@@ -15,6 +15,9 @@ esdiag --help
 esdiag <command> --help
 ```
 
+The same command surface is available as `elastic diag <args...>` when ESDiag
+is registered as an experimental Elastic CLI extension.
+
 ## Commands
 
 | Command | What it does |
@@ -96,6 +99,54 @@ credentials from command arguments, environment variables, and `esdiag.yml`.
 run log records `info` and the terminal shows warnings and errors.
 `ESDIAG_KEYSTORE_PASSWORD` supplies a keystore password for non-interactive use.
 
+### Elastic CLI extension
+
+Install the `esdiag` binary, then register this checkout under the explicit
+short name `diag`:
+
+```sh
+cargo install --path .
+elastic extension create diag --path "$PWD"
+elastic diag help
+```
+
+The repository contains the `elastic-diag` entrypoint, which delegates
+`elastic diag <args...>` to `esdiag <args...>` and marks the child process as
+an Elastic CLI invocation. Use `elastic diag help [COMMAND]` for extension
+help; current Elastic CLI releases consume `--help` before dispatching an
+extension. The current GitHub installer derives extension
+names from repository names, so installing `elastic/esdiag` directly would
+register `elastic esdiag`, not `elastic diag`. Remote publication under the
+required `diag` name is tracked separately in
+[issue #342](https://github.com/elastic/esdiag/issues/342).
+
+The extension accepts the active context values supplied by Elastic CLI:
+
+- `ELASTIC_ES_URL`, `ELASTIC_ES_API_KEY`, `ELASTIC_ES_USERNAME`, and
+  `ELASTIC_ES_PASSWORD`
+- `ELASTIC_KIBANA_URL`, `ELASTIC_KIBANA_API_KEY`, `ELASTIC_KIBANA_USERNAME`,
+  and `ELASTIC_KIBANA_PASSWORD`
+- `ELASTIC_CLOUD_URL` and `ELASTIC_CLOUD_API_KEY`
+
+Arguments that resolve remote targets also accept these references:
+
+| Reference | Target |
+|---|---|
+| `.es`, `.elasticsearch` | Elasticsearch in the active context. |
+| `.kb`, `.kibana` | Kibana in the active context. |
+| `.cloud` | Elastic Cloud in the active context. |
+| `.context.service` | A service in a named Elastic CLI context. |
+
+Named references are loaded read-only from `ELASTIC_CLI_CONFIG_FILE` or the
+supported `.elasticrc` files in the user's home directory. The rightmost
+segment is the service, so `.prod.us-west.es` selects context `prod.us-west`.
+Use an explicit filesystem prefix such as `./.es` for a local hidden path.
+
+Resolver expressions are supported for Elastic CLI config compatibility,
+including environment, file, OS credential store, `pass`, and command-backed
+values. Command-backed resolvers execute explicit arguments without a shell
+and with bounded time and output; use them only with config files you trust.
+
 ## Output selection
 
 `process` and `serve` accept an optional output:
@@ -103,9 +154,10 @@ run log records `info` and the terminal shows warnings and errors.
 | Value | Result |
 |---|---|
 | `-` | Write processed documents to stdout. |
+| `.service` or `.context.service` | Use an Elastic CLI context target. |
 | Saved host name | Send to that host. |
 | Other non-empty string | Write to a local file or directory. |
-| Omitted | Use a complete `ESDIAG_OUTPUT_*` deployment, then the default linked output in `esdiag.yml`. |
+| Omitted | Use a complete `ESDIAG_OUTPUT_*` or Elastic CLI Elasticsearch deployment, then the default linked output in `esdiag.yml`. |
 
 The web workflow's `Default` output reuses the active `serve` target, including
 an explicit output supplied at startup.
@@ -275,8 +327,13 @@ The credential needs permission to install them.
 esdiag collect <HOST> <OUTPUT_DIR>
 ```
 
-`<HOST>` must be a saved host with the `collect` role. `<OUTPUT_DIR>` must
-exist. Collection creates an archive under that directory.
+`<HOST>` must be a saved host with the `collect` role or an Elastic CLI target
+reference. `<OUTPUT_DIR>` must exist. Collection creates an archive under that
+directory.
+
+```sh
+elastic diag collect .es ~/diag-output
+```
 
 Common options:
 
@@ -296,7 +353,11 @@ esdiag process <INPUT> [OUTPUT]
 ```
 
 `<INPUT>` can be a support-diagnostics ZIP, an unpacked directory, a saved
-host, or an Elastic Upload Service URL.
+host, an Elastic CLI target reference, or an Elastic Upload Service URL.
+
+```sh
+elastic diag process .prod.es .diag.es
+```
 
 `--ask <PROMPT>` processes the diagnostic, then starts an Agent Builder
 conversation with the diagnostic ID in context. It needs a Kibana-enabled
