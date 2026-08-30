@@ -25,3 +25,14 @@
 - [x] 4.1 Update `Diagnostic::try_new` to recognize Kibana products
 - [x] 4.2 Update `Diagnostic::process` to route to `KibanaDiagnostic`
 - [x] 4.3 Add integration test using `tests/archives/kibana-api-diagnostics-8.19.3.zip`
+
+## 5. Verification Remediation
+
+- [x] 5.1 Mark successfully parsed sources and persist read, parse, and export failures in diagnostic reports
+- [x] 5.2 Process all root, space-scoped, and paginated source files, including legacy numbered filenames
+- [x] 5.3 Register processable Kibana sources and honor `ProcessSelection`
+- [x] 5.4 Include diagnostic version and collection timestamp in shared Kibana metadata
+- [x] 5.5 Add minimal index templates for every emitted Kibana metrics stream
+- [x] 5.6 Add direct tests for every requirement scenario, including scoped and paginated bundles
+- [x] 5.7 Reconcile the design and runtime documentation with the implemented processor scope
+- [x] 5.8 Pass formatting, Kibana processor, asset-contract, and strict OpenSpec validation checks

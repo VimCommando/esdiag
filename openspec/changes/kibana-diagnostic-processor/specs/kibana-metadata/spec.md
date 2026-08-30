@@ -5,4 +5,4 @@ The system SHALL extract common metadata from the diagnostic bundle to enrich al
 
 #### Scenario: Successful metadata extraction
 - **WHEN** a Kibana diagnostic is initialized
-- **THEN** the system extracts `diagnostic.*` info (ID, version, timestamp) and `node.*` info (name, version) to be used as a shared context for all processors.
+- **THEN** every exported document contains `diagnostic.id`, the collector version in `diagnostic.version`, top-level `@timestamp`, and `node.name`, `node.id`, and `node.version.number` as shared processing context
