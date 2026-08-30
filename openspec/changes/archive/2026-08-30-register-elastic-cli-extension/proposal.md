@@ -15,7 +15,7 @@ The Elastic CLI now includes an experimental extension system, and ESDiag should
 - Support deployment- and application-qualified Cloud-admin references such as `.prod.cloud/<deployment-id>/<application>` without treating Cloud as an application.
 - Preserve backward compatibility for existing saved-host output configuration and saved Jobs when typed context references are introduced.
 - Document the runtime contract consumed by a separately specified self-contained extension package.
-- Preserve existing `esdiag` command names, flags, host files, keystore behavior, and environment variables.
+- Preserve existing `esdiag` host files, keystore behavior, environment variables, and command behavior except for the intentional terminology change from `upload`/`--upload` to `send`/`--send`.
 - Add tests covering the extension profile, active and named context resolution, configured output deployments, and Cloud-admin resource references.
 
 ## Capabilities
