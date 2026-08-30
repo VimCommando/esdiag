@@ -7,12 +7,6 @@ use crate::env;
 use super::{Application, ElasticCloud, KnownHost, KnownHostBuilder, OutputDeployment, ResolvedKnownHost};
 use eyre::{OptionExt, Report, Result, eyre};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-#[cfg(feature = "elasticrc")]
-use std::{
-    collections::HashMap,
-    ffi::OsString,
-    sync::{Mutex, MutexGuard, OnceLock},
-};
 use std::{
     path::{Path, PathBuf},
     str::FromStr,
@@ -30,9 +24,9 @@ pub enum Uri {
     ElasticCloudAdmin(KnownHost),
     /// An Elastic Cloud GovCloud Admin URL for the Elasticsearch API proxy
     ElasticGovCloudAdmin(KnownHost),
-    /// An Elastic Uploader service URL, embed the auth token as `token:<value>@` instead of `username:password` in the URL
+    /// An Elastic Upload Service URL; embed the auth token as `token:<value>@` instead of `username:password`
     ServiceLink(Url),
-    /// An Elastic Uploader service URL, without authentication
+    /// An Elastic Upload Service URL without authentication
     ServiceLinkNoAuth(Url),
     /// A standard URL
     Url(Url),
@@ -43,159 +37,6 @@ pub enum Uri {
     /// An input/output stream (stdin/stdout)
     #[default]
     Stream,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ElasticCliService {
-    Elasticsearch,
-    Kibana,
-    Cloud,
-}
-
-fn parse_active_context_service(reference: &str) -> Option<ElasticCliService> {
-    let service = reference.strip_prefix('.')?;
-    if service.is_empty() || service.contains('.') {
-        return None;
-    }
-
-    match service {
-        "elasticsearch" | "es" => Some(ElasticCliService::Elasticsearch),
-        "kibana" | "kb" => Some(ElasticCliService::Kibana),
-        "cloud" => Some(ElasticCliService::Cloud),
-        _ => None,
-    }
-}
-
-fn try_from_active_context_service(service: ElasticCliService) -> Result<Uri> {
-    match service {
-        ElasticCliService::Elasticsearch => Uri::try_from_active_elasticsearch_env(),
-        ElasticCliService::Kibana => Uri::try_from_active_kibana_env(),
-        ElasticCliService::Cloud => Uri::try_from_active_cloud_env(),
-    }
-}
-
-#[cfg(feature = "elasticrc")]
-#[derive(Clone, Eq, Hash, PartialEq)]
-struct ElasticrcCacheKey {
-    config_file: Option<OsString>,
-    home: Option<OsString>,
-    user_profile: Option<OsString>,
-}
-
-#[cfg(feature = "elasticrc")]
-#[derive(Clone)]
-enum CachedElasticrc {
-    Loaded(Box<elasticrc::ConfigFile>),
-    NotFound,
-    Failed(String),
-}
-
-#[cfg(feature = "elasticrc")]
-fn elasticrc_cache() -> &'static Mutex<HashMap<ElasticrcCacheKey, CachedElasticrc>> {
-    static CACHE: OnceLock<Mutex<HashMap<ElasticrcCacheKey, CachedElasticrc>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-#[cfg(feature = "elasticrc")]
-fn elasticrc_cache_lock() -> Result<MutexGuard<'static, HashMap<ElasticrcCacheKey, CachedElasticrc>>> {
-    elasticrc_cache()
-        .lock()
-        .map_err(|err| eyre!("elasticrc cache lock poisoned: {err}"))
-}
-
-#[cfg(feature = "elasticrc")]
-fn elasticrc_cache_key() -> ElasticrcCacheKey {
-    ElasticrcCacheKey {
-        config_file: std::env::var_os("ELASTIC_CLI_CONFIG_FILE"),
-        home: std::env::var_os("HOME"),
-        user_profile: std::env::var_os("USERPROFILE"),
-    }
-}
-
-#[cfg(feature = "elasticrc")]
-fn load_elasticrc_config_cached() -> Result<Option<elasticrc::ConfigFile>> {
-    let key = elasticrc_cache_key();
-    {
-        let cache = elasticrc_cache_lock()?;
-        if let Some(cached) = cache.get(&key) {
-            return cached.clone().into_result();
-        }
-    }
-
-    let cached = match elasticrc::ConfigFile::load_with_options(None, None) {
-        Ok(config) => CachedElasticrc::Loaded(Box::new(config)),
-        Err(elasticrc::Error::ConfigNotFound { .. }) | Err(elasticrc::Error::HomeDirectoryUnavailable) => {
-            CachedElasticrc::NotFound
-        }
-        Err(err) => CachedElasticrc::Failed(err.to_string()),
-    };
-    let result = cached.clone().into_result();
-    elasticrc_cache_lock()?.insert(key, cached);
-    result
-}
-
-#[cfg(feature = "elasticrc")]
-impl CachedElasticrc {
-    fn into_result(self) -> Result<Option<elasticrc::ConfigFile>> {
-        match self {
-            Self::Loaded(config) => Ok(Some(*config)),
-            Self::NotFound => Ok(None),
-            Self::Failed(message) => Err(eyre!(message)),
-        }
-    }
-}
-
-#[cfg(feature = "elasticrc")]
-fn uri_from_elasticrc_service(service: elasticrc::ResolvedService) -> Result<Uri> {
-    let application = match service.kind {
-        elasticrc::ServiceKind::Elasticsearch | elasticrc::ServiceKind::Cloud => Application::Elasticsearch,
-        elasticrc::ServiceKind::Kibana => Application::Kibana,
-    };
-    let mut builder = KnownHostBuilder::new(service.url).application(application);
-    match service.auth {
-        elasticrc::ResolvedAuth::ApiKey(api_key) => {
-            builder = builder.apikey(Some(api_key.expose_secret().clone()));
-        }
-        elasticrc::ResolvedAuth::Basic { username, password } => {
-            builder = builder
-                .username(Some(username))
-                .password(Some(password.expose_secret().clone()));
-        }
-        elasticrc::ResolvedAuth::None => {}
-    }
-    builder.build()?.try_into()
-}
-
-#[cfg(feature = "elasticrc")]
-fn try_from_elasticrc_reference(reference: &str) -> Result<Option<Uri>> {
-    let Some(reference) = elasticrc::ContextServiceReference::parse(reference) else {
-        return Ok(None);
-    };
-    let Some(context) = reference.context else {
-        return Ok(None);
-    };
-
-    let Some(config) = load_elasticrc_config_cached()? else {
-        return Ok(None);
-    };
-    let service = config.resolve_service(&context, reference.service)?;
-    Ok(Some(uri_from_elasticrc_service(service)?))
-}
-
-#[cfg(feature = "elasticrc")]
-fn try_from_current_elasticrc_reference(reference: &str) -> Result<Option<Uri>> {
-    let Some(reference) = elasticrc::ContextServiceReference::parse(reference) else {
-        return Ok(None);
-    };
-    if reference.context.is_some() {
-        return Ok(None);
-    }
-
-    let Some(config) = load_elasticrc_config_cached()? else {
-        return Ok(None);
-    };
-    let service = config.resolve_current_service(reference.service)?;
-    Ok(Some(uri_from_elasticrc_service(service)?))
 }
 
 /// Try reading the authentication environment variables.
@@ -229,56 +70,7 @@ fn try_get_auth_env(
     Ok((apikey, username, password))
 }
 
-fn try_get_elastic_cli_auth_env(
-    apikey_name: &str,
-    username_name: &str,
-    password_name: &str,
-) -> (Option<String>, Option<String>, Option<String>) {
-    let apikey = std::env::var(apikey_name).ok();
-    let username = std::env::var(username_name).ok();
-    let password = std::env::var(password_name).ok();
-    (apikey, username, password)
-}
-
 impl Uri {
-    fn try_from_active_elasticsearch_env() -> Result<Self> {
-        tracing::debug!("Creating URI from active ELASTIC_ES_URL");
-        let url = std::env::var("ELASTIC_ES_URL").map_err(|_| eyre!("ELASTIC_ES_URL is not defined"))?;
-        let (apikey, username, password) =
-            try_get_elastic_cli_auth_env("ELASTIC_ES_API_KEY", "ELASTIC_ES_USERNAME", "ELASTIC_ES_PASSWORD");
-        let host = KnownHostBuilder::new(Url::parse(&url)?)
-            .apikey(apikey)
-            .username(username)
-            .password(password)
-            .build()?;
-        host.try_into()
-    }
-
-    fn try_from_active_kibana_env() -> Result<Self> {
-        tracing::debug!("Creating URI from active ELASTIC_KIBANA_URL");
-        let url = std::env::var("ELASTIC_KIBANA_URL").map_err(|_| eyre!("ELASTIC_KIBANA_URL is not defined"))?;
-        let (apikey, username, password) = try_get_elastic_cli_auth_env(
-            "ELASTIC_KIBANA_API_KEY",
-            "ELASTIC_KIBANA_USERNAME",
-            "ELASTIC_KIBANA_PASSWORD",
-        );
-        let host = KnownHostBuilder::new(Url::parse(&url)?)
-            .application(Application::Kibana)
-            .apikey(apikey)
-            .username(username)
-            .password(password)
-            .build()?;
-        host.try_into()
-    }
-
-    fn try_from_active_cloud_env() -> Result<Self> {
-        tracing::debug!("Creating URI from active ELASTIC_CLOUD_URL");
-        let url = std::env::var("ELASTIC_CLOUD_URL").map_err(|_| eyre!("ELASTIC_CLOUD_URL is not defined"))?;
-        let apikey = std::env::var("ELASTIC_CLOUD_API_KEY").ok();
-        let host = KnownHostBuilder::new(Url::parse(&url)?).apikey(apikey).build()?;
-        host.try_into()
-    }
-
     /// Try creating a new Elasticsearch Uri from the environment variables
     /// - `ESDIAG_OUTPUT_URL` (required): The URL to use for Elasticsearch output.
     /// - `ESDIAG_OUTPUT_APIKEY` (optional): API key for authentication.
@@ -429,35 +221,6 @@ impl TryFrom<&str> for Uri {
             return Ok(Uri::Stream);
         }
 
-        if let Some(service) = parse_active_context_service(uri) {
-            tracing::debug!("Creating Uri from active Elastic CLI context reference: {uri}");
-            if env::is_elastic_cli_invocation() {
-                match try_from_active_context_service(service) {
-                    Ok(uri) => return Ok(uri),
-                    Err(active_context_error) => {
-                        #[cfg(feature = "elasticrc")]
-                        if let Some(uri) = try_from_current_elasticrc_reference(uri)? {
-                            tracing::debug!("Creating Uri from Elastic CLI current context reference: {uri}");
-                            return Ok(uri);
-                        }
-                        return Err(active_context_error);
-                    }
-                }
-            }
-
-            #[cfg(feature = "elasticrc")]
-            if let Some(uri) = try_from_current_elasticrc_reference(uri)? {
-                tracing::debug!("Creating Uri from Elastic CLI current context reference: {uri}");
-                return Ok(uri);
-            }
-        }
-
-        #[cfg(feature = "elasticrc")]
-        if let Some(uri) = try_from_elasticrc_reference(uri)? {
-            tracing::debug!("Creating Uri from Elastic CLI config reference: {uri}");
-            return Ok(uri);
-        }
-
         if let Some(host) = KnownHost::resolve_template_reference(uri)? {
             return host.try_into();
         }
@@ -488,11 +251,11 @@ impl TryFrom<&str> for Uri {
             let domain = url.domain().ok_or_eyre("URL is missing a domain")?;
             match (domain, url.username(), url.password()) {
                 ("upload.elastic.co", "token", Some(_)) => {
-                    tracing::debug!("Creating Uri::ElasticUploader");
+                    tracing::debug!("Creating authenticated Elastic Upload Service URI");
                     return Ok(Uri::ServiceLink(url));
                 }
                 ("upload.elastic.co", _, None) => {
-                    tracing::debug!("Missing auth token for Elastic Uploader");
+                    tracing::debug!("Missing auth token for Elastic Upload Service");
                     return Ok(Uri::ServiceLinkNoAuth(url));
                 }
                 _ => {
@@ -579,9 +342,8 @@ impl std::fmt::Display for Uri {
 #[cfg(test)]
 mod tests {
     use super::Uri;
-    use crate::data::{Application, Auth, ElasticCloud, HostRole, KnownHost};
-    use std::{collections::BTreeMap, path::Path};
-    use tempfile::TempDir;
+    use crate::data::{Application, Auth, ElasticCloud};
+    use std::path::Path;
 
     const ENV_VARS: &[&str] = &[
         "ESDIAG_OUTPUT_URL",
@@ -612,24 +374,6 @@ mod tests {
                 std::env::remove_var(name);
             }
         }
-    }
-
-    fn setup_hosts_env() -> TempDir {
-        let tmp = TempDir::new().expect("temp dir");
-        unsafe {
-            std::env::set_var("ESDIAG_HOSTS", tmp.path().join("hosts.yml"));
-        }
-        tmp
-    }
-
-    fn write_elasticrc(contents: &str) -> TempDir {
-        let tmp = TempDir::new().expect("temp dir");
-        let path = tmp.path().join(".elasticrc.yml");
-        std::fs::write(&path, contents).expect("write elasticrc");
-        unsafe {
-            std::env::set_var("ELASTIC_CLI_CONFIG_FILE", &path);
-        }
-        tmp
     }
 
     #[test]
@@ -843,138 +587,6 @@ mod tests {
     }
 
     #[test]
-    fn active_context_es_alias_resolves_before_saved_hosts() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _tmp = setup_hosts_env();
-        let mut hosts = BTreeMap::new();
-        hosts.insert(
-            ".es".to_string(),
-            KnownHost::new_no_auth(
-                Application::Elasticsearch,
-                url::Url::parse("https://saved.example:9200").expect("saved url"),
-                vec![HostRole::Collect],
-                None,
-                false,
-            ),
-        );
-        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
-        unsafe {
-            std::env::set_var("ESDIAG_ELASTIC_CLI", "1");
-            std::env::set_var("ELASTIC_ES_URL", "https://active.example:9200");
-            std::env::set_var("ELASTIC_ES_API_KEY", "active-key");
-        }
-
-        let Uri::KnownHost(host) = Uri::try_from(".es").expect("active context uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.get_url().expect("url").as_str(), "https://active.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "active-key"));
-        clear_env();
-    }
-
-    #[test]
-    fn active_context_es_alias_prefers_elastic_context_over_esdiag_output() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        unsafe {
-            std::env::set_var("ESDIAG_ELASTIC_CLI", "1");
-            std::env::set_var("ESDIAG_OUTPUT_URL", "https://output.example:9200");
-            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "output-key");
-            std::env::set_var("ELASTIC_ES_URL", "https://active.example:9200");
-            std::env::set_var("ELASTIC_ES_API_KEY", "active-key");
-        }
-
-        let Uri::KnownHost(host) = Uri::try_from(".es").expect("active context uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.get_url().expect("url").as_str(), "https://active.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "active-key"));
-        clear_env();
-    }
-
-    #[test]
-    fn standalone_active_context_alias_falls_through_to_saved_host() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let previous_home = std::env::var_os("HOME");
-        let _tmp = setup_hosts_env();
-        let home = TempDir::new().expect("home temp dir");
-        let mut hosts = BTreeMap::new();
-        hosts.insert(
-            ".es".to_string(),
-            KnownHost::new_no_auth(
-                Application::Elasticsearch,
-                url::Url::parse("https://saved.example:9200").expect("saved url"),
-                vec![HostRole::Collect],
-                None,
-                false,
-            ),
-        );
-        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
-        unsafe {
-            std::env::set_var("HOME", home.path());
-            std::env::set_var("ELASTIC_ES_URL", "https://active.example:9200");
-        }
-
-        let Uri::KnownHost(host) = Uri::try_from(".es").expect("saved host uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.get_url().expect("url").as_str(), "https://saved.example:9200/");
-        clear_env();
-        unsafe {
-            if let Some(previous_home) = previous_home {
-                std::env::set_var("HOME", previous_home);
-            } else {
-                std::env::remove_var("HOME");
-            }
-        }
-    }
-
-    #[test]
-    fn active_context_kibana_alias_resolves() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        unsafe {
-            std::env::set_var("ESDIAG_ELASTIC_CLI", "1");
-            std::env::set_var("ELASTIC_KIBANA_URL", "https://active-kb.example:5601");
-        }
-
-        let Uri::KnownHost(host) = Uri::try_from(".kb").expect("active context uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.app(), Some(Application::Kibana));
-        assert_eq!(host.get_url().expect("url").as_str(), "https://active-kb.example:5601/");
-        clear_env();
-    }
-
-    #[test]
-    fn active_context_cloud_service_resolves() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        unsafe {
-            std::env::set_var("ESDIAG_ELASTIC_CLI", "1");
-            std::env::set_var(
-                "ELASTIC_CLOUD_URL",
-                "https://cloud.elastic.co/deployments/deployment-123",
-            );
-            std::env::set_var("ELASTIC_CLOUD_API_KEY", "cloud-key");
-        }
-
-        let Uri::KnownHost(host) = Uri::try_from(".cloud").expect("active context uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.cloud_id(), Some(&ElasticCloud::ElasticCloud));
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "cloud-key"));
-        clear_env();
-    }
-
-    #[test]
     fn non_service_leading_dot_falls_through_to_path_resolution() {
         let _guard = crate::test_env_lock().lock().expect("env lock");
         clear_env();
@@ -997,279 +609,6 @@ mod tests {
         assert!(matches!(
             Uri::try_from("./.es"),
             Ok(Uri::Directory(path)) if path == Path::new("./.es")
-        ));
-        clear_env();
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_elasticrc_reference_resolves_elasticsearch() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _tmp = write_elasticrc(
-            r#"
-current_context: prod
-contexts:
-  prod:
-    elasticsearch:
-      url: https://prod.example:9200
-      auth:
-        api_key: prod-key
-"#,
-        );
-
-        let Uri::KnownHost(host) = Uri::try_from(".prod.es").expect("elasticrc uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.get_url().expect("url").as_str(), "https://prod.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "prod-key"));
-        clear_env();
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn active_elasticrc_reference_resolves_current_context() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _tmp = write_elasticrc(
-            r#"
-current_context: prod
-contexts:
-  prod:
-    elasticsearch:
-      url: https://prod.example:9200
-      auth:
-        api_key: prod-key
-"#,
-        );
-
-        let Uri::KnownHost(host) = Uri::try_from(".es").expect("elasticrc current context uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.get_url().expect("url").as_str(), "https://prod.example:9200/");
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "prod-key"));
-        clear_env();
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_elasticrc_reference_resolves_canonical_elasticsearch() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _tmp = write_elasticrc(
-            r#"
-current_context: prod
-contexts:
-  prod:
-    elasticsearch:
-      url: https://prod.example:9200
-"#,
-        );
-
-        let Uri::KnownHost(host) = Uri::try_from(".prod.elasticsearch").expect("elasticrc uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.get_url().expect("url").as_str(), "https://prod.example:9200/");
-        clear_env();
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_elasticrc_reference_resolves_dotted_context_name() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _tmp = write_elasticrc(
-            r#"
-current_context: prod.us-west
-contexts:
-  prod.us-west:
-    elasticsearch:
-      url: https://west.example:9200
-"#,
-        );
-
-        let Uri::KnownHost(host) = Uri::try_from(".prod.us-west.es").expect("elasticrc uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.get_url().expect("url").as_str(), "https://west.example:9200/");
-        clear_env();
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_elasticrc_reference_resolves_kibana() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _tmp = write_elasticrc(
-            r#"
-current_context: prod
-contexts:
-  prod:
-    kibana:
-      url: https://kb.example:5601
-"#,
-        );
-
-        let Uri::KnownHost(host) = Uri::try_from(".prod.kb").expect("elasticrc uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.app(), Some(Application::Kibana));
-        assert_eq!(host.get_url().expect("url").as_str(), "https://kb.example:5601/");
-        clear_env();
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_elasticrc_reference_resolves_cloud() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _tmp = write_elasticrc(
-            r#"
-current_context: prod
-contexts:
-  prod:
-    cloud:
-      url: https://cloud.elastic.co/deployments/deployment-123
-      auth:
-        api_key: cloud-key
-"#,
-        );
-
-        let Uri::KnownHost(host) = Uri::try_from(".prod.cloud").expect("elasticrc uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.cloud_id(), Some(&ElasticCloud::ElasticCloud));
-        assert_eq!(
-            host.get_url().expect("url").as_str(),
-            "https://cloud.elastic.co/api/v1/deployments/deployment-123/elasticsearch/_main/proxy/"
-        );
-        assert!(matches!(host.get_auth().expect("auth"), Auth::Apikey(key) if key.expose_secret() == "cloud-key"));
-        clear_env();
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_elasticrc_reference_takes_precedence_over_saved_host() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _hosts_tmp = setup_hosts_env();
-        let _elasticrc_tmp = write_elasticrc(
-            r#"
-current_context: prod
-contexts:
-  prod:
-    elasticsearch:
-      url: https://config.example:9200
-"#,
-        );
-        let mut hosts = BTreeMap::new();
-        hosts.insert(
-            ".prod.es".to_string(),
-            KnownHost::new_no_auth(
-                Application::Elasticsearch,
-                url::Url::parse("https://saved.example:9200").expect("saved url"),
-                vec![HostRole::Collect],
-                None,
-                false,
-            ),
-        );
-        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
-
-        let Uri::KnownHost(host) = Uri::try_from(".prod.es").expect("elasticrc uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.get_url().expect("url").as_str(), "https://config.example:9200/");
-        clear_env();
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_elasticrc_reference_without_config_falls_through_to_saved_host() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let previous_home = std::env::var_os("HOME");
-        let _tmp = setup_hosts_env();
-        let home = TempDir::new().expect("home temp dir");
-        let mut hosts = BTreeMap::new();
-        hosts.insert(
-            ".prod.es".to_string(),
-            KnownHost::new_no_auth(
-                Application::Elasticsearch,
-                url::Url::parse("https://saved.example:9200").expect("saved url"),
-                vec![HostRole::Collect],
-                None,
-                false,
-            ),
-        );
-        KnownHost::write_hosts_yml(&hosts).expect("write hosts");
-        unsafe {
-            std::env::set_var("HOME", home.path());
-        }
-
-        let Uri::KnownHost(host) = Uri::try_from(".prod.es").expect("saved host uri") else {
-            panic!("expected known host");
-        };
-
-        assert_eq!(host.get_url().expect("url").as_str(), "https://saved.example:9200/");
-        clear_env();
-        unsafe {
-            if let Some(previous_home) = previous_home {
-                std::env::set_var("HOME", previous_home);
-            } else {
-                std::env::remove_var("HOME");
-            }
-        }
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_elasticrc_reference_reports_missing_context() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _tmp = write_elasticrc(
-            r#"
-current_context: prod
-contexts:
-  prod:
-    elasticsearch:
-      url: https://prod.example:9200
-"#,
-        );
-
-        let err = match Uri::try_from(".diag.es") {
-            Ok(_) => panic!("missing context should fail"),
-            Err(err) => err,
-        };
-
-        assert!(err.to_string().contains("Elastic CLI context 'diag' was not found"));
-        clear_env();
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn unsupported_named_service_falls_through_to_path_resolution() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        clear_env();
-        let _tmp = write_elasticrc(
-            r#"
-current_context: prod
-contexts:
-  prod:
-    elasticsearch:
-      url: https://prod.example:9200
-"#,
-        );
-
-        assert!(matches!(
-            Uri::try_from(".prod.ls"),
-            Ok(Uri::File(path)) if path == Path::new(".prod.ls")
         ));
         clear_env();
     }
