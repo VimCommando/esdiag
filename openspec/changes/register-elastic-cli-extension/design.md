@@ -10,13 +10,16 @@ ESDiag is currently a Rust binary named `esdiag`. It already supports environmen
 
 - Make ESDiag invokable as `elastic diag <args...>` through the Elastic CLI extension system.
 - Keep the existing `esdiag` binary, command grammar, saved hosts, keystore, Job model, and diagnostic stages intact.
-- Allow Elastic CLI-provided Elasticsearch, Kibana, and Cloud context to drive env-backed ESDiag workflows without saved host setup.
+- Provide a focused `elastic diag` command profile from the same native Rust binary.
+- Allow Elastic CLI-provided Elasticsearch and Kibana context to drive transient Collect targets without saved host setup.
 - Support `.service` active-context target references from extension-provided environment variables.
 - Support `.context.service` named-context target references through native Elastic CLI config loading.
+- Support a frequently changing input context and a separately configured, relatively fixed output context.
 - Keep native Elastic CLI config support read-only for this change.
-- Support Elastic Cloud service targets where ESDiag can map the Cloud API key path into its existing known-host model.
+- Support Cloud-admin proxy targets only when a context reference supplies a deployment identifier and explicit application.
 - Keep root `cargo install --path .` and repo-root build/test workflows functional after introducing the workspace.
-- Provide an entrypoint that can be registered explicitly as the Elastic CLI `diag` extension.
+- Make the `elasticrc` library independently publishable and consumable by Rust projects outside ESDiag.
+- Keep the extension runtime compatible with a separately specified self-contained native package registered as `diag`.
 - Preserve cross-platform behavior for macOS, Linux, and Windows.
 
 **Non-Goals:**
@@ -28,44 +31,37 @@ ESDiag is currently a Rust binary named `esdiag`. It already supports environmen
 - Do not add extension-provided nested help to the Elastic CLI, since the current extension system does not support that.
 - Do not publish an npm package as part of this change.
 - Do not write or mutate `.elasticrc` files in this change.
+- Do not define remote extension publication, native artifact selection, or installer upgrades in this change.
 
 ## Decisions
 
 ### Use `elastic-diag` as the extension entrypoint
 
-The extension-facing executable will be named `elastic-diag`. Local registration will explicitly select the short name with `elastic extension create diag --path <checkout>`. The entrypoint will forward all arguments to the existing ESDiag execution layer so commands such as `elastic diag process`, `elastic diag setup`, and `elastic diag serve` preserve the same behavior as `esdiag process`, `esdiag setup`, and `esdiag serve`.
+The extension-facing executable will be the same compiled Rust binary installed under the name `elastic-diag`. The executable name selects an extension-specific Clap profile and renders usage as `elastic diag`, while `esdiag` continues to select the standalone profile. The custom environment marker remains useful for tests and development wrappers but is not the primary identity mechanism.
 
-The short name is an intentional override of the repository and binary name. The current GitHub installer derives a command from the repository name before inspecting package metadata, so `elastic extension install elastic/esdiag` registers `elastic esdiag`. Remote publication under a source named `elastic-diag`, or upstream support for an explicit name override, is deferred to issue #342.
+The short name is an intentional override of the repository and standalone binary name. The separate self-contained packaging change owns the installer mechanism needed to preserve that name.
 
-### Package the extension from the existing ESDiag repository
+### Keep distribution separate from runtime behavior
 
-The first extension packaging path will live in the existing ESDiag repository. It will not require a separate `elastic/elastic-diag` repository, and npm publication is deferred until the extension has been tested locally. The repository will provide a discoverable `elastic-diag` entrypoint and metadata for explicit local-path registration.
+This change defines the Rust command profile and context behavior consumed by an extension installation. A separate OpenSpec change owns native artifact selection, checksums, installer naming, license packaging, publication, and upgrades. Local development may continue to use the existing registration wrapper while the runtime profile is implemented.
 
-Alternative considered: create a dedicated extension repository or publish an npm package immediately. That would make command naming and installation cleaner, but it adds release surface before the extension behavior is proven locally.
+### Expose a focused extension command profile
 
-### Require `esdiag` on PATH for the initial wrapper
+The initial extension profile exposes `collect`, `process`, `send`, `setup`, `job`, `output`, `help`, and `version`. Standalone deployment and credential administration remain under `esdiag`: `local`, `serve`, `init`, `host`, `keystore`, and `agent` are omitted from extension help and parsing.
 
-The initial `elastic-diag` wrapper will require an `esdiag` executable to be available on `PATH`. If it is missing, the wrapper will fail gracefully with installation guidance. Users can install the binary through a release package, Homebrew, or Cargo. The extension packaging can later bundle or locate a matching released binary.
+The extension uses `send` for transmitting a bundle to Elastic Uploader because that operation is the Send stage. It must not label outbound bundle transfer as upload.
 
-Alternative considered: compile or download `esdiag` during extension install. Keeping installation separate makes local validation simpler, but leaves version matching and self-contained remote publication for follow-up work.
+### Keep context mapping in ESDiag core
 
-### Keep context mapping in ESDiag core, not only in the wrapper
+ESDiag core will consume Elastic CLI context variables through a typed context adapter. Active Elasticsearch and Kibana values are runtime-only input credentials, not generic field-by-field fallbacks for `ESDIAG_OUTPUT_*`. Output contexts are resolved separately as complete deployments so a frequently changing input context can never silently become the Export destination.
 
-ESDiag will recognize Elastic CLI context variables as fallbacks in the same code path that currently reads `ESDIAG_OUTPUT_*` and `ESDIAG_KIBANA_URL`. Existing `ESDIAG_*` names remain authoritative when both are set. This makes the behavior testable in Rust and keeps direct `esdiag` invocations compatible with Elastic CLI-provided environments.
+The adapter constructs stage-aware transient resolved hosts: Elasticsearch or Kibana with the Collect role for input, Elasticsearch with the output role for Export, and Kibana with the View role when an output deployment needs it. It keeps service credentials separate and persists none of them.
 
-Alternative considered: map variables only inside the `elastic-diag` wrapper. That is simple for extension runs, but it makes the behavior harder to validate from the core binary and creates different semantics between direct and extension invocation.
+### Keep packaging non-authoritative
 
-### Keep the wrapper thin and non-authoritative
+Installer metadata selects and verifies the binary but does not parse ESDiag arguments, resolve contexts, or implement authentication. The shared Rust execution layer remains authoritative for Job construction and execution.
 
-The wrapper should not parse ESDiag arguments, inspect diagnostic inputs, or implement auth logic. Its job is to satisfy Elastic CLI extension entrypoint discovery and delegate execution. Any required env translation may be present as a compatibility layer, but the core binary remains the source of truth for command behavior.
-
-Alternative considered: build a richer extension command layer that rewrites commands or introduces extension-only options. That would create a second CLI surface and increase drift from `esdiag`.
-
-### Mark Elastic CLI extension invocations in the ESDiag namespace
-
-The `elastic-diag` wrapper will set `ESDIAG_ELASTIC_CLI=1` before delegating to the ESDiag execution layer. Core ESDiag may use this marker for extension-specific parsing hints, help text, and diagnostics because it is a wrapper-owned signal rather than a heuristic based on the presence of `ELASTIC_*` service context variables.
-
-Alternative considered: use a generic marker such as `ELASTIC_CLI=1`. That is shorter, but it claims an upstream Elastic CLI namespace that is not currently part of the extension contract.
+Alternative considered: retain a JavaScript wrapper that locates `esdiag` on `PATH`. Rejected because native Elastic CLI users may not have Node.js, independent installations can drift in version, and the extension would not be self-contained.
 
 ### Add active-context leading-dot target references
 
@@ -79,7 +75,6 @@ ESDiag will support leading-dot target references in command arguments that alre
 
 - `elasticsearch` or `es`
 - `kibana` or `kb`
-- `cloud`
 
 For arguments that can be multiple kinds of input, such as `process <input> [output]`, resolution order will be:
 
@@ -89,7 +84,7 @@ For arguments that can be multiple kinds of input, such as `process <input> [out
 
 This gives `elastic diag collect .es ./out` an explicit remote-target meaning while keeping existing saved-host and local path behavior. A local hidden path that would otherwise look like a context target can be written with an explicit filesystem prefix such as `./.es`.
 
-Alternative considered: infer the collect source from `ESDIAG_ELASTIC_CLI=1` and active `ELASTIC_*` variables when the user provides only one positional. That is concise, but it becomes ambiguous when the active context contains multiple services and does not scale to cross-context workflows.
+The extension never guesses an application. `elastic diag process` without an input fails with guidance to choose `.es`, `.kb`, or an explicit named-context target even when an output context is configured. For example, after selecting active context `prod` and configuring output context `monitoring`, `elastic diag process .es` Collects Elasticsearch data from `prod`, Processes it, and Exports the documents to `monitoring`.
 
 ### Add native Elastic CLI config support for named contexts
 
@@ -107,6 +102,42 @@ This enables cross-context workflows such as `elastic diag process .prod.es .dia
 
 Alternative considered: have the `elastic-diag` wrapper preload all contexts into environment variables. The current Elastic CLI extension runner only provides one resolved active context, so named-context support belongs in ESDiag's own config resolver unless the upstream extension API grows multi-context support.
 
+### Configure a separate named output context
+
+`elastic diag output set <context>` stores a symbolic Elastic CLI context reference as the default output deployment. `elastic diag output show` and `elastic diag output clear` inspect and remove it. ESDiag persists the context name and any required non-secret config-file identity, never resolved URLs or credentials, and never mutates `.elasticrc`.
+
+An output context resolves as a deployment rather than a single URI: Elasticsearch is required for Export, while Kibana is optional for ordinary processing and required by commands that install assets or create viewer links. Elasticsearch and Kibana authentication remain separate.
+
+Application configuration and saved Jobs gain typed Elastic context reference variants with backward-compatible deserialization. Existing saved-host names and existing Job input/output variants retain their current serialized meaning; users do not need to migrate them before upgrading.
+
+Output resolution order is:
+
+1. An explicit target in the command's existing output positional, including `.monitoring.es`.
+2. The configured Elastic CLI output context.
+3. The existing standalone ESDiag output deployment where that profile permits it.
+4. A fail-closed error.
+
+No additional output-context option is introduced. A leading-dot context reference in output position resolves as an output deployment because target adaptation is stage-aware. The active input context is never an implicit output fallback. This prevents a changing customer or production input context from accidentally receiving processed diagnostic documents.
+
+### Add Cloud-admin resource target references
+
+The Elastic CLI `cloud` service supplies management-plane credentials; it is not an `Application` and `.cloud` alone is not a collectable target. Cloud-admin collection requires a deployment selector:
+
+```text
+.cloud/<deployment-id>/<application>
+.context.cloud/<deployment-id>/<application>
+```
+
+The application is always explicit, keeping the no-guessing rule consistent and preserving an extensible grammar if the proxy later supports Kibana or another application. Initially only `es` and `elasticsearch` are accepted; unsupported applications fail before client construction. The resolver combines the context's Cloud URL and API key with the deployment identifier to produce a concrete Elasticsearch target using the Cloud admin route and an `ElasticCloudHosted` platform hint.
+
+The existing saved-host template syntax remains independently supported:
+
+```text
+<saved-template>://<deployment-id>[/<application>]
+```
+
+Context Cloud references do not create or require a saved host, while saved-template references continue to obtain their route and credentials from ESDiag host storage.
+
 ### Match Elastic CLI config semantics where target resolution depends on them
 
 Native config support needs read parity for target resolution. Read parity includes config discovery order, explicit config-file overrides, YAML/JSON parsing, structural validation, resolver expression handling, OS secret resolvers, inline-secret compatibility, and loose-permission warnings.
@@ -115,9 +146,9 @@ The resolver should keep parity scoped to context and service resolution. Comman
 
 Alternative considered: support only inline `.elasticrc.yml` values at first. That would be fast to implement, but it would fail for the normal Elastic CLI path where secrets are commonly stored as resolver expressions backed by the OS keychain.
 
-For this change, `elasticrc` write support is explicitly deferred. The crate may design public types with future writing in mind, but implementation work should focus on read-only resolution for `.context.service` targets and active context parity.
+For this change, `elasticrc` write support is explicitly deferred. The crate may design public types with future writing in mind, but implementation work should focus on read-only resolution for named input targets, configured output deployments, and Cloud-admin resource references.
 
-The service model should match Elastic CLI's currently supported config service blocks. That means `elasticsearch`, `kibana`, and `cloud` may be parsed by the crate. ESDiag should expose `cloud` target references by mapping Elastic CLI Cloud URL/API key data into the existing ESDiag Cloud known-host code path. Logstash (`logstash` / `ls`) is deferred until the Elastic CLI config schema supports it.
+The service model should match Elastic CLI's currently supported config service blocks. `elasticsearch` and `kibana` resolve directly to applications. `cloud` may be parsed only as the credential and base-URL source for a resource-qualified Cloud admin route. Logstash (`logstash` / `ls`) is deferred until the Elastic CLI config schema supports it.
 
 ### Use `keyring-core` for credential resolver integration
 
@@ -151,7 +182,7 @@ Alternative considered: exactly mirror Elastic CLI's shell-command behavior. Tha
 
 ### Implement native Elastic CLI config support as an `elasticrc` crate
 
-The Elastic CLI config implementation should live in a dedicated workspace library crate named `elasticrc`, with the main `esdiag` crate depending on it for `.context.service` resolution behind an `elasticrc` Cargo feature. This feature should be enabled in the default feature set. For this change, the crate owns read-only config file discovery, parsing, validation, resolver expressions, OS secret store integration, and inline-secret warnings. The `esdiag` crate owns only the conversion from an `elasticrc` resolved service block into ESDiag's transient `KnownHost`/`Uri` model.
+The Elastic CLI config implementation should live in a dedicated workspace library crate named `elasticrc`, with the main `esdiag` crate depending on it for named-context resolution behind an `elasticrc` Cargo feature. This feature should be enabled in the default feature set. For this change, the crate owns read-only config file discovery, parsing, validation, resolver expressions, OS secret store integration, and inline-secret warnings. The `esdiag` crate owns conversion from resolved config values into stage-aware transient hosts, output deployments, and Cloud-admin routes.
 
 The current repository is a single Cargo package, so this change will introduce a Cargo workspace layout while keeping the existing package name and binary intact. The initial layout should be minimal:
 
@@ -166,27 +197,36 @@ src/
 
 Alternative considered: implement `.elasticrc` support inside `src/data`. That would be faster initially, but it would couple OS keychain and config-writer concerns to ESDiag's diagnostic domain and make reuse or independent testing harder.
 
+### Publish `elasticrc` as an independent library crate
+
+`elasticrc` is a reusable integration boundary rather than an ESDiag-internal module. Its public API owns Elastic CLI config discovery, raw typed configuration, context and service selection, lazy resolver evaluation, redacted authentication, and errors. It must not expose or depend on `KnownHost`, `Uri`, `OutputDeployment`, Job stages, or other ESDiag domain types; callers perform those adaptations.
+
+The crate manifest includes registry metadata, a README with a minimal load-and-resolve example, repository and documentation links, license and Rust-version declarations, and registry versions for every runtime dependency. ESDiag uses a combined path-and-version dependency so workspace development uses local source while packaged ESDiag resolves the published crate.
+
+Publication readiness is verified with `cargo package -p elasticrc`, `cargo publish --dry-run -p elasticrc`, public documentation tests, and an external-consumer fixture that depends only on the packaged crate. CI also checks the declared minimum Rust version.
+
+Public compatibility follows semantic versioning. Config loading remains side-effect-free, and resolver execution remains lazy and service-scoped so downstream projects can safely inspect configuration without executing resolver expressions.
+
+Alternative considered: keep `elasticrc` private until ESDiag stabilizes its context model. Rejected because the crate already models an upstream Elastic CLI format independently of ESDiag, and publishing it allows other Rust extensions to share one tested implementation instead of duplicating secret resolver and schema behavior.
+
 ### Make help context-aware for Elastic CLI invocations
 
 When `ESDIAG_ELASTIC_CLI=1` is present, ESDiag help output may include Elastic CLI-specific examples such as `elastic diag collect .es ./out` and mention `.service` target references. A bare `elastic diag` invocation can therefore provide extension-specific guidance. Current Elastic CLI releases consume `--help` before extension dispatch, so users must use `elastic diag help [COMMAND]` for delegated Clap help. This keeps normal `esdiag --help` focused on standalone usage while improving discoverability for extension users. Shell completions remain out of scope.
 
-### Treat install packaging as separate from diagnostic runtime
-
-The repository will provide metadata that Elastic CLI can use to discover `elastic-diag` during explicit local registration. The diagnostic runtime remains the Rust ESDiag binary. If a future remote package needs to fetch or locate a released binary, that logic belongs in package installation scripts or release packaging rather than in the diagnostic processing path.
-
-Remote installation and publication are tracked independently in issue #342 because the current GitHub source name cannot produce the required `diag` command.
-
 ## Risks / Trade-offs
 
-- Extension registration does not rename `elastic/esdiag` to `diag` → Register the local checkout with an explicit `diag` name and treat remote publication as separate follow-up work.
-- Two environment variable families can diverge → Preserve `ESDIAG_*` precedence and document the fallback order.
-- Invocation marker could be confused with Elastic CLI-provided context → Use `ESDIAG_ELASTIC_CLI=1` only as an invocation marker and continue to use `ELASTIC_*` only for service context.
+- Runtime and distribution land separately → Keep the extension profile contract stable and verify packaging against it in the isolated distribution change.
+- Input and output contexts may differ → Persist typed symbolic references and resolve each direction independently at Job execution.
+- An omitted application is ambiguous in a multi-service context → Require `.es`, `.kb`, or another explicit application selector and never guess, including for Cloud-admin references.
 - Leading-dot references can resemble hidden local files → Reserve the leading-dot grammar only when the service segment is a known service name or alias, and document `./.name` for local hidden paths.
 - Explicit `.context.service` references require reading Elastic CLI config directly → Isolate `.elasticrc` loading behind the `elasticrc` crate so active-context env resolution and saved-host behavior remain independent.
+- Cloud management credentials are not an application target → Require a fully qualified `.context.cloud/<id>/<application>` reference and materialize a Cloud admin route.
 - Elastic CLI config parity includes OS-specific secret stores and command execution resolvers → Use `keyring-core` for credential access, use native keyring store crates where practical, and implement command resolvers with bounded execution, platform-specific errors, and focused tests.
-- Resolver command parity intentionally avoids shell interpretation → Document the safer argv-based behavior and test rejection of shell-only syntax.
+- Resolver command parity intentionally avoids shell interpretation → Document the safer argv-based behavior, remove inherited `ELASTIC_*` credentials from child environments, and test rejection of shell-only syntax.
 - Workspace conversion can break root install flows → Preserve root package metadata and test `cargo install --path .`.
-- Initial extension packaging depends on `esdiag` being on `PATH` → Fail with clear install guidance until precompiled release binaries are available.
-- Credentials passed through environment variables can be inherited by child processes → Keep the wrapper minimal, avoid logging secret values, and rely on the Elastic CLI extension security model.
-- `collect` still requires an explicit host argument → Support the existing command unchanged first, and only add active-context collection semantics if the implementation can keep clap usage unambiguous.
+- A path-only workspace dependency prevents registry packaging → Declare both the local path and published `elasticrc` version in ESDiag.
+- Publishing exposes API compatibility obligations → Keep ESDiag adaptation types outside the crate, document the public surface, and apply semantic versioning.
+- Dependency MSRV can exceed the crate declaration → Test the packaged crate and its default feature set with the declared Rust version.
+- Credentials passed through environment variables can be inherited by child processes → Keep context credentials runtime-only, redact them, and construct minimal child environments.
+- The extension profile can drift from standalone `esdiag` → Share Job construction and execution while testing the smaller command grammar independently.
 - The Elastic CLI extension feature is experimental → Keep the extension-specific surface small so changes in the Elastic CLI installer contract require limited updates.
