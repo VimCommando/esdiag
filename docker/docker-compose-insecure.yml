@@ -51,7 +51,7 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - esdiag-data:/usr/share/elasticsearch/data
+      - data:/usr/share/elasticsearch/data
     networks:
       - net
     ports:
@@ -76,7 +76,7 @@ services:
       - SERVER_NAME=kibana
       - ELASTICSEARCH_HOSTS=http://esdiag-elasticsearch:9200
     volumes:
-      - esdiag-data:/usr/share/kibana/data
+      - data:/usr/share/kibana/data
     networks:
       - net
     ports:
@@ -92,7 +92,7 @@ services:
       retries: 30
 
 volumes:
-  esdiag-data:
+  data:
     driver: local
 
 networks:

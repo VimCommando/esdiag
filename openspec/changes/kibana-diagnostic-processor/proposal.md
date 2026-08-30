@@ -23,6 +23,7 @@ ESDiag currently lacks support for processing Kibana-specific diagnostic data (l
 - `kibana-synthetics-uptime`: Process Synthetics and Uptime settings and locations.
 - `kibana-detection-engine`: Process Detection Engine health and rules.
 - `kibana-metadata`: Extract and provide common metadata (diagnostic and node info) for document enrichment.
+- `kibana-processing-runtime`: Discover scoped and paginated inputs, honor processing selections, report processing outcomes, and install compatible output templates.
 
 ### Modified Capabilities
 <!-- None -->
@@ -31,4 +32,5 @@ ESDiag currently lacks support for processing Kibana-specific diagnostic data (l
 
 - `src/processor/mod.rs`: To register the new `kibana` module.
 - `src/processor/kibana`: New directory for Kibana-specific logic.
-- Potential updates to data streams/templates to accommodate Kibana documents.
+- `assets/kibana/sources.yml`: Mark implemented sources as processable and define their processing dependencies.
+- Elasticsearch index templates for every emitted Kibana metrics stream, with explicit dashboard metadata mappings and dynamic payload mappings.

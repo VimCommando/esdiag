@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Version {
     pub name: String,
-    #[serde(rename = "uuid")]
+    #[serde(rename(deserialize = "uuid", serialize = "id"))]
     pub id: String,
     pub version: VersionDetails,
 }

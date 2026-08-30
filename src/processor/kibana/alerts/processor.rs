@@ -2,7 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::super::{DocumentExporter, KibanaMetadata, Lookups, Metadata};
+use super::super::{DocumentExporter, KibanaMetadata, Lookups, Metadata, send_documents};
 use super::{AlertHealth, Alerts};
 use crate::{exporter::Exporter, processor::ProcessorSummary};
 use serde::Serialize;
@@ -14,12 +14,7 @@ impl DocumentExporter<Lookups, KibanaMetadata> for Alerts {
         let metadata_doc = metadata.for_data_stream(&data_stream).as_meta_doc();
         let docs = process_alerts_data(self.0, metadata_doc);
 
-        let mut summary = ProcessorSummary::new(data_stream.clone());
-        match exporter.send(data_stream, docs).await {
-            Ok(batch) => summary.add_batch(batch),
-            Err(err) => tracing::error!("Failed to send Kibana alerts: {}", err),
-        }
-        summary
+        send_documents(exporter, &data_stream, docs).await
     }
 }
 
@@ -32,12 +27,7 @@ impl DocumentExporter<Lookups, KibanaMetadata> for AlertHealth {
             data: self.0
         });
 
-        let mut summary = ProcessorSummary::new(data_stream.clone());
-        match exporter.send(data_stream, vec![doc]).await {
-            Ok(batch) => summary.add_batch(batch),
-            Err(err) => tracing::error!("Failed to send Kibana alert health: {}", err),
-        }
-        summary
+        send_documents(exporter, &data_stream, vec![doc]).await
     }
 }
 

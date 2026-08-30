@@ -2,7 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-use super::super::{DocumentExporter, KibanaMetadata, Lookups, Metadata};
+use super::super::{DocumentExporter, KibanaMetadata, Lookups, Metadata, send_documents};
 use super::Status;
 use crate::{exporter::Exporter, processor::ProcessorSummary};
 use serde::Serialize;
@@ -14,12 +14,7 @@ impl DocumentExporter<Lookups, KibanaMetadata> for Status {
         let metadata_doc = metadata.for_data_stream(&data_stream).as_meta_doc();
         let status_doc = json!(StatusDoc::new(self, metadata_doc));
 
-        let mut summary = ProcessorSummary::new(data_stream.clone());
-        match exporter.send(data_stream, vec![status_doc]).await {
-            Ok(batch) => summary.add_batch(batch),
-            Err(err) => tracing::error!("Failed to send Kibana status: {}", err),
-        }
-        summary
+        send_documents(exporter, &data_stream, vec![status_doc]).await
     }
 }
 
