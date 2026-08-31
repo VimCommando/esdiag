@@ -83,8 +83,8 @@ const ELASTIC_CREDENTIAL_ENV_VARS: [&str; 9] = [
 /// Secret fields may contain inline values or unresolved expressions. Resolver
 /// expressions are evaluated only when a service is explicitly resolved.
 pub struct ConfigFile {
-    pub current_context: String,
-    pub contexts: BTreeMap<String, Context>,
+    current_context: String,
+    contexts: BTreeMap<String, Context>,
 }
 
 impl<'de> Deserialize<'de> for ConfigFile {
@@ -168,6 +168,16 @@ impl ConfigFile {
             name: name.to_string(),
             available: self.contexts.keys().cloned().collect(),
         })
+    }
+
+    /// Return the configured current context name.
+    pub fn current_context_name(&self) -> &str {
+        &self.current_context
+    }
+
+    /// Return all configured contexts.
+    pub fn contexts(&self) -> &BTreeMap<String, Context> {
+        &self.contexts
     }
 
     /// Return the current context.
@@ -1410,7 +1420,7 @@ contexts:
 
         let config = ConfigFile::load_with_options(Some(&explicit), None).expect("load config");
 
-        assert_eq!(config.current_context, "explicit");
+        assert_eq!(config.current_context_name(), "explicit");
         unsafe {
             std::env::remove_var("ELASTIC_CLI_CONFIG_FILE");
         }
@@ -1436,7 +1446,7 @@ contexts:
 
         let config = ConfigFile::load_with_options(None, Some(&home)).expect("load config");
 
-        assert_eq!(config.current_context, "env");
+        assert_eq!(config.current_context_name(), "env");
         unsafe {
             std::env::remove_var("ELASTIC_CLI_CONFIG_FILE");
         }
@@ -1592,7 +1602,7 @@ contexts:
 
         let config = ConfigFile::load(&path).expect("load config");
         let api_key = config
-            .contexts
+            .contexts()
             .get("prod")
             .and_then(|context| context.elasticsearch.as_ref())
             .and_then(|service| service.auth.as_ref())

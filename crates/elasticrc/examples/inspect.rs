@@ -38,12 +38,12 @@ fn run() -> Result<(), elasticrc::Error> {
         .elasticsearch
         .as_ref()
         .ok_or_else(|| elasticrc::Error::MissingService {
-            context: config.current_context.clone(),
+            context: config.current_context_name().to_string(),
             service: Elasticsearch::NAME,
         })?
         .resolve()?;
 
-    println!("context: {}", config.current_context);
+    println!("context: {}", config.current_context_name());
     println!("service: {}", Elasticsearch::NAME);
     println!("url: {}", service.url);
     println!(
