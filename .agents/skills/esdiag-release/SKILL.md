@@ -1,6 +1,6 @@
 ---
 name: esdiag-release
-description: Prepare and verify ESDiag numbered releases, with explicit human approval for publication. Use when cutting a maintenance branch, setting a stable version, drafting notes, publishing containers or the crates.io crate, creating a numeric tag, attaching native Homebrew assets, updating the elastic/tools Formula, or validating a draft GitHub release.
+description: Prepare and verify ESDiag numbered releases, with explicit human approval for publication. Use when cutting a maintenance branch, setting a stable version, drafting notes, publishing containers or crates.io crates, creating a numeric tag, attaching native Homebrew assets, updating the elastic/tools Formula, or validating a draft GitHub release.
 ---
 
 # ESDiag Release
@@ -24,7 +24,13 @@ HOMEBREW_REPO=$HOME/Development/elastic/homebrew-tools
 ```
 
 ESDiag uses numeric tags without a leading `v`. Keep `VERSION`, the Cargo
-package version, `bin/esdiag-local`, the full image tag, and `TAG` aligned.
+package version, `bin/esdiag-local`, the full image tag, and `TAG` aligned for
+an ESDiag application release. `elasticrc` has an independent version when it
+is released as a standalone crate.
+
+Set `CRATE` to the selected Cargo package before following the crates.io
+target. Publishing `elasticrc` does not publish `esdiag` or require changing
+the ESDiag application version.
 
 ## Target References
 
@@ -34,8 +40,8 @@ Read only the target references required by the release:
   draft workflow, publication gate, and GitHub recovery.
 - [Containers](references/containers.md): multi-architecture image build,
   registry aliases, manifest inspection, and runtime verification.
-- [crates.io](references/crates-io.md): package validation, dry-run, approved
-  publication, and immutable-version recovery.
+- [crates.io](references/crates-io.md): independent package selection,
+  validation, dry-run, approved publication, and immutable-version recovery.
 - [Homebrew](references/homebrew.md): native assets, checksum contract,
   draft-release upload, Formula update, and tap PR.
 
@@ -45,7 +51,9 @@ Read only the target references required by the release:
 2. Fetch `upstream` and `origin` with pruning. Fast-forward local `main` to
    `upstream/main`; push `origin/main` when the fork is behind.
 3. Set the stable version on `BRANCH`, update all version-sensitive files and
-   `NOTICE.txt`, then run the baseline validation:
+   `NOTICE.txt`, then run the baseline validation. For a standalone crate
+   target, update and validate only that package's version and follow the
+   crates.io reference:
 
    ```bash
    cargo fmt --all -- --check
@@ -62,8 +70,9 @@ Read only the target references required by the release:
    manifests before creating `TAG` when the release includes images.
 6. Attach every Homebrew release asset to the draft before the GitHub release
    becomes public. Never change those assets after publication.
-7. Stop for explicit approval before publishing crates.io or changing a GitHub
-   release from draft to public. A human publishes the GitHub release.
+7. Stop for explicit approval before publishing any crates.io package or
+   changing a GitHub release from draft to public. A human publishes the
+   GitHub release.
 8. Complete the Homebrew target only after the GitHub release is public,
    stable, complete, and immutable. Follow its reference through the checked
    tap PR and include that PR in the release handoff.

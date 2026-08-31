@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.89"
 license = "Elastic-2.0"
 
+[workspace]
+members = [".", "crates/elasticrc"]
+resolver = "3"
+
 [features]
 default = ["full"]
 full = ["server", "setup", "keystore"]
