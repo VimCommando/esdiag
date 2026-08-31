@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use elasticrc::{ConfigFile, ContextServiceReference, ResolvedAuth};
+use elasticrc::{Auth, ConfigFile, ContextServiceReference};
 use std::{fs, process};
 
 struct RemoveFileOnDrop(std::path::PathBuf);
@@ -38,16 +38,21 @@ fn main() {
     )
     .expect("write config");
     let config = ConfigFile::load(&path).expect("load packaged config");
+    let ContextServiceReference::Elasticsearch { context } = reference else {
+        panic!("expected Elasticsearch reference");
+    };
     let service = config
-        .resolve_service(
-            reference.context.as_deref().expect("named context"),
-            reference.service,
-        )
+        .context(context.as_deref().expect("named context"))
+        .expect("context")
+        .elasticsearch
+        .as_ref()
+        .expect("Elasticsearch config")
+        .resolve()
         .expect("resolve packaged service");
 
     assert_eq!(service.url.as_str(), "https://example.invalid:9200/");
     assert!(matches!(
         service.auth,
-        ResolvedAuth::ApiKey(ref key) if key.expose_secret() == "package-secret"
+        Auth::ApiKey(ref key) if key.expose_secret() == "package-secret"
     ));
 }

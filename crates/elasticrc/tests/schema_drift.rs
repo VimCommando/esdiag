@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use elasticrc::{ConfigFile, Error, ResolvedAuth, ServiceKind};
+use elasticrc::{Auth, ConfigFile, Error};
 use std::fs;
 
 #[test]
@@ -25,18 +25,30 @@ fn supported_elastic_cli_fixture_resolves_expected_services() {
     let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/elastic-cli-basic.yml");
     let config = ConfigFile::load(fixture).expect("fixture should load");
 
-    let es = config
-        .resolve_current_service(ServiceKind::Elasticsearch)
+    let current = config.current().expect("current context");
+    let es = current
+        .elasticsearch
+        .as_ref()
+        .expect("current es config")
+        .resolve()
         .expect("current es service");
-    let kb = config
-        .resolve_current_service(ServiceKind::Kibana)
+    let kb = current
+        .kibana
+        .as_ref()
+        .expect("current kb config")
+        .resolve()
         .expect("current kb service");
     let cloud = config
-        .resolve_service("diag", ServiceKind::Cloud)
+        .context("diag")
+        .expect("diag context")
+        .cloud
+        .as_ref()
+        .expect("diag cloud config")
+        .resolve()
         .expect("diag cloud service");
 
     assert_eq!(es.url.as_str(), "https://local-es.example:9200/");
-    assert!(matches!(es.auth, ResolvedAuth::ApiKey(ref key) if key.expose_secret() == "local-api-key"));
+    assert!(matches!(es.auth, Auth::ApiKey(ref key) if key.expose_secret() == "local-api-key"));
     assert_eq!(kb.url.as_str(), "https://local-kb.example:5601/");
     assert_eq!(
         cloud.url.as_str(),
@@ -59,7 +71,12 @@ fn platform_specific_keyring_resolver_rejects_unsupported_platform() {
 
     let config = ConfigFile::load(&path).expect("load config");
     let err = config
-        .resolve_current_service(ServiceKind::Elasticsearch)
+        .current()
+        .expect("current context")
+        .elasticsearch
+        .as_ref()
+        .expect("Elasticsearch config")
+        .resolve()
         .expect_err("unsupported resolver should fail");
 
     assert!(matches!(err, Error::ResolverFailed { resolver: actual, .. } if actual == resolver));

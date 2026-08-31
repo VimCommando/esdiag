@@ -14,20 +14,25 @@ It reads `.elasticrc`, `.elasticrc.json`, `.elasticrc.yaml`, and
 ## Usage
 
 ```rust
-use elasticrc::{ConfigFile, ServiceKind};
+use elasticrc::ConfigFile;
 
 let config = ConfigFile::load_with_options(None, None)?;
-let elasticsearch =
-    config.resolve_current_service(ServiceKind::Elasticsearch)?;
+let elasticsearch = config
+    .current()?
+    .elasticsearch
+    .as_ref()
+    .expect("current context has no Elasticsearch service")
+    .resolve()?;
 
 println!("Connecting to {}", elasticsearch.url);
 
 # Ok::<(), elasticrc::Error>(())
 ```
 
-Loading a config parses and validates its structure without executing resolver
-expressions. `resolve_service` and `resolve_current_service` evaluate only the
-requested service.
+Loading a config parses its typed `ServiceConfig<Elasticsearch>`,
+`ServiceConfig<Kibana>`, and `ServiceConfig<Cloud>` fields without executing
+resolver expressions. `ServiceConfig::resolve` evaluates only the selected
+configuration and returns a runtime `Service<T>`.
 
 Supported resolvers:
 

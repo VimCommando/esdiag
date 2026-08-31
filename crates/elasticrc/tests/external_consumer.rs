@@ -17,20 +17,28 @@
  * under the License.
  */
 
-use elasticrc::{ConfigFile, ContextServiceReference, ResolvedAuth, ServiceKind};
+use elasticrc::{Auth, ConfigFile, ContextServiceReference, Elasticsearch, Service};
+
+fn accepts_elasticsearch_service(_service: &Service<Elasticsearch>) {}
 
 #[test]
 fn public_api_resolves_context_without_esdiag_types() {
     let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/elastic-cli-basic.yml");
     let reference = ContextServiceReference::parse(".local.es").expect("context reference");
     let config = ConfigFile::load(fixture).expect("load config");
+    let ContextServiceReference::Elasticsearch { context } = reference else {
+        panic!("expected Elasticsearch reference");
+    };
     let service = config
-        .resolve_service(
-            reference.context.as_deref().expect("named context"),
-            ServiceKind::Elasticsearch,
-        )
+        .context(context.as_deref().expect("named context"))
+        .expect("context")
+        .elasticsearch
+        .as_ref()
+        .expect("Elasticsearch config")
+        .resolve()
         .expect("resolve service");
 
+    accepts_elasticsearch_service(&service);
     assert_eq!(service.url.as_str(), "https://local-es.example:9200/");
-    assert!(matches!(service.auth, ResolvedAuth::ApiKey(_)));
+    assert!(matches!(service.auth, Auth::ApiKey(_)));
 }
