@@ -12,6 +12,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Changed `elasticrc` to parse schema-keyed `ServiceConfig<T>` values that resolve into typed runtime `Service<T>` values.
 - Replaced `min-diag.sh` with the collection-only, version-aware `esdiag-lite.sh`, using environment-based Elasticsearch authentication, optional ZIP output, and no `jq` runtime dependency.
 
 ### Added

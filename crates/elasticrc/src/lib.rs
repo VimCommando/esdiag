@@ -20,18 +20,23 @@
 //! Read-only discovery, parsing, and lazy resolution of Elastic CLI contexts.
 //!
 //! Loading a [`ConfigFile`] validates only its top-level shape and never executes
-//! resolver expressions. Call [`ConfigFile::resolve_service`] or
-//! [`ConfigFile::resolve_current_service`] to resolve one selected service.
+//! resolver expressions. Call [`ServiceConfig::resolve`] on one selected service
+//! configuration to produce a runtime [`Service`].
 //!
-//! Resolved credentials use [`SecretString`] so common debug formatting does not
+//! Runtime credentials use [`SecretString`] so common debug formatting does not
 //! reveal secret values. Callers should keep those values runtime-only.
 //!
 //! ```
-//! use elasticrc::{ConfigFile, ServiceKind};
+//! use elasticrc::ConfigFile;
 //!
 //! # fn example() -> Result<(), elasticrc::Error> {
 //! let config = ConfigFile::load_with_options(None, None)?;
-//! let elasticsearch = config.resolve_current_service(ServiceKind::Elasticsearch)?;
+//! let elasticsearch = config
+//!     .current()?
+//!     .elasticsearch
+//!     .as_ref()
+//!     .expect("current context has no Elasticsearch service")
+//!     .resolve()?;
 //! println!("Elasticsearch URL: {}", elasticsearch.url);
 //! # Ok(())
 //! # }
@@ -48,9 +53,9 @@ use std::{
     fmt::Display,
     fs,
     io::{self, Read},
+    marker::PhantomData,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    str::FromStr,
     thread,
     time::{Duration, Instant},
 };
@@ -72,17 +77,44 @@ const ELASTIC_CREDENTIAL_ENV_VARS: [&str; 9] = [
     "ELASTIC_CLOUD_PASSWORD",
 ];
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 /// Raw Elastic CLI configuration.
 ///
 /// Secret fields may contain inline values or unresolved expressions. Resolver
 /// expressions are evaluated only when a service is explicitly resolved.
 pub struct ConfigFile {
-    pub current_context: String,
-    pub contexts: BTreeMap<String, Context>,
+    current_context: String,
+    contexts: BTreeMap<String, Context>,
+}
+
+impl<'de> Deserialize<'de> for ConfigFile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ConfigFileData {
+            current_context: String,
+            contexts: BTreeMap<String, Context>,
+        }
+
+        let data = ConfigFileData::deserialize(deserializer)?;
+        let mut config = Self {
+            current_context: data.current_context,
+            contexts: data.contexts,
+        };
+        config.attach_context_names();
+        Ok(config)
+    }
 }
 
 impl ConfigFile {
+    fn attach_context_names(&mut self) {
+        for (context_name, context) in &mut self.contexts {
+            context.attach_name(context_name);
+        }
+    }
+
     /// Load a JSON or YAML Elastic CLI config from an explicit path.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         load_config_file(path)
@@ -114,8 +146,8 @@ impl ConfigFile {
     /// Validate all raw service blocks without evaluating resolver expressions.
     pub fn validate(&self) -> Result<(), Error> {
         self.validate_shape()?;
-        for (context_name, context) in &self.contexts {
-            context.validate(context_name)?;
+        for context in self.contexts.values() {
+            context.validate()?;
         }
         Ok(())
     }
@@ -130,58 +162,106 @@ impl ConfigFile {
         Ok(())
     }
 
-    /// Resolve and validate one service from a named context.
-    pub fn resolve_service(&self, context_name: &str, kind: ServiceKind) -> Result<ResolvedService, Error> {
-        let context = self.contexts.get(context_name).ok_or_else(|| Error::MissingContext {
-            name: context_name.to_string(),
+    /// Return a named context.
+    pub fn context(&self, name: &str) -> Result<&Context, Error> {
+        self.contexts.get(name).ok_or_else(|| Error::MissingContext {
+            name: name.to_string(),
             available: self.contexts.keys().cloned().collect(),
-        })?;
-        let service = context.service(kind).ok_or_else(|| Error::MissingService {
-            context: context_name.to_string(),
-            service: kind,
-        })?;
-        let mut service = service.clone();
-        service.resolve_expressions(context_name, kind)?;
-        service.validate(context_name, kind)?;
-        service.resolve(kind)
+        })
     }
 
-    /// Resolve and validate one service from `current_context`.
-    pub fn resolve_current_service(&self, kind: ServiceKind) -> Result<ResolvedService, Error> {
-        self.resolve_service(&self.current_context, kind)
+    /// Return the configured current context name.
+    pub fn current_context_name(&self) -> &str {
+        &self.current_context
     }
+
+    /// Return all configured contexts.
+    pub fn contexts(&self) -> &BTreeMap<String, Context> {
+        &self.contexts
+    }
+
+    /// Return the current context.
+    pub fn current(&self) -> Result<&Context, Error> {
+        self.contexts
+            .get(&self.current_context)
+            .ok_or_else(|| Error::MissingContext {
+                name: self.current_context.clone(),
+                available: self.contexts.keys().cloned().collect(),
+            })
+    }
+}
+
+/// Marker for an Elasticsearch service.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Elasticsearch;
+
+/// Marker for a Kibana service.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Kibana;
+
+/// Marker for an Elastic Cloud service.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cloud;
+
+mod private {
+    pub trait Sealed {}
+
+    impl Sealed for super::Elasticsearch {}
+    impl Sealed for super::Kibana {}
+    impl Sealed for super::Cloud {}
+}
+
+/// A service type supported by the Elastic CLI configuration schema.
+pub trait ServiceType: private::Sealed {
+    /// Canonical name used by the Elastic CLI configuration schema.
+    const NAME: &'static str;
+}
+
+impl ServiceType for Elasticsearch {
+    const NAME: &'static str = "elasticsearch";
+}
+
+impl ServiceType for Kibana {
+    const NAME: &'static str = "kibana";
+}
+
+impl ServiceType for Cloud {
+    const NAME: &'static str = "cloud";
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 /// Services configured for one Elastic CLI context.
 pub struct Context {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub elasticsearch: Option<ServiceBlock>,
+    pub elasticsearch: Option<ServiceConfig<Elasticsearch>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kibana: Option<ServiceBlock>,
+    pub kibana: Option<ServiceConfig<Kibana>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cloud: Option<ServiceBlock>,
+    pub cloud: Option<ServiceConfig<Cloud>>,
 }
 
 impl Context {
-    /// Return a raw service block without evaluating its resolver expressions.
-    pub fn service(&self, kind: ServiceKind) -> Option<&ServiceBlock> {
-        match kind {
-            ServiceKind::Elasticsearch => self.elasticsearch.as_ref(),
-            ServiceKind::Kibana => self.kibana.as_ref(),
-            ServiceKind::Cloud => self.cloud.as_ref(),
+    fn attach_name(&mut self, context_name: &str) {
+        if let Some(service) = &mut self.elasticsearch {
+            service.context = Some(context_name.to_string());
+        }
+        if let Some(service) = &mut self.kibana {
+            service.context = Some(context_name.to_string());
+        }
+        if let Some(service) = &mut self.cloud {
+            service.context = Some(context_name.to_string());
         }
     }
 
-    fn validate(&self, context_name: &str) -> Result<(), Error> {
-        for (kind, service) in [
-            (ServiceKind::Elasticsearch, self.elasticsearch.as_ref()),
-            (ServiceKind::Kibana, self.kibana.as_ref()),
-            (ServiceKind::Cloud, self.cloud.as_ref()),
-        ] {
-            if let Some(service) = service {
-                service.validate(context_name, kind)?;
-            }
+    fn validate(&self) -> Result<(), Error> {
+        if let Some(service) = &self.elasticsearch {
+            service.validate()?;
+        }
+        if let Some(service) = &self.kibana {
+            service.validate()?;
+        }
+        if let Some(service) = &self.cloud {
+            service.validate()?;
         }
         Ok(())
     }
@@ -189,57 +269,80 @@ impl Context {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 /// Raw URL and optional authentication for one context service.
-pub struct ServiceBlock {
+#[serde(bound = "")]
+pub struct ServiceConfig<T> {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auth: Option<AuthBlock>,
+    pub auth: Option<AuthConfig>,
+    #[serde(skip)]
+    context: Option<String>,
+    #[serde(skip)]
+    service_type: PhantomData<T>,
 }
 
-impl ServiceBlock {
-    fn validate(&self, context_name: &str, kind: ServiceKind) -> Result<(), Error> {
+impl<T: ServiceType> ServiceConfig<T> {
+    /// Construct a raw service configuration.
+    pub fn new(url: impl Into<String>, auth: Option<AuthConfig>) -> Self {
+        Self {
+            url: url.into(),
+            auth,
+            context: None,
+            service_type: PhantomData,
+        }
+    }
+
+    fn validate(&self) -> Result<(), Error> {
         let url = Url::parse(&self.url).map_err(|source| Error::InvalidServiceUrl {
-            context: context_name.to_string(),
-            service: kind,
+            context: self.context.clone(),
+            service: T::NAME,
             value: self.url.clone(),
             source,
         })?;
         if !matches!(url.scheme(), "http" | "https") {
             return Err(Error::InvalidServiceUrlScheme {
-                context: context_name.to_string(),
-                service: kind,
+                context: self.context.clone(),
+                service: T::NAME,
                 value: self.url.clone(),
             });
         }
         if let Some(auth) = &self.auth {
-            auth.validate(context_name, kind)?;
+            auth.validate(self.context.as_deref(), T::NAME)?;
         }
         Ok(())
     }
 
-    fn resolve(&self, kind: ServiceKind) -> Result<ResolvedService, Error> {
-        Ok(ResolvedService {
-            kind,
-            url: Url::parse(&self.url).map_err(|source| Error::InvalidServiceUrl {
-                context: "<resolved>".to_string(),
-                service: kind,
-                value: self.url.clone(),
-                source,
-            })?,
-            auth: self
-                .auth
-                .as_ref()
-                .map(AuthBlock::resolve)
-                .transpose()?
-                .unwrap_or_default(),
+    /// Resolve expressions and produce a validated runtime service.
+    pub fn resolve(&self) -> Result<Service<T>, Error> {
+        let field = |name: &str| match &self.context {
+            Some(context) => format!("{context}.{}.{name}", T::NAME),
+            None => format!("{}.{name}", T::NAME),
+        };
+        let url_value = resolve_string_expressions(&self.url, &field("url"))?;
+        let url = Url::parse(&url_value).map_err(|source| Error::InvalidServiceUrl {
+            context: self.context.clone(),
+            service: T::NAME,
+            value: url_value.clone(),
+            source,
+        })?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(Error::InvalidServiceUrlScheme {
+                context: self.context.clone(),
+                service: T::NAME,
+                value: url_value,
+            });
+        }
+        let auth = if let Some(auth) = &self.auth {
+            auth.validate(self.context.as_deref(), T::NAME)?;
+            auth.resolve(self.context.as_deref(), T::NAME)?
+        } else {
+            Auth::None
+        };
+
+        Ok(Service {
+            url,
+            auth,
+            service_type: PhantomData,
         })
-    }
-
-    fn resolve_expressions(&mut self, context_name: &str, kind: ServiceKind) -> Result<(), Error> {
-        self.url = resolve_string_expressions(&self.url, &format!("{context_name}.{kind}.url"))?;
-        if let Some(auth) = &mut self.auth {
-            auth.resolve_expressions(context_name, kind)?;
-        }
-        Ok(())
     }
 }
 
@@ -247,7 +350,7 @@ impl ServiceBlock {
 /// Raw authentication configuration.
 ///
 /// Debug output redacts API keys and passwords, including inline values.
-pub struct AuthBlock {
+pub struct AuthConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,10 +359,10 @@ pub struct AuthBlock {
     pub password: Option<String>,
 }
 
-impl std::fmt::Debug for AuthBlock {
+impl std::fmt::Debug for AuthConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("AuthBlock")
+            .debug_struct("AuthConfig")
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
@@ -267,107 +370,49 @@ impl std::fmt::Debug for AuthBlock {
     }
 }
 
-impl AuthBlock {
-    fn validate(&self, context_name: &str, kind: ServiceKind) -> Result<(), Error> {
+impl AuthConfig {
+    fn validate(&self, context_name: Option<&str>, service: &'static str) -> Result<(), Error> {
         match (&self.api_key, &self.username, &self.password) {
             (Some(_), None, None) | (None, None, None) | (None, Some(_), Some(_)) => Ok(()),
             (Some(_), _, _) => Err(Error::InvalidAuth {
-                context: context_name.to_string(),
-                service: kind,
+                context: context_name.map(str::to_string),
+                service,
                 message: "api_key cannot be combined with username or password".to_string(),
             }),
             (None, Some(_), None) | (None, None, Some(_)) => Err(Error::InvalidAuth {
-                context: context_name.to_string(),
-                service: kind,
+                context: context_name.map(str::to_string),
+                service,
                 message: "basic authentication requires both username and password".to_string(),
             }),
         }
     }
 
-    fn resolve(&self) -> Result<ResolvedAuth, Error> {
+    fn resolve(&self, context_name: Option<&str>, service: &'static str) -> Result<Auth, Error> {
+        let resolve = |value: &str, name: &str| {
+            let field = match context_name {
+                Some(context) => format!("{context}.{service}.auth.{name}"),
+                None => format!("{service}.auth.{name}"),
+            };
+            resolve_string_expressions(value, &field)
+        };
         match (&self.api_key, &self.username, &self.password) {
-            (Some(api_key), None, None) => Ok(ResolvedAuth::api_key(api_key.clone())),
-            (None, Some(username), Some(password)) => Ok(ResolvedAuth::basic(username.clone(), password.clone())),
-            (None, None, None) => Ok(ResolvedAuth::None),
+            (Some(api_key), None, None) => Ok(Auth::api_key(resolve(api_key, "api_key")?)),
+            (None, Some(username), Some(password)) => Ok(Auth::basic(
+                resolve(username, "username")?,
+                resolve(password, "password")?,
+            )),
+            (None, None, None) => Ok(Auth::None),
             _ => Err(Error::InvalidShape("invalid auth block".to_string())),
         }
     }
-
-    fn resolve_expressions(&mut self, context_name: &str, kind: ServiceKind) -> Result<(), Error> {
-        if let Some(api_key) = &mut self.api_key {
-            *api_key = resolve_string_expressions(api_key, &format!("{context_name}.{kind}.auth.api_key"))?;
-        }
-        if let Some(username) = &mut self.username {
-            *username = resolve_string_expressions(username, &format!("{context_name}.{kind}.auth.username"))?;
-        }
-        if let Some(password) = &mut self.password {
-            *password = resolve_string_expressions(password, &format!("{context_name}.{kind}.auth.password"))?;
-        }
-        Ok(())
-    }
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-/// Service blocks supported by the Elastic CLI configuration schema.
-pub enum ServiceKind {
-    Elasticsearch,
-    Kibana,
-    Cloud,
-}
-
-impl ServiceKind {
-    /// Parse a canonical service name or supported short alias.
-    pub fn parse_alias(value: &str) -> Option<Self> {
-        match value {
-            "elasticsearch" | "es" => Some(Self::Elasticsearch),
-            "kibana" | "kb" => Some(Self::Kibana),
-            "cloud" => Some(Self::Cloud),
-            _ => None,
-        }
-    }
-
-    /// Return the canonical Elastic CLI service name.
-    pub fn canonical_name(self) -> &'static str {
-        match self {
-            Self::Elasticsearch => "elasticsearch",
-            Self::Kibana => "kibana",
-            Self::Cloud => "cloud",
-        }
-    }
-}
-
-impl Display for ServiceKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.canonical_name())
-    }
-}
-
-impl FromStr for ServiceKind {
-    type Err = UnknownService;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::parse_alias(value).ok_or_else(|| UnknownService(value.to_string()))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-/// Error returned when parsing an unsupported service name.
-pub struct UnknownService(String);
-
-impl Display for UnknownService {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown Elastic CLI service '{}'", self.0)
-    }
-}
-
-impl std::error::Error for UnknownService {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Parsed `.service` or `.context.service` reference.
-pub struct ContextServiceReference {
-    pub context: Option<String>,
-    pub service: ServiceKind,
+pub enum ContextServiceReference {
+    Elasticsearch { context: Option<String> },
+    Kibana { context: Option<String> },
+    Cloud { context: Option<String> },
 }
 
 impl ContextServiceReference {
@@ -386,24 +431,26 @@ impl ContextServiceReference {
             }
             None => (None, value),
         };
-        Some(Self {
-            context,
-            service: ServiceKind::parse_alias(service)?,
-        })
+        match service {
+            "elasticsearch" | "es" => Some(Self::Elasticsearch { context }),
+            "kibana" | "kb" => Some(Self::Kibana { context }),
+            "cloud" => Some(Self::Cloud { context }),
+            _ => None,
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-/// A validated service with lazily resolved authentication.
-pub struct ResolvedService {
-    pub kind: ServiceKind,
+/// A runtime service with a validated URL and resolved authentication.
+pub struct Service<T> {
     pub url: Url,
-    pub auth: ResolvedAuth,
+    pub auth: Auth,
+    service_type: PhantomData<T>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-/// Authentication resolved for a selected service.
-pub enum ResolvedAuth {
+/// Runtime authentication for a selected service.
+pub enum Auth {
     ApiKey(SecretString),
     Basic {
         username: String,
@@ -413,7 +460,7 @@ pub enum ResolvedAuth {
     None,
 }
 
-impl ResolvedAuth {
+impl Auth {
     /// Construct redacted API key authentication.
     pub fn api_key(api_key: impl Into<String>) -> Self {
         Self::ApiKey(SecretString::new(api_key.into()))
@@ -457,22 +504,22 @@ pub enum Error {
     },
     MissingService {
         context: String,
-        service: ServiceKind,
+        service: &'static str,
     },
     InvalidServiceUrl {
-        context: String,
-        service: ServiceKind,
+        context: Option<String>,
+        service: &'static str,
         value: String,
         source: url::ParseError,
     },
     InvalidServiceUrlScheme {
-        context: String,
-        service: ServiceKind,
+        context: Option<String>,
+        service: &'static str,
         value: String,
     },
     InvalidAuth {
-        context: String,
-        service: ServiceKind,
+        context: Option<String>,
+        service: &'static str,
         message: String,
     },
     InvalidResolverExpression {
@@ -527,26 +574,47 @@ impl Display for Error {
                 service,
                 value,
                 source,
-            } => write!(
-                f,
-                "invalid URL for Elastic CLI context '{context}' service '{service}' ({value}): {source}"
-            ),
+            } => {
+                if let Some(context) = context {
+                    write!(
+                        f,
+                        "invalid URL for Elastic CLI context '{context}' service '{service}' ({value}): {source}"
+                    )
+                } else {
+                    write!(f, "invalid URL for Elastic CLI service '{service}' ({value}): {source}")
+                }
+            }
             Self::InvalidServiceUrlScheme {
                 context,
                 service,
                 value,
-            } => write!(
-                f,
-                "invalid URL scheme for Elastic CLI context '{context}' service '{service}' ({value}); expected http or https"
-            ),
+            } => {
+                if let Some(context) = context {
+                    write!(
+                        f,
+                        "invalid URL scheme for Elastic CLI context '{context}' service '{service}' ({value}); expected http or https"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "invalid URL scheme for Elastic CLI service '{service}' ({value}); expected http or https"
+                    )
+                }
+            }
             Self::InvalidAuth {
                 context,
                 service,
                 message,
-            } => write!(
-                f,
-                "invalid auth for Elastic CLI context '{context}' service '{service}': {message}"
-            ),
+            } => {
+                if let Some(context) = context {
+                    write!(
+                        f,
+                        "invalid auth for Elastic CLI context '{context}' service '{service}': {message}"
+                    )
+                } else {
+                    write!(f, "invalid auth for Elastic CLI service '{service}': {message}")
+                }
+            }
             Self::InvalidResolverExpression { field, value } => {
                 write!(f, "invalid resolver expression in field '{field}': {value}")
             }
@@ -644,20 +712,21 @@ impl ConfigFile {
 
 impl Context {
     fn contains_inline_secret(&self) -> bool {
-        [&self.elasticsearch, &self.kibana, &self.cloud]
-            .into_iter()
-            .flatten()
-            .any(ServiceBlock::contains_inline_secret)
+        self.elasticsearch
+            .as_ref()
+            .is_some_and(ServiceConfig::contains_inline_secret)
+            || self.kibana.as_ref().is_some_and(ServiceConfig::contains_inline_secret)
+            || self.cloud.as_ref().is_some_and(ServiceConfig::contains_inline_secret)
     }
 }
 
-impl ServiceBlock {
+impl<T> ServiceConfig<T> {
     fn contains_inline_secret(&self) -> bool {
-        self.auth.as_ref().is_some_and(AuthBlock::contains_inline_secret)
+        self.auth.as_ref().is_some_and(AuthConfig::contains_inline_secret)
     }
 }
 
-impl AuthBlock {
+impl AuthConfig {
     fn contains_inline_secret(&self) -> bool {
         [&self.api_key, &self.password]
             .into_iter()
@@ -1073,8 +1142,8 @@ fn resolve_platform_keyring_secret(resolver: &str, _service: &str, _account: &st
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigFile, ContextServiceReference, ELASTIC_CREDENTIAL_ENV_VARS, Error, FILE_RESOLVER_MAX_BYTES, ResolvedAuth,
-        ServiceKind, discover_config_path, inline_secret_permission_warning, parse_command_argv, read_command_output,
+        Auth, ConfigFile, ContextServiceReference, ELASTIC_CREDENTIAL_ENV_VARS, Error, FILE_RESOLVER_MAX_BYTES,
+        discover_config_path, inline_secret_permission_warning, parse_command_argv, read_command_output,
         read_file_resolver_value, read_keyring_store,
     };
     #[cfg(unix)]
@@ -1085,7 +1154,6 @@ mod tests {
         fs,
         io::ErrorKind,
         path::Path,
-        str::FromStr,
         sync::{Mutex, OnceLock},
         time::{Duration, Instant},
     };
@@ -1095,34 +1163,25 @@ mod tests {
         fs::write(path, contents).expect("write config");
     }
 
+    fn current_elasticsearch(config: &ConfigFile) -> &super::ServiceConfig<super::Elasticsearch> {
+        config
+            .current()
+            .expect("current context")
+            .elasticsearch
+            .as_ref()
+            .expect("Elasticsearch config")
+    }
+
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
     #[test]
-    fn service_kind_parses_supported_aliases() {
-        assert_eq!(ServiceKind::from_str("elasticsearch"), Ok(ServiceKind::Elasticsearch));
-        assert_eq!(ServiceKind::from_str("es"), Ok(ServiceKind::Elasticsearch));
-        assert_eq!(ServiceKind::from_str("kibana"), Ok(ServiceKind::Kibana));
-        assert_eq!(ServiceKind::from_str("kb"), Ok(ServiceKind::Kibana));
-        assert_eq!(ServiceKind::from_str("cloud"), Ok(ServiceKind::Cloud));
-    }
-
-    #[test]
-    fn service_kind_rejects_unsupported_aliases() {
-        assert!(ServiceKind::from_str("ls").is_err());
-        assert!(ServiceKind::from_str("logstash").is_err());
-    }
-
-    #[test]
     fn context_service_reference_parses_active_context_service() {
         assert_eq!(
             ContextServiceReference::parse(".es"),
-            Some(ContextServiceReference {
-                context: None,
-                service: ServiceKind::Elasticsearch,
-            })
+            Some(ContextServiceReference::Elasticsearch { context: None })
         );
     }
 
@@ -1130,10 +1189,25 @@ mod tests {
     fn context_service_reference_parses_named_context_from_rightmost_segment() {
         assert_eq!(
             ContextServiceReference::parse(".prod.us-west.es"),
-            Some(ContextServiceReference {
+            Some(ContextServiceReference::Elasticsearch {
                 context: Some("prod.us-west".to_string()),
-                service: ServiceKind::Elasticsearch,
             })
+        );
+    }
+
+    #[test]
+    fn context_service_reference_parses_all_service_keys_and_aliases() {
+        assert_eq!(
+            ContextServiceReference::parse(".elasticsearch"),
+            Some(ContextServiceReference::Elasticsearch { context: None })
+        );
+        assert_eq!(
+            ContextServiceReference::parse(".kb"),
+            Some(ContextServiceReference::Kibana { context: None })
+        );
+        assert_eq!(
+            ContextServiceReference::parse(".cloud"),
+            Some(ContextServiceReference::Cloud { context: None })
         );
     }
 
@@ -1145,8 +1219,8 @@ mod tests {
     }
 
     #[test]
-    fn resolved_auth_debug_redacts_api_key() {
-        let auth = super::ResolvedAuth::api_key("super-secret");
+    fn auth_debug_redacts_api_key() {
+        let auth = Auth::api_key("super-secret");
         let rendered = format!("{auth:?}");
 
         assert!(rendered.contains("[REDACTED"));
@@ -1154,8 +1228,8 @@ mod tests {
     }
 
     #[test]
-    fn resolved_auth_debug_redacts_basic_password() {
-        let auth = super::ResolvedAuth::basic("elastic", "super-secret");
+    fn auth_debug_redacts_basic_password() {
+        let auth = Auth::basic("elastic", "super-secret");
         let rendered = format!("{auth:?}");
 
         assert!(rendered.contains("elastic"));
@@ -1216,7 +1290,7 @@ mod tests {
 
     #[test]
     fn raw_auth_debug_redacts_inline_secrets() {
-        let auth = super::AuthBlock {
+        let auth = super::AuthConfig {
             api_key: Some("inline-api-key".to_string()),
             username: Some("elastic".to_string()),
             password: Some("inline-password".to_string()),
@@ -1276,11 +1350,16 @@ contexts:
 
         let config = ConfigFile::load(&path).expect("load config");
         let service = config
-            .resolve_service("prod", ServiceKind::Elasticsearch)
+            .context("prod")
+            .expect("prod context")
+            .elasticsearch
+            .as_ref()
+            .expect("Elasticsearch config")
+            .resolve()
             .expect("resolve service");
 
         assert_eq!(service.url.as_str(), "https://es.example:9200/");
-        assert!(matches!(service.auth, ResolvedAuth::ApiKey(ref key) if key.expose_secret() == "es-key"));
+        assert!(matches!(service.auth, Auth::ApiKey(ref key) if key.expose_secret() == "es-key"));
     }
 
     #[test]
@@ -1307,12 +1386,17 @@ contexts:
 
         let config = ConfigFile::load(&path).expect("load config");
         let service = config
-            .resolve_current_service(ServiceKind::Elasticsearch)
+            .current()
+            .expect("current context")
+            .elasticsearch
+            .as_ref()
+            .expect("Elasticsearch config")
+            .resolve()
             .expect("resolve service");
 
         assert!(matches!(
             service.auth,
-            ResolvedAuth::Basic { ref username, ref password }
+            Auth::Basic { ref username, ref password }
                 if username == "elastic" && password.expose_secret() == "changeme"
         ));
     }
@@ -1336,7 +1420,7 @@ contexts:
 
         let config = ConfigFile::load_with_options(Some(&explicit), None).expect("load config");
 
-        assert_eq!(config.current_context, "explicit");
+        assert_eq!(config.current_context_name(), "explicit");
         unsafe {
             std::env::remove_var("ELASTIC_CLI_CONFIG_FILE");
         }
@@ -1362,7 +1446,7 @@ contexts:
 
         let config = ConfigFile::load_with_options(None, Some(&home)).expect("load config");
 
-        assert_eq!(config.current_context, "env");
+        assert_eq!(config.current_context_name(), "env");
         unsafe {
             std::env::remove_var("ELASTIC_CLI_CONFIG_FILE");
         }
@@ -1400,9 +1484,7 @@ contexts:
         );
         let config = ConfigFile::load(&path).expect("load config");
 
-        let err = config
-            .resolve_service("diag", ServiceKind::Elasticsearch)
-            .expect_err("missing context should fail");
+        let err = config.context("diag").expect_err("missing context should fail");
 
         assert!(matches!(err, Error::MissingContext { name, .. } if name == "diag"));
     }
@@ -1417,17 +1499,7 @@ contexts:
         );
         let config = ConfigFile::load(&path).expect("load config");
 
-        let err = config
-            .resolve_service("prod", ServiceKind::Kibana)
-            .expect_err("missing service should fail");
-
-        assert!(matches!(
-            err,
-            Error::MissingService {
-                service: ServiceKind::Kibana,
-                ..
-            }
-        ));
+        assert!(config.context("prod").expect("prod context").kibana.is_none());
     }
 
     #[test]
@@ -1440,16 +1512,27 @@ contexts:
         );
 
         let config = ConfigFile::load(&path).expect("load config");
-        let err = config
-            .resolve_current_service(ServiceKind::Elasticsearch)
-            .expect_err("invalid url should fail");
+        let err = config.validate().expect_err("invalid url should fail");
 
         assert!(matches!(
             err,
             Error::InvalidServiceUrlScheme {
-                service: ServiceKind::Elasticsearch,
+                context: Some(ref context),
+                service: "elasticsearch",
                 ..
-            }
+            } if context == "prod"
+        ));
+
+        let err = current_elasticsearch(&config)
+            .resolve()
+            .expect_err("resolved URL should retain context");
+        assert!(matches!(
+            err,
+            Error::InvalidServiceUrlScheme {
+                context: Some(ref context),
+                service: "elasticsearch",
+                ..
+            } if context == "prod"
         ));
     }
 
@@ -1463,16 +1546,15 @@ contexts:
         );
 
         let config = ConfigFile::load(&path).expect("load config");
-        let err = config
-            .resolve_current_service(ServiceKind::Elasticsearch)
-            .expect_err("invalid auth should fail");
+        let err = config.validate().expect_err("invalid auth should fail");
 
         assert!(matches!(
             err,
             Error::InvalidAuth {
-                service: ServiceKind::Elasticsearch,
+                context: Some(ref context),
+                service: "elasticsearch",
                 ..
-            }
+            } if context == "prod"
         ));
     }
 
@@ -1491,10 +1573,15 @@ contexts:
 
         let config = ConfigFile::load(&path).expect("load config");
         let service = config
-            .resolve_current_service(ServiceKind::Elasticsearch)
+            .current()
+            .expect("current context")
+            .elasticsearch
+            .as_ref()
+            .expect("Elasticsearch config")
+            .resolve()
             .expect("resolve service");
 
-        assert!(matches!(service.auth, ResolvedAuth::ApiKey(ref key) if key.expose_secret() == "env-key"));
+        assert!(matches!(service.auth, Auth::ApiKey(ref key) if key.expose_secret() == "env-key"));
         unsafe {
             std::env::remove_var("ELASTICRC_TEST_API_KEY");
         }
@@ -1515,7 +1602,7 @@ contexts:
 
         let config = ConfigFile::load(&path).expect("load config");
         let api_key = config
-            .contexts
+            .contexts()
             .get("prod")
             .and_then(|context| context.elasticsearch.as_ref())
             .and_then(|service| service.auth.as_ref())
@@ -1543,9 +1630,7 @@ contexts:
         );
 
         let config = ConfigFile::load(&config_path).expect("load config");
-        config
-            .resolve_current_service(ServiceKind::Elasticsearch)
-            .expect("resolve Elasticsearch");
+        current_elasticsearch(&config).resolve().expect("resolve Elasticsearch");
 
         assert!(!marker.exists(), "unselected Kibana resolver must remain lazy");
     }
@@ -1565,11 +1650,9 @@ contexts:
         );
 
         let config = ConfigFile::load(&config).expect("load config");
-        let service = config
-            .resolve_current_service(ServiceKind::Elasticsearch)
-            .expect("resolve service");
+        let service = current_elasticsearch(&config).resolve().expect("resolve service");
 
-        assert!(matches!(service.auth, ResolvedAuth::ApiKey(ref key) if key.expose_secret() == "file-key"));
+        assert!(matches!(service.auth, Auth::ApiKey(ref key) if key.expose_secret() == "file-key"));
     }
 
     #[test]
@@ -1582,11 +1665,9 @@ contexts:
         );
 
         let config = ConfigFile::load(&path).expect("load config");
-        let service = config
-            .resolve_current_service(ServiceKind::Elasticsearch)
-            .expect("resolve service");
+        let service = current_elasticsearch(&config).resolve().expect("resolve service");
 
-        assert!(matches!(service.auth, ResolvedAuth::ApiKey(ref key) if key.expose_secret() == "cmd-key"));
+        assert!(matches!(service.auth, Auth::ApiKey(ref key) if key.expose_secret() == "cmd-key"));
     }
 
     #[test]
@@ -1649,8 +1730,8 @@ contexts:
         );
 
         let config = ConfigFile::load(&path).expect("load config");
-        let err = config
-            .resolve_current_service(ServiceKind::Elasticsearch)
+        let err = current_elasticsearch(&config)
+            .resolve()
             .expect_err("shell syntax should fail");
 
         assert!(matches!(err, Error::ShellSyntaxUnsupported { .. }));
@@ -1666,11 +1747,15 @@ contexts:
         );
 
         let config = ConfigFile::load(&path).expect("load config");
-        let err = config
-            .resolve_current_service(ServiceKind::Elasticsearch)
+        let err = current_elasticsearch(&config)
+            .resolve()
             .expect_err("unknown resolver should fail");
 
-        assert!(matches!(err, Error::UnknownResolver { resolver, .. } if resolver == "unknown"));
+        assert!(matches!(
+            err,
+            Error::UnknownResolver { resolver, field }
+                if resolver == "unknown" && field == "prod.elasticsearch.auth.api_key"
+        ));
     }
 
     #[cfg(unix)]

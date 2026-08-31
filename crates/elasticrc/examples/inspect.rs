@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use elasticrc::{ConfigFile, ResolvedAuth, ServiceKind};
+use elasticrc::{Auth, ConfigFile, Elasticsearch, ServiceType};
 use std::{env, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {
@@ -33,17 +33,25 @@ fn main() -> ExitCode {
 fn run() -> Result<(), elasticrc::Error> {
     let explicit_path = env::args_os().nth(1).map(PathBuf::from);
     let config = ConfigFile::load_with_options(explicit_path.as_deref(), None)?;
-    let service = config.resolve_current_service(ServiceKind::Elasticsearch)?;
+    let service = config
+        .current()?
+        .elasticsearch
+        .as_ref()
+        .ok_or_else(|| elasticrc::Error::MissingService {
+            context: config.current_context_name().to_string(),
+            service: Elasticsearch::NAME,
+        })?
+        .resolve()?;
 
-    println!("context: {}", config.current_context);
-    println!("service: {}", service.kind);
+    println!("context: {}", config.current_context_name());
+    println!("service: {}", Elasticsearch::NAME);
     println!("url: {}", service.url);
     println!(
         "authentication: {}",
         match service.auth {
-            ResolvedAuth::ApiKey(_) => "api_key",
-            ResolvedAuth::Basic { .. } => "basic",
-            ResolvedAuth::None => "none",
+            Auth::ApiKey(_) => "api_key",
+            Auth::Basic { .. } => "basic",
+            Auth::None => "none",
         }
     );
     Ok(())
