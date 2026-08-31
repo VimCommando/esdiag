@@ -119,8 +119,8 @@ impl ConfigFile {
     /// Validate all raw service blocks without evaluating resolver expressions.
     pub fn validate(&self) -> Result<(), Error> {
         self.validate_shape()?;
-        for context in self.contexts.values() {
-            context.validate()?;
+        for (context_name, context) in &self.contexts {
+            context.validate(context_name)?;
         }
         Ok(())
     }
@@ -204,15 +204,15 @@ pub struct Context {
 }
 
 impl Context {
-    fn validate(&self) -> Result<(), Error> {
+    fn validate(&self, context_name: &str) -> Result<(), Error> {
         if let Some(service) = &self.elasticsearch {
-            service.validate()?;
+            service.validate(Some(context_name))?;
         }
         if let Some(service) = &self.kibana {
-            service.validate()?;
+            service.validate(Some(context_name))?;
         }
         if let Some(service) = &self.cloud {
-            service.validate()?;
+            service.validate(Some(context_name))?;
         }
         Ok(())
     }
@@ -239,20 +239,22 @@ impl<T: ServiceType> ServiceConfig<T> {
         }
     }
 
-    fn validate(&self) -> Result<(), Error> {
+    fn validate(&self, context_name: Option<&str>) -> Result<(), Error> {
         let url = Url::parse(&self.url).map_err(|source| Error::InvalidServiceUrl {
+            context: context_name.map(str::to_string),
             service: T::NAME,
             value: self.url.clone(),
             source,
         })?;
         if !matches!(url.scheme(), "http" | "https") {
             return Err(Error::InvalidServiceUrlScheme {
+                context: context_name.map(str::to_string),
                 service: T::NAME,
                 value: self.url.clone(),
             });
         }
         if let Some(auth) = &self.auth {
-            auth.validate(T::NAME)?;
+            auth.validate(context_name, T::NAME)?;
         }
         Ok(())
     }
@@ -262,18 +264,20 @@ impl<T: ServiceType> ServiceConfig<T> {
         let field = |name: &str| format!("{}.{name}", T::NAME);
         let url_value = resolve_string_expressions(&self.url, &field("url"))?;
         let url = Url::parse(&url_value).map_err(|source| Error::InvalidServiceUrl {
+            context: None,
             service: T::NAME,
             value: url_value.clone(),
             source,
         })?;
         if !matches!(url.scheme(), "http" | "https") {
             return Err(Error::InvalidServiceUrlScheme {
+                context: None,
                 service: T::NAME,
                 value: url_value,
             });
         }
         let auth = if let Some(auth) = &self.auth {
-            auth.validate(T::NAME)?;
+            auth.validate(None, T::NAME)?;
             auth.resolve(T::NAME)?
         } else {
             Auth::None
@@ -312,14 +316,16 @@ impl std::fmt::Debug for AuthConfig {
 }
 
 impl AuthConfig {
-    fn validate(&self, service: &'static str) -> Result<(), Error> {
+    fn validate(&self, context_name: Option<&str>, service: &'static str) -> Result<(), Error> {
         match (&self.api_key, &self.username, &self.password) {
             (Some(_), None, None) | (None, None, None) | (None, Some(_), Some(_)) => Ok(()),
             (Some(_), _, _) => Err(Error::InvalidAuth {
+                context: context_name.map(str::to_string),
                 service,
                 message: "api_key cannot be combined with username or password".to_string(),
             }),
             (None, Some(_), None) | (None, None, Some(_)) => Err(Error::InvalidAuth {
+                context: context_name.map(str::to_string),
                 service,
                 message: "basic authentication requires both username and password".to_string(),
             }),
@@ -440,15 +446,18 @@ pub enum Error {
         service: &'static str,
     },
     InvalidServiceUrl {
+        context: Option<String>,
         service: &'static str,
         value: String,
         source: url::ParseError,
     },
     InvalidServiceUrlScheme {
+        context: Option<String>,
         service: &'static str,
         value: String,
     },
     InvalidAuth {
+        context: Option<String>,
         service: &'static str,
         message: String,
     },
@@ -499,15 +508,51 @@ impl Display for Error {
             Self::MissingService { context, service } => {
                 write!(f, "Elastic CLI context '{context}' does not define service '{service}'")
             }
-            Self::InvalidServiceUrl { service, value, source } => {
-                write!(f, "invalid URL for Elastic CLI service '{service}' ({value}): {source}")
+            Self::InvalidServiceUrl {
+                context,
+                service,
+                value,
+                source,
+            } => {
+                if let Some(context) = context {
+                    write!(
+                        f,
+                        "invalid URL for Elastic CLI context '{context}' service '{service}' ({value}): {source}"
+                    )
+                } else {
+                    write!(f, "invalid URL for Elastic CLI service '{service}' ({value}): {source}")
+                }
             }
-            Self::InvalidServiceUrlScheme { service, value } => write!(
-                f,
-                "invalid URL scheme for Elastic CLI service '{service}' ({value}); expected http or https"
-            ),
-            Self::InvalidAuth { service, message } => {
-                write!(f, "invalid auth for Elastic CLI service '{service}': {message}")
+            Self::InvalidServiceUrlScheme {
+                context,
+                service,
+                value,
+            } => {
+                if let Some(context) = context {
+                    write!(
+                        f,
+                        "invalid URL scheme for Elastic CLI context '{context}' service '{service}' ({value}); expected http or https"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "invalid URL scheme for Elastic CLI service '{service}' ({value}); expected http or https"
+                    )
+                }
+            }
+            Self::InvalidAuth {
+                context,
+                service,
+                message,
+            } => {
+                if let Some(context) = context {
+                    write!(
+                        f,
+                        "invalid auth for Elastic CLI context '{context}' service '{service}': {message}"
+                    )
+                } else {
+                    write!(f, "invalid auth for Elastic CLI service '{service}': {message}")
+                }
             }
             Self::InvalidResolverExpression { field, value } => {
                 write!(f, "invalid resolver expression in field '{field}': {value}")
@@ -1406,21 +1451,15 @@ contexts:
         );
 
         let config = ConfigFile::load(&path).expect("load config");
-        let err = config
-            .current()
-            .expect("current context")
-            .elasticsearch
-            .as_ref()
-            .expect("Elasticsearch config")
-            .resolve()
-            .expect_err("invalid url should fail");
+        let err = config.validate().expect_err("invalid url should fail");
 
         assert!(matches!(
             err,
             Error::InvalidServiceUrlScheme {
+                context: Some(ref context),
                 service: "elasticsearch",
                 ..
-            }
+            } if context == "prod"
         ));
     }
 
@@ -1434,21 +1473,15 @@ contexts:
         );
 
         let config = ConfigFile::load(&path).expect("load config");
-        let err = config
-            .current()
-            .expect("current context")
-            .elasticsearch
-            .as_ref()
-            .expect("Elasticsearch config")
-            .resolve()
-            .expect_err("invalid auth should fail");
+        let err = config.validate().expect_err("invalid auth should fail");
 
         assert!(matches!(
             err,
             Error::InvalidAuth {
+                context: Some(ref context),
                 service: "elasticsearch",
                 ..
-            }
+            } if context == "prod"
         ));
     }
 

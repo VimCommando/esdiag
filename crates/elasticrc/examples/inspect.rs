@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use elasticrc::{Auth, ConfigFile};
+use elasticrc::{Auth, ConfigFile, Elasticsearch, ServiceType};
 use std::{env, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {
@@ -39,12 +39,12 @@ fn run() -> Result<(), elasticrc::Error> {
         .as_ref()
         .ok_or_else(|| elasticrc::Error::MissingService {
             context: config.current_context.clone(),
-            service: "elasticsearch",
+            service: Elasticsearch::NAME,
         })?
         .resolve()?;
 
     println!("context: {}", config.current_context);
-    println!("service: elasticsearch");
+    println!("service: {}", Elasticsearch::NAME);
     println!("url: {}", service.url);
     println!(
         "authentication: {}",
