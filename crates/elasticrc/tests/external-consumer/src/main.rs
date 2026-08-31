@@ -20,9 +20,18 @@
 use elasticrc::{ConfigFile, ContextServiceReference, ResolvedAuth};
 use std::{fs, process};
 
+struct RemoveFileOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveFileOnDrop {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 fn main() {
     let reference = ContextServiceReference::parse(".production.es").expect("context reference");
     let path = std::env::temp_dir().join(format!("elasticrc-external-consumer-{}.yml", process::id()));
+    let _cleanup = RemoveFileOnDrop(path.clone());
     fs::write(
         &path,
         "current_context: production\ncontexts:\n  production:\n    elasticsearch:\n      url: https://example.invalid:9200\n      auth:\n        api_key: package-secret\n",
@@ -41,5 +50,4 @@ fn main() {
         service.auth,
         ResolvedAuth::ApiKey(ref key) if key.expose_secret() == "package-secret"
     ));
-    fs::remove_file(path).expect("remove config");
 }

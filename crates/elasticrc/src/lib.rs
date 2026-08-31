@@ -930,12 +930,20 @@ fn run_command_with_timeout(
 
     let start = Instant::now();
     let status = loop {
-        if let Some(status) = child.try_wait().map_err(|source| Error::ResolverFailed {
-            resolver: resolver.to_string(),
-            field: field.to_string(),
-            message: source.to_string(),
-        })? {
-            break status;
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(source) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(Error::ResolverFailed {
+                    resolver: resolver.to_string(),
+                    field: field.to_string(),
+                    message: source.to_string(),
+                });
+            }
         }
         if start.elapsed() >= timeout {
             let _ = child.kill();
@@ -951,8 +959,9 @@ fn run_command_with_timeout(
         thread::sleep(Duration::from_millis(10));
     };
 
-    let stdout = stdout_reader
-        .join()
+    let stdout_result = stdout_reader.join();
+    let stderr_result = stderr_reader.join();
+    let stdout = stdout_result
         .map_err(|_| Error::ResolverFailed {
             resolver: resolver.to_string(),
             field: field.to_string(),
@@ -963,8 +972,7 @@ fn run_command_with_timeout(
             field: field.to_string(),
             message: source.to_string(),
         })?;
-    let _stderr = stderr_reader
-        .join()
+    let _stderr = stderr_result
         .map_err(|_| Error::ResolverFailed {
             resolver: resolver.to_string(),
             field: field.to_string(),
