@@ -51,6 +51,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Fixed
 
+- Fixed legacy diagnostic writers being rejected after rollover by keeping both provenance field names writable and searchable; setup now warns about incompatible existing mappings.
 - Fixed searchable-snapshot documents being rejected by Elasticsearch by placing their stats mappings under `searchable_snapshot`.
 - Fixed `esdiag local` launcher execution and structured outcomes for help output and forwarded state directories (#382).
 - Fixed compilation of every `server`, `setup`, and `keystore` feature combination, including `--no-default-features` (#347).

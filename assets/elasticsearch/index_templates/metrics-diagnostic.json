@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "ESDiag processing stats",
-    "compatibility_debt": "Remove diagnostic.product/application and diagnostic.orchestration/platform aliases after dashboards migrate and old indices age out. Shipped dashboards are checked by shipped_saved_objects_only_query_provenance_names_the_templates_define; pre-rename indices carry the mirrored alias installed by setup."
+    "compatibility_debt": "Keep both provenance names writable with reciprocal copy_to until legacy writers and dashboards retire and old indices age out. Existing alias mappings require rollover after setup for mixed-version writes; historical aliases remain query-only. See ADR-0014."
   },
   "index_patterns": ["metrics-diagnostic-esdiag"],
   "composed_of": ["esdiag@metadata", "esdiag@mappings", "esdiag@settings"],
@@ -452,26 +452,28 @@
               }
             },
             "product": {
-              "type": "alias",
-              "path": "diagnostic.application"
+              "type": "keyword",
+              "copy_to": "diagnostic.application"
             },
             "parent_id": {
               "type": "keyword"
             },
             "platform": {
-              "type": "keyword"
+              "type": "keyword",
+              "copy_to": "diagnostic.orchestration"
             },
             "orchestration": {
-              "type": "alias",
-              "path": "diagnostic.platform"
+              "type": "keyword",
+              "copy_to": "diagnostic.platform"
             },
             "application": {
-              "type": "keyword"
+              "type": "keyword",
+              "copy_to": "diagnostic.product"
             }
           }
         }
       }
     }
   },
-  "version": 2
+  "version": 3
 }
