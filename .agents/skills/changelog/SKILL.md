@@ -20,6 +20,11 @@ update changelog content.
 
 - Follow the target repository's guidance on which issue trackers and references
   are appropriate for its changelog.
+- In this repository, the root `AGENTS.md` requires references only to verified
+  public `elastic/esdiag` issues. Do not include private repository issue links,
+  qualified references, or their bare issue numbers here. Never reuse a private
+  issue number in a public URL. In another repository, follow that repository's
+  own `AGENTS.md` or equivalent guidance instead.
 - Prefer issue numbers over PR numbers on bullets when the target repository's
   guidance permits references.
 - Use a PR number only when there is no explicit issue reference to cite and the
@@ -70,9 +75,9 @@ When updating changelog content:
   Verify the repository as well as the issue number.
 - A PR's `Resolves #123` refers to its own repository unless explicitly qualified;
   it does not establish that issue #123 in another repository is the same issue.
-- Private issue links are appropriate when the target repository's guidance and
-  intended audience permit them. If a verified source cannot be cited, keep the
-  supported changelog bullet without a reference.
+- In this repository, private issue links are not allowed in changelog entries.
+  In another repository, follow its citation rules. If a verified source cannot
+  be cited, keep the supported changelog bullet without a reference.
 
 ## PR Review Use
 
