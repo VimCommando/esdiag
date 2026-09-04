@@ -9,6 +9,10 @@
   "data_stream": {},
   "priority": 300,
   "template": {
+    "lifecycle": {
+      "enabled": false,
+      "data_retention": null
+    },
     "mappings": {
       "numeric_detection": false,
       "dynamic": true,
@@ -473,5 +477,5 @@
       }
     }
   },
-  "version": 2
+  "version": 3
 }

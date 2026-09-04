@@ -236,12 +236,48 @@ async fn install_provenance_aliases(client: &Client) -> Result<()> {
     Ok(())
 }
 
-fn should_skip_asset(asset: &Asset, security_enabled: bool) -> bool {
-    asset.requires_security && !security_enabled
+fn should_skip_asset(asset: &Asset, security_assets_supported: bool) -> bool {
+    asset.requires_security && !security_assets_supported
 }
 
 async fn send_asset(client: &Client, asset: &Asset, path: &Path, contents: &[u8], named: bool) -> Result<()> {
     send_asset_with_allowed_statuses(client, asset, path, contents, named, &[]).await
+}
+
+/// Adapt only template settings. ILM fields in diagnostic mappings are source data.
+fn serverless_asset_contents(asset: &Asset, contents: &[u8]) -> Result<Vec<u8>> {
+    if !is_template_asset(asset) {
+        return Ok(contents.to_vec());
+    }
+    let mut body: Value = serde_json::from_slice(contents)?;
+    if let Some(settings) = body.pointer_mut("/template/settings") {
+        remove_serverless_ilm_settings(settings, "");
+    }
+    Ok(serde_json::to_vec(&body)?)
+}
+
+fn is_template_asset(asset: &Asset) -> bool {
+    matches!(
+        asset.endpoint.trim_matches('/'),
+        "_component_template" | "_index_template"
+    )
+}
+
+fn remove_serverless_ilm_settings(value: &mut Value, prefix: &str) {
+    if let Some(settings) = value.as_object_mut() {
+        settings.retain(|key, value| {
+            let path = if prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{prefix}.{key}")
+            };
+            if matches!(path.as_str(), "index.lifecycle.name" | "index.lifecycle.prefer_ilm") {
+                return false;
+            }
+            remove_serverless_ilm_settings(value, &path);
+            !value.as_object().is_some_and(|object| object.is_empty())
+        });
+    }
 }
 
 async fn send_asset_with_allowed_statuses(
@@ -301,19 +337,25 @@ pub async fn assets(client: &Client) -> Result<()> {
     let assets = parse_assets_yml(client.into(), &embedded_assets)?;
 
     // Check security status
-    let security_enabled = client
-        .has_security_enabled()
-        .await
-        .wrap_err("Failed to determine security status")?;
-
-    if !security_enabled {
+    let serverless = client.is_serverless().await?;
+    let security_enabled = serverless
+        || client
+            .has_security_enabled()
+            .await
+            .wrap_err("Failed to determine security status")?;
+    if serverless {
+        tracing::info!(
+            "Serverless security is always enabled. Skipping bundled security-dependent assets; configure project roles separately."
+        );
+    } else if !security_enabled {
         tracing::info!("Security is disabled on the cluster. Security-dependent assets will be skipped.");
     }
+    let supports_security_assets = security_enabled && !serverless;
 
     let mut error_count = 0;
 
     for asset in assets {
-        if should_skip_asset(&asset, security_enabled) {
+        if should_skip_asset(&asset, supports_security_assets) {
             tracing::debug!("Skipping security-dependent asset: {}", &asset.name);
             continue;
         }
@@ -326,6 +368,11 @@ pub async fn assets(client: &Client) -> Result<()> {
         if !dir_files.is_empty() {
             // do something with the directory
             for (file_path, contents) in dir_files {
+                let contents = if serverless && is_template_asset(&asset) {
+                    std::borrow::Cow::Owned(serverless_asset_contents(&asset, &contents)?)
+                } else {
+                    contents
+                };
                 tracing::debug!("file.path: {:?}", file_path);
                 match send_asset(client, &asset, &file_path, &contents, true).await {
                     Ok(res) => tracing::debug!("Response: {:?}", res),
@@ -336,6 +383,11 @@ pub async fn assets(client: &Client) -> Result<()> {
                 }
             }
         } else if let Some(contents) = embedded_assets.get_file(&path) {
+            let contents = if serverless && is_template_asset(&asset) {
+                std::borrow::Cow::Owned(serverless_asset_contents(&asset, &contents)?)
+            } else {
+                contents
+            };
             // do something with the file
             tracing::debug!("file.path: {:?}", &path);
             if let Err(e) = send_asset(client, &asset, &path, &contents, false).await {
@@ -372,6 +424,11 @@ pub async fn ensure_agent_builder_license(client: &Client) -> Result<()> {
     let Client::Elasticsearch(_) = client else {
         return Err(eyre!("an Elasticsearch client is required to start the trial license"));
     };
+
+    if client.is_serverless().await? {
+        tracing::info!("Serverless manages feature entitlements; skipping the Elasticsearch trial license API");
+        return Ok(());
+    }
 
     if agent_builder_license_is_active(&current_license(client).await?) {
         return Ok(());
@@ -425,7 +482,10 @@ fn agent_builder_license_is_active(response: &Value) -> bool {
 }
 
 async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Result<()> {
-    let bundle = kibana_bundle(embedded_assets)?.read_all()?;
+    let mut bundle = kibana_bundle(embedded_assets)?.read_all()?;
+    if client.is_serverless().await? {
+        adapt_serverless_kibana_bundle(&mut bundle);
+    }
     let Client::Kibana(kibana) = client else {
         return Err(eyre!("expected Kibana client"));
     };
@@ -468,6 +528,16 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
 
     tracing::info!("completed setup for {client}");
     Ok(())
+}
+
+fn adapt_serverless_kibana_bundle(bundle: &mut SyncBundle) {
+    for space in &mut bundle.spaces {
+        if let Some(space) = space.as_object_mut() {
+            // Serverless fixes the solution and disallows space feature visibility controls.
+            space.remove("solution");
+            space.remove("disabledFeatures");
+        }
+    }
 }
 
 fn saved_objects_bundle(bundle: &SyncBundle) -> SyncBundle {
@@ -598,7 +668,12 @@ async fn attach_skills_to_default_agent(client: &Client, space_id: &str, skill_i
             response.text().await?
         ));
     }
-    let mut agent: Value = response.json().await?;
+    let agent: Value = response.json().await?;
+    let update = default_agent_skill_update(agent, skill_ids)?;
+    send_kibana_json_with_method(client, Method::PUT, &path, &update, false).await
+}
+
+fn default_agent_skill_update(mut agent: Value, skill_ids: &[String]) -> Result<Value> {
     let configuration = agent
         .get_mut("configuration")
         .and_then(Value::as_object_mut)
@@ -613,13 +688,9 @@ async fn attach_skills_to_default_agent(client: &Client, space_id: &str, skill_i
             configured_skills.push(Value::String(skill_id.clone()));
         }
     }
-    if let Some(agent) = agent.as_object_mut() {
-        agent.remove("id");
-        agent.remove("readonly");
-        agent.remove("type");
-        agent.remove("created_by");
-    }
-    send_kibana_json_with_method(client, Method::PUT, &path, &agent, false).await
+    // The update API accepts a partial body. Read responses also contain server-owned
+    // fields such as access_control.entries that must not be echoed into an update.
+    Ok(serde_json::json!({ "configuration": configuration }))
 }
 
 async fn send_kibana_json_with_method(
@@ -655,6 +726,10 @@ fn parse_assets_yml(application: Application, assets_store: &EmbeddedAssets) -> 
     let assets = yaml_serde::from_slice(&contents)?;
     Ok(assets)
 }
+
+#[cfg(test)]
+#[path = "setup/serverless_tests.rs"]
+mod serverless_tests;
 
 #[cfg(test)]
 mod tests {
