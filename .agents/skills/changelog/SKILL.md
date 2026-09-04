@@ -20,10 +20,13 @@ update changelog content.
 
 - Follow the target repository's guidance on which issue trackers and references
   are appropriate for its changelog.
-- Prefer issue numbers over PR numbers on bullets.
-- Use a PR number only when there is no explicit issue reference to cite.
+- Prefer issue numbers over PR numbers on bullets when the target repository's
+  guidance permits references.
+- Use a PR number only when there is no explicit issue reference to cite and the
+  target repository's guidance permits PR references.
 - Add `#123` references inline at the end of the bullet whenever they can be
-  verified from GitHub history or release notes.
+  verified from GitHub history or release notes and the target repository allows
+  that reference.
 - Only include a `Fixed` bullet if the change clearly closed or resolved a GitHub
   issue, or if release notes explicitly frame it as a bug fix.
 
