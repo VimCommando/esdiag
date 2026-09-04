@@ -36,74 +36,84 @@
           }
         },
         "index": {
-          "type": "keyword"
-        },
-        "file_ext": {
-          "type": "keyword"
-        },
-        "num_files": {
-          "type": "long"
-        },
-        "open_count": {
-          "type": "long"
-        },
-        "close_count": {
-          "type": "long"
-        },
-        "size": {
-          "type": "object"
-        },
-        "contiguous_bytes_read": {
-          "type": "object"
-        },
-        "non_contiguous_bytes_read": {
-          "type": "object"
-        },
-        "cached_bytes_read": {
-          "type": "object"
-        },
-        "index_cache_bytes_read": {
-          "type": "object"
-        },
-        "cached_bytes_written": {
-          "type": "object"
-        },
-        "direct_bytes_read": {
-          "type": "object"
-        },
-        "optimized_bytes_read": {
-          "type": "object"
-        },
-        "forward_seeks": {
           "type": "object",
           "properties": {
-            "small": {
-              "type": "object"
-            },
-            "large": {
-              "type": "object"
+            "name": {
+              "type": "keyword"
             }
           }
         },
-        "backward_seeks": {
+        "searchable_snapshot": {
           "type": "object",
           "properties": {
-            "small": {
+            "file_ext": {
+              "type": "keyword"
+            },
+            "num_files": {
+              "type": "long"
+            },
+            "open_count": {
+              "type": "long"
+            },
+            "close_count": {
+              "type": "long"
+            },
+            "size": {
               "type": "object"
             },
-            "large": {
+            "contiguous_bytes_read": {
               "type": "object"
+            },
+            "non_contiguous_bytes_read": {
+              "type": "object"
+            },
+            "cached_bytes_read": {
+              "type": "object"
+            },
+            "index_cache_bytes_read": {
+              "type": "object"
+            },
+            "cached_bytes_written": {
+              "type": "object"
+            },
+            "direct_bytes_read": {
+              "type": "object"
+            },
+            "optimized_bytes_read": {
+              "type": "object"
+            },
+            "forward_seeks": {
+              "type": "object",
+              "properties": {
+                "small": {
+                  "type": "object"
+                },
+                "large": {
+                  "type": "object"
+                }
+              }
+            },
+            "backward_seeks": {
+              "type": "object",
+              "properties": {
+                "small": {
+                  "type": "object"
+                },
+                "large": {
+                  "type": "object"
+                }
+              }
+            },
+            "blob_store_bytes_requested": {
+              "type": "object"
+            },
+            "lucene_bytes_read": {
+              "type": "object"
+            },
+            "current_index_cache_fills": {
+              "type": "long"
             }
           }
-        },
-        "blob_store_bytes_requested": {
-          "type": "object"
-        },
-        "lucene_bytes_read": {
-          "type": "object"
-        },
-        "current_index_cache_fills": {
-          "type": "long"
         }
       }
     }

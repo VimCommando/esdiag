@@ -51,6 +51,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Fixed
 
+- Fixed searchable-snapshot documents being rejected by Elasticsearch by placing their stats mappings under `searchable_snapshot`.
 - Fixed `esdiag local` launcher execution and structured outcomes for help output and forwarded state directories (#382).
 - Fixed compilation of every `server`, `setup`, and `keystore` feature combination, including `--no-default-features` (#347).
 - Fixed the file, stream, and directory exporters reporting a fabricated HTTP `200` request status; they now report the reserved `0` that means "no HTTP transport", so a real Elasticsearch response is distinguishable from a local write (#350).
