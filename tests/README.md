@@ -150,3 +150,20 @@ The script requires `cargo`, `curl`, and `docker` by default. Set
 `CONTAINER_RUNTIME=podman` to use Podman instead. It starts temporary Elastic
 Stack containers and uses a temporary directory for the Logstash pipeline
 configuration.
+
+## Mixed-version provenance writes
+
+`tests/provenance_writers_tests.rs` installs the checkout's Elasticsearch assets
+and tests legacy, current, and dual-name payloads against report, Elasticsearch
+node, and Logstash node streams. It checks direct and bulk writes, term queries,
+aggregations, and a subsequent rollover.
+
+Run only against a disposable Elasticsearch cluster with security disabled.
+The test replaces ESDiag templates and rolls over its test streams.
+
+```sh
+ESDIAG_TEST_ES_URL=http://localhost:19278 cargo test --test provenance_writers_tests -- --ignored --nocapture
+```
+
+The test is ignored by default. Elasticsearch 9.4.2 on
+Ironhide is the regression environment for mixed-version provenance writes.

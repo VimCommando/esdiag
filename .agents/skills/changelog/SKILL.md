@@ -18,14 +18,20 @@ update changelog content.
 
 ## Project Rules
 
-- Changelog issue references must point only to the public `elastic/esdiag`
-  repository, using `https://github.com/elastic/esdiag/issues/<number>` or a
-  verified public issue number such as `#123`.
-- `elastic/esdiag-dev` is private. Never include its issue links, qualified
-  references, or bare issue numbers in the changelog. Do not transfer a private
-  issue number to a public URL; the repositories have separate issue numbering.
-- If no corresponding public `elastic/esdiag` issue is verified, keep the
-  changelog bullet without a reference. Do not substitute a PR link or number.
+- Follow the target repository's guidance on which issue trackers and references
+  are appropriate for its changelog.
+- In this repository, the root `AGENTS.md` requires references only to verified
+  public `elastic/esdiag` issues. Do not include private repository issue links,
+  qualified references, or their bare issue numbers here. Never reuse a private
+  issue number in a public URL. In another repository, follow that repository's
+  own `AGENTS.md` or equivalent guidance instead.
+- Prefer issue numbers over PR numbers on bullets when the target repository's
+  guidance permits references.
+- Use a PR number only when there is no explicit issue reference to cite and the
+  target repository's guidance permits PR references.
+- Add `#123` references inline at the end of the bullet whenever they can be
+  verified from GitHub history or release notes and the target repository allows
+  that reference.
 - Only include a `Fixed` bullet if the change clearly closed or resolved a GitHub
   issue, or if release notes explicitly frame it as a bug fix.
 
@@ -58,18 +64,20 @@ When updating changelog content:
 4. For each candidate bullet:
    - choose the correct section (`Added`, `Changed`, `Fixed`, etc.)
    - reduce it to a single user-facing item
-   - attach a reference only if the corresponding public `elastic/esdiag` issue is verified
-   - otherwise omit the reference
+   - attach an issue number if verified and allowed by the repository's guidance
+   - otherwise attach a verified PR number if allowed
+   - omit the reference if neither qualifies
 5. Remove or rewrite bullets that cannot be supported by the sources.
 
 ## GitHub Verification Guidance
 
-- Use release notes, PRs, and commit history to find the corresponding public
-  `elastic/esdiag` issue. Verify the repository as well as the issue number.
+- Use release notes, PRs, and commit history to find the corresponding issue.
+  Verify the repository as well as the issue number.
 - A PR's `Resolves #123` refers to its own repository unless explicitly qualified;
-  it does not establish that public `elastic/esdiag#123` is the same issue.
-- Private issues may substantiate a fix internally, but must not appear as
-  changelog references. A verified private fix can have an unreferenced `Fixed` bullet.
+  it does not establish that issue #123 in another repository is the same issue.
+- In this repository, private issue links are not allowed in changelog entries.
+  In another repository, follow its citation rules. If a verified source cannot
+  be cited, keep the supported changelog bullet without a reference.
 
 ## PR Review Use
 
@@ -77,7 +85,7 @@ During PR review workflows, check changelog updates for:
 
 - correct Keep a Changelog structure
 - one feature per `Added` bullet
-- references restricted to verified public `elastic/esdiag` issues, with no private references
+- verified references that follow the target repository's citation rules
 - `Fixed` bullets limited to verified fixes
 - no invented versions or unsupported claims
 - accurate `Unreleased` scope for the branch being reviewed

@@ -127,10 +127,9 @@ const PROVENANCE_RENAMES: [(&str, &str); 2] = [("application", "product"), ("pla
 ///
 /// A field alias must point at a concrete field, so no single index can carry
 /// both names as aliases: the direction is fixed by which name that index stores.
-/// The templates give every *new* index the legacy name as an alias to the
-/// current one; this supplies the mirror image for indices that predate them, so
-/// a query over an index pattern spanning both generations resolves either name
-/// in every index it touches.
+/// New templates keep both names writable with reciprocal `copy_to`. Historical
+/// indices still need a query-only alias because adding a concrete field would
+/// leave previously indexed documents unsearchable through that name.
 ///
 /// Returns `None` when there is nothing to bridge — a new-generation index, one
 /// already carrying the alias, or a mapping with no provenance fields at all —
@@ -176,6 +175,36 @@ fn provenance_alias_patches(mappings: &Value) -> Vec<(String, Value)> {
         .collect()
 }
 
+/// Existing aliases cannot accept writes, and unlinked concrete fields can split
+/// search results. Neither can be repaired by installing a new template.
+fn provenance_mapping_warnings(properties: &Value) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (current, legacy) in PROVENANCE_RENAMES {
+        for name in [current, legacy] {
+            if properties[name]["type"] == "alias" {
+                warnings.push(format!(
+                    "diagnostic.{name} is a query-only alias and rejects writers using that name; \
+                     roll over the data stream after setup before mixing writer versions"
+                ));
+            }
+        }
+        let concrete = |name: &str| properties[name]["type"].as_str().is_some_and(|kind| kind != "alias");
+        let copies_to = |from: &str, to: &str| {
+            let target = Value::String(format!("diagnostic.{to}"));
+            let copy = &properties[from]["copy_to"];
+            copy == &target || copy.as_array().is_some_and(|targets| targets.contains(&target))
+        };
+        if concrete(current) && concrete(legacy) && !(copies_to(current, legacy) && copies_to(legacy, current)) {
+            warnings.push(format!(
+                "diagnostic.{current} and diagnostic.{legacy} are unlinked concrete fields; \
+                 historical search results may be split. Roll over for future writes and \
+                 reindex historical documents if both names must find them"
+            ));
+        }
+    }
+    warnings
+}
+
 /// Bridge the provenance rename on indices that predate it (ADR-0014).
 ///
 /// Templates only govern indices created after they are installed, so this is the
@@ -197,6 +226,16 @@ async fn install_provenance_aliases(client: &Client) -> Result<()> {
     }
 
     let mappings: Value = response.json().await?;
+    if let Some(indices) = mappings.as_object() {
+        for (index, mapping) in indices {
+            let properties = mapping
+                .pointer("/mappings/properties/diagnostic/properties")
+                .unwrap_or(&Value::Null);
+            for warning in provenance_mapping_warnings(properties) {
+                tracing::warn!("{index}: {warning}");
+            }
+        }
+    }
     let patches = provenance_alias_patches(&mappings);
     if patches.is_empty() {
         tracing::debug!("No pre-rename ESDiag indices need a provenance alias");
@@ -212,6 +251,9 @@ async fn install_provenance_aliases(client: &Client) -> Result<()> {
         match result {
             Ok(response) if response.status().is_success() => {
                 tracing::info!("Aliased the current provenance names onto {index}");
+                tracing::warn!(
+                    "{index}: added query-only provenance aliases; roll over the data stream after setup before mixing writer versions"
+                );
             }
             Ok(response) => {
                 failures += 1;
@@ -780,15 +822,11 @@ mod tests {
     #[test]
     fn both_provenance_names_resolve_in_either_index_generation() {
         let new_index = template_diagnostic_properties();
-        assert_eq!(
-            resolves_to(&new_index, "product"),
-            resolves_to(&new_index, "application"),
-            "a new index stores `application` and aliases `product` to it"
-        );
-        assert_eq!(
-            resolves_to(&new_index, "orchestration"),
-            resolves_to(&new_index, "platform")
-        );
+        for (current, legacy) in PROVENANCE_RENAMES {
+            assert_eq!(new_index[current]["type"], "keyword");
+            assert_eq!(new_index[legacy]["type"], "keyword");
+        }
+        assert!(provenance_mapping_warnings(&new_index).is_empty());
         assert!(
             provenance_alias_patch(&new_index).is_none(),
             "a new index needs no patch, so setup is idempotent"
@@ -816,6 +854,26 @@ mod tests {
             provenance_alias_patch(&old_index).is_none(),
             "re-running setup over a patched index is a no-op"
         );
+    }
+
+    #[test]
+    fn provenance_warnings_identify_aliases_and_unlinked_fields() {
+        let old = pre_rename_diagnostic_properties();
+        assert!(provenance_mapping_warnings(&old).is_empty());
+        let patch = provenance_alias_patch(&old).unwrap();
+        assert_eq!(provenance_mapping_warnings(&patched(&old, &patch)).len(), 2);
+        let split = serde_json::json!({
+            "application": {"type": "keyword"},
+            "product": {"type": "keyword"}
+        });
+        assert!(provenance_mapping_warnings(&split)[0].contains("unlinked concrete fields"));
+        assert!(provenance_alias_patch(&split).is_none());
+        let alias = serde_json::json!({
+            "application": {"type": "keyword"},
+            "product": {"type": "alias", "path": "diagnostic.application"}
+        });
+        assert!(provenance_mapping_warnings(&alias)[0].contains("diagnostic.product is a query-only alias"));
+        assert!(provenance_mapping_warnings(&Value::Null).is_empty());
     }
 
     #[test]

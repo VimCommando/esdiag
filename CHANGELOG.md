@@ -51,6 +51,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Fixed
 
+- Fixed legacy diagnostic writers being rejected after rollover by keeping both provenance field names writable and searchable; setup now warns about incompatible existing mappings.
 - Fixed Serverless setup failures caused by security and license probes (#390).
 - Fixed Serverless asset installation failures caused by unsupported ILM template settings, Kibana space controls, and read-only fields in default-agent updates (#390).
 - Fixed searchable-snapshot documents being rejected by Elasticsearch by placing their stats mappings under `searchable_snapshot`.
