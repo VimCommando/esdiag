@@ -69,6 +69,24 @@ The output needs ESDiag templates and ingest pipelines:
 esdiag setup diagnostics-output
 ```
 
+On Elasticsearch Serverless, `setup` detects the deployment, omits unsupported
+ILM settings, and keeps the 30-day data stream retention policy for ordinary
+diagnostic data. Diagnostic reports are retained indefinitely. It installs
+templates and ingest pipelines and skips bundled security-dependent role
+assets. Configure project roles separately. Serverless security is always
+enabled; a `410 Gone` security usage response also reports security as enabled.
+
+Run `esdiag setup <saved-kibana-host>` to install the Kibana assets separately.
+On Serverless, the ESDiag space uses the project's solution and feature
+visibility. Guided setup skips the stateful Elasticsearch trial-license API;
+Agent Builder access depends on the project's feature tier.
+
+ILM, shard, node, and snapshot dashboards remain available for analyzing
+diagnostics collected from stateful clusters. Those fields describe the
+source cluster, not the Serverless destination. See the
+[Serverless asset audit](../reference/serverless-assets.md) for compatibility
+details and repeatable verification.
+
 Run this with a credential that can install assets. If normal ingestion uses a
 less-privileged credential, replace the saved secret after setup:
 
