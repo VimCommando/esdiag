@@ -246,10 +246,7 @@ async fn send_asset(client: &Client, asset: &Asset, path: &Path, contents: &[u8]
 
 /// Adapt only template settings. ILM fields in diagnostic mappings are source data.
 fn serverless_asset_contents(asset: &Asset, contents: &[u8]) -> Result<Vec<u8>> {
-    if !matches!(
-        asset.endpoint.trim_matches('/'),
-        "_component_template" | "_index_template"
-    ) {
+    if !is_template_asset(asset) {
         return Ok(contents.to_vec());
     }
     let mut body: Value = serde_json::from_slice(contents)?;
@@ -257,6 +254,13 @@ fn serverless_asset_contents(asset: &Asset, contents: &[u8]) -> Result<Vec<u8>> 
         remove_serverless_ilm_settings(settings, "");
     }
     Ok(serde_json::to_vec(&body)?)
+}
+
+fn is_template_asset(asset: &Asset) -> bool {
+    matches!(
+        asset.endpoint.trim_matches('/'),
+        "_component_template" | "_index_template"
+    )
 }
 
 fn remove_serverless_ilm_settings(value: &mut Value, prefix: &str) {
@@ -364,7 +368,7 @@ pub async fn assets(client: &Client) -> Result<()> {
         if !dir_files.is_empty() {
             // do something with the directory
             for (file_path, contents) in dir_files {
-                let contents = if serverless {
+                let contents = if serverless && is_template_asset(&asset) {
                     std::borrow::Cow::Owned(serverless_asset_contents(&asset, &contents)?)
                 } else {
                     contents
@@ -379,7 +383,7 @@ pub async fn assets(client: &Client) -> Result<()> {
                 }
             }
         } else if let Some(contents) = embedded_assets.get_file(&path) {
-            let contents = if serverless {
+            let contents = if serverless && is_template_asset(&asset) {
                 std::borrow::Cow::Owned(serverless_asset_contents(&asset, &contents)?)
             } else {
                 contents

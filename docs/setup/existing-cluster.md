@@ -70,7 +70,8 @@ esdiag setup diagnostics-output
 ```
 
 On Elasticsearch Serverless, `setup` detects the deployment, omits unsupported
-ILM settings, and keeps the 30-day data stream retention policy. It installs
+ILM settings, and keeps the 30-day data stream retention policy for ordinary
+diagnostic data. Diagnostic reports are retained indefinitely. It installs
 templates and ingest pipelines and skips bundled security-dependent role
 assets. Configure project roles separately. Serverless security is always
 enabled; a `410 Gone` security usage response also reports security as enabled.
