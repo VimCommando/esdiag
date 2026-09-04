@@ -28,6 +28,29 @@ pub enum Client {
 }
 
 impl Client {
+    /// Detect the deployment from product metadata, without relying on its hostname.
+    pub async fn is_serverless(&self) -> Result<bool> {
+        let path = match self {
+            Client::Elasticsearch(_) => "/",
+            Client::Kibana(_) => "/api/status",
+            Client::Logstash(_) => return Ok(false),
+        };
+        let response = self.request(Method::GET, &HashMap::new(), path, None).await?;
+        let status = response.status();
+        if matches!(status.as_u16(), 401 | 403 | 404) {
+            tracing::debug!("Deployment metadata is unavailable (HTTP {status}); using endpoint capability probes");
+            return Ok(false);
+        }
+        if !status.is_success() {
+            return Err(eyre!("Failed to detect deployment type: HTTP {status}"));
+        }
+        let metadata: serde_json::Value = response.json().await?;
+        Ok(metadata
+            .pointer("/version/build_flavor")
+            .and_then(serde_json::Value::as_str)
+            == Some("serverless"))
+    }
+
     /// Send an HTTP request to a path on the client's base URL
     pub async fn request(
         &self,
@@ -134,6 +157,8 @@ impl Client {
     /// Check if security is enabled on the cluster.
     ///
     /// For Elasticsearch, this checks the `security.enabled` flag in `/_xpack/usage`.
+    /// An unavailable usage API (HTTP 410 on Serverless) does not mean security is disabled.
+    /// Serverless always has security enabled, including when the probe returns HTTP 410.
     /// For Kibana and Logstash, this currently always returns `true`.
     pub async fn has_security_enabled(&self) -> Result<bool> {
         match self {
@@ -171,6 +196,12 @@ impl Client {
                                 "Security detection returned 404. Assuming security is disabled or not supported."
                             );
                             Ok(false)
+                        }
+                        410 => {
+                            tracing::debug!(
+                                "Serverless security is always enabled; the security usage API is unavailable."
+                            );
+                            Ok(true)
                         }
                         _ => {
                             tracing::warn!("Failed to check security status (HTTP {status}).");
