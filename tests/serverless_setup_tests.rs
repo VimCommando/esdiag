@@ -35,7 +35,16 @@ async fn deployment_metadata_handles_both_products_and_restricted_metadata() {
             (StatusCode::OK, "invalid", None),
         ] {
             let app = Router::new().fallback(move |request: Request<Body>| async move {
-                assert_eq!(request.uri().path(), if kibana { "/api/status" } else { "/" });
+                let expected_path = if kibana { "/api/status" } else { "/" };
+                assert!(
+                    request.uri().path() == expected_path
+                        || (!kibana
+                            && request.uri().path() == "/_xpack/usage"
+                            && matches!(
+                                status,
+                                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+                            ))
+                );
                 (
                     status,
                     [
@@ -58,6 +67,36 @@ async fn deployment_metadata_handles_both_products_and_restricted_metadata() {
             assert_eq!(actual.ok(), expected);
         }
     }
+}
+
+#[tokio::test]
+async fn restricted_elasticsearch_metadata_uses_serverless_security_fallback() {
+    let app = Router::new().fallback(|request: Request<Body>| async move {
+        let (status, body) = match request.uri().path() {
+            "/" => (StatusCode::FORBIDDEN, ""),
+            "/_xpack/usage" => (StatusCode::GONE, ""),
+            _ => (StatusCode::OK, "{}"),
+        };
+        (
+            status,
+            [
+                ("content-type", "application/json"),
+                ("x-elastic-product", "Elasticsearch"),
+            ],
+            body,
+        )
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap()).parse().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = Client::Elasticsearch(
+        ElasticsearchBuilder::new(url)
+            .apikey("test-key".into())
+            .build()
+            .unwrap(),
+    );
+    assert!(client.is_serverless().await.unwrap());
+    task.abort();
 }
 
 impl Drop for MockCluster {

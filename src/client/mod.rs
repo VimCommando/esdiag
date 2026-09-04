@@ -38,6 +38,17 @@ impl Client {
         let response = self.request(Method::GET, &HashMap::new(), path, None).await?;
         let status = response.status();
         if matches!(status.as_u16(), 401 | 403 | 404) {
+            if matches!(self, Client::Elasticsearch(_)) {
+                let usage = self
+                    .request(Method::GET, &HashMap::new(), "/_xpack/usage", None)
+                    .await?;
+                if usage.status() == reqwest::StatusCode::GONE {
+                    tracing::debug!(
+                        "Deployment metadata is restricted and the security usage API is gone; identifying the deployment as Serverless"
+                    );
+                    return Ok(true);
+                }
+            }
             tracing::debug!("Deployment metadata is unavailable (HTTP {status}); using endpoint capability probes");
             return Ok(false);
         }
