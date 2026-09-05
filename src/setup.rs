@@ -387,8 +387,8 @@ pub async fn assets(client: &Client) -> Result<()> {
     let report = assets_report(client).await?;
     if !report.is_complete() {
         return Err(eyre!(
-            "Asset installation was partial. {} indices could not be updated. {}",
-            report.failed_indices.len(),
+            "Asset installation was partial. These indices could not be updated: {}. {}",
+            report.failed_indices.join(", "),
             report.warnings.join(" ")
         ));
     }

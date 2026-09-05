@@ -23,9 +23,11 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
-- Changed onboarding to show workflow changes, offer only available credential sources, and prompt for a diagnostic user without defaulting to the shell username.
-- Added credential-update guidance to keystore errors and listed local-stack commands in `esdiag local --help`.
-
+- Changed onboarding to show workflow changes when resuming and changing a saved workflow.
+- Changed onboarding to offer only available credential sources.
+- Changed onboarding to prompt for a diagnostic user without defaulting to the shell username.
+- Changed keystore replacement errors to suggest the `update` command.
+- Changed `esdiag local --help` to list the local-stack commands.
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
 - Changed platform detection to identify Elastic Cloud Hosted bundles from a cluster license issued to `Elastic Cloud`, so API-only hosted bundles no longer report an unknown platform (#347).
 - Changed collection and processing source selection to use canonical registry keys and added a maintainer reconciliation utility for upstream support-diagnostics sources (#348).

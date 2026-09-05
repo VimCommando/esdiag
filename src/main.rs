@@ -4675,7 +4675,7 @@ fn safe_output_display(uri: &Uri) -> String {
         | Uri::ElasticGovCloudAdmin(host) => host
             .concrete_url()
             .map(|url| safe_output_display(&Uri::Url(url.clone())))
-            .unwrap_or_default(),
+            .unwrap_or_else(|| host.transport_display()),
         Uri::Url(url) | Uri::ServiceLink(url) | Uri::ServiceLinkNoAuth(url) => {
             let mut url = url.clone();
             let _ = url.set_username("");
