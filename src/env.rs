@@ -77,12 +77,8 @@ pub fn kibana_url_with_space(kibana_url: &str, space: Option<&str>) -> String {
                     .filter(|segment| !segment.is_empty())
                     .map(str::to_string)
                     .collect::<Vec<_>>();
-                if segments.first().map(String::as_str) == Some("s") {
-                    if let Some(current_space) = segments.get_mut(1) {
-                        *current_space = space.to_string();
-                    } else {
-                        segments.push(space.to_string());
-                    }
+                if let Some(index) = segments.windows(2).rposition(|pair| pair[0] == "s") {
+                    segments[index + 1] = space.to_string();
                 } else {
                     segments.insert(0, space.to_string());
                     segments.insert(0, "s".to_string());
@@ -94,14 +90,18 @@ pub fn kibana_url_with_space(kibana_url: &str, space: Option<&str>) -> String {
         }
         None => {
             if let Ok(mut url) = url::Url::parse(kibana_url) {
-                let path = url.path();
-                if let Some(index) = path.find("/s/") {
-                    let rest = &path[index + 3..];
-                    let path = format!(
-                        "{}{}",
-                        &path[..index],
-                        rest.find('/').map(|i| &rest[i..]).unwrap_or("/")
-                    );
+                let mut segments = url
+                    .path_segments()
+                    .map(|segments| {
+                        segments
+                            .filter(|segment| !segment.is_empty())
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if let Some(index) = segments.windows(2).rposition(|pair| pair[0] == "s") {
+                    segments.drain(index..=index + 1);
+                    let path = format!("/{}", segments.join("/"));
                     url.set_path(&path);
                     return url.to_string();
                 }
@@ -167,6 +167,10 @@ mod tests {
         assert_eq!(
             append_kibana_space("https://kb:5601/s/foo/app/home"),
             "https://kb:5601/s/support/app/home"
+        );
+        assert_eq!(
+            append_kibana_space("https://kb:5601/proxy/s/foo/app/home"),
+            "https://kb:5601/proxy/s/support/app/home"
         );
     }
 
