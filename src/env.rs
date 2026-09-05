@@ -80,8 +80,12 @@ pub fn kibana_url_with_space(kibana_url: &str, space: Option<&str>) -> String {
                 if let Some(index) = segments.windows(2).rposition(|pair| pair[0] == "s") {
                     segments[index + 1] = space.to_string();
                 } else {
-                    segments.insert(0, space.to_string());
-                    segments.insert(0, "s".to_string());
+                    let insert_at = segments
+                        .iter()
+                        .position(|segment| matches!(segment.as_str(), "app" | "api" | "internal"))
+                        .unwrap_or(segments.len());
+                    segments.insert(insert_at, space.to_string());
+                    segments.insert(insert_at, "s".to_string());
                 }
                 url.set_path(&format!("/{}", segments.join("/")));
                 return url.to_string();
@@ -170,6 +174,10 @@ mod tests {
         );
         assert_eq!(
             append_kibana_space("https://kb:5601/proxy/s/foo/app/home"),
+            "https://kb:5601/proxy/s/support/app/home"
+        );
+        assert_eq!(
+            append_kibana_space("https://kb:5601/proxy/app/home"),
             "https://kb:5601/proxy/s/support/app/home"
         );
     }
