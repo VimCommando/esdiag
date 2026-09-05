@@ -29,7 +29,18 @@ fn connection_failure(error: &(dyn std::error::Error + 'static)) -> String {
         cause = error.source();
     }
     let details = messages.join(" ");
-    if details.contains("dns") || details.contains("resolve") || details.contains("name or service not known") {
+    if [
+        "dns error",
+        "dns lookup",
+        "failed to lookup address",
+        "name or service not known",
+        "could not resolve host",
+        "nodename nor servname",
+        "getaddrinfo",
+    ]
+    .iter()
+    .any(|marker| details.contains(marker))
+    {
         "DNS lookup failed"
     } else if details.contains("certificate") || details.contains("tls") || details.contains("ssl") {
         "TLS verification failed"
@@ -49,6 +60,7 @@ mod connection_failure_tests {
     fn classifies_nested_transport_errors_without_exposing_their_contents() {
         for (cause, expected) in [
             ("dns error: failed to lookup address", "DNS lookup failed"),
+            ("windows connection failure", "connection failed"),
             ("invalid peer certificate", "TLS verification failed"),
             ("operation timed out", "connection timed out"),
             ("tcp connect error", "connection failed"),
