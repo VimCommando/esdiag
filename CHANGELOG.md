@@ -23,6 +23,9 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Changed onboarding to show workflow changes, offer only available credential sources, and prompt for a diagnostic user without defaulting to the shell username.
+- Added credential-update guidance to keystore errors and listed local-stack commands in `esdiag local --help`.
+
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
 - Changed platform detection to identify Elastic Cloud Hosted bundles from a cluster license issued to `Elastic Cloud`, so API-only hosted bundles no longer report an unknown platform (#347).
 - Changed collection and processing source selection to use canonical registry keys and added a maintainer reconciliation utility for upstream support-diagnostics sources (#348).
@@ -50,6 +53,13 @@ published release notes, maintenance branches, and tagged history.
   container; full mode preserves the containerized runtime.
 
 ### Fixed
+
+- Fixed first-run output validation trying to read a pasted API key from the keystore before it had been saved.
+- Fixed onboarding accepting invalid confirmations and aborting on invalid URLs or default-job host selections; output validation now identifies endpoint failures and offers a retry.
+- Fixed local-stack startup failures deleting the files needed to retrieve credentials, retry startup, or stop running containers.
+- Fixed local-stack readiness checks panicking inside the async runtime and rejecting reachable ESDiag services that require authentication.
+- Fixed processing results omitting rejected-document counts and affected indices.
+- Fixed setup results reporting incomplete mapping updates without a partial outcome and recovery guidance.
 
 - Fixed legacy diagnostic writers being rejected after rollover by keeping both provenance field names writable and searchable; setup now warns about incompatible existing mappings.
 - Fixed Serverless setup failures caused by security and license probes (#390).

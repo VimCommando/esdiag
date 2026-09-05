@@ -1443,7 +1443,7 @@ impl KnownHost {
                 Ok(hosts)
             }
             false => {
-                tracing::info!("No hosts file found at {:?}", path);
+                tracing::debug!("No hosts file found at {:?}", path);
                 Ok(BTreeMap::new())
             }
         }

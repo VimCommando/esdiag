@@ -703,7 +703,9 @@ pub fn add_secret(
     let auth = parse_secret_auth(username, password, apikey)?;
     let mut store = read_store(keystore_password)?;
     if store.secrets.contains_key(secret_id) {
-        return Err(eyre!("Secret '{secret_id}' already exists"));
+        return Err(eyre!(
+            "Secret '{secret_id}' already exists. Replace its credential with `esdiag keystore update {secret_id} --apikey` or `--user <username> --password`."
+        ));
     }
     store
         .secrets
@@ -794,7 +796,7 @@ fn ensure_secret_is_unreferenced(secret_id: &str) -> Result<()> {
     }
 
     Err(eyre!(
-        "Cannot remove secret '{secret_id}' because it is still referenced by {}",
+        "Cannot remove secret '{secret_id}' because it is still referenced by {}. To replace its credential, use `esdiag keystore update {secret_id} --apikey` or `--user <username> --password`.",
         parts.join("; ")
     ))
 }
