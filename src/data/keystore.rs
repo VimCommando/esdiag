@@ -693,6 +693,23 @@ pub fn get_password_for_secret_commands() -> Result<String> {
     )
 }
 
+#[derive(Debug)]
+pub struct SecretAlreadyExists {
+    pub secret_id: String,
+}
+
+impl std::fmt::Display for SecretAlreadyExists {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let id = &self.secret_id;
+        write!(
+            f,
+            "Secret '{id}' already exists. Replace its credential with `esdiag keystore update {id} --apikey` or `--user <username> --password`."
+        )
+    }
+}
+
+impl std::error::Error for SecretAlreadyExists {}
+
 pub fn add_secret(
     secret_id: &str,
     username: Option<String>,
@@ -703,9 +720,10 @@ pub fn add_secret(
     let auth = parse_secret_auth(username, password, apikey)?;
     let mut store = read_store(keystore_password)?;
     if store.secrets.contains_key(secret_id) {
-        return Err(eyre!(
-            "Secret '{secret_id}' already exists. Replace its credential with `esdiag keystore update {secret_id} --apikey` or `--user <username> --password`."
-        ));
+        return Err(SecretAlreadyExists {
+            secret_id: secret_id.to_string(),
+        }
+        .into());
     }
     store
         .secrets

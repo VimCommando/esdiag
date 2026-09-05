@@ -184,6 +184,14 @@ to inspect the failure, retry `up`, or stop the stack with `down`. Include
 the same `--state-dir` when using a custom directory. `secrets password`
 continues to read the retained password.
 
+During startup, Elasticsearch authentication failures are retried while its
+security index initializes. If authentication still fails when readiness times
+out, check the retained credentials. `local auth` reports rejected credentials
+immediately. The managed native server uses the local deployment's output and
+Kibana settings, overriding ambient `ESDIAG_OUTPUT_*` and `ESDIAG_KIBANA_*`
+variables. If that child exits during startup, `up` reports its exit status and
+log path without waiting for the readiness timeout.
+
 ```sh
 esdiag local up
 esdiag local status
