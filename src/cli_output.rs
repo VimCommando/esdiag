@@ -136,7 +136,9 @@ pub enum CliOutcome {
     SetupCompleted {
         targets: Vec<String>,
         outcome: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
         failed_indices: Vec<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
     },
     LocalStack {
