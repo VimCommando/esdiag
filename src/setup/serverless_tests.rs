@@ -6,6 +6,59 @@ use super::*;
 use std::collections::BTreeSet;
 
 #[test]
+fn kibana_setup_targets_default_and_named_spaces_without_losing_assets() {
+    let original = kibana_bundle(&EmbeddedAssets::new().unwrap())
+        .unwrap()
+        .read_all()
+        .unwrap();
+    for target in [None, Some("support"), Some("esdiag")] {
+        let mut bundle = original.clone();
+        target_kibana_bundle(&mut bundle, target).unwrap();
+        let destination = target.unwrap_or("default");
+        assert_eq!(bundle.by_space.len(), 1);
+        let assets = &bundle.by_space[destination];
+        let source = &original.by_space["esdiag"];
+        assert_eq!(assets.saved_objects.len(), source.saved_objects.len());
+        assert_eq!(assets.workflows.len(), source.workflows.len());
+        assert_eq!(assets.agents.len(), source.agents.len());
+        assert_eq!(assets.tools.len(), source.tools.len());
+        assert_eq!(assets.skills.len(), source.skills.len());
+        if target.is_none() {
+            assert!(bundle.spaces.is_empty());
+            assert_eq!(
+                default_agent_path(destination),
+                "api/agent_builder/agents/elastic-ai-agent"
+            );
+        } else {
+            assert_eq!(bundle.spaces[0]["id"], destination);
+            assert_eq!(
+                default_agent_path(destination),
+                format!("s/{destination}/api/agent_builder/agents/elastic-ai-agent")
+            );
+        }
+        if destination != "esdiag" {
+            for value in assets
+                .saved_objects
+                .iter()
+                .chain(&assets.workflows)
+                .chain(&assets.agents)
+                .chain(&assets.tools)
+                .chain(&assets.skills)
+            {
+                assert!(!value.to_string().contains("/s/esdiag/"));
+            }
+            let skill_text = serde_json::to_string(&assets.skills).unwrap();
+            let expected = target
+                .map(|space| format!("/s/{space}/app/dashboards"))
+                .unwrap_or_else(|| "/app/dashboards".to_string());
+            assert!(skill_text.contains(&expected));
+        } else {
+            assert_eq!(bundle, original);
+        }
+    }
+}
+
+#[test]
 fn default_agent_update_preserves_configuration_without_echoing_read_only_fields() {
     let original = serde_json::json!({
         "id": "elastic-ai-agent", "readonly": true,

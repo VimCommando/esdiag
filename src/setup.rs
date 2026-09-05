@@ -569,6 +569,7 @@ fn agent_builder_license_is_active(response: &Value) -> bool {
 
 async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Result<()> {
     let mut bundle = kibana_bundle(embedded_assets)?.read_all()?;
+    target_kibana_bundle(&mut bundle, crate::env::get_kibana_space().as_deref())?;
     if client.is_serverless().await? {
         adapt_serverless_kibana_bundle(&mut bundle);
     }
@@ -614,6 +615,51 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
 
     tracing::info!("completed setup for {client}");
     Ok(())
+}
+
+fn target_kibana_bundle(bundle: &mut SyncBundle, space: Option<&str>) -> Result<()> {
+    let target = space.unwrap_or("default");
+    if target == "esdiag" {
+        return Ok(());
+    }
+    if bundle.by_space.len() != 1 || !bundle.by_space.contains_key("esdiag") {
+        return Err(eyre!(
+            "Expected a single esdiag asset space before selecting a destination"
+        ));
+    }
+    let mut assets = bundle.by_space.remove("esdiag").expect("checked asset space");
+    let prefix = space
+        .map(|s| format!("/s/{}", urlencoding::encode(s)))
+        .unwrap_or_default();
+    for value in assets
+        .saved_objects
+        .iter_mut()
+        .chain(&mut assets.workflows)
+        .chain(&mut assets.agents)
+        .chain(&mut assets.tools)
+        .chain(&mut assets.skills)
+    {
+        rewrite_kibana_asset_links(value, &prefix);
+    }
+    bundle.by_space.insert(target.to_string(), assets);
+    if space.is_none() {
+        bundle.spaces.clear();
+    } else {
+        for definition in &mut bundle.spaces {
+            definition["id"] = Value::String(target.to_string());
+            definition["name"] = Value::String(target.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn rewrite_kibana_asset_links(value: &mut Value, prefix: &str) {
+    match value {
+        Value::String(text) => *text = text.replace("/s/esdiag/", &format!("{prefix}/")),
+        Value::Array(values) => values.iter_mut().for_each(|v| rewrite_kibana_asset_links(v, prefix)),
+        Value::Object(values) => values.values_mut().for_each(|v| rewrite_kibana_asset_links(v, prefix)),
+        _ => {}
+    }
 }
 
 fn adapt_serverless_kibana_bundle(bundle: &mut SyncBundle) {
@@ -745,7 +791,7 @@ async fn attach_skills_to_default_agent(client: &Client, space_id: &str, skill_i
     if skill_ids.is_empty() {
         return Ok(());
     }
-    let path = format!("s/{space_id}/api/agent_builder/agents/elastic-ai-agent");
+    let path = default_agent_path(space_id);
     let response = client.request(Method::GET, &HashMap::new(), &path, None).await?;
     let status = response.status();
     if !status.is_success() {
@@ -757,6 +803,15 @@ async fn attach_skills_to_default_agent(client: &Client, space_id: &str, skill_i
     let agent: Value = response.json().await?;
     let update = default_agent_skill_update(agent, skill_ids)?;
     send_kibana_json_with_method(client, Method::PUT, &path, &update, false).await
+}
+
+fn default_agent_path(space_id: &str) -> String {
+    let endpoint = "api/agent_builder/agents/elastic-ai-agent";
+    if space_id == "default" {
+        endpoint.to_string()
+    } else {
+        format!("s/{}/{endpoint}", urlencoding::encode(space_id))
+    }
 }
 
 fn default_agent_skill_update(mut agent: Value, skill_ids: &[String]) -> Result<Value> {

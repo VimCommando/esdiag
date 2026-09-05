@@ -3046,7 +3046,7 @@ fn agent_builder_space(viewer: &Url) -> Option<String> {
     match std::env::var("ESDIAG_KIBANA_SPACE") {
         Ok(space) => {
             let space = space.trim();
-            (!space.is_empty()).then(|| space.to_string())
+            Some(if space.is_empty() { "_default" } else { space }.to_string())
         }
         Err(std::env::VarError::NotPresent) => {
             let viewer_has_space = viewer.path_segments().is_some_and(|mut segments| {
@@ -3625,6 +3625,28 @@ mod tests {
             agent_builder_space(&Url::parse("https://kb.example/app/s/support").expect("url")),
             None
         );
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn agent_builder_space_explicit_default_overrides_url() {
+        let _guard = env_lock().lock().expect("env lock");
+        let previous = std::env::var_os("ESDIAG_KIBANA_SPACE");
+        let viewer = Url::parse("https://kb.example/s/support").unwrap();
+        for value in ["_default", "", "  _default  "] {
+            unsafe {
+                std::env::set_var("ESDIAG_KIBANA_SPACE", value);
+            }
+            let location =
+                esdiag::agent::builder::AgentBuilderLocation::new(viewer.clone(), agent_builder_space(&viewer));
+            assert_eq!(location.space(), None);
+        }
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("ESDIAG_KIBANA_SPACE", value),
+                None => std::env::remove_var("ESDIAG_KIBANA_SPACE"),
+            }
+        }
     }
 
     #[cfg(feature = "agent")]

@@ -51,7 +51,9 @@ impl AgentBuilderLocation {
 
         Self {
             viewer,
-            space: space.or(url_space),
+            space: space
+                .or(url_space)
+                .filter(|s| !s.is_empty() && s != "_default" && s != "default"),
         }
     }
 
@@ -520,6 +522,21 @@ mod tests {
         let location = AgentBuilderLocation::new(Url::parse("https://kb.example").expect("url"), None);
 
         assert_eq!(location.api_path(CONVERSE_PATH), "/api/agent_builder/converse/async");
+    }
+
+    #[test]
+    fn explicit_default_overrides_viewer_space() {
+        for space in ["_default", "", "default"] {
+            let location = AgentBuilderLocation::new(
+                Url::parse("https://kb.example/proxy/s/ops").unwrap(),
+                Some(space.to_string()),
+            );
+            assert_eq!(location.space(), None);
+            assert_eq!(
+                location.api_path("api/agent_builder/agents"),
+                "/proxy/api/agent_builder/agents"
+            );
+        }
     }
 
     #[test]
