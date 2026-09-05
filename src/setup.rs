@@ -386,11 +386,20 @@ impl SetupReport {
 pub async fn assets(client: &Client) -> Result<()> {
     let report = assets_report(client).await?;
     if !report.is_complete() {
-        return Err(eyre!(
-            "Asset installation was partial. These indices could not be updated: {}. {}",
-            report.failed_indices.join(", "),
-            report.warnings.join(" ")
-        ));
+        let failed_indices = if report.failed_indices.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " These indices could not be updated: {}.",
+                report.failed_indices.join(", ")
+            )
+        };
+        let warnings = if report.warnings.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", report.warnings.join(" "))
+        };
+        return Err(eyre!("Asset installation was partial.{}{}", failed_indices, warnings));
     }
     Ok(())
 }
