@@ -79,6 +79,8 @@ pub fn kibana_url_with_space(kibana_url: &str, space: Option<&str>) -> String {
                     .collect::<Vec<_>>();
                 if let Some(index) = segments.windows(2).rposition(|pair| pair[0] == "s") {
                     segments[index + 1] = space.to_string();
+                } else if segments.last().map(String::as_str) == Some("s") {
+                    segments.push(space.to_string());
                 } else {
                     let insert_at = segments
                         .iter()
@@ -105,6 +107,11 @@ pub fn kibana_url_with_space(kibana_url: &str, space: Option<&str>) -> String {
                     .unwrap_or_default();
                 if let Some(index) = segments.windows(2).rposition(|pair| pair[0] == "s") {
                     segments.drain(index..=index + 1);
+                    let path = format!("/{}", segments.join("/"));
+                    url.set_path(&path);
+                    return url.to_string();
+                } else if segments.last().map(String::as_str) == Some("s") {
+                    segments.pop();
                     let path = format!("/{}", segments.join("/"));
                     url.set_path(&path);
                     return url.to_string();
@@ -180,6 +187,10 @@ mod tests {
             append_kibana_space("https://kb:5601/proxy/app/home"),
             "https://kb:5601/proxy/s/support/app/home"
         );
+        assert_eq!(
+            append_kibana_space("https://kb:5601/proxy/s"),
+            "https://kb:5601/proxy/s/support"
+        );
     }
 
     #[test]
@@ -206,5 +217,6 @@ mod tests {
             append_kibana_space("https://kb:5601/app/home"),
             "https://kb:5601/app/home"
         );
+        assert_eq!(append_kibana_space("https://kb:5601/proxy/s"), "https://kb:5601/proxy");
     }
 }
