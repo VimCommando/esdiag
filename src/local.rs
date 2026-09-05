@@ -356,7 +356,7 @@ impl LocalState {
         let kibana_space = self.required("ESDIAG_KIBANA_SPACE")?;
         self.value(
             "ESDIAG_KIBANA_PUBLIC_URL",
-            &format!("http://127.0.0.1:{kibana_port}/s/{kibana_space}"),
+            &esdiag::env::kibana_url_with_space(&format!("http://127.0.0.1:{kibana_port}"), Some(kibana_space)),
         );
         self.value("LOG_LEVEL", "info");
         self.write_compose(mode)
@@ -383,7 +383,7 @@ impl LocalState {
         let compose = format!(
             "name: esdiag-local\nservices:\n  elasticsearch:\n    image: ${{ELASTICSEARCH_IMAGE}}\n    environment:\n      discovery.type: single-node\n      xpack.security.enabled: \"true\"\n      xpack.security.http.ssl.enabled: \"false\"\n      ELASTIC_PASSWORD: ${{ELASTIC_PASSWORD}}\n    ports: [\"127.0.0.1:${{ESDIAG_ELASTICSEARCH_PORT}}:9200\"]\n    volumes: [\"elasticsearch-data:/usr/share/elasticsearch/data\"]\n  kibana:\n    image: ${{KIBANA_IMAGE}}\n    environment:\n      ELASTICSEARCH_HOSTS: http://elasticsearch:9200\n      ELASTICSEARCH_USERNAME: kibana_system\n      ELASTICSEARCH_PASSWORD: ${{KIBANA_SYSTEM_PASSWORD}}\n      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${{KIBANA_ENCRYPTION_KEY}}\n    ports: [\"127.0.0.1:${{ESDIAG_KIBANA_PORT}}:5601\"]\n    volumes: [\"kibana-data:/usr/share/kibana/data\"]\n{full_services}volumes:\n  elasticsearch-data:\n  kibana-data:\n{full_volume}",
             full_services = if full {
-                "  setup:\n    image: ${ESDIAG_IMAGE}\n    profiles: [\"setup\"]\n    environment:\n      ESDIAG_OUTPUT_URL: http://elasticsearch:9200\n      ESDIAG_OUTPUT_APIKEY: ${ESDIAG_OUTPUT_APIKEY}\n      ESDIAG_KIBANA_URL: http://kibana:5601/s/${ESDIAG_KIBANA_SPACE}\n    command: [\"setup\"]\n  esdiag:\n    image: ${ESDIAG_IMAGE}\n    environment:\n      ESDIAG_MODE: user\n      ESDIAG_CONTAINER_LOCAL_STACK: full\n      ESDIAG_OUTPUT_URL: http://elasticsearch:9200\n      ESDIAG_OUTPUT_APIKEY: ${ESDIAG_OUTPUT_APIKEY}\n      ESDIAG_KIBANA_URL: http://kibana:5601/s/${ESDIAG_KIBANA_SPACE}\n      ESDIAG_KIBANA_INTERNAL_URL: http://kibana:5601/s/${ESDIAG_KIBANA_SPACE}\n      ESDIAG_KIBANA_PUBLIC_URL: ${ESDIAG_KIBANA_PUBLIC_URL}\n    command: [\"serve\"]\n    ports: [\"127.0.0.1:${ESDIAG_PORT}:2501\"]\n    volumes: [\"esdiag-data:/root/.esdiag\"]\n"
+                "  setup:\n    image: ${ESDIAG_IMAGE}\n    profiles: [\"setup\"]\n    environment:\n      ESDIAG_OUTPUT_URL: http://elasticsearch:9200\n      ESDIAG_OUTPUT_APIKEY: ${ESDIAG_OUTPUT_APIKEY}\n      ESDIAG_KIBANA_SPACE: ${ESDIAG_KIBANA_SPACE}\n      ESDIAG_KIBANA_URL: http://kibana:5601\n    command: [\"setup\"]\n  esdiag:\n    image: ${ESDIAG_IMAGE}\n    environment:\n      ESDIAG_MODE: user\n      ESDIAG_CONTAINER_LOCAL_STACK: full\n      ESDIAG_OUTPUT_URL: http://elasticsearch:9200\n      ESDIAG_OUTPUT_APIKEY: ${ESDIAG_OUTPUT_APIKEY}\n      ESDIAG_KIBANA_SPACE: ${ESDIAG_KIBANA_SPACE}\n      ESDIAG_KIBANA_URL: http://kibana:5601\n      ESDIAG_KIBANA_INTERNAL_URL: http://kibana:5601\n      ESDIAG_KIBANA_PUBLIC_URL: ${ESDIAG_KIBANA_PUBLIC_URL}\n    command: [\"serve\"]\n    ports: [\"127.0.0.1:${ESDIAG_PORT}:2501\"]\n    volumes: [\"esdiag-data:/root/.esdiag\"]\n"
             } else {
                 ""
             },
@@ -763,10 +763,12 @@ impl LocalState {
         )
     }
     fn kibana_url(&self) -> String {
-        format!(
-            "http://127.0.0.1:{}/s/{}",
-            self.required("ESDIAG_KIBANA_PORT").unwrap_or("5601"),
-            self.required("ESDIAG_KIBANA_SPACE").unwrap_or("esdiag")
+        esdiag::env::kibana_url_with_space(
+            &format!(
+                "http://127.0.0.1:{}",
+                self.required("ESDIAG_KIBANA_PORT").unwrap_or("5601")
+            ),
+            Some(self.required("ESDIAG_KIBANA_SPACE").unwrap_or("esdiag")),
         )
     }
     fn esdiag_url(&self) -> String {
@@ -943,6 +945,20 @@ mod tests {
             state.resolve_mode(StackMode::Auto).expect("resolve mode"),
             StackMode::Core
         );
+    }
+
+    #[test]
+    fn default_space_local_urls_and_containers_use_explicit_selection() {
+        let (directory, mut state) = state();
+        state.values.insert("ESDIAG_KIBANA_SPACE".into(), "_default".into());
+        assert_eq!(state.kibana_url(), "http://127.0.0.1:5601");
+        state.write_compose(StackMode::Full).unwrap();
+        let compose = fs::read_to_string(directory.path().join("compose.yml")).unwrap();
+        assert_eq!(
+            compose.matches("ESDIAG_KIBANA_SPACE: ${ESDIAG_KIBANA_SPACE}").count(),
+            2
+        );
+        assert!(!compose.contains("/s/${ESDIAG_KIBANA_SPACE}"));
     }
 
     #[test]

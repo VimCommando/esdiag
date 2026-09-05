@@ -49,7 +49,7 @@ pub fn get_kibana_space() -> Option<String> {
     match std::env::var("ESDIAG_KIBANA_SPACE") {
         Ok(space) => {
             let trimmed = space.trim();
-            if trimmed.is_empty() {
+            if trimmed.is_empty() || trimmed == "_default" || trimmed == "default" {
                 None
             } else {
                 Some(trimmed.to_string())
@@ -60,8 +60,15 @@ pub fn get_kibana_space() -> Option<String> {
 }
 
 pub fn append_kibana_space(kibana_url: &str) -> String {
+    kibana_url_with_space(kibana_url, get_kibana_space().as_deref())
+}
+
+pub fn kibana_url_with_space(kibana_url: &str, space: Option<&str>) -> String {
     let kibana_url = kibana_url.trim_end_matches('/');
-    match get_kibana_space() {
+    let space = space
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "_default" && *s != "default");
+    match space {
         Some(space) => {
             if let Ok(mut url) = url::Url::parse(kibana_url)
                 && let Some(existing_segments) = url.path_segments()
@@ -72,12 +79,12 @@ pub fn append_kibana_space(kibana_url: &str) -> String {
                     .collect::<Vec<_>>();
                 if segments.first().map(String::as_str) == Some("s") {
                     if let Some(current_space) = segments.get_mut(1) {
-                        *current_space = space;
+                        *current_space = space.to_string();
                     } else {
-                        segments.push(space);
+                        segments.push(space.to_string());
                     }
                 } else {
-                    segments.insert(0, space);
+                    segments.insert(0, space.to_string());
                     segments.insert(0, "s".to_string());
                 }
                 url.set_path(&format!("/{}", segments.join("/")));
@@ -85,7 +92,22 @@ pub fn append_kibana_space(kibana_url: &str) -> String {
             }
             format!("{kibana_url}/s/{space}")
         }
-        None => kibana_url.to_string(),
+        None => {
+            if let Ok(mut url) = url::Url::parse(kibana_url) {
+                let path = url.path();
+                if let Some(index) = path.find("/s/") {
+                    let rest = &path[index + 3..];
+                    let path = format!(
+                        "{}{}",
+                        &path[..index],
+                        rest.find('/').map(|i| &rest[i..]).unwrap_or("/")
+                    );
+                    url.set_path(&path);
+                    return url.to_string();
+                }
+            }
+            kibana_url.to_string()
+        }
     }
 }
 
@@ -96,6 +118,33 @@ mod tests {
 
     fn env_lock() -> &'static Mutex<()> {
         crate::test_env_lock()
+    }
+
+    #[test]
+    fn explicit_default_space_removes_existing_prefix() {
+        let _guard = env_lock().lock().expect("env lock");
+        let previous = std::env::var_os("ESDIAG_KIBANA_SPACE");
+        for value in ["_default", "", "  _default  ", "default"] {
+            unsafe {
+                std::env::set_var("ESDIAG_KIBANA_SPACE", value);
+            }
+            assert_eq!(get_kibana_space(), None);
+            assert_eq!(
+                append_kibana_space("https://kb/s/ops/app/home?x=1#hash"),
+                "https://kb/app/home?x=1#hash"
+            );
+            assert_eq!(append_kibana_space("https://kb/s/ops"), "https://kb/");
+            assert_eq!(
+                append_kibana_space("https://kb/proxy/s/ops/app/home"),
+                "https://kb/proxy/app/home"
+            );
+        }
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("ESDIAG_KIBANA_SPACE", value),
+                None => std::env::remove_var("ESDIAG_KIBANA_SPACE"),
+            }
+        }
     }
 
     #[test]

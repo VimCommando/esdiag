@@ -63,6 +63,20 @@ validate the role and resolve its credentials.
 
 ## Install assets
 
+Kibana assets install into the `esdiag` space unless `ESDIAG_KIBANA_SPACE`
+selects another destination. To install into Kibana's default space:
+
+```sh
+ESDIAG_KIBANA_SPACE=_default esdiag setup esdiag-less
+```
+
+Replace `esdiag-less` with your configured deployment or Kibana host name.
+`_default` skips space creation and omits `/s/{space}` from asset requests and
+links. An empty value or Kibana's `default` ID also selects the default space. A named value such as
+`support` installs into that space. An explicit selection overrides a space
+prefix in the configured Kibana URL. Keep the same environment setting when
+running `process`, `serve`, or `agent ask` so their links use that destination.
+
 The output needs ESDiag templates and ingest pipelines:
 
 ```sh
