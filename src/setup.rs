@@ -210,10 +210,9 @@ fn provenance_mapping_warnings(properties: &Value) -> Vec<String> {
 /// Templates only govern indices created after they are installed, so this is the
 /// other half of the bridge: without it a dashboard querying the current field
 /// name silently matches nothing in historical indices. Failures are reported and
-/// not fatal — an index that cannot take a mapping update (closed, frozen, or
-/// write-blocked) costs one index's worth of legacy-name resolution, which is no
-/// reason to fail installing the assets.
-async fn install_provenance_aliases(client: &Client) -> Result<()> {
+/// returned to the caller so the CLI can report partial installation while
+/// allowing the remaining assets to be installed.
+async fn install_provenance_aliases(client: &Client) -> Result<Vec<String>> {
     let headers = default_headers();
     let path = format!("/{ESDIAG_INDEX_PATTERN}/_mapping?ignore_unavailable=true&allow_no_indices=true");
     let response = client.request(Method::GET, &headers, &path, None).await?;
@@ -239,10 +238,10 @@ async fn install_provenance_aliases(client: &Client) -> Result<()> {
     let patches = provenance_alias_patches(&mappings);
     if patches.is_empty() {
         tracing::debug!("No pre-rename ESDiag indices need a provenance alias");
-        return Ok(());
+        return Ok(vec![]);
     }
 
-    let mut failures = 0;
+    let mut failures = Vec::new();
     for (index, patch) in &patches {
         let body = serde_json::to_vec(patch)?;
         let result = client
@@ -250,13 +249,10 @@ async fn install_provenance_aliases(client: &Client) -> Result<()> {
             .await;
         match result {
             Ok(response) if response.status().is_success() => {
-                tracing::info!("Aliased the current provenance names onto {index}");
-                tracing::warn!(
-                    "{index}: added query-only provenance aliases; roll over the data stream after setup before mixing writer versions"
-                );
+                tracing::debug!("Aliased the current provenance names onto {index}");
             }
             Ok(response) => {
-                failures += 1;
+                failures.push(index.clone());
                 tracing::warn!(
                     "Could not add the provenance alias to {index}: {} {}",
                     response.status(),
@@ -264,7 +260,7 @@ async fn install_provenance_aliases(client: &Client) -> Result<()> {
                 );
             }
             Err(err) => {
-                failures += 1;
+                failures.push(index.clone());
                 tracing::warn!("Could not add the provenance alias to {index}: {err}");
             }
         }
@@ -272,10 +268,15 @@ async fn install_provenance_aliases(client: &Client) -> Result<()> {
 
     tracing::info!(
         "Bridged provenance field names on {} of {} pre-rename indices",
-        patches.len() - failures,
+        patches.len() - failures.len(),
         patches.len()
     );
-    Ok(())
+    if patches.len() > failures.len() {
+        tracing::warn!(
+            "Added query-only provenance aliases. Roll over the affected data streams after setup before mixing writer versions."
+        );
+    }
+    Ok(failures)
 }
 
 fn should_skip_asset(asset: &Asset, security_assets_supported: bool) -> bool {
@@ -368,11 +369,47 @@ async fn send_asset_with_allowed_statuses(
     }
 }
 
-/// Submit saved assets to the client APIs
+/// Mapping updates that could not be completed after asset installation.
+#[derive(Default)]
+pub struct SetupReport {
+    pub failed_indices: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+impl SetupReport {
+    pub fn is_complete(&self) -> bool {
+        self.failed_indices.is_empty() && self.warnings.is_empty()
+    }
+}
+
+/// Install assets, requiring complete mapping updates before returning success.
 pub async fn assets(client: &Client) -> Result<()> {
+    let report = assets_report(client).await?;
+    if !report.is_complete() {
+        let failed_indices = if report.failed_indices.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " These indices could not be updated: {}.",
+                report.failed_indices.join(", ")
+            )
+        };
+        let warnings = if report.warnings.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", report.warnings.join(" "))
+        };
+        return Err(eyre!("Asset installation was partial.{}{}", failed_indices, warnings));
+    }
+    Ok(())
+}
+
+pub async fn assets_report(client: &Client) -> Result<SetupReport> {
+    let mut report = SetupReport::default();
     let embedded_assets = EmbeddedAssets::new()?;
     if Application::from(client) == Application::Kibana {
-        return kibana_assets(client, &embedded_assets).await;
+        kibana_assets(client, &embedded_assets).await?;
+        return Ok(report);
     }
 
     // load asset list from ./assets/{product}/assets.yml
@@ -446,15 +483,22 @@ pub async fn assets(client: &Client) -> Result<()> {
     // with (ADR-0014). Elasticsearch owns those indices, so the bridge is only
     // meaningful there — asking any other product for its mappings would warn
     // about a call that never made sense.
-    if matches!(client, Client::Elasticsearch(_))
-        && let Err(err) = install_provenance_aliases(client).await
-    {
-        tracing::warn!("Could not bridge provenance field names on existing ESDiag indices: {err}");
+    if matches!(client, Client::Elasticsearch(_)) {
+        match install_provenance_aliases(client).await {
+            Ok(indices) => report.failed_indices = indices,
+            Err(err) => {
+                tracing::warn!("Could not bridge provenance field names on existing ESDiag indices: {err}");
+                report.warnings.push("Could not inspect or update existing index mappings. Check connectivity and mapping privileges, then rerun setup.".to_string());
+            }
+        }
+        if !report.failed_indices.is_empty() {
+            report.warnings.push("Check the failed indices for mapping limits or write blocks. For a total-fields-limit error, raise index.mapping.total_fields.limit, then rerun setup.".to_string());
+        }
     }
 
     if error_count == 0 {
-        tracing::info!("completed setup for {client}");
-        Ok(())
+        tracing::info!("finished asset installation for {client}");
+        Ok(report)
     } else {
         tracing::error!("{error_count} errors in setup for {client}");
         Err(eyre!("{error_count} errors in setup for {client}"))

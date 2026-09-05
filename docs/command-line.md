@@ -37,6 +37,11 @@ esdiag <command> --help
 finite commands. YAML is the default.
 
 Finite commands write one result to stdout. Progress and errors go to stderr.
+Processing results include `outcome`, `documents_failed`, and `indexing_failures`
+with affected index names and rejection counts. `output` identifies the resolved
+destination, including a saved default deployment. A `setup_completed` result
+has an `outcome` of `complete` or `partial`; partial mapping updates include
+`failed_indices` and recovery advice in `warnings`.
 When a command fails after it starts, stdout contains a `command_failed` result
 and the command exits non-zero.
 
@@ -148,6 +153,21 @@ legacy plaintext host credentials into the keystore.
 
 It stores credentials in `secrets.yml`, not `esdiag.yml`.
 
+Enter an email address or another diagnostic user identifier. `EMAIL`, when
+set to an email address, supplies the default; the shell username does not.
+Invalid yes/no answers, endpoint URLs, and default-job host selections prompt
+again. The default job requires a saved collection host name, not a URL.
+Resuming displays the saved workflow, and changing it displays both choices.
+
+Pasted keys are hidden and used to validate Elasticsearch and Kibana before
+saving the output. Validation identifies the failing application and reports
+authentication, TLS, DNS, connection, or response failures. You can retry the
+output step without restarting onboarding. The local API key source appears
+only when a usable local key is detected.
+
+To replace a referenced API key later, run `esdiag keystore update <name> --apikey`
+at a terminal. It prompts for the key without putting it in shell history.
+
 When you select local processing and no stack exists, `init` can start a
 binary-owned core stack. Its approval includes that new stack's required
 assets; declining returns to remote output setup.
@@ -157,6 +177,12 @@ See [Configure ESDiag](setup/configuration.md) for the prompts and paths.
 ## `local`
 
 `esdiag local <command>` runs the binary's Rust-owned local-stack lifecycle:
+
+`esdiag local --help` lists the available commands. If startup fails, the
+generated `.env` and `compose.yml` remain in the state directory. Use `logs`
+to inspect the failure, retry `up`, or stop the stack with `down`. Include
+the same `--state-dir` when using a custom directory. `secrets password`
+continues to read the retained password.
 
 ```sh
 esdiag local up

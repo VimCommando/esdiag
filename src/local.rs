@@ -5,16 +5,17 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    thread,
     time::Duration,
 };
 
+use esdiag::cli_output::CliOutcome;
+#[cfg(feature = "setup")]
 use esdiag::{
-    cli_output::CliOutcome,
     client::Client,
     data::{Application, KnownHostBuilder, Uri},
     setup,
 };
+#[cfg(feature = "setup")]
 use url::Url;
 
 const STATE_SCHEMA_VERSION: &str = "3";
@@ -48,7 +49,7 @@ impl StackMode {
 
 pub async fn run(args: &[OsString]) -> Result<CliOutcome> {
     let command = args.first().and_then(|argument| argument.to_str()).unwrap_or("help");
-    let options = LocalOptions::parse(&args[1..])?;
+    let options = LocalOptions::parse(args.get(1..).unwrap_or_default())?;
     let mut state = LocalState::load(options.state_dir.clone())?;
     state.open_browser = options.open_browser;
     state.copy_password = options.copy_password;
@@ -71,7 +72,7 @@ pub async fn run(args: &[OsString]) -> Result<CliOutcome> {
             state.setup().await?;
         }
         "open" => state.open_browser()?,
-        "auth" => state.auth()?,
+        "auth" => state.auth().await?,
         "reset" => state.reset(options.force)?,
         "secrets" => state.secret(options.remaining.first().map(String::as_str))?,
         "update" => {
@@ -215,15 +216,13 @@ impl LocalState {
     }
 
     async fn up(&mut self, options: LocalOptions) -> Result<()> {
-        let previous_env = fs::read_to_string(self.dir.join(".env")).ok();
-        let previous_compose = fs::read_to_string(self.dir.join("compose.yml")).ok();
-        match self.up_inner(options).await {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                self.restore_startup_state(previous_env, previous_compose)?;
-                Err(error)
-            }
-        }
+        self.up_inner(options).await.map_err(|error| {
+            let message = format!(
+                "Local startup did not complete: {error}. Generated state is retained at {}. Inspect `esdiag local logs --state-dir {}`, then retry `esdiag local up --state-dir {}` or stop with `esdiag local down --state-dir {}`.",
+                self.dir.display(), self.dir.display(), self.dir.display(), self.dir.display()
+            );
+            error.wrap_err(message)
+        })
     }
 
     async fn up_inner(&mut self, options: LocalOptions) -> Result<()> {
@@ -244,12 +243,11 @@ impl LocalState {
             self.compose(&["down", "--remove-orphans"])?;
         }
         self.compose(&["pull", "elasticsearch", "kibana"])?;
-        self.compose(&["up", "-d", "elasticsearch"])?;
-        self.wait_elasticsearch()?;
-        self.configure_security()?;
+        self.compose(&["up", "-d", "elasticsearch", "kibana"])?;
+        self.wait_elasticsearch().await?;
+        self.configure_security().await?;
         self.write()?;
-        self.compose(&["up", "-d", "kibana"])?;
-        self.wait_kibana()?;
+        self.wait_kibana().await?;
         self.setup_mode(mode).await?;
         if mode == StackMode::Full {
             self.stop_native_service()?;
@@ -257,27 +255,11 @@ impl LocalState {
         } else {
             self.start_native_service()?;
         }
-        self.wait_url(&self.esdiag_url(), None)?;
+        self.wait_url(&self.esdiag_url(), None).await?;
         self.values.insert("STACK_MODE".to_string(), mode.as_str().to_string());
         self.write()?;
         if self.open_browser {
             self.open_browser()?;
-        }
-        Ok(())
-    }
-
-    fn restore_startup_state(&self, env: Option<String>, compose: Option<String>) -> Result<()> {
-        match env {
-            Some(env) => write_private(self.dir.join(".env"), &env)?,
-            None => {
-                let _ = fs::remove_file(self.dir.join(".env"));
-            }
-        }
-        match compose {
-            Some(compose) => write_private(self.dir.join("compose.yml"), &compose)?,
-            None => {
-                let _ = fs::remove_file(self.dir.join("compose.yml"));
-            }
         }
         Ok(())
     }
@@ -410,8 +392,8 @@ impl LocalState {
         write_private(self.dir.join("compose.yml"), &compose)
     }
 
-    fn configure_security(&mut self) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+    async fn configure_security(&mut self) -> Result<()> {
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
         let response = client
             .post(format!(
                 "{}/_security/user/kibana_system/_password",
@@ -419,7 +401,8 @@ impl LocalState {
             ))
             .basic_auth("elastic", Some(self.required("ELASTIC_PASSWORD")?))
             .json(&serde_json::json!({"password": self.required("KIBANA_SYSTEM_PASSWORD")?}))
-            .send()?
+            .send()
+            .await?
             .error_for_status()?;
         drop(response);
         if self.required("ESDIAG_OUTPUT_APIKEY")? == "pending" {
@@ -427,9 +410,11 @@ impl LocalState {
                 .post(format!("{}/_security/api_key", self.elasticsearch_url()))
                 .basic_auth("elastic", Some(self.required("ELASTIC_PASSWORD")?))
                 .json(&serde_json::json!({"name": "esdiag-local"}))
-                .send()?
+                .send()
+                .await?
                 .error_for_status()?
-                .json()?;
+                .json()
+                .await?;
             let key = response["encoded"]
                 .as_str()
                 .ok_or_else(|| eyre!("Elasticsearch did not return an API key"))?;
@@ -450,6 +435,14 @@ impl LocalState {
         }
     }
 
+    #[cfg(not(feature = "setup"))]
+    async fn native_setup(&self) -> Result<()> {
+        Err(eyre!(
+            "Native local-stack setup requires an ESDiag binary built with the setup feature."
+        ))
+    }
+
+    #[cfg(feature = "setup")]
     async fn native_setup(&self) -> Result<()> {
         let apikey = self.required("ESDIAG_OUTPUT_APIKEY")?.to_string();
         let elasticsearch = KnownHostBuilder::new(Url::parse(&self.elasticsearch_url())?)
@@ -605,9 +598,9 @@ impl LocalState {
         }
     }
 
-    fn auth(&self) -> Result<()> {
-        self.wait_elasticsearch()?;
-        self.wait_kibana()
+    async fn auth(&self) -> Result<()> {
+        self.wait_elasticsearch().await?;
+        self.wait_kibana().await
     }
 
     fn reset(&mut self, force: bool) -> Result<()> {
@@ -706,46 +699,52 @@ impl LocalState {
             .ok_or_else(|| eyre!("{runtime} compose command failed"))
     }
 
-    fn wait_elasticsearch(&self) -> Result<()> {
+    async fn wait_elasticsearch(&self) -> Result<()> {
         self.wait_url(
             &self.elasticsearch_url(),
             Some(("elastic", self.required("ELASTIC_PASSWORD")?)),
         )
+        .await
     }
 
-    fn wait_kibana(&self) -> Result<()> {
+    async fn wait_kibana(&self) -> Result<()> {
         let url = format!("{}/api/status", self.kibana_url());
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
         for _ in 0..60 {
-            if let Ok(response) = client.get(&url).send()
+            if let Ok(response) = client.get(&url).send().await
                 && response.status().is_success()
                 && response
                     .json::<serde_json::Value>()
+                    .await
                     .is_ok_and(|response| kibana_is_available(&response))
             {
                 return Ok(());
             }
-            thread::sleep(Duration::from_secs(2));
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
         Err(eyre!("Timed out waiting for Kibana to become available at {url}"))
     }
 
-    fn wait_url(&self, url: &str, auth: Option<(&str, &str)>) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+    async fn wait_url(&self, url: &str, auth: Option<(&str, &str)>) -> Result<()> {
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
         for _ in 0..60 {
             let request = client.get(url);
             let request = match auth {
                 Some((username, password)) => request.basic_auth(username, Some(password)),
                 None => request,
             };
-            if request
-                .send()
-                .and_then(reqwest::blocking::Response::error_for_status)
-                .is_ok()
-            {
-                return Ok(());
+            if let Ok(response) = request.send().await {
+                let status = response.status();
+                if local_endpoint_ready(status, auth.is_some()) {
+                    return Ok(());
+                }
+                if auth.is_some() && matches!(status.as_u16(), 401 | 403) {
+                    return Err(eyre!(
+                        "Authentication failed at {url} (HTTP {status}); check the retained local credentials."
+                    ));
+                }
             }
-            thread::sleep(Duration::from_secs(2));
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
         Err(eyre!("Timed out waiting for {url}"))
     }
@@ -1011,5 +1010,71 @@ mod tests {
         assert!(kibana_is_available(&serde_json::json!({
             "status": {"overall": {"level": "available"}}
         })));
+    }
+}
+
+fn local_endpoint_ready(status: reqwest::StatusCode, authenticated: bool) -> bool {
+    status.is_success() || (!authenticated && status == reqwest::StatusCode::UNAUTHORIZED)
+}
+
+#[cfg(test)]
+mod onboarding_recovery_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn readiness_requests_run_inside_the_async_lifecycle() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 4096];
+                socket.read(&mut buffer).await.unwrap();
+                socket
+                    .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let state = LocalState::load(dir.path().into()).unwrap();
+        assert!(state.wait_url(&url, None).await.is_ok());
+        let error = state
+            .wait_url(&url, Some(("elastic", "bad-test-password")))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Authentication failed"));
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn service_reachability_does_not_mask_bad_elasticsearch_credentials() {
+        assert!(local_endpoint_ready(reqwest::StatusCode::OK, true));
+        assert!(local_endpoint_ready(reqwest::StatusCode::UNAUTHORIZED, false));
+        assert!(!local_endpoint_ready(reqwest::StatusCode::UNAUTHORIZED, true));
+        assert!(!local_endpoint_ready(reqwest::StatusCode::SERVICE_UNAVAILABLE, false));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_startup_retains_recovery_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        fs::write(
+            &runtime,
+            "#!/bin/sh\ncase \"$*\" in\n  'compose version') exit 0;;\n  *) exit 1;;\nesac\n",
+        )
+        .unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        let state_dir = dir.path().join("state");
+        let mut state = LocalState::load(state_dir.clone()).unwrap();
+        let mut options = LocalOptions::parse(&[]).unwrap();
+        options.runtime = Some(runtime.to_string_lossy().into_owned());
+        assert!(state.up(options).await.is_err());
+        let env = fs::read_to_string(state_dir.join(".env")).unwrap();
+        assert!(parse_env(&env).unwrap().contains_key("ELASTIC_PASSWORD"));
+        assert!(state_dir.join("compose.yml").exists());
     }
 }

@@ -58,6 +58,20 @@ pub struct CollectHostInput {
     pub auth: Option<SecretAuth>,
 }
 
+/// Build a transient validation target without resolving an unsaved secret.
+/// Persisted hosts are built separately and contain only a keystore reference.
+pub fn output_validation_host(url: Url, app: Application, auth: SecretAuth) -> Result<KnownHost> {
+    let mut host = KnownHostBuilder::new(url).application(app).build()?;
+    match auth {
+        SecretAuth::ApiKey { apikey } => host.legacy_apikey = Some(apikey),
+        SecretAuth::Basic { username, password } => {
+            host.legacy_username = Some(username);
+            host.legacy_password = Some(password);
+        }
+    }
+    Ok(host)
+}
+
 pub fn inspect() -> Result<OnboardingReadiness> {
     let config = ApplicationConfig::load()?;
     let hosts = KnownHost::parse_hosts_yml()?;
@@ -243,6 +257,28 @@ fn validate_name(name: &str, kind: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn validation_uses_unsaved_credentials_without_reading_or_writing_keystore() {
+        let _env = crate::TestEnv::new();
+        for app in [
+            crate::data::Application::Elasticsearch,
+            crate::data::Application::Kibana,
+        ] {
+            let host = super::output_validation_host(
+                url::Url::parse("http://127.0.0.1:9200").unwrap(),
+                app,
+                crate::data::SecretAuth::apikey("new-unsaved-key"),
+            )
+            .unwrap();
+            assert!(host.secret.is_none());
+            let serialized = yaml_serde::to_string(&host).unwrap();
+            assert!(!serialized.contains("new-unsaved-key"));
+            let uri = crate::data::Uri::try_from(host).unwrap();
+            assert!(crate::client::Client::try_from(uri).is_ok());
+            assert!(!crate::data::keystore_exists().unwrap());
+        }
+    }
+
     use super::{
         CollectHostInput, OnboardingReadiness, OutputDeploymentInput, inspect, save_collect_host, save_default_job,
         save_default_processing_job, save_output_deployment, save_user, save_workflow,

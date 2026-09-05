@@ -121,6 +121,9 @@ impl Client {
                     .map_err(|e| format!("{e}"))?;
 
                 let status = response.status_code();
+                if !status.is_success() {
+                    return Err(format!("HTTP {status}"));
+                }
                 let json: serde_json::Value = response
                     .json::<serde_json::Value>()
                     .await
@@ -136,6 +139,9 @@ impl Client {
             Client::Kibana(client) => {
                 let response = client.test_connection().await.map_err(|e| format!("{e}"))?;
                 let status = response.status();
+                if !status.is_success() {
+                    return Err(format!("HTTP {status}"));
+                }
                 let json: serde_json::Value = response
                     .json::<serde_json::Value>()
                     .await
@@ -149,6 +155,9 @@ impl Client {
             Client::Logstash(client) => {
                 let response = client.test_connection().await.map_err(|e| format!("{e}"))?;
                 let status = response.status();
+                if !status.is_success() {
+                    return Err(format!("HTTP {status}"));
+                }
                 let json: serde_json::Value = response
                     .json::<serde_json::Value>()
                     .await

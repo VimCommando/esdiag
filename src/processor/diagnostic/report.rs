@@ -456,6 +456,19 @@ impl DiagnosticReport {
         &self.diagnostic.events
     }
 
+    pub fn rejected_indices(&self) -> Vec<(String, u32)> {
+        let mut indices = self
+            .diagnostic
+            .processor
+            .stats
+            .values()
+            .filter(|summary| summary.doc_errors > 0)
+            .map(|summary| (summary.index.clone(), summary.doc_errors))
+            .collect::<Vec<_>>();
+        indices.sort();
+        indices
+    }
+
     pub fn add_identifiers(&mut self, identifiers: Identifiers) {
         self.diagnostic.identifiers = identifiers;
     }
@@ -1200,6 +1213,27 @@ user: ada
         assert_eq!(summary.events.len(), 2);
         assert!(summary.events.iter().all(|e| e.severity == EventSeverity::Error));
         assert!(summary.events.iter().any(|e| e.reason.contains("boom")));
+    }
+
+    #[test]
+    fn rejected_documents_retain_index_counts_and_partial_outcome() {
+        let metadata = DiagnosticMetadata {
+            id: "test".into(),
+            collection_date: 0,
+            runner: "test".into(),
+            uuid: "test".into(),
+        };
+        let mut report =
+            DiagnosticReport::try_from(DiagnosticReportBuilder::from(metadata).receiver("file path".into())).unwrap();
+        let mut summary = ProcessorSummary::new("metrics-test-esdiag".into());
+        let mut batch = BatchResponse::new(10);
+        batch.errors = 3;
+        batch.status_code = 200;
+        summary.add_batch(batch);
+        report.add_processor_summary(summary.was_parsed());
+        assert_eq!(report.outcome(), DiagnosticOutcome::Partial);
+        assert_eq!(report.diagnostic.docs.errors, 3);
+        assert_eq!(report.rejected_indices(), vec![("metrics-test-esdiag".into(), 3)]);
     }
 
     #[test]
