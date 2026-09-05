@@ -415,6 +415,7 @@ pub struct AgentRecovery {
 #[serde(rename_all = "snake_case")]
 pub enum CliFailureCategory {
     InvalidInput,
+    Conflict,
     NotFound,
     AuthenticationFailed,
     CollectionFailed,
@@ -429,6 +430,7 @@ impl CliFailureCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidInput => "invalid_input",
+            Self::Conflict => "conflict",
             Self::NotFound => "not_found",
             Self::AuthenticationFailed => "authentication_failed",
             Self::CollectionFailed => "collection_failed",

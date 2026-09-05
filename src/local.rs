@@ -4,7 +4,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     time::Duration,
 };
 
@@ -244,18 +244,26 @@ impl LocalState {
         }
         self.compose(&["pull", "elasticsearch", "kibana"])?;
         self.compose(&["up", "-d", "elasticsearch", "kibana"])?;
-        self.wait_elasticsearch().await?;
+        self.wait_url_for_startup(
+            &self.elasticsearch_url(),
+            Some(("elastic", self.required("ELASTIC_PASSWORD")?)),
+            None,
+            true,
+        )
+        .await?;
         self.configure_security().await?;
         self.write()?;
         self.wait_kibana().await?;
         self.setup_mode(mode).await?;
-        if mode == StackMode::Full {
+        let mut native_child = if mode == StackMode::Full {
             self.stop_native_service()?;
             self.compose(&["up", "-d", "esdiag"])?;
+            None
         } else {
-            self.start_native_service()?;
-        }
-        self.wait_url(&self.esdiag_url(), None).await?;
+            Some(self.start_native_service()?)
+        };
+        self.wait_url_for_startup(&self.esdiag_url(), None, native_child.as_mut(), false)
+            .await?;
         self.values.insert("STACK_MODE".to_string(), mode.as_str().to_string());
         self.write()?;
         if self.open_browser {
@@ -461,11 +469,20 @@ impl LocalState {
         setup::assets(&kibana).await
     }
 
-    fn start_native_service(&self) -> Result<()> {
+    fn start_native_service(&self) -> Result<Child> {
         self.stop_native_service()?;
         let log = self.dir.join("logs/native-serve.log");
         let stdout = fs::File::create(&log)?;
-        let child = Command::new(std::env::current_exe()?)
+        let mut command = Command::new(std::env::current_exe()?);
+        // The managed deployment owns its output and viewer configuration.
+        // Other environment entries (PATH, HOME, proxy settings) remain available.
+        for (key, _) in std::env::vars_os() {
+            let name = key.to_string_lossy();
+            if name.starts_with("ESDIAG_OUTPUT_") || name.starts_with("ESDIAG_KIBANA_") {
+                command.env_remove(key);
+            }
+        }
+        let mut child = command
             .arg("serve")
             .arg("--mode")
             .arg("user")
@@ -480,6 +497,7 @@ impl LocalState {
             .stdout(Stdio::from(stdout.try_clone()?))
             .stderr(Stdio::from(stdout))
             .spawn()?;
+        self.check_native_child(&mut child)?;
         write_private(self.dir.join(".native-serve.pid"), &child.id().to_string())?;
         write_private(
             self.dir.join(".native-serve.binary"),
@@ -490,6 +508,17 @@ impl LocalState {
             &process_start_time(child.id() as i32)?
                 .ok_or_else(|| eyre!("Could not identify managed native ESDiag service"))?,
         )?;
+        Ok(child)
+    }
+
+    fn check_native_child(&self, child: &mut Child) -> Result<()> {
+        if let Some(status) = child.try_wait()? {
+            return Err(eyre!(
+                "Native ESDiag server exited ({status}) before becoming ready. Read {} with `esdiag local logs --state-dir {} esdiag`.",
+                self.dir.join("logs/native-serve.log").display(),
+                self.dir.display()
+            ));
+        }
         Ok(())
     }
 
@@ -726,8 +755,22 @@ impl LocalState {
     }
 
     async fn wait_url(&self, url: &str, auth: Option<(&str, &str)>) -> Result<()> {
+        self.wait_url_for_startup(url, auth, None, false).await
+    }
+
+    async fn wait_url_for_startup(
+        &self,
+        url: &str,
+        auth: Option<(&str, &str)>,
+        mut child: Option<&mut Child>,
+        retry_auth: bool,
+    ) -> Result<()> {
         let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
+        let mut last_status = None;
         for _ in 0..60 {
+            if let Some(child) = child.as_deref_mut() {
+                self.check_native_child(child)?;
+            }
             let request = client.get(url);
             let request = match auth {
                 Some((username, password)) => request.basic_auth(username, Some(password)),
@@ -735,16 +778,29 @@ impl LocalState {
             };
             if let Ok(response) = request.send().await {
                 let status = response.status();
+                last_status = Some(status);
+                if let Some(child) = child.as_deref_mut() {
+                    self.check_native_child(child)?;
+                }
                 if local_endpoint_ready(status, auth.is_some()) {
                     return Ok(());
                 }
-                if auth.is_some() && matches!(status.as_u16(), 401 | 403) {
+                if !retry_auth && auth.is_some() && matches!(status.as_u16(), 401 | 403) {
                     return Err(eyre!(
                         "Authentication failed at {url} (HTTP {status}); check the retained local credentials."
                     ));
                 }
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        if let Some(child) = child {
+            self.check_native_child(child)?;
+        }
+        if auth.is_some() && last_status.is_some_and(|status| matches!(status.as_u16(), 401 | 403)) {
+            return Err(eyre!(
+                "Timed out waiting for {url}: authentication was still rejected (HTTP {}); check the retained local credentials.",
+                last_status.unwrap()
+            ));
         }
         Err(eyre!("Timed out waiting for {url}"))
     }
@@ -1020,6 +1076,56 @@ fn local_endpoint_ready(status: reqwest::StatusCode, authenticated: bool) -> boo
 #[cfg(test)]
 mod onboarding_recovery_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn startup_retries_authentication_until_security_is_ready() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for status in ["401 Unauthorized", "200 OK"] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 4096];
+                socket.read(&mut buffer).await.unwrap();
+                socket
+                    .write_all(
+                        format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let state = LocalState::load(dir.path().into()).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            state.wait_url_for_startup(&url, Some(("elastic", "test-password")), None, true),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_reports_native_child_exit_without_waiting_for_http_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = LocalState::load(dir.path().into()).unwrap();
+        let mut child = Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap();
+        child.wait().unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            state.wait_url_for_startup("http://127.0.0.1:1", None, Some(&mut child), false),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("exit status: 7"));
+        assert!(message.contains("native-serve.log"));
+        assert!(message.contains("local logs --state-dir"));
+    }
 
     #[tokio::test]
     async fn readiness_requests_run_inside_the_async_lifecycle() {

@@ -717,6 +717,9 @@ async fn run_local_lifecycle(args: Vec<OsString>) -> Result<CommandResult> {
 }
 
 fn classify_failure(error: &eyre::Report) -> CliFailureCategory {
+    if error.downcast_ref::<esdiag::data::SecretAlreadyExists>().is_some() {
+        return CliFailureCategory::Conflict;
+    }
     if let Some(response) = http_response_details(error) {
         return match response.status {
             401 | 403 => CliFailureCategory::AuthenticationFailed,
@@ -757,6 +760,7 @@ fn safe_failure_message(error: &eyre::Report) -> String {
         };
     }
     match classify_failure(error) {
+        CliFailureCategory::Conflict => "requested resource already exists",
         CliFailureCategory::NotFound => "requested resource was not found",
         CliFailureCategory::AuthenticationFailed => "authentication failed",
         CliFailureCategory::CollectionFailed => "diagnostic collection failed",
@@ -2310,6 +2314,10 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     }
                     return Err(eyre!("Output validation failed. Run `esdiag init` again to resume."));
                 }
+                if !confirm_output_replacement(&output_name, &viewer_name, &secret_id, &keystore_password)? {
+                    println!("Existing output configuration was not changed. Choose an output deployment.");
+                    continue;
+                }
                 break (
                     output_name,
                     output_url,
@@ -2321,7 +2329,6 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     viewer_client,
                 );
             };
-            confirm_output_replacement(&output_name, &viewer_name, &secret_id, &keystore_password)?;
             output_name_for_defaults = Some(output_name.clone());
             output_url_for_defaults = Some(output_url.to_string());
             save_output_deployment(
@@ -2518,7 +2525,7 @@ fn confirm_output_replacement(
     viewer_name: &str,
     secret_id: &str,
     keystore_password: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let hosts = KnownHost::parse_hosts_yml()?;
     let replaces_output = hosts.contains_key(output_name);
     let replaces_viewer = hosts.contains_key(viewer_name);
@@ -2543,11 +2550,9 @@ fn confirm_output_replacement(
         if replaces_default {
             replaced.push("the configured default output".to_string());
         }
-        if !prompt_confirm(&format!("Replace {}? [y/N]: ", replaced.join(", ")))? {
-            return Err(eyre!("Output deployment replacement was declined."));
-        }
+        return prompt_confirm(&format!("Replace {}? [y/N]: ", replaced.join(", ")));
     }
-    Ok(())
+    Ok(true)
 }
 
 fn default_collect_host_name() -> Option<String> {
@@ -2853,30 +2858,29 @@ fn default_esdiag_local_state_dir() -> Option<PathBuf> {
 }
 
 fn prompt_api_key(label: &str, local_preset: Option<&EsdiagLocalPreset>) -> Result<SecretAuth> {
-    let default = if local_preset.and_then(|preset| preset.apikey.as_ref()).is_some() {
-        "3"
-    } else {
-        "4"
-    };
+    let has_local_key = local_preset.and_then(|preset| preset.apikey.as_ref()).is_some();
+    let paste_selection = if has_local_key { "4" } else { "3" };
     loop {
         println!("{label} API key source:");
         println!("  1. Read from a file");
         println!("  2. Read from an environment variable");
-        if default == "3" {
+        if has_local_key {
             println!("  3. Read from detected esdiag-local configuration");
         }
-        println!("  4. Paste securely");
-        let source = prompt_with_default("Selection", default)?;
+        println!("  {paste_selection}. Paste securely");
+        let source = prompt_with_default("Selection", "3")?;
         let apikey = match source.as_str() {
             "1" | "file" => prompt_required("API key file path: ").and_then(|path| read_api_key_file(&path)),
             "2" | "environment" | "env" => {
                 let name = prompt_with_default("API key environment variable", "ESDIAG_OUTPUT_APIKEY")?;
                 std::env::var(&name).map_err(|_| eyre!("{name} is not set"))
             }
+            value if value == paste_selection || value == "paste" => {
+                prompt_missing_secret_value(&format!("Enter {label} API key: "))
+            }
             "3" | "esdiag-local" | "local" => local_preset
                 .and_then(|preset| preset.apikey.clone())
                 .ok_or_else(|| eyre!("No usable ESDiag local API key was detected")),
-            "4" | "paste" => prompt_missing_secret_value(&format!("Enter {label} API key: ")),
             _ => Err(eyre!("Choose one of the listed API key sources")),
         };
         let apikey = match apikey {

@@ -23,6 +23,12 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Changed local startup to retry transient Elasticsearch authentication failures while security initializes.
+- Changed the managed native server to use local output credentials and report early exits with a log path.
+- Changed onboarding to return to output selection when replacement is declined.
+- Changed API key source menus to use consecutive numbering when local credentials are unavailable.
+- Changed endpoint validation to distinguish network failures using the underlying error chain.
+- Changed duplicate keystore-secret failures to report the `conflict` outcome category.
 - Changed onboarding to show workflow changes when resuming and changing a saved workflow.
 - Changed onboarding to offer only available credential sources.
 - Changed onboarding to prompt for a diagnostic user without defaulting to the shell username.

@@ -84,6 +84,11 @@ Choose processing, then choose **remote**. The initializer saves the output
 host, linked Kibana viewer, and encrypted credentials. It also offers to
 install output assets.
 
+If validation fails, `init` identifies the endpoint and lets you re-enter its
+settings. Declining to replace an existing output returns to output selection
+without changing the saved deployment. API key source numbers depend on which
+sources are available; use the displayed number or type `paste`, `file`, or `env`.
+
 To configure the destination yourself:
 
 ```sh

@@ -20,6 +20,58 @@ use eyre::{Result, eyre};
 use reqwest::Method;
 use std::collections::HashMap;
 
+// Inspect the whole transport error chain, but never expose URLs or credentials.
+fn connection_failure(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut messages = Vec::new();
+    let mut cause = Some(error);
+    while let Some(error) = cause {
+        messages.push(error.to_string().to_ascii_lowercase());
+        cause = error.source();
+    }
+    let details = messages.join(" ");
+    if [
+        "dns error",
+        "dns lookup",
+        "failed to lookup address",
+        "name or service not known",
+        "could not resolve host",
+        "nodename nor servname",
+        "getaddrinfo",
+    ]
+    .iter()
+    .any(|marker| details.contains(marker))
+    {
+        "DNS lookup failed"
+    } else if details.contains("certificate") || details.contains("tls") || details.contains("ssl") {
+        "TLS verification failed"
+    } else if details.contains("timed out") || details.contains("timeout") {
+        "connection timed out"
+    } else {
+        "connection failed"
+    }
+    .to_string()
+}
+
+#[cfg(test)]
+mod connection_failure_tests {
+    use super::connection_failure;
+
+    #[test]
+    fn classifies_nested_transport_errors_without_exposing_their_contents() {
+        for (cause, expected) in [
+            ("dns error: failed to lookup address", "DNS lookup failed"),
+            ("windows connection failure", "connection failed"),
+            ("invalid peer certificate", "TLS verification failed"),
+            ("operation timed out", "connection timed out"),
+            ("tcp connect error", "connection failed"),
+        ] {
+            let error = eyre::Report::new(std::io::Error::other(format!("{cause}: api_key=secret")))
+                .wrap_err("Failed to send request");
+            assert_eq!(connection_failure(error.as_ref()), expected);
+        }
+    }
+}
+
 /// A standardized client for interacting with Elastic Stack APIs
 pub enum Client {
     Elasticsearch(ElasticsearchClient),
@@ -118,7 +170,7 @@ impl Client {
                         None,
                     )
                     .await
-                    .map_err(|e| format!("{e}"))?;
+                    .map_err(|e| connection_failure(&e))?;
 
                 let status = response.status_code();
                 if !status.is_success() {
@@ -137,7 +189,10 @@ impl Client {
                 }
             }
             Client::Kibana(client) => {
-                let response = client.test_connection().await.map_err(|e| format!("{e}"))?;
+                let response = client
+                    .test_connection()
+                    .await
+                    .map_err(|e| connection_failure(e.as_ref()))?;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(format!("HTTP {status}"));
@@ -153,7 +208,10 @@ impl Client {
                 }
             }
             Client::Logstash(client) => {
-                let response = client.test_connection().await.map_err(|e| format!("{e}"))?;
+                let response = client
+                    .test_connection()
+                    .await
+                    .map_err(|e| connection_failure(e.as_ref()))?;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(format!("HTTP {status}"));
