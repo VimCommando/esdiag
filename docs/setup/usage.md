@@ -65,8 +65,9 @@ ESDiag only uploads when you run `upload` or use `collect --upload`.
 
 ## Web UI
 
-After `esdiag local up`, open the URL it prints. The default is
-`http://127.0.0.1:2501`. Upload an archive and follow the returned Kibana link.
+After `esdiag local up`, the browser opens the onboarding page at
+`http://127.0.0.1:2501/welcome`. Upload an archive and follow the returned
+Kibana link.
 
 Use `esdiag local status`, `logs`, `restart`, `down`, and `reset --force` to
 operate a binary-owned stack. The standalone forms start with `esdiag-local`.

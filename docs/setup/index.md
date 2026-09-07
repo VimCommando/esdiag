@@ -26,6 +26,10 @@ owns that service's exporter, credentials, and upgrades.
 2. [Configure ESDiag](configuration.md)
 3. [Use ESDiag](usage.md)
 
+Agent Builder also needs an inference model. For an OpenAI-compatible model
+running on your network, see
+[Connect Agent Builder to a local LLM](local-llm.md).
+
 ## Terms used in these guides
 
 - A `collect` host is the system ESDiag reads.

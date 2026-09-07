@@ -19,6 +19,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use url::Url;
 use zip::ZipArchive;
 
 // Subdirectory for templates and configs files
@@ -503,6 +504,83 @@ pub async fn assets_report(client: &Client) -> Result<SetupReport> {
         tracing::error!("{error_count} errors in setup for {client}");
         Err(eyre!("{error_count} errors in setup for {client}"))
     }
+}
+
+/// Checks the minimum ESDiag asset set required for processing and Agent Builder.
+///
+/// This is deliberately read-only and inexpensive enough for onboarding status:
+/// the Elasticsearch ingest pipeline proves processing assets are present, while
+/// the default Kibana agent must have the ESDiag diagnostic skill attached.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AssetStatus {
+    Installed,
+    Missing,
+    #[default]
+    Unknown,
+}
+
+pub async fn asset_statuses(
+    elasticsearch: &Client,
+    kibana: &Client,
+    kibana_url: Option<&str>,
+) -> (AssetStatus, AssetStatus) {
+    let headers = HashMap::new();
+    let pipeline = elasticsearch.request(Method::GET, &headers, "_ingest/pipeline/esdiag", None);
+    let agent_path = kibana_agent_path(kibana_url);
+    let agent = kibana.request(Method::GET, &headers, &agent_path, None);
+    let (pipeline, agent) = tokio::join!(pipeline, agent);
+
+    let elasticsearch_assets = match pipeline {
+        Ok(response) if response.status().is_success() => AssetStatus::Installed,
+        Ok(response) if response.status() == StatusCode::NOT_FOUND => AssetStatus::Missing,
+        Ok(_) | Err(_) => AssetStatus::Unknown,
+    };
+    let kibana_assets = match agent {
+        Ok(response) if response.status().is_success() => match response.json::<Value>().await {
+            Ok(agent) => {
+                let installed = agent
+                    .get("configuration")
+                    .and_then(|configuration| configuration.get("skill_ids"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|skills| {
+                        skills
+                            .iter()
+                            .any(|skill| skill.as_str() == Some("agentic-diagnostic-assistant"))
+                    });
+                if installed {
+                    AssetStatus::Installed
+                } else {
+                    AssetStatus::Missing
+                }
+            }
+            Err(_) => AssetStatus::Unknown,
+        },
+        Ok(response) if response.status() == StatusCode::NOT_FOUND => AssetStatus::Missing,
+        Ok(_) | Err(_) => AssetStatus::Unknown,
+    };
+
+    (elasticsearch_assets, kibana_assets)
+}
+
+pub async fn assets_installed(elasticsearch: &Client, kibana: &Client) -> bool {
+    let (elasticsearch_assets, kibana_assets) = asset_statuses(elasticsearch, kibana, None).await;
+    elasticsearch_assets == AssetStatus::Installed && kibana_assets == AssetStatus::Installed
+}
+
+fn kibana_agent_path(kibana_url: Option<&str>) -> String {
+    let url = kibana_url
+        .map(str::to_string)
+        .or_else(|| std::env::var("ESDIAG_KIBANA_URL").ok());
+    url.and_then(|url| {
+        Url::parse(&url).ok().and_then(|url| {
+            let segments = url.path_segments()?.collect::<Vec<_>>();
+            segments
+                .windows(2)
+                .find(|segments| segments[0] == "s")
+                .map(|segments| format!("s/{}/api/agent_builder/agents/elastic-ai-agent", segments[1]))
+        })
+    })
+    .unwrap_or_else(|| "/api/agent_builder/agents/elastic-ai-agent".to_string())
 }
 
 /// Start and verify a trial license before loading Enterprise-only Kibana assets.

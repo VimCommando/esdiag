@@ -22,10 +22,12 @@ mod settings;
 mod stats;
 mod template;
 mod theme;
+#[cfg(feature = "keystore")]
+mod web_onboarding;
 
 use super::processor::{DiagnosticOutcome, Identifiers};
 use crate::{
-    data::{KnownHost, Uri},
+    data::{KnownHost, Settings, Uri},
     exporter::Exporter,
 };
 use askama::Template;
@@ -431,6 +433,7 @@ pub struct ServerStartOptions<'a> {
     pub auth_provider: Option<AuthProvider>,
     pub job_caps: Option<JobConcurrencyCaps>,
     pub web_features: Option<&'a str>,
+    pub onboarding: bool,
 }
 
 impl Server {
@@ -488,6 +491,20 @@ impl Server {
             options.job_caps,
             options.web_features,
         )?;
+        if runtime_mode == RuntimeMode::User {
+            match Settings::migrate_to_application_config() {
+                Ok(crate::data::LegacySettingsMigration::Migrated) => {
+                    tracing::info!("Migrated legacy user output settings to esdiag.yml");
+                }
+                Ok(crate::data::LegacySettingsMigration::NotRepresentable) => {
+                    tracing::info!("Legacy user settings require web onboarding before they can be migrated");
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!("Unable to inspect legacy user settings for migration: {err}");
+                }
+            }
+        }
         let route_policy = server_policy.clone();
 
         // Create shared state
@@ -504,6 +521,7 @@ impl Server {
             stats_updates_rx,
             runtime_mode,
             server_policy: server_policy.clone(),
+            onboarding: options.onboarding,
             #[cfg(feature = "keystore")]
             keystore_rate_limit: Arc::new(std::sync::Mutex::new(keystore::KeystoreRateLimit::default())),
         });
@@ -583,7 +601,15 @@ impl Server {
 
             #[cfg(feature = "keystore")]
             let app = if route_policy.allows_local_runtime_features() {
-                app.route("/settings", get(hosts::page))
+                app.route("/welcome", get(web_onboarding::page))
+                    .route("/welcome/identity", post(web_onboarding::save_identity))
+                    .route("/welcome/keystore", post(web_onboarding::save_keystore))
+                    .route("/welcome/output", post(web_onboarding::save_output))
+                    .route("/welcome/output/local", post(web_onboarding::provision_local_output))
+                    .route("/welcome/output/setup", post(web_onboarding::install_output_assets))
+                    .route("/welcome/collection", post(web_onboarding::save_collection))
+                    .route("/welcome/default-job", post(web_onboarding::save_default_job))
+                    .route("/settings", get(hosts::page))
                     .route("/settings/create", post(hosts::create_host))
                     .route("/settings/update", put(hosts::update_host))
                     .route("/settings/host/{action}/{id}", post(hosts::host_action))
@@ -605,7 +631,7 @@ impl Server {
                     .route("/keystore/lock", post(keystore::lock))
                     .route("/keystore/status", get(keystore::status))
             } else {
-                app
+                app.route("/welcome", get(web_onboarding::service_mode_page))
             };
 
             let app = if route_policy.requires_authentication() {
@@ -694,6 +720,7 @@ pub struct ServerState {
     pub retained_bundles: Arc<RwLock<HashMap<String, RetainedBundle>>>,
     pub runtime_mode: RuntimeMode,
     pub server_policy: ServerPolicy,
+    pub onboarding: bool,
     #[cfg(feature = "keystore")]
     pub keystore_rate_limit: Arc<std::sync::Mutex<keystore::KeystoreRateLimit>>,
     stats: Arc<RwLock<Stats>>,
@@ -710,7 +737,6 @@ pub(crate) struct KeystorePageState {
     pub can_use_keystore: bool,
     pub locked: bool,
     pub lock_time: i64,
-    pub show_bootstrap: bool,
 }
 
 #[cfg(not(feature = "keystore"))]
@@ -1224,6 +1250,7 @@ pub(crate) fn test_server_state() -> Arc<ServerState> {
         retained_bundles: Arc::new(RwLock::new(HashMap::new())),
         runtime_mode,
         server_policy: ServerPolicy::defaults(runtime_mode),
+        onboarding: false,
         #[cfg(feature = "keystore")]
         keystore_rate_limit: Arc::new(std::sync::Mutex::new(keystore::KeystoreRateLimit::default())),
         shutdown: watch::channel(false).1,
@@ -1861,6 +1888,7 @@ mod tests {
             retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             runtime_mode: mode,
             server_policy: ServerPolicy::defaults(mode),
+            onboarding: false,
             #[cfg(feature = "keystore")]
             keystore_rate_limit: Arc::new(std::sync::Mutex::new(super::keystore::KeystoreRateLimit::default())),
             stats: Arc::new(RwLock::new(Stats::default())),

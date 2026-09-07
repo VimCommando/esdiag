@@ -168,6 +168,12 @@ only when a usable local key is detected.
 To replace a referenced API key later, run `esdiag keystore update <name> --apikey`
 at a terminal. It prompts for the key without putting it in shell history.
 
+Before configuration begins, an incomplete workflow can continue in the web
+interface. `init` starts `esdiag serve --mode user`, opens `/welcome`, and
+keeps the terminal attached until you stop the server with Ctrl+C. The terminal
+and web flows persist the same user, workflow, host, job, output, and keystore
+state.
+
 When you select local processing and no stack exists, `init` can start a
 binary-owned core stack. Its approval includes that new stack's required
 assets; declining returns to remote output setup.
@@ -283,6 +289,12 @@ run `serve`, `init`, or `setup`.
 Service mode uses one startup-defined exporter. It does not persist user hosts,
 jobs, or keystore state. Use `--auth-provider google-iap|none` to select
 request authentication. Use `none` only for controlled local testing.
+
+In user mode, an incomplete local workflow opens the `/welcome` onboarding
+flow. It creates or unlocks the encrypted keystore with a masked form and
+configures the same persistent workflow as `esdiag init`. Service mode shows an
+administrator-owned configuration notice instead and never writes local
+onboarding state.
 
 `ESDIAG_SERVICE_JOB_CAP` sets the global job cap.
 `ESDIAG_SERVICE_OWNER_JOB_CAP` sets the per-user cap.

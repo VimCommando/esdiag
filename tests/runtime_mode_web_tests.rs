@@ -328,8 +328,15 @@ async fn user_mode_workflow_shows_known_host_collect_and_local_save_defaults() {
 
     assert!(body.contains("id=\"collect-known-host\""));
     assert!(body.contains("id=\"known-host-button\""));
-    assert!(body.contains("data-signals:job.collect.mode=\"'upload'\""));
-    assert!(body.contains("data-signals:job.collect.source=\"'upload-file'\""));
+    assert!(body.contains("data-signals:job.collect.mode=\"'collect'\""));
+    assert!(body.contains("data-signals:job.collect.source=\"'known-host'\""));
+    let new_tab = body
+        .find("data-class:active=\"$job.collect.mode === 'collect'\"")
+        .expect("new collect tab");
+    let existing_tab = body
+        .find("data-class:active=\"$job.collect.mode === 'upload'\"")
+        .expect("existing bundle tab");
+    assert!(new_tab < existing_tab, "new tab should precede existing tab");
     assert!(body.contains("id=\"collect-save-toggle\""));
     assert!(body.contains("Download Archive"));
     assert!(body.contains("id=\"upload-form\""));

@@ -58,6 +58,18 @@ deployment. If you decline, it returns to remote setup without creating local
 state. Existing local stacks and remote deployments ask separately before
 installing assets.
 
+For a browser-guided first run, choose the web-interface handoff at the start
+of `esdiag init`. It opens `/welcome`, where the same workflow is persisted in
+stages. The keystore password and endpoint API keys use masked form controls
+and are never stored in browser state or `esdiag.yml`.
+
+When `ESDIAG_OUTPUT_URL` and `ESDIAG_KIBANA_URL` provide the runtime output,
+web onboarding treats that deployment as the diagnostic cluster. It validates
+both authenticated endpoints and checks the processing and Agent Builder asset
+set instead of asking for another cluster. Full `esdiag-local` stacks identify
+themselves with `ESDIAG_CONTAINER_LOCAL_STACK=full`, so the page never attempts
+to launch containers from inside the ESDiag container.
+
 Core and full modes keep separate ESDiag user state. Switching modes does not
 move hosts, jobs, settings, or secrets between the native user directory and
 the full-mode container volume.

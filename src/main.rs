@@ -54,7 +54,7 @@ use std::{
     io::{IsTerminal, Write},
     net::Ipv4Addr,
     path::PathBuf,
-    process::ExitCode,
+    process::{Command, ExitCode},
     str::FromStr,
     time::Duration,
 };
@@ -162,6 +162,9 @@ enum Commands {
         /// Optional comma-separated web feature allowlist (advanced, job-builder)
         #[arg(long, value_name = "FEATURES")]
         web_features: Option<String>,
+        /// Open the user-mode web onboarding flow on startup
+        #[arg(long, hide = true)]
+        onboarding: bool,
         /// Kibana URL to display in the web interface
         #[arg(
             long,
@@ -1060,6 +1063,7 @@ fn saved_job_result(name: String, job: &esdiag::data::Job) -> SavedJobResult {
     let process = job.process().map(|process| JobProcessResult {
         export: match &process.export {
             esdiag::job::model::ExportTarget::KnownHost { name } => format!("host:{name}"),
+            esdiag::job::model::ExportTarget::Environment => "environment".to_string(),
             esdiag::job::model::ExportTarget::File { path } => path.display().to_string(),
             esdiag::job::model::ExportTarget::Directory { output_dir } => output_dir.display().to_string(),
             esdiag::job::model::ExportTarget::Stdout => "-".to_string(),
@@ -1099,11 +1103,22 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 mode,
                 auth_provider,
                 web_features,
+                onboarding,
                 kibana,
             } => {
                 tracing::info!("Starting ESDiag server");
                 let runtime_mode = resolve_serve_runtime_mode(mode)?;
-                let exporter = resolve_serve_exporter(output)?;
+                let exporter = match resolve_serve_exporter(output) {
+                    Ok(exporter) => exporter,
+                    Err(err)
+                        if runtime_mode == RuntimeMode::User
+                            && inspect_onboarding().is_ok_and(|readiness| !readiness.is_complete()) =>
+                    {
+                        tracing::info!("Starting user-mode web onboarding without a configured output: {err}");
+                        onboarding_exporter()?
+                    }
+                    Err(err) => return Err(err),
+                };
                 let exporter_owns_stdout = exporter.target_uri() == "stdio://stdout";
 
                 let kibana_url = kibana.unwrap_or_else(|| {
@@ -1121,6 +1136,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                     ServerStartOptions {
                         auth_provider,
                         web_features: web_features.as_deref(),
+                        onboarding,
                         ..ServerStartOptions::default()
                     },
                 )
@@ -2137,6 +2153,10 @@ async fn run_init_wizard() -> Result<CommandResult> {
 
     let initial = inspect_onboarding()?;
     println!("ESDiag first-run initialization");
+    #[cfg(feature = "server")]
+    if !initial.is_complete() && prompt_confirm("Continue setup in the web interface? [y/N]: ")? {
+        return run_gui_onboarding().await;
+    }
     let mut output_name_for_defaults = esdiag::data::ApplicationConfig::load()?.output.default;
     let mut output_url_for_defaults = output_name_for_defaults
         .as_ref()
@@ -2553,6 +2573,57 @@ fn confirm_output_replacement(
         return prompt_confirm(&format!("Replace {}? [y/N]: ", replaced.join(", ")));
     }
     Ok(true)
+}
+
+#[cfg(feature = "server")]
+async fn run_gui_onboarding() -> Result<CommandResult> {
+    let url = "http://127.0.0.1:2501/welcome";
+    let address = "127.0.0.1:2501"
+        .parse()
+        .map_err(|err| eyre!("Invalid local onboarding address: {err}"))?;
+    if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok() {
+        open_gui_onboarding_browser(url);
+        println!("Using the ESDiag user-mode server already running at {url}. Press Ctrl+C to leave this terminal.");
+        wait_for_shutdown_signal().await?;
+        return Ok(CommandResult::stream());
+    }
+
+    let executable =
+        std::env::current_exe().map_err(|err| eyre!("Unable to locate the running ESDiag binary: {err}"))?;
+    let mut server = Command::new(executable)
+        .args(["serve", "--mode", "user", "--onboarding"])
+        .spawn()
+        .map_err(|err| eyre!("Unable to start the ESDiag web server: {err}"))?;
+
+    open_gui_onboarding_browser(url);
+    let status = server
+        .wait()
+        .map_err(|err| eyre!("ESDiag web server stopped unexpectedly: {err}"))?;
+    if !status.success() {
+        return Err(eyre!("ESDiag web server exited with {status}"));
+    }
+    Ok(CommandResult::stream())
+}
+
+#[cfg(feature = "server")]
+fn open_gui_onboarding_browser(url: &str) {
+    let browser_result = if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).spawn()
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/C", "start", "", url]).spawn()
+    } else {
+        Command::new("xdg-open").arg(url).spawn()
+    };
+    if let Err(err) = browser_result {
+        tracing::warn!("ESDiag is running at {url}, but the browser could not be opened: {err}");
+    }
+}
+
+#[cfg(feature = "server")]
+fn onboarding_exporter() -> Result<Exporter> {
+    let directory = std::env::temp_dir().join("esdiag-onboarding");
+    std::fs::create_dir_all(&directory)?;
+    Exporter::try_from(Uri::Directory(directory))
 }
 
 fn default_collect_host_name() -> Option<String> {

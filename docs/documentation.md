@@ -15,6 +15,7 @@ New users should start with [Set up ESDiag](setup/index.md).
 - [Configure ESDiag](setup/configuration.md)
 - [Use ESDiag](setup/usage.md)
 - [Use a shared ESDiag service](setup/shared-service.md)
+- [Connect Agent Builder to a local LLM](setup/local-llm.md)
 
 ## Reference
 

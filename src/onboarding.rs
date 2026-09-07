@@ -6,7 +6,7 @@
 
 use crate::data::{
     Application, ApplicationConfig, HostRole, Job, JobOutput, KnownHost, KnownHostBuilder, OnboardingWorkflow,
-    SavedJobs, SecretAuth, keystore_exists, save_saved_jobs, upsert_secret_auth,
+    SavedJobs, SecretAuth, keystore_exists, runtime_output_is_declared, save_saved_jobs, upsert_secret_auth,
 };
 use crate::job::model::Input;
 use eyre::{Result, eyre};
@@ -18,6 +18,7 @@ pub struct OnboardingReadiness {
     pub keystore_ready: bool,
     pub workflow: Option<OnboardingWorkflow>,
     pub output_configured: bool,
+    pub output_from_environment: bool,
     pub collect_host_configured: bool,
     pub default_job_configured: bool,
 }
@@ -27,7 +28,9 @@ impl OnboardingReadiness {
         self.user_configured
             && match self.workflow {
                 Some(OnboardingWorkflow::CollectOnly) => self.collect_host_configured && self.default_job_configured,
-                Some(OnboardingWorkflow::ProcessExisting) => self.keystore_ready && self.output_configured,
+                Some(OnboardingWorkflow::ProcessExisting) => {
+                    self.output_configured && (self.output_from_environment || self.keystore_ready)
+                }
                 Some(OnboardingWorkflow::CollectAndProcess) => {
                     self.keystore_ready
                         && self.output_configured
@@ -77,11 +80,13 @@ pub fn inspect() -> Result<OnboardingReadiness> {
     let hosts = KnownHost::parse_hosts_yml()?;
     let jobs = crate::data::load_saved_jobs()?;
 
-    let output_configured = config
-        .output
-        .default
-        .as_ref()
-        .is_some_and(|name| hosts.get(name).is_some_and(valid_output_host));
+    let output_from_environment = runtime_output_is_declared();
+    let output_configured = output_from_environment
+        || config
+            .output
+            .default
+            .as_ref()
+            .is_some_and(|name| hosts.get(name).is_some_and(valid_output_host));
     let collect_host_configured = hosts.values().any(|host| host.has_role(HostRole::Collect));
     let default_job_configured = config
         .job
@@ -95,6 +100,7 @@ pub fn inspect() -> Result<OnboardingReadiness> {
         keystore_ready: keystore_exists()?,
         workflow: config.workflow,
         output_configured,
+        output_from_environment,
         collect_host_configured,
         default_job_configured,
     })
@@ -115,7 +121,13 @@ fn workflow_job_is_valid(
     match workflow {
         Some(OnboardingWorkflow::CollectOnly) => job.process().is_none(),
         Some(OnboardingWorkflow::CollectAndProcess) => {
-            matches!(job.process().map(|process| &process.export), Some(JobOutput::KnownHost { name }) if Some(name.as_str()) == output)
+            matches!(
+                job.process().map(|process| &process.export),
+                Some(JobOutput::Environment) if runtime_output_is_declared()
+            ) || matches!(
+                job.process().map(|process| &process.export),
+                Some(JobOutput::KnownHost { name }) if Some(name.as_str()) == output
+            )
         }
         Some(OnboardingWorkflow::ProcessExisting) | None => false,
     }
@@ -205,6 +217,35 @@ pub fn save_collect_host(input: CollectHostInput, keystore_password: Option<&str
     Ok(())
 }
 
+/// Replaces a collection host after the caller has obtained explicit user
+/// confirmation. Unlike [`save_collect_host`], this updates the endpoint and
+/// credential reference instead of only adding the collect role.
+pub fn replace_collect_host(input: CollectHostInput, keystore_password: Option<&str>) -> Result<()> {
+    validate_name(&input.name, "collect host")?;
+    match (&input.secret_id, &input.auth, keystore_password) {
+        (Some(secret_id), Some(auth), Some(password)) => upsert_secret_auth(secret_id, auth.clone(), password)?,
+        (Some(_), None, _) | (None, None, _) => {}
+        _ => {
+            return Err(eyre!(
+                "Collect-host credentials require a secret id, authentication value, and unlocked keystore"
+            ));
+        }
+    }
+
+    let builder = KnownHostBuilder::new(input.url)
+        .application(input.app)
+        .roles(vec![HostRole::Collect])
+        .secret(input.secret_id);
+    let host = match input.auth {
+        Some(auth) => builder.build_with_secret_auth(auth)?,
+        None => builder.build()?,
+    };
+    let mut hosts = KnownHost::parse_hosts_yml()?;
+    hosts.insert(input.name, host);
+    KnownHost::write_hosts_yml(&hosts)?;
+    Ok(())
+}
+
 pub fn save_default_processing_job(name: String, collect_host: String) -> Result<ApplicationConfig> {
     validate_name(&name, "default job")?;
     let collect = KnownHost::get_known(&collect_host)
@@ -215,14 +256,18 @@ pub fn save_default_processing_job(name: String, collect_host: String) -> Result
         ));
     }
     let config = ApplicationConfig::load()?;
-    let output = config
-        .output
-        .default
-        .clone()
-        .ok_or_else(|| eyre!("A validated output deployment is required before creating a default job"))?;
-    let job = Job::builder()
-        .collect_from(collect_host)?
-        .process_to(JobOutput::KnownHost { name: output })?;
+    let output = if runtime_output_is_declared() {
+        JobOutput::Environment
+    } else {
+        JobOutput::KnownHost {
+            name: config
+                .output
+                .default
+                .clone()
+                .ok_or_else(|| eyre!("A validated output deployment is required before creating a default job"))?,
+        }
+    };
+    let job = Job::builder().collect_from(collect_host)?.process_to(output)?;
     save_default_job(name, job)
 }
 
@@ -280,8 +325,8 @@ mod tests {
     }
 
     use super::{
-        CollectHostInput, OnboardingReadiness, OutputDeploymentInput, inspect, save_collect_host, save_default_job,
-        save_default_processing_job, save_output_deployment, save_user, save_workflow,
+        CollectHostInput, OnboardingReadiness, OutputDeploymentInput, inspect, replace_collect_host, save_collect_host,
+        save_default_job, save_default_processing_job, save_output_deployment, save_user, save_workflow,
     };
     use crate::data::{
         Application, ApplicationConfig, HostRole, Job, KnownHost, KnownHostBuilder, OnboardingWorkflow, SecretAuth,
@@ -438,6 +483,49 @@ mod tests {
     }
 
     #[test]
+    fn environment_output_completes_process_existing_without_a_keystore() {
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_OUTPUT_URL", "https://output.example:9200");
+        env.set("ESDIAG_OUTPUT_APIKEY", "runtime-key");
+        env.set("ESDIAG_KIBANA_URL", "https://kibana.example:5601");
+        save_user("operator@example.com".to_string()).expect("save user");
+        save_workflow(OnboardingWorkflow::ProcessExisting).expect("save workflow");
+
+        let readiness = inspect().expect("environment readiness");
+        assert!(readiness.output_from_environment);
+        assert!(readiness.output_configured);
+        assert!(!readiness.keystore_ready);
+        assert!(readiness.is_complete());
+    }
+
+    #[test]
+    fn processing_job_can_persist_the_environment_output() {
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_OUTPUT_URL", "https://output.example:9200");
+        env.set("ESDIAG_OUTPUT_APIKEY", "runtime-key");
+        env.set("ESDIAG_KIBANA_URL", "https://kibana.example:5601");
+        save_collect_host(
+            CollectHostInput {
+                name: "collect-es".to_string(),
+                app: Application::Elasticsearch,
+                url: Url::parse("https://collect.example:9200").expect("url"),
+                secret_id: None,
+                auth: None,
+            },
+            None,
+        )
+        .expect("save collect host");
+
+        save_default_processing_job("default".to_string(), "collect-es".to_string()).expect("save environment job");
+
+        let jobs = crate::data::load_saved_jobs().expect("load saved jobs");
+        assert!(matches!(
+            jobs["default"].process().map(|process| &process.export),
+            Some(crate::data::JobOutput::Environment)
+        ));
+    }
+
+    #[test]
     fn existing_collect_host_does_not_update_unrelated_credentials() {
         let _env = crate::TestEnv::new();
         create_keystore("pw").expect("create keystore");
@@ -475,6 +563,41 @@ mod tests {
         assert_eq!(
             resolve_secret_auth("replacement-secret", "pw").expect("resolve replacement secret"),
             None
+        );
+    }
+
+    #[test]
+    fn confirmed_collect_host_replacement_updates_endpoint_and_credentials() {
+        let _env = crate::TestEnv::new();
+        create_keystore("pw").expect("create keystore");
+        let existing = KnownHostBuilder::new(Url::parse("https://existing.example:9200").expect("url"))
+            .application(Application::Elasticsearch)
+            .build()
+            .expect("host");
+        KnownHost::write_hosts_yml(&BTreeMap::from([("existing".to_string(), existing)])).expect("write host");
+
+        replace_collect_host(
+            CollectHostInput {
+                name: "existing".to_string(),
+                app: Application::Elasticsearch,
+                url: Url::parse("https://replacement.example:9200").expect("url"),
+                secret_id: Some("replacement-secret".to_string()),
+                auth: Some(SecretAuth::apikey("replacement-key")),
+            },
+            Some("pw"),
+        )
+        .expect("replace collection host");
+
+        let host = KnownHost::get_known(&"existing".to_string()).expect("replaced host");
+        assert!(host.has_role(HostRole::Collect));
+        assert_eq!(host.secret_reference(), Some("replacement-secret"));
+        assert_eq!(
+            host.concrete_url().map(Url::as_str),
+            Some("https://replacement.example:9200/")
+        );
+        assert_eq!(
+            resolve_secret_auth("replacement-secret", "pw").expect("resolve replacement secret"),
+            Some(SecretAuth::apikey("replacement-key"))
         );
     }
 }

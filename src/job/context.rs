@@ -130,6 +130,7 @@ impl ExecutionContext {
                 }
                 DocumentExporter::try_from(Uri::try_from(host)?)
             }
+            ExportTarget::Environment => DocumentExporter::try_from(Uri::try_from_output_env()?),
             ExportTarget::File { path } => DocumentExporter::try_from(Uri::File(path.clone())),
             ExportTarget::Directory { output_dir } => DocumentExporter::try_from(Uri::Directory(output_dir.clone())),
             ExportTarget::Stdout => DocumentExporter::try_from(Uri::Stream),

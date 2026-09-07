@@ -520,6 +520,7 @@ impl JobOutput {
     pub fn target_uri(&self) -> String {
         match self {
             Self::KnownHost { name } => name.clone(),
+            Self::Environment => "environment".to_string(),
             Self::File { path } => path.display().to_string(),
             Self::Directory { output_dir } => output_dir.display().to_string(),
             Self::Stdout => "-".to_string(),
@@ -530,6 +531,7 @@ impl JobOutput {
     fn label(&self) -> String {
         match self {
             Self::KnownHost { name } => name.clone(),
+            Self::Environment => "environment".to_string(),
             Self::File { path } => path.display().to_string(),
             Self::Directory { output_dir } => format!("dir:{}", output_dir.display()),
             Self::Stdout => "stdout".to_string(),
@@ -585,6 +587,10 @@ impl JobOutput {
             Self::KnownHost { name } => {
                 signals.send.mode = SendMode::Remote;
                 signals.send.remote_target = Some(name.clone());
+            }
+            Self::Environment => {
+                signals.send.mode = SendMode::Remote;
+                signals.send.remote_target = None;
             }
             Self::Directory { output_dir } => {
                 signals.send.mode = SendMode::Local;

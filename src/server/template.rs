@@ -40,7 +40,6 @@ pub struct Index {
     pub output_secure: bool,
     pub keystore_locked: bool,
     pub keystore_lock_time: i64,
-    pub show_keystore_bootstrap: bool,
 }
 
 #[derive(Template)]
@@ -75,7 +74,6 @@ pub struct Advanced {
     pub can_use_keystore: bool,
     pub keystore_locked: bool,
     pub keystore_lock_time: i64,
-    pub show_keystore_bootstrap: bool,
 }
 
 #[derive(Template)]
@@ -107,7 +105,6 @@ pub struct Jobs {
     pub can_use_keystore: bool,
     pub keystore_locked: bool,
     pub keystore_lock_time: i64,
-    pub show_keystore_bootstrap: bool,
     // Saved job fields
     pub saved_job_name: Option<String>,
     pub saved_collect_mode: String,
@@ -157,6 +154,93 @@ pub struct KeystoreProcessUnlockModal {}
 #[template(path = "keystore/bootstrap.html")]
 pub struct KeystoreBootstrapModal {
     pub migrate: bool,
+}
+
+#[derive(Template, Default)]
+#[template(path = "welcome.html")]
+pub struct Welcome {
+    pub stage: String,
+    pub user: String,
+    pub workflow_value: String,
+    pub processes_diagnostics: bool,
+    pub show_cluster: bool,
+    pub show_collection: bool,
+    pub show_default_job: bool,
+    pub show_complete: bool,
+    pub keystore_ready: bool,
+    pub keystore_unlocked: bool,
+    pub output_name: String,
+    pub output_url: String,
+    pub viewer_name: String,
+    pub viewer_url: String,
+    pub output_location: String,
+    pub environment_output: bool,
+    pub managed_local_stack: bool,
+    pub container_runtime: String,
+    pub elasticsearch_ready: bool,
+    pub kibana_ready: bool,
+    pub elasticsearch_assets: String,
+    pub kibana_assets: String,
+    pub assets_installed: bool,
+    pub collect_name: String,
+    pub collect_url: String,
+    pub default_job_name: String,
+    pub message: String,
+}
+
+#[derive(Template)]
+#[template(path = "welcome_page.html")]
+pub struct WelcomePage {
+    pub auth_header: bool,
+    pub debug: bool,
+    pub desktop: bool,
+    pub kibana_url: String,
+    pub stats: String,
+    pub stage: String,
+    pub user: String,
+    pub workflow_value: String,
+    pub processes_diagnostics: bool,
+    pub show_cluster: bool,
+    pub show_collection: bool,
+    pub show_default_job: bool,
+    pub show_complete: bool,
+    pub keystore_ready: bool,
+    pub keystore_unlocked: bool,
+    pub output_name: String,
+    pub output_url: String,
+    pub viewer_name: String,
+    pub viewer_url: String,
+    pub output_location: String,
+    pub environment_output: bool,
+    pub managed_local_stack: bool,
+    pub container_runtime: String,
+    pub elasticsearch_ready: bool,
+    pub kibana_ready: bool,
+    pub elasticsearch_assets: String,
+    pub kibana_assets: String,
+    pub assets_installed: bool,
+    pub collect_name: String,
+    pub collect_url: String,
+    pub default_job_name: String,
+    pub user_initial: char,
+    pub version: String,
+    pub theme_dark: bool,
+    pub runtime_mode: String,
+    pub show_advanced: bool,
+    pub show_job_builder: bool,
+    pub can_use_keystore: bool,
+    pub keystore_locked: bool,
+    pub keystore_lock_time: i64,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WelcomeStage {
+    Identity,
+    Output,
+    Collection,
+    DefaultJob,
+    Complete,
 }
 
 #[derive(Template)]
@@ -269,7 +353,6 @@ pub struct HostsPage {
     pub can_use_keystore: bool,
     pub keystore_locked: bool,
     pub keystore_lock_time: i64,
-    pub show_keystore_bootstrap: bool,
     pub hosts_panel_html: String,
     pub secrets_panel_html: String,
     pub clusters_panel_html: String,
@@ -524,7 +607,6 @@ mod tests {
             can_use_keystore: true,
             keystore_locked: false,
             keystore_lock_time: 0,
-            show_keystore_bootstrap: false,
             saved_job_name: None,
             saved_collect_mode: "upload".to_string(),
             saved_collect_source: "upload-file".to_string(),

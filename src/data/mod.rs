@@ -44,7 +44,7 @@ pub use known_host::{
     CredentialDirection, ElasticCloud, HostRole, HostRoute, KnownHost, KnownHostBuilder, KnownHostCliUpdate,
     ResolvedKnownHost,
 };
-pub use output_deployment::{OutputDeployment, OutputDeploymentSource};
+pub use output_deployment::{OutputDeployment, OutputDeploymentSource, runtime_output_is_declared};
 pub use platform::Platform;
 pub use saved_jobs::{
     CollectMode, CollectSource, DraftTargetAvailability, Job, JobBuilder, JobDraft, JobDraftCollect, JobDraftProcess,
@@ -52,7 +52,7 @@ pub use saved_jobs::{
     NeedsAction, NeedsCollect, ProcessMode, SavedJobs, SendMode, load_saved_jobs, load_saved_jobs_async,
     save_saved_jobs, with_saved_jobs_async,
 };
-pub use settings::Settings;
+pub use settings::{LegacySettingsMigration, Settings};
 pub use uri::Uri;
 
 use crate::env;

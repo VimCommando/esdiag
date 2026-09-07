@@ -957,6 +957,7 @@ mod tests {
             retained_bundles: Arc::new(RwLock::new(HashMap::<String, RetainedBundle>::new())),
             runtime_mode: mode,
             server_policy: ServerPolicy::defaults(mode),
+            onboarding: false,
             #[cfg(feature = "keystore")]
             keystore_rate_limit: Arc::new(std::sync::Mutex::new(
                 crate::server::keystore::KeystoreRateLimit::default(),

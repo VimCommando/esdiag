@@ -30,6 +30,7 @@
     --size-footer: 0px;
     --size-header: 52px;
     --content-article-max-width: 850px;
+    --content-form-max-width: 30rem;
 
     --focus-ring-outline: 3px solid
         color-mix(
@@ -3167,6 +3168,102 @@ content.full-page {
     max-width: 100%;
     padding: var(--size-m) var(--size-m) var(--size-footer) var(--size-m);
     overflow: auto;
+}
+
+onboarding-flow {
+    display: block;
+    margin: 0 auto;
+}
+
+onboarding-flow > steps {
+    display: block;
+    margin: var(--size-xl) 0;
+}
+
+onboarding-flow steps h2 {
+    margin: 0 0 var(--size-xs);
+}
+
+onboarding-flow form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--size-m);
+    width: 100%;
+    max-width: var(--content-form-max-width);
+    margin-top: var(--size-l);
+}
+
+onboarding-flow input-group {
+    width: 100%;
+    margin-bottom: 0;
+}
+
+onboarding-flow .form-input {
+    width: 100%;
+}
+
+radio-group {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--size-s);
+}
+
+radio-group > label,
+onboarding-flow form > label {
+    display: flex;
+    align-items: center;
+    gap: var(--size-s);
+}
+
+radio-group > label {
+    cursor: pointer;
+}
+
+credential-gate {
+    display: block;
+    margin-top: var(--size-m);
+    padding: var(--size-m);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-small);
+    background-color: var(--background-color-dimmed);
+}
+
+status-list {
+    display: block;
+    margin-top: var(--size-m);
+}
+
+status-list > p {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--size-m);
+    margin: var(--size-s) 0;
+}
+
+badge {
+    display: inline-flex;
+    padding: var(--size-xxs) var(--size-s);
+    border-radius: var(--border-radius-small);
+    font-size: var(--font-size-s);
+    font-weight: var(--font-weight-semibold);
+}
+
+badge.success {
+    color: var(--color-success);
+    background-color: color-mix(in srgb, var(--color-success) 15%, transparent);
+}
+
+badge.warning {
+    color: var(--color-warning);
+    background-color: color-mix(in srgb, var(--color-warning) 15%, transparent);
+}
+
+badge.neutral {
+    color: var(--color-text-muted);
+    background-color: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
 }
 
 metadata-form {

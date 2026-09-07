@@ -12,7 +12,8 @@ use esdiag::cli_output::CliOutcome;
 #[cfg(feature = "setup")]
 use esdiag::{
     client::Client,
-    data::{Application, KnownHostBuilder, Uri},
+    data::{Application, ApplicationConfig, KnownHostBuilder, SecretAuth, Uri, get_password_for_secret_commands},
+    onboarding::{OutputDeploymentInput, save_output_deployment},
     setup,
 };
 #[cfg(feature = "setup")]
@@ -110,6 +111,8 @@ struct LocalOptions {
     stack: StackMode,
     open_browser: bool,
     copy_password: bool,
+    start_native_service: bool,
+    persist_onboarding_output: bool,
     log_level: Option<String>,
     force: bool,
     remaining: Vec<String>,
@@ -123,6 +126,8 @@ impl LocalOptions {
             stack: StackMode::Auto,
             open_browser: true,
             copy_password: true,
+            start_native_service: true,
+            persist_onboarding_output: false,
             log_level: None,
             force: false,
             remaining: Vec::new(),
@@ -158,6 +163,9 @@ impl LocalOptions {
                 "--open-browser=true" => options.open_browser = true,
                 "--copy-password=false" => options.copy_password = false,
                 "--copy-password=true" => options.copy_password = true,
+                "--start-native-service=false" => options.start_native_service = false,
+                "--start-native-service=true" => options.start_native_service = true,
+                "--persist-onboarding-output" => options.persist_onboarding_output = true,
                 "--log-level" => {
                     index += 1;
                     options.log_level = Some(
@@ -259,15 +267,22 @@ impl LocalState {
             self.stop_native_service()?;
             self.compose(&["up", "-d", "esdiag"])?;
             None
-        } else {
+        } else if options.start_native_service {
             Some(self.start_native_service()?)
+        } else {
+            None
         };
-        self.wait_url_for_startup(&self.esdiag_url(), None, native_child.as_mut(), false)
-            .await?;
+        if options.persist_onboarding_output {
+            self.persist_onboarding_output()?;
+        }
+        if mode == StackMode::Full || options.start_native_service {
+            self.wait_url_for_startup(&self.esdiag_url(), None, native_child.as_mut(), false)
+                .await?;
+        }
         self.values.insert("STACK_MODE".to_string(), mode.as_str().to_string());
         self.write()?;
         if self.open_browser {
-            self.open_browser()?;
+            self.open_browser_to("/welcome")?;
         }
         Ok(())
     }
@@ -342,6 +357,10 @@ impl LocalState {
         self.value("STATE_SCHEMA_VERSION", STATE_SCHEMA_VERSION);
         self.value("STACK_ESDIAG_VERSION", version);
         self.value("STACK_ELASTIC_VERSION", ELASTIC_VERSION);
+        if let Some(runtime) = self.runtime.as_deref() {
+            self.values
+                .insert("ESDIAG_CONTAINER_RUNTIME".to_string(), runtime.to_string());
+        }
         self.value("ELASTIC_SECURITY_ENABLED", "true");
         self.value("ELASTIC_PASSWORD", &random_secret());
         self.value("KIBANA_SYSTEM_PASSWORD", &random_secret());
@@ -396,6 +415,16 @@ impl LocalState {
                 ""
             },
             full_volume = if full { "  esdiag-data:\n" } else { "" }
+        );
+        let compose = compose.replace(
+            "      ESDIAG_CONTAINER_LOCAL_STACK: full\n",
+            &format!(
+                "      ESDIAG_CONTAINER_LOCAL_STACK: full\n      ESDIAG_CONTAINER_RUNTIME: {}\n",
+                self.values
+                    .get("ESDIAG_CONTAINER_RUNTIME")
+                    .map(String::as_str)
+                    .unwrap_or("unknown")
+            ),
         );
         write_private(self.dir.join("compose.yml"), &compose)
     }
@@ -469,6 +498,26 @@ impl LocalState {
         setup::assets(&kibana).await
     }
 
+    fn persist_onboarding_output(&self) -> Result<()> {
+        let password = get_password_for_secret_commands()?;
+        let api_key = self.required("ESDIAG_OUTPUT_APIKEY")?.to_string();
+        save_output_deployment(
+            OutputDeploymentInput {
+                output_name: "local".to_string(),
+                output_url: Url::parse(&self.elasticsearch_url())?,
+                viewer_name: "local-kibana".to_string(),
+                viewer_url: Url::parse(&self.kibana_url())?,
+                secret_id: "local".to_string(),
+                auth: SecretAuth::apikey(api_key),
+            },
+            &password,
+        )?;
+        let mut config = ApplicationConfig::load()?;
+        config.output.authenticated_on = Some(chrono::Utc::now().to_rfc3339());
+        config.output.assets_version = Some(env!("CARGO_PKG_VERSION").to_string());
+        config.save()
+    }
+
     fn start_native_service(&self) -> Result<Child> {
         self.stop_native_service()?;
         let log = self.dir.join("logs/native-serve.log");
@@ -490,6 +539,7 @@ impl LocalState {
             .arg("127.0.0.1")
             .arg("--port")
             .arg(self.required("ESDIAG_PORT")?)
+            .env("ESDIAG_CONTAINER_RUNTIME", self.required("ESDIAG_CONTAINER_RUNTIME")?)
             .env("ESDIAG_OUTPUT_URL", self.elasticsearch_url())
             .env("ESDIAG_OUTPUT_APIKEY", self.required("ESDIAG_OUTPUT_APIKEY")?)
             .env("ESDIAG_KIBANA_URL", self.kibana_url())
@@ -654,27 +704,29 @@ impl LocalState {
     }
 
     fn open_browser(&self) -> Result<()> {
+        self.open_browser_to("")
+    }
+
+    fn open_browser_to(&self, path: &str) -> Result<()> {
         if self.copy_password {
             self.copy_password_to_clipboard();
         }
+        let url = format!("{}{path}", self.esdiag_url());
         #[cfg(target_os = "macos")]
         let opener = Command::new("open")
-            .arg(self.esdiag_url())
+            .arg(&url)
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .status();
         #[cfg(target_os = "linux")]
         let opener = Command::new("xdg-open")
-            .arg(self.esdiag_url())
+            .arg(&url)
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .status();
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Err(error) = opener {
-            eprintln!(
-                "Could not open the browser: {error}. Open {} manually.",
-                self.esdiag_url()
-            );
+            eprintln!("Could not open the browser: {error}. Open {url} manually.");
         }
         Ok(())
     }

@@ -18,6 +18,7 @@ published release notes, maintenance branches, and tagged history.
 - Added `esdiag process --ask` to start an Agent Builder conversation about a newly processed diagnostic with its identifier included automatically (#379).
 - Added `esdiag agent skills` to install the running binary's offline, version-matched ESDiag skill for Claude Code, Codex, and OpenCode (#379).
 - Added `esdiag local` to provision and manage a local Elastic Stack through a Rust-owned lifecycle, with core as the default and an explicit full-container override.
+- Added resumable user-mode web onboarding at `/welcome`, including masked keystore and API-key forms for configuring a diagnostic workflow.
 - Added optional Elastic Upload Service forwarding to `esdiag-lite.sh` for newly collected and existing ZIP archives.
 - Added `esdiag-lite.ps1` for version-aware Elasticsearch diagnostic collection on Windows PowerShell.
 
@@ -57,6 +58,14 @@ published release notes, maintenance branches, and tagged history.
 - Changed `esdiag init` to offer a binary-owned core local stack when local
   processing has no existing deployment.
 - Changed `esdiag init` to defer opening a newly created local-stack web UI until every onboarding stage completes.
+- Changed `esdiag local up` to open the web onboarding page instead of the web UI root.
+- Changed the Advanced page to open on the New collection tab, with Existing available as the second tab.
+- Changed local-stack onboarding to show a spinner while Elasticsearch and Kibana start, then clear the status when both are running.
+- Changed web onboarding to report Elasticsearch and Kibana asset status separately and provide install or reinstall actions.
+- Changed the Remote cluster configuration step to show unknown asset status until a remote deployment is saved.
+- Changed local-stack onboarding to report the detected container runtime separately from its stack-management method.
+- Changed web onboarding to recognize environment-provided diagnostic clusters, validate their authenticated Elasticsearch and Kibana endpoints, and report whether required ESDiag assets are installed.
+- Changed user-mode web output selection to persist shared `esdiag.yml` preferences, with a backup-backed migration for representable legacy `settings.yml` targets.
 - Changed `esdiag-local` to retain `auto`, `core`, or `full` stack mode per
   deployment. Core mode uses the matching native binary and avoids an ESDiag
   container; full mode preserves the containerized runtime.

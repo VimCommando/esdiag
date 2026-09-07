@@ -3,10 +3,12 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{ServerState, get_theme_dark, template};
-use crate::data::{Application, HostRole, KnownHost, Settings, is_collectable_app};
+use crate::data::{Application, ApplicationConfig, HostRole, KnownHost, Settings, is_collectable_app};
 #[cfg(feature = "keystore")]
 use crate::data::{Job, load_saved_jobs_async};
 use crate::exporter::Exporter;
+#[cfg(feature = "keystore")]
+use crate::onboarding;
 use crate::processor::api::ApiResolver;
 use askama::Template;
 #[cfg(feature = "keystore")]
@@ -14,7 +16,7 @@ use axum::response::Response;
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Redirect},
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{path::PathBuf, str::FromStr, sync::Arc};
@@ -81,12 +83,22 @@ pub async fn handler(
     };
     let user_initial = user_email.chars().next().unwrap_or('_').to_ascii_uppercase();
     let allows_local_runtime_features = state.server_policy.allows_local_runtime_features();
+    #[cfg(feature = "keystore")]
+    if state.onboarding
+        && allows_local_runtime_features
+        && onboarding::inspect()
+            .map(|readiness| !readiness.is_complete())
+            .unwrap_or(true)
+    {
+        return Redirect::to("/welcome").into_response();
+    }
     let theme_dark = get_theme_dark(&headers);
     let kibana_url = { state.kibana_url.read().await.clone() };
     let output_secure = if allows_local_runtime_features {
-        Settings::load()
+        ApplicationConfig::load()
             .ok()
-            .and_then(|settings| settings.active_target)
+            .and_then(|config| config.output.default)
+            .or_else(|| Settings::load().ok().and_then(|settings| settings.active_target))
             .and_then(|target| KnownHost::get_known(&target))
             .is_some_and(|host| host.requires_keystore_secret())
     } else {
@@ -113,7 +125,6 @@ pub async fn handler(
         output_secure,
         keystore_locked: keystore_state.locked,
         keystore_lock_time: keystore_state.lock_time,
-        show_keystore_bootstrap: keystore_state.show_bootstrap,
     };
 
     let html = match page.render() {
@@ -183,7 +194,6 @@ pub async fn advanced_page(
         can_use_keystore: keystore_state.can_use_keystore,
         keystore_locked: keystore_state.locked,
         keystore_lock_time: keystore_state.lock_time,
-        show_keystore_bootstrap: keystore_state.show_bootstrap,
     };
 
     let html = match page.render() {
@@ -305,7 +315,6 @@ async fn build_jobs_page(
         can_use_keystore: keystore_state.can_use_keystore,
         keystore_locked: keystore_state.locked,
         keystore_lock_time: keystore_state.lock_time,
-        show_keystore_bootstrap: keystore_state.show_bootstrap,
         saved_job_name: if hide_saved_job { None } else { saved_job_name },
         saved_collect_mode: saved.collect_mode,
         saved_collect_source: saved.collect_source,
