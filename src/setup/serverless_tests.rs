@@ -557,7 +557,7 @@ fn serverless_kibana_only_removes_stateful_space_controls() {
     let mut adapted = original.clone();
     adapt_serverless_kibana_bundle(&mut adapted);
     assert_eq!(original.spaces[0]["solution"], "oblt");
-    assert!(original.spaces[0]["disabledFeatures"].as_array().unwrap().len() > 0);
+    assert!(!original.spaces[0]["disabledFeatures"].as_array().unwrap().is_empty());
     for (before, after) in original.spaces.iter().zip(&adapted.spaces) {
         let mut expected = before.clone();
         expected.as_object_mut().unwrap().remove("solution");

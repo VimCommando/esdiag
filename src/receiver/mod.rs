@@ -75,6 +75,25 @@ impl std::fmt::Display for MissingSource {
 
 impl std::error::Error for MissingSource {}
 
+// Skip JSON whitespace without allocating a second copy of the source payload.
+fn source_has_json(reader: &mut impl std::io::BufRead) -> std::io::Result<bool> {
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(false);
+        }
+        let whitespace = buffer
+            .iter()
+            .take_while(|b| matches!(b, b' ' | b'\n' | b'\r' | b'\t'))
+            .count();
+        let found = whitespace < buffer.len();
+        reader.consume(whitespace);
+        if found {
+            return Ok(true);
+        }
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait Receive {
     async fn is_connected(&self) -> bool;
@@ -491,6 +510,27 @@ mod tests {
     use super::{DirectoryReceiver, Receiver};
     use crate::data::{Application, KnownHostBuilder};
     use url::Url;
+
+    #[test]
+    fn source_probe_handles_whitespace_across_buffers_without_consuming_json() {
+        for input in ["", " \n\r\t \n"] {
+            let mut reader = std::io::BufReader::with_capacity(2, input.as_bytes());
+            assert!(!super::source_has_json(&mut reader).unwrap());
+        }
+        let mut reader = std::io::BufReader::with_capacity(2, b" \n\r\t {\"value\":42}  ".as_slice());
+        assert!(super::source_has_json(&mut reader).unwrap());
+        let value: serde_json::Value = serde_json::from_reader(reader).unwrap();
+        assert_eq!(value, serde_json::json!({"value":42}));
+    }
+
+    #[test]
+    fn source_probe_leaves_malformed_or_trailing_json_as_parse_errors() {
+        for input in [" {", "null null", "invalid"] {
+            let mut reader = std::io::BufReader::with_capacity(2, input.as_bytes());
+            assert!(super::source_has_json(&mut reader).unwrap());
+            assert!(serde_json::from_reader::<_, serde_json::Value>(reader).is_err());
+        }
+    }
 
     fn directory_receiver() -> Receiver {
         let root = tempfile::tempdir().expect("temp diagnostic root");

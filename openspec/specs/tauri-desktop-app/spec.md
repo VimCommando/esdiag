@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define the native desktop wrapper and its embedded local web server.
+
+## Requirements
 
 ### Requirement: Tauri Wrapper Startup
 The application SHALL embed the existing Axum web server inside a native Tauri desktop wrapper without modifying the core behavior of the Axum service. The background server must bind to an available port and initialize web runtime mode for desktop-hosted execution.

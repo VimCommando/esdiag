@@ -7,7 +7,7 @@ SHALL continue to read and write its active target and Kibana URL through
 persistence. `esdiag init` and CLI output resolution MAY use `esdiag.yml`, but
 they MUST NOT migrate, rewrite, or infer values from `settings.yml`.
 
-#### Scenario: User mode retains legacy settings persistence
+#### Scenario: User mode persists local settings
 - **GIVEN** the web interface is running in `user` mode
 - **WHEN** the user configures a custom target host and restarts the application without CLI arguments
 - **THEN** the server initializes using `settings.yml` and its saved host target data

@@ -4,6 +4,7 @@
     <td class="host-product-column">
         <form-input>
             <select data-bind:hosts.rows.{{ row_id }}.draft.app>
+                <option value="Unresolved" {% if host.app == "Unresolved" %}selected{% endif %}>Unresolved</option>
                 <option value="None" {% if host.app == "None" %}selected{% endif %}>None</option>
                 <option value="Elasticsearch" {% if host.app == "Elasticsearch" %}selected{% endif %}>Elasticsearch</option>
                 <option value="Kibana" {% if host.app == "Kibana" %}selected{% endif %}>Kibana</option>

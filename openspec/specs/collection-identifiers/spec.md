@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define collection metadata arguments and preserve those identifiers in diagnostic manifests.
+
+## Requirements
 
 ### Requirement: CLI Arguments for Identifiers during Collection
 The system SHALL provide CLI arguments for the `collect` command to capture metadata identifiers: `--account` (`-a`), `--case` (`-c`), `--opportunity` (`-o`), and `--user` (`-u`). These MUST mirror the identifier arguments currently available in the `process` command.

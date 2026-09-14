@@ -76,9 +76,8 @@ impl Receive for DirectoryReceiver {
             tracing::debug!("Reading file: {}", &filename.display());
             match File::open(&filename) {
                 Ok(file) => {
-                    let mut contents = String::new();
-                    BufReader::new(file).read_to_string(&mut contents)?;
-                    if contents.trim().is_empty() {
+                    let mut reader = BufReader::new(file);
+                    if !crate::receiver::source_has_json(&mut reader)? {
                         last_error = Some(
                             MissingSource::Empty {
                                 path: filename.display().to_string(),
@@ -87,7 +86,7 @@ impl Receive for DirectoryReceiver {
                         );
                         continue;
                     }
-                    let data: T = serde_json::from_str(&contents)
+                    let data: T = serde_json::from_reader(reader)
                         .wrap_err_with(|| format!("Failed to parse {} for {}", filename.display(), T::name()))?;
                     return Ok(data);
                 }

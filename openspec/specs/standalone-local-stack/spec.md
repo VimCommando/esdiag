@@ -1,7 +1,9 @@
 # standalone-local-stack Specification
 
 ## Purpose
-TBD - created by archiving change add-standalone-esdiag-local. Update Purpose after archive.
+
+Define standalone local Elastic Stack installation, lifecycle management, and protected runtime state.
+
 ## Requirements
 ### Requirement: Standalone Local Stack Artifact
 The project SHALL distribute `esdiag-local` as a single executable shell artifact that manages a local ESDiag stack without reading any repository-owned file. The script MAY generate durable runtime configuration after execution, but MUST NOT require `Cargo.toml`, Git metadata, `example.env`, `docker/Dockerfile`, repository Compose files, or a repository-relative working directory.

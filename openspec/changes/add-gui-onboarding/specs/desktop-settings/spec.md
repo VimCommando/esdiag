@@ -17,7 +17,7 @@ only retain limited, non-sensitive preferences.
 - **THEN** it creates an equivalent shared output configuration
 - **AND** retains a backup of the legacy settings before switching persistence
 
-#### Scenario: User mode persists shared output settings
+#### Scenario: User mode persists local settings
 
 - **GIVEN** the web interface is running in `user` mode after migration
 - **WHEN** the user configures a custom saved output target and restarts the application
@@ -28,3 +28,10 @@ only retain limited, non-sensitive preferences.
 - **GIVEN** the web interface is running in `service` mode
 - **WHEN** a user updates available preferences from the UI
 - **THEN** the system does not write credentials or host target records to local `settings.yml`, `esdiag.yml`, or `hosts.yml` artifacts
+
+#### Scenario: CLI does not infer desktop preferences
+
+- **GIVEN** a legacy `settings.yml` file exists without shared output configuration
+- **WHEN** a CLI command omits its output target and no runtime output environment is present
+- **THEN** the CLI resolves only `esdiag.yml` configuration
+- **AND** it does not read `settings.yml`

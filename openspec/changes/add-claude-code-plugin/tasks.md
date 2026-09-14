@@ -21,14 +21,14 @@
 
 ## 4. Successor CLI Boundaries
 
-- [ ] 4.1 Complete `standardize-cli-output` so the skill consumes exact YAML/JSON outcomes and no longer parses completion prose.
-- [ ] 4.2 Complete `add-first-run-onboarding` so the plugin owns no URLs, credentials, saved-job defaults, or prompt-driven first-job setup and routes new users through `references/onboarding.md`.
-- [ ] 4.3 Complete `add-agent-cli` so the skill delegates through `esdiag agent ask`, uses canonical output deployment configuration, persists no local conversation map, runs no direct freshness query, and can be installed from the running binary through `esdiag agent skills`.
-- [ ] 4.4 Remove canonical and generated skill script directories and regenerate identical Claude Code, Codex, and OpenCode packages.
+- [x] 4.1 Complete `standardize-cli-output` so the skill consumes exact YAML/JSON outcomes and no longer parses completion prose.
+- [x] 4.2 Complete `add-first-run-onboarding` so the plugin owns no URLs, credentials, saved-job defaults, or prompt-driven first-job setup and routes new users through `references/onboarding.md`.
+- [x] 4.3 Complete `add-agent-cli` so the skill delegates through `esdiag agent ask`, uses canonical output deployment configuration, persists no local conversation map, runs no direct freshness query, and can be installed from the running binary through `esdiag agent skills`.
+- [x] 4.4 Remove canonical and generated skill script directories and regenerate identical Claude Code, Codex, and OpenCode packages.
 
 ## 5. Documentation And Archive Verification
 
-- [ ] 5.1 Update installation and skill documentation to distinguish normal use, local `esdiag init` onboarding, and cluster provisioning without exposing credentials to agent conversations.
-- [ ] 5.2 Document Agent Builder inference cost, required privileges, explicit conversation continuation, Kibana handoff, and unsafe retry behavior.
-- [ ] 5.3 Update `CHANGELOG.md` using the repository changelog skill for the final portable script-free workflow.
-- [ ] 5.4 Run plugin/package tests, `cargo clippy`, `cargo test`, and strict validation for this change and all three successor changes before archive.
+- [x] 5.1 Update installation and skill documentation to distinguish normal use, local `esdiag init` onboarding, and cluster provisioning without exposing credentials to agent conversations.
+- [x] 5.2 Document Agent Builder inference cost, required privileges, explicit conversation continuation, Kibana handoff, and unsafe retry behavior.
+- [x] 5.3 Update `CHANGELOG.md` using the repository changelog skill for the final portable script-free workflow.
+- [x] 5.4 Run plugin/package tests, `cargo clippy`, `cargo test`, and strict validation for this change and all three successor changes before archive.

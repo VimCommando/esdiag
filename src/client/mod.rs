@@ -52,26 +52,6 @@ fn connection_failure(error: &(dyn std::error::Error + 'static)) -> String {
     .to_string()
 }
 
-#[cfg(test)]
-mod connection_failure_tests {
-    use super::connection_failure;
-
-    #[test]
-    fn classifies_nested_transport_errors_without_exposing_their_contents() {
-        for (cause, expected) in [
-            ("dns error: failed to lookup address", "DNS lookup failed"),
-            ("windows connection failure", "connection failed"),
-            ("invalid peer certificate", "TLS verification failed"),
-            ("operation timed out", "connection timed out"),
-            ("tcp connect error", "connection failed"),
-        ] {
-            let error = eyre::Report::new(std::io::Error::other(format!("{cause}: api_key=secret")))
-                .wrap_err("Failed to send request");
-            assert_eq!(connection_failure(error.as_ref()), expected);
-        }
-    }
-}
-
 /// A standardized client for interacting with Elastic Stack APIs
 pub enum Client {
     Elasticsearch(ElasticsearchClient),
@@ -347,6 +327,26 @@ impl TryFrom<Uri> for Client {
                 }
             }
             _ => Err(eyre!("Unsupported URI")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod connection_failure_tests {
+    use super::connection_failure;
+
+    #[test]
+    fn classifies_nested_transport_errors_without_exposing_their_contents() {
+        for (cause, expected) in [
+            ("dns error: failed to lookup address", "DNS lookup failed"),
+            ("windows connection failure", "connection failed"),
+            ("invalid peer certificate", "TLS verification failed"),
+            ("operation timed out", "connection timed out"),
+            ("tcp connect error", "connection failed"),
+        ] {
+            let error = eyre::Report::new(std::io::Error::other(format!("{cause}: api_key=secret")))
+                .wrap_err("Failed to send request");
+            assert_eq!(connection_failure(error.as_ref()), expected);
         }
     }
 }

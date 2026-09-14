@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define persistent user settings and the restricted preferences available in service mode.
+
+## Requirements
 
 ### Requirement: Persistent Desktop Settings
 The system SHALL support mode-aware settings persistence. In `user` mode, it SHALL read and write configuration settings (active exporter and Kibana URL) to a local settings file alongside `hosts.yml`. In `service` mode, it SHALL avoid local credential and host persistence and only retain limited, non-sensitive preferences.

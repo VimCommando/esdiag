@@ -50,9 +50,9 @@ impl Export for StreamExporter {
         // (ADR-0016); write failures travel in `errors`, not the status.
         let mut batch = BatchResponse::new(doc_count);
         tracing::debug!("{} wrote {} docs to stdout", index, doc_count);
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
         for doc in docs {
-            let stdout = std::io::stdout();
-            let mut writer = stdout.lock();
             serde_json::to_writer(&mut writer, &doc)?;
             writer.write_all(b"\n")?;
         }

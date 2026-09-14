@@ -76,6 +76,9 @@ published release notes, maintenance branches, and tagged history.
 
 ### Fixed
 
+- Fixed unresolved saved hosts displaying the wrong application while editing.
+- Avoided buffering an extra copy of each JSON source when processing diagnostic directories and archives.
+
 - Fixed the Lifecycle Overview dashboard resetting the global time filter to the default 15-minute window on cold load, which hid diagnostic data; it now stores a 90-day range so lifecycle data is visible by default (#365).
 
 - Ported the released web statistics and active serve-output fixes to the unified job runner, counting created documents from completed reports (#380, #381).

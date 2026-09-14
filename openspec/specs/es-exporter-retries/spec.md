@@ -1,3 +1,9 @@
+## Purpose
+
+Define bounded retries, backoff, and failure reporting for Elasticsearch bulk exports.
+
+## Requirements
+
 ### Requirement: Retry Bulk Export on HTTP 429
 The Elasticsearch exporter SHALL retry a failed bulk batch when the output cluster responds with HTTP 429 (Too Many Requests). Retries MUST use exponential backoff with jitter. The maximum number of attempts and backoff bounds MUST be configurable via environment variables. After exhausting all attempts the exporter MUST log an error and continue processing remaining batches.
 

@@ -8,15 +8,17 @@ use std::{
     time::Duration,
 };
 
-use esdiag::cli_output::CliOutcome;
+use esdiag::{
+    cli_output::CliOutcome,
+    data::{ApplicationConfig, SecretAuth, get_password_for_secret_commands},
+    onboarding::{OutputDeploymentInput, save_output_deployment},
+};
 #[cfg(feature = "setup")]
 use esdiag::{
     client::Client,
-    data::{Application, ApplicationConfig, KnownHostBuilder, SecretAuth, Uri, get_password_for_secret_commands},
-    onboarding::{OutputDeploymentInput, save_output_deployment},
+    data::{Application, KnownHostBuilder, Uri},
     setup,
 };
-#[cfg(feature = "setup")]
 use url::Url;
 
 const STATE_SCHEMA_VERSION: &str = "3";
@@ -1154,7 +1156,7 @@ mod onboarding_recovery_tests {
             for status in ["401 Unauthorized", "200 OK"] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buffer = [0; 4096];
-                socket.read(&mut buffer).await.unwrap();
+                assert!(socket.read(&mut buffer).await.unwrap() > 0, "expected an HTTP request");
                 socket
                     .write_all(
                         format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
@@ -1204,7 +1206,7 @@ mod onboarding_recovery_tests {
             for _ in 0..2 {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buffer = [0; 4096];
-                socket.read(&mut buffer).await.unwrap();
+                assert!(socket.read(&mut buffer).await.unwrap() > 0, "expected an HTTP request");
                 socket
                     .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                     .await

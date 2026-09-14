@@ -968,17 +968,10 @@ mod tests {
         },
     };
     use axum::{Router, http::StatusCode, routing::get};
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use std::{collections::HashMap, sync::Arc};
     use tokio::net::TcpListener;
     use tokio::sync::{RwLock, broadcast, mpsc, watch};
     use url::Url;
-
-    fn env_lock() -> &'static Mutex<()> {
-        crate::test_env_lock()
-    }
 
     fn test_state(mode: RuntimeMode) -> ServerState {
         let (stats_updates_tx, stats_updates_rx) = watch::channel(0u64);

@@ -3433,6 +3433,37 @@ fn resolve_serve_exporter(output: Option<String>) -> Result<Exporter> {
     Exporter::try_from(Uri::try_from(output)?)
 }
 
+#[cfg(feature = "setup")]
+fn setup_outcome(targets: Vec<String>, report: setup::SetupReport) -> CliOutcome {
+    CliOutcome::SetupCompleted {
+        targets,
+        outcome: if report.is_complete() { "complete" } else { "partial" }.to_string(),
+        failed_indices: report.failed_indices,
+        warnings: report.warnings,
+    }
+}
+
+fn safe_output_display(uri: &Uri) -> String {
+    match uri {
+        Uri::KnownHost(host)
+        | Uri::ElasticCloud(host)
+        | Uri::ElasticCloudAdmin(host)
+        | Uri::ElasticGovCloudAdmin(host) => host
+            .concrete_url()
+            .map(|url| safe_output_display(&Uri::Url(url.clone())))
+            .unwrap_or_else(|| host.transport_display()),
+        Uri::Url(url) | Uri::ServiceLink(url) | Uri::ServiceLinkNoAuth(url) => {
+            let mut url = url.clone();
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string()
+        }
+        _ => uri.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -4751,36 +4782,5 @@ mod desktop_startup_tests {
 
         server.shutdown().await;
         drop(occupied_listener);
-    }
-}
-
-#[cfg(feature = "setup")]
-fn setup_outcome(targets: Vec<String>, report: setup::SetupReport) -> CliOutcome {
-    CliOutcome::SetupCompleted {
-        targets,
-        outcome: if report.is_complete() { "complete" } else { "partial" }.to_string(),
-        failed_indices: report.failed_indices,
-        warnings: report.warnings,
-    }
-}
-
-fn safe_output_display(uri: &Uri) -> String {
-    match uri {
-        Uri::KnownHost(host)
-        | Uri::ElasticCloud(host)
-        | Uri::ElasticCloudAdmin(host)
-        | Uri::ElasticGovCloudAdmin(host) => host
-            .concrete_url()
-            .map(|url| safe_output_display(&Uri::Url(url.clone())))
-            .unwrap_or_else(|| host.transport_display()),
-        Uri::Url(url) | Uri::ServiceLink(url) | Uri::ServiceLinkNoAuth(url) => {
-            let mut url = url.clone();
-            let _ = url.set_username("");
-            let _ = url.set_password(None);
-            url.set_query(None);
-            url.set_fragment(None);
-            url.to_string()
-        }
-        _ => uri.to_string(),
     }
 }

@@ -41,28 +41,30 @@ test_skills_are_script_free() {
     [[ ! -e "${source_skill}/scripts" ]] || fail "canonical skill still contains scripts"
     [[ ! -e "${bundled_skill}/scripts" ]] || fail "generated skill still contains scripts"
     [[ ! -e "${bundled_skill}/agents" ]] || fail "generated skill contains provider metadata"
-    if grep -R -F -q 'scripts/' "$source_skill"; then
+    if rg -F -q 'scripts/' "$source_skill"; then
         fail "canonical skill references a helper script"
     fi
 }
 
 test_skill_routes_to_native_commands() {
-    grep -Fq 'esdiag init' "${source_skill}/SKILL.md" ||
+    rg -Fq 'references/esdiag-cli.md' "${source_skill}/SKILL.md" || fail "native CLI guide is unreachable"
+    rg -Fq 'references/onboarding.md' "${source_skill}/SKILL.md" || fail "onboarding guide is unreachable"
+    rg -Fq 'esdiag init' "${source_skill}/references/onboarding.md" ||
         fail "canonical skill does not hand off first-run setup"
-    grep -Fq 'esdiag agent skills' "${source_skill}/SKILL.md" ||
+    rg -Fq 'esdiag agent skills' "${source_skill}/references/esdiag-cli.md" ||
         fail "canonical skill does not document offline installation"
-    grep -Fq 'esdiag agent ask' "${source_skill}/SKILL.md" ||
+    rg -Fq 'esdiag agent ask' "${source_skill}/references/esdiag-cli.md" ||
         fail "canonical skill does not invoke native Agent Builder ask"
     [[ -f "${source_skill}/references/onboarding.md" ]] ||
         fail "canonical skill has no onboarding reference"
 }
 
 test_host_manifests_are_valid_json() {
-    jq -e . "${root}/plugin/.claude-plugin/plugin.json" >/dev/null ||
+    tq -e . "${root}/plugin/.claude-plugin/plugin.json" >/dev/null ||
         fail "Claude plugin manifest is not valid JSON"
-    jq -e . "${root}/plugin/.codex-plugin/plugin.json" >/dev/null ||
+    tq -e . "${root}/plugin/.codex-plugin/plugin.json" >/dev/null ||
         fail "Codex plugin manifest is not valid JSON"
-    jq -e . "${root}/.claude-plugin/marketplace.json" >/dev/null ||
+    tq -e . "${root}/.claude-plugin/marketplace.json" >/dev/null ||
         fail "marketplace manifest is not valid JSON"
 }
 
@@ -70,8 +72,8 @@ test_plugin_version_matches_package_version() {
     local package_version claude_version codex_version
     package_version="$(awk -F '"' '/^version = / {print $2; exit}' "${root}/Cargo.toml")"
     package_version="${package_version%-SNAPSHOT}"
-    claude_version="$(jq -r '.version' "${root}/plugin/.claude-plugin/plugin.json")"
-    codex_version="$(jq -r '.version' "${root}/plugin/.codex-plugin/plugin.json")"
+    claude_version="$(tq -r '.version' "${root}/plugin/.claude-plugin/plugin.json")"
+    codex_version="$(tq -r '.version' "${root}/plugin/.codex-plugin/plugin.json")"
     assert_eq "$claude_version" "$package_version"
     assert_eq "$codex_version" "$package_version"
 }
