@@ -24,6 +24,8 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Changed `elasticrc` to parse schema-keyed `ServiceConfig<T>` values that resolve into typed runtime `Service<T>` values.
+
 - Enabled failure stores for new diagnostic data streams so rejected documents can be inspected and recovered.
 
 - Changed local startup to retry transient Elasticsearch authentication failures while security initializes.
@@ -73,6 +75,8 @@ published release notes, maintenance branches, and tagged history.
   container; full mode preserves the containerized runtime.
 
 ### Fixed
+
+- Fixed the Lifecycle Overview dashboard resetting the global time filter to the default 15-minute window on cold load, which hid diagnostic data; it now stores a 90-day range so lifecycle data is visible by default (#365).
 
 - Ported the released web statistics and active serve-output fixes to the unified job runner, counting created documents from completed reports (#380, #381).
 
