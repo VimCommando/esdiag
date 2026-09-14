@@ -127,6 +127,33 @@ published release notes, maintenance branches, and tagged history.
 - Clarified credential custody so saved credentials are mediated by the user-mode keystore, service-mode outputs use runtime-provided credentials, and ad-hoc input API keys remain transient (#352).
 - Wrapped every API key, password, and cached keystore password in a redacting type, so credential material renders as a marker in debug and log output and can only be serialized where a field opts in (#352).
 
+## [0.16.5] - 2026-08-20
+
+### Fixed
+
+- Fixed the shared web statistics counter so completed jobs add their processed documents (#380).
+- Fixed web processing with an explicit `serve` output so it no longer requires `ESDIAG_OUTPUT_URL`.
+
+## [0.16.4] - 2026-08-07
+
+### Changed
+
+- Changed container builds to use `Cargo.lock` for reproducible dependency resolution.
+- Updated bundled dependencies and third-party notices.
+- Added required crates.io package metadata.
+
+## [0.16.2] - 2026-08-07
+
+### Changed
+
+- Changed the Elasticsearch client dependency to use its crates.io release, allowing ESDiag to be published to crates.io.
+
+## [0.16.1] - 2026-07-26
+
+### Fixed
+
+- Fixed index settings ingestion for clusters containing standard indices without a searchable snapshot `repository_uuid` (#362).
+
 ## [0.16.0] - 2026-07-11
 
 ### Added
@@ -322,7 +349,11 @@ published release notes, maintenance branches, and tagged history.
   fail on invalid zip paths (#177).
 - Fixed ECK diagnostic path handling for correctly structured archives (#179).
 
-[Unreleased]: https://github.com/elastic/esdiag/compare/0.16.0...main
+[Unreleased]: https://github.com/elastic/esdiag/compare/0.16.5...main
+[0.16.5]: https://github.com/elastic/esdiag/compare/0.16.4...0.16.5
+[0.16.4]: https://github.com/elastic/esdiag/compare/0.16.2...0.16.4
+[0.16.2]: https://github.com/elastic/esdiag/compare/0.16.1...0.16.2
+[0.16.1]: https://github.com/elastic/esdiag/compare/0.16.0...0.16.1
 [0.16.0]: https://github.com/elastic/esdiag/compare/0.15.0...0.16.0
 [0.15.0]: https://github.com/elastic/esdiag/compare/0.14.2...0.15.0
 [0.14]: https://github.com/elastic/esdiag/compare/0.13.0...0.14.2

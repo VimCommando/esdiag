@@ -102,6 +102,9 @@ keystore password for non-interactive use.
 | Other non-empty string | Write to a local file or directory. |
 | Omitted | Use a complete `ESDIAG_OUTPUT_*` deployment, then the default linked output in `esdiag.yml`. |
 
+The web workflow's `Default` output reuses the active `serve` target, including
+an explicit output supplied at startup.
+
 Save HTTP URLs as hosts before using them as outputs. A raw `http://` or
 `https://` argument is a file path, not an Elasticsearch destination.
 

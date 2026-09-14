@@ -1974,6 +1974,16 @@ mod tests {
         result
     }
 
+    #[tokio::test]
+    async fn successful_job_records_processed_documents_in_shared_stats() {
+        let state = test_server_state();
+
+        state.record_success("test@example.com", 4636, 0).await;
+
+        let stats = state.get_stats().await;
+        assert_eq!(stats.docs.total, 4636);
+    }
+
     #[test]
     fn web_feature_defaults_enable_only_advanced_for_user_mode() {
         let policy = ServerPolicy::defaults(RuntimeMode::User);
