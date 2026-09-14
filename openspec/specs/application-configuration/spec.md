@@ -1,4 +1,9 @@
-## ADDED Requirements
+# application-configuration Specification
+
+## Purpose
+Define non-secret application preferences and resolution of linked diagnostic output deployments.
+
+## Requirements
 
 ### Requirement: General Application Configuration
 The system SHALL persist local non-secret preferences in a versioned

@@ -1,3 +1,7 @@
+## Purpose
+
+Define native Agent Builder analysis, conversation handoff, and safe retry behavior for diagnostic questions.
+
 ## ADDED Requirements
 
 ### Requirement: Analysis Delegated To The Cluster Agent

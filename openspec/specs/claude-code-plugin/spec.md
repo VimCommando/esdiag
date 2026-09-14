@@ -1,4 +1,9 @@
-## ADDED Requirements
+# claude-code-plugin Specification
+
+## Purpose
+Define portable, script-free packaging and native command routing for coding-agent diagnostic workflows.
+
+## Requirements
 
 ### Requirement: Plugin Package Installable Into Claude Code
 The project SHALL provide a distributable Claude Code plugin package containing valid plugin metadata and the portable ESDiag skill. Installation MUST NOT require a source checkout or host-specific copy of the skill instructions.

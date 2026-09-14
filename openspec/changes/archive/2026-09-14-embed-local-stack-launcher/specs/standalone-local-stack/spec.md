@@ -147,6 +147,8 @@ MUST NOT create or depend on that volume.
 - **THEN** the ESDiag user-state volume is removed with the Elasticsearch and
   Kibana data volumes
 
+## ADDED Requirements
+
 ### Requirement: Full-Mode Container CLI Execution
 
 The standalone launcher SHALL provide

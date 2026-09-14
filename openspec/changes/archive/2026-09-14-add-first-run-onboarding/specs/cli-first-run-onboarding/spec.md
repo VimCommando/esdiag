@@ -1,3 +1,7 @@
+## Purpose
+
+Define resumable terminal initialization of diagnostic identity, credentials, output deployments, and saved workflows.
+
 ## ADDED Requirements
 
 ### Requirement: Interactive First-Run Workflow
