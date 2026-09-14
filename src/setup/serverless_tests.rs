@@ -95,6 +95,42 @@ fn visit_json(value: &Value, visitor: &mut impl FnMut(&Value)) {
 }
 
 #[test]
+fn dashboard_visualizations_have_a_definition_or_reference() {
+    let bundle = kibana_bundle(&EmbeddedAssets::new().unwrap())
+        .unwrap()
+        .read_all()
+        .unwrap();
+    for dashboard in bundle.by_space["esdiag"]
+        .saved_objects
+        .iter()
+        .filter(|o| o["type"] == "dashboard")
+    {
+        let panels = &dashboard["attributes"]["panelsJSON"];
+        for panel in panels
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["type"] == "visualization")
+        {
+            assert!(
+                panel["embeddableConfig"]["savedVis"]["type"].is_string()
+                    || panel["panelRefName"].is_string()
+                    || panel["embeddableConfig"]["savedObjectId"].is_string()
+                    || dashboard["references"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|r| r["type"] == "visualization"
+                            && r["name"] == format!("{}:savedObjectRef", panel["panelIndex"].as_str().unwrap())),
+                "{}: visualization {} has no definition or reference",
+                dashboard["id"],
+                panel["panelIndex"]
+            );
+        }
+    }
+}
+
+#[test]
 fn dashboard_links_have_one_reference_and_no_obsolete_saved_object_id() {
     let bundle = kibana_bundle(&EmbeddedAssets::new().unwrap())
         .unwrap()

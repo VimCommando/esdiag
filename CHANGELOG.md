@@ -74,6 +74,13 @@ published release notes, maintenance branches, and tagged history.
 
 ### Fixed
 
+- Ported the released web statistics and active serve-output fixes to the unified job runner, counting created documents from completed reports (#380, #381).
+
+- Kept browser upload processing connected while its card is replaced, allowing completion links and statistics to arrive.
+- Created the runtime report directory when saving diagnostics from a fresh service environment.
+- Mapped optional diagnostic case numbers so Diagnostic List controls work before any case number is ingested.
+- Removed an empty Search Summary visualization that rendered an error instead of content.
+
 - Explicitly mapped the HTTP maximum warning-header size setting, preventing node-settings rejection without changing shared dynamic-template suppression rules.
 - Fixed successful Logstash diagnostics reporting partial outcomes because parsed sources were not recorded as parsed.
 - Resolved imported Kibana dashboard and data-view IDs before generating diagnostic links, including imports that assign new IDs in another space.

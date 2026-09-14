@@ -1,15 +1,11 @@
 ---
 type: Reference
 title: Serverless asset compatibility
-description: Elasticsearch and Kibana setup asset audit and live verification.
+description: Elasticsearch and Kibana setup compatibility and configuration for Serverless.
 tags: [setup, serverless, elasticsearch, kibana]
 ---
 
 # Serverless asset compatibility
-
-Audited for issue [#390](https://github.com/elastic/esdiag/issues/390) on
-2026-09-04 using the saved `esdiag-less` and `esdiag-less-kb` hosts. Both
-products reported version `9.6.0` and build flavor `serverless`.
 
 Setup reads `version.build_flavor` from Elasticsearch's root response or
 Kibana's `/api/status`. It does not infer deployment type from the hostname.
@@ -17,7 +13,7 @@ An Elasticsearch security usage response of HTTP 410 reports security as
 enabled. Deployment metadata selects the Serverless asset adaptations;
 security status does not determine deployment compatibility.
 
-## Findings and changes
+## Compatibility adaptations
 
 | Item | Finding | Setup behavior |
 | --- | --- | --- |
@@ -72,11 +68,8 @@ partial or failed outcome, even when Elasticsearch returns HTTP 201 with
 The shared template sets `index.codec: best_compression` for regular backing
 indices. Elasticsearch currently filters this setting out when creating failure
 indices; its [failure-store settings allowlist](https://github.com/elastic/elasticsearch/blob/main/server/src/main/java/org/elasticsearch/cluster/metadata/DataStreamFailureStoreDefinition.java)
-does not include `index.codec`. A live Serverless check with an isolated template
-confirmed `best_compression` on the regular backing index and `default` on a newly
-created failure index. Template configuration therefore cannot currently enforce
-failure-store compression. Recheck this capability when Elasticsearch adds support;
-do not infer failure-index settings from template simulation alone.
+does not include `index.codec`. Template configuration therefore cannot enforce
+failure-store compression.
 
 Existing streams need a separate options update. Template updates and rollover
 do not change their failure-store options:
@@ -127,32 +120,20 @@ keyword. Dynamic templates apply only to unmapped fields, so this prevents the
 human-readable size rule from creating a disabled object beneath the flattened
 HTTP namespace. The shared suppression rules need no path exclusions.
 
+The optional `diagnostic.case_number` field is mapped as a keyword so Diagnostic
+List controls can load before any report contains a case number. After setup,
+apply this additive mapping to existing report indices without reindexing:
+
+```http
+PUT /metrics-diagnostic-esdiag/_mapping
+{"properties":{"diagnostic":{"properties":{"case_number":{"type":"keyword"}}}}}
+```
+
 Dashboard links remain references to the shared navigation objects. Obsolete
 `embeddableConfig.savedObjectId` fields and duplicate references are removed:
 current Kibana transforms the saved-object reference into `ref_id`, and its
 strict schema rejects the obsolete field. Both reference and inline links
 panels remain supported.
-
-Live checks against the `serverless-dev` CLI context indexed all 490 documents
-from a regression fixture and all 284 documents from a fresh local collection.
-The fixture includes scalar settings with dotted sub-settings and health
-impact and diagnosis records. Tests inspect deployment flavor and API behavior;
-they do not require a fixed Serverless `version.number`.
-All 12 embedded dashboard searches also completed without shard failures.
-Vega specs use strict JSON so the audit can parse their queries instead of
-silently skipping them.
-
-The complete archive matrix indexed 1,310 documents from all four Elasticsearch
-and four Logstash bundles without rejections. Kibana archive processing is not
-implemented; all four Kibana bundles stop before export. A live stateful-source
-run indexed 3,532 documents without rejections after the node-setting fix. Its
-partial outcome reflected an optional searchable-snapshot statistics request
-returning HTTP 404 because the source had no searchable snapshot indices.
-
-An isolated live rejection test also verifies pipeline routing, attribution to
-impact and diagnosis streams, failure-store recovery, and direct rejection
-reasons with capture disabled. Its UUID-named streams and templates are removed
-after the assertions; shared diagnostic streams are not modified.
 
 An Elasticsearch asset rejection is recorded in the setup report's `warnings`.
 The combined `esdiag setup` command continues to Kibana and reports a partial
@@ -187,13 +168,7 @@ stateful APIs such as ILM and node statistics. Setup does not send these
 requests. This audit covers Serverless as the diagnostic destination and
 viewer; it does not establish Serverless diagnostic collection support.
 
-## Repeat the verification
-
-Both setup commands completed successfully on the audited project. The live
-audit passed after reading all 34 installed Elasticsearch assets, simulating
-all 26 composed index templates and the pipeline, finding all 90 Kibana saved
-objects, verifying their references, and checking the workflow, tool, skill,
-and default-agent attachment. Embedded Vega searches also succeeded.
+## Verification commands
 
 Kibana may assign new IDs when an imported object already exists in another
 space. The audit matches these objects by `originId` and checks their actual
@@ -201,12 +176,6 @@ references; it does not assume every imported object retains its original ID.
 Diagnostic links likewise resolve the imported Cluster Report and Node Settings
 data-view IDs in the output's Kibana space. If the viewer cannot be read or the
 required objects are absent, processing omits the link and logs the reason.
-
-The `serverless-dev` audit also completed Elasticsearch and Kibana setup,
-verified all 90 saved objects and their references, checked default-agent skill
-attachment, and confirmed navigation panels survive Kibana's dashboard API
-transformation. That API omits unsupported `legacy_vis` panels from its response;
-this is an API limitation and does not establish browser rendering behavior.
 
 Use an unlocked keystore and saved Elasticsearch and Kibana hosts for a
 Serverless test project. These setup commands install or update ESDiag assets:

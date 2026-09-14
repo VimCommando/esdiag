@@ -3871,20 +3871,6 @@ a:link { text-decoration: none; }""",
       },
       {
         "embeddableConfig": {
-          "enhancements": {}
-        },
-        "gridData": {
-          "h": 3,
-          "i": "6f8df980-19de-4e60-beb0-ccbb54ec18cf",
-          "w": 48,
-          "x": 0,
-          "y": 22
-        },
-        "panelIndex": "6f8df980-19de-4e60-beb0-ccbb54ec18cf",
-        "type": "visualization"
-      },
-      {
-        "embeddableConfig": {
           "attributes": {
             "references": [
               {

@@ -88,6 +88,7 @@ pub fn save_file<T: Serialize>(filename: &str, content: &T) -> Result<()> {
         .join(env::get_string("ESDIAG_HOME")?)
         .join("last_run")
         .join(filename);
+    std::fs::create_dir_all(home_file.parent().expect("last_run directory"))?;
     let mut file = OpenOptions::new().create(true).append(true).open(home_file)?;
     let body = serde_json::to_string(&content)?;
     file.write_all(body.as_bytes())?;
@@ -202,6 +203,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Application, collect_application};
+
+    #[test]
+    fn save_file_creates_missing_last_run_and_appends_records() {
+        let mut env = crate::TestEnv::new();
+        let home = env.tmp.path().join("new-runtime-home");
+        env.set_path("ESDIAG_HOME", home.clone());
+        super::save_file("report.json", &serde_json::json!({"id":1})).unwrap();
+        super::save_file("report.json", &serde_json::json!({"id":2})).unwrap();
+        let contents = std::fs::read_to_string(home.join("last_run/report.json")).unwrap();
+        let records: Vec<serde_json::Value> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records, vec![serde_json::json!({"id":1}), serde_json::json!({"id":2})]);
+    }
 
     #[test]
     fn collect_application_accepts_every_api_collectable_application() {

@@ -472,7 +472,7 @@ impl Server {
     pub async fn start_with_options(
         bind_addr: [u8; 4],
         port: u16,
-        mut exporter: Exporter,
+        exporter: Exporter,
         kibana_url: String,
         runtime_mode: RuntimeMode,
         options: ServerStartOptions<'_>,
@@ -480,7 +480,6 @@ impl Server {
         let (_, rx) = mpsc::channel::<(Identifiers, Bytes)>(1);
         let rx = Arc::new(RwLock::new(rx));
         let rx_clone = rx.clone();
-        let docs_rx = exporter.get_docs_rx();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (stats_updates_tx, stats_updates_rx) = watch::channel(0u64);
 
@@ -527,14 +526,6 @@ impl Server {
         });
 
         stats::spawn_stats_publisher(state.clone(), state.event_sender());
-
-        let docs_state = state.clone();
-        tokio::spawn(async move {
-            let mut docs_rx = docs_rx;
-            while let Some(doc_count) = docs_rx.recv().await {
-                docs_state.add_docs_count(doc_count).await;
-            }
-        });
 
         let handle = axum_server::Handle::new();
         let handle_clone = handle.clone();
@@ -835,8 +826,9 @@ impl ServerState {
         Ok((identity.authenticated, identity.user))
     }
 
-    pub async fn record_success(&self, owner: &str, _docs: u32, errors: u32) {
+    pub async fn record_success(&self, owner: &str, docs: u32, errors: u32) {
         let mut stats = self.stats.write().await;
+        stats.docs.total += docs as usize;
         stats.docs.errors += errors as usize;
         stats.jobs.total += 1;
         stats.jobs.success += 1;
@@ -848,13 +840,14 @@ impl ServerState {
         self.notify_stats_changed();
     }
 
-    pub async fn record_outcome(&self, owner: &str, outcome: DiagnosticOutcome, errors: u32) {
+    pub async fn record_outcome(&self, owner: &str, outcome: DiagnosticOutcome, docs: u32, errors: u32) {
         if outcome != DiagnosticOutcome::Failed {
-            self.record_success(owner, 0, errors).await;
+            self.record_success(owner, docs, errors).await;
             return;
         }
 
         let mut stats = self.stats.write().await;
+        stats.docs.total += docs as usize;
         stats.docs.errors += errors as usize;
         stats.jobs.total += 1;
         stats.jobs.failed += 1;
@@ -897,13 +890,6 @@ impl ServerState {
                 owners.remove(owner);
             }
         }
-    }
-
-    pub async fn add_docs_count(&self, doc_count: usize) {
-        let mut stats = self.stats.write().await;
-        stats.docs.total += doc_count;
-        drop(stats);
-        self.notify_stats_changed();
     }
 
     pub async fn get_stats(&self) -> Stats {
@@ -1901,11 +1887,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_reports_count_created_documents_once() {
+        let state = test_state(RuntimeMode::User);
+        state
+            .record_outcome("test@example.com", DiagnosticOutcome::Complete, 487, 0)
+            .await;
+        state
+            .record_outcome("test@example.com", DiagnosticOutcome::Partial, 10, 2)
+            .await;
+        let stats = state.get_stats().await;
+        assert_eq!(stats.docs.total, 497);
+        assert_eq!(stats.docs.errors, 2);
+        assert_eq!(stats.jobs.total, 2);
+    }
+
+    #[tokio::test]
     async fn record_outcome_counts_failed_outcome_as_failed_job() {
         let state = test_state(RuntimeMode::User);
 
         state
-            .record_outcome("test@example.com", DiagnosticOutcome::Failed, 2)
+            .record_outcome("test@example.com", DiagnosticOutcome::Failed, 3, 2)
             .await;
 
         let stats = state.stats.read().await;
@@ -1913,6 +1914,7 @@ mod tests {
         assert_eq!(stats.jobs.success, 0);
         assert_eq!(stats.jobs.failed, 1);
         assert_eq!(stats.docs.errors, 2);
+        assert_eq!(stats.docs.total, 3);
     }
 
     #[tokio::test]

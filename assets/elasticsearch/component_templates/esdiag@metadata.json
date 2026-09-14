@@ -67,6 +67,9 @@
             "account": {
               "type": "keyword"
             },
+            "case_number": {
+              "type": "keyword"
+            },
             "collection_date": {
               "format": "strict_date_optional_time||epoch_millis",
               "index": true,
@@ -128,5 +131,5 @@
       }
     }
   },
-  "version": 3
+  "version": 4
 }
