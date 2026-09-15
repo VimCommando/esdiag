@@ -24,6 +24,8 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Made source-tree notice generation opt-in so Cargo package verification and registry installation use committed notices.
+- Limited web onboarding to builds with both keystore and setup support, preserving host and keystore management in builds without setup.
 - Restored the published Elasticsearch client dependency with a response compatibility adapter so ESDiag can be packaged from registry dependencies.
 - Updated workspace dependency requirements and the lockfile for the 0.18 development cycle, and regenerated third-party notices.
 
