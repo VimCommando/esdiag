@@ -36,6 +36,8 @@ the ESDiag application version.
 
 Read only the target references required by the release:
 
+- [Branching](references/branching.md): split development and release versions,
+  update public Cargo dependencies and notices, open both PRs, and draft notes.
 - [GitHub release](references/github.md): branch, curated notes, numeric tag,
   draft workflow, publication gate, and GitHub recovery.
 - [Containers](references/containers.md): multi-architecture image build,
@@ -51,7 +53,7 @@ Read only the target references required by the release:
 2. Fetch `upstream` and `origin` with pruning. Fast-forward local `main` to
    `upstream/main`; push `origin/main` when the fork is behind.
 3. Set the stable version on `BRANCH`, update all version-sensitive files and
-   `NOTICE.txt`, then run the baseline validation. For a standalone crate
+   `NOTICES.md`, then run the baseline validation. For a standalone crate
    target, update and validate only that package's version and follow the
    crates.io reference:
 
@@ -89,6 +91,6 @@ Read only the target references required by the release:
 ## Command Conventions
 
 Follow repository `AGENTS.md`: use `rtk` for supported commands and pipe GitHub
-JSON/API output through `toon -s`. Use authenticated HTTPS if SSH is unavailable.
+JSON/API output through `tq -x`. Use authenticated HTTPS if SSH is unavailable.
 Keep local `BRANCH`, `upstream/BRANCH`, and the dereferenced `TAG` commit aligned
 before handoff.

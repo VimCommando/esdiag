@@ -61,6 +61,15 @@ Pull Request Workflow
 
 If you need the full maintainer branch and release policy, see `docs/repository/branch-management.md`.
 
+PR Attribution
+--------------
+
+For PRs created with Codex, end the description with this exact Markdown line:
+
+```markdown
+Created with [Codex](https://chatgpt.com/codex/)
+```
+
 Sign the Contributor License Agreement
 --------------------------------------
 
