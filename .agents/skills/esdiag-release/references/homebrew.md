@@ -19,7 +19,7 @@ Each archive must contain exactly these root entries:
 ```text
 esdiag
 LICENSE.txt
-NOTICE.txt
+NOTICES.md
 ```
 
 The checksum file contains exactly one lowercase SHA-256 record per archive.
@@ -58,7 +58,7 @@ gh release upload "$TAG" \
 ```
 
 Intel macOS uses the tagged GitHub source archive rather than a native asset.
-It must contain `Cargo.toml`, `Cargo.lock`, `LICENSE.txt`, and `NOTICE.txt`, and
+It must contain `Cargo.toml`, `Cargo.lock`, `LICENSE.txt`, and `NOTICES.md`, and
 declare the release `VERSION`.
 
 ## Formula Update

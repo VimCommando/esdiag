@@ -33,8 +33,8 @@ If the series branch already exists, inspect it instead of resetting it.
 4. Use public registry dependencies, including Elasticsearch, instead of Git
    forks. Reuse the repository's compatibility adapters where needed.
 5. Regenerate third-party notices from the resulting lockfile with
-   `cargo about generate --locked about.hbs -o NOTICE.txt`, then copy that
-   generated Markdown output to NOTICES.md. Builds use committed notices by
+   `cargo about generate --locked about.hbs -o NOTICES.md`. Keep NOTICES.md
+   as the only application notice artifact. Builds use committed notices by
    default; optional source-build generation uses ESDIAG_GENERATE_NOTICE=1.
    Never bypass package verification with --no-verify when a build script
    rewrites packaged sources.
