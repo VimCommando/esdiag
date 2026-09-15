@@ -7,7 +7,7 @@ use crate::data::{Application, ApplicationConfig, HostRole, KnownHost, Settings,
 #[cfg(feature = "keystore")]
 use crate::data::{Job, load_saved_jobs_async};
 use crate::exporter::Exporter;
-#[cfg(feature = "keystore")]
+#[cfg(all(feature = "keystore", feature = "setup"))]
 use crate::onboarding;
 use crate::processor::api::ApiResolver;
 use askama::Template;
@@ -83,7 +83,7 @@ pub async fn handler(
     };
     let user_initial = user_email.chars().next().unwrap_or('_').to_ascii_uppercase();
     let allows_local_runtime_features = state.server_policy.allows_local_runtime_features();
-    #[cfg(feature = "keystore")]
+    #[cfg(all(feature = "keystore", feature = "setup"))]
     if state.onboarding
         && allows_local_runtime_features
         && onboarding::inspect()

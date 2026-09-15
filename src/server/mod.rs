@@ -22,7 +22,7 @@ mod settings;
 mod stats;
 mod template;
 mod theme;
-#[cfg(feature = "keystore")]
+#[cfg(all(feature = "keystore", feature = "setup"))]
 mod web_onboarding;
 
 use super::processor::{DiagnosticOutcome, Identifiers};
@@ -590,7 +590,7 @@ impl Server {
                 app
             };
 
-            #[cfg(feature = "keystore")]
+            #[cfg(all(feature = "keystore", feature = "setup"))]
             let app = if route_policy.allows_local_runtime_features() {
                 app.route("/welcome", get(web_onboarding::page))
                     .route("/welcome/identity", post(web_onboarding::save_identity))
@@ -600,7 +600,13 @@ impl Server {
                     .route("/welcome/output/setup", post(web_onboarding::install_output_assets))
                     .route("/welcome/collection", post(web_onboarding::save_collection))
                     .route("/welcome/default-job", post(web_onboarding::save_default_job))
-                    .route("/settings", get(hosts::page))
+            } else {
+                app.route("/welcome", get(web_onboarding::service_mode_page))
+            };
+
+            #[cfg(feature = "keystore")]
+            let app = if route_policy.allows_local_runtime_features() {
+                app.route("/settings", get(hosts::page))
                     .route("/settings/create", post(hosts::create_host))
                     .route("/settings/update", put(hosts::update_host))
                     .route("/settings/host/{action}/{id}", post(hosts::host_action))
@@ -622,7 +628,7 @@ impl Server {
                     .route("/keystore/lock", post(keystore::lock))
                     .route("/keystore/status", get(keystore::status))
             } else {
-                app.route("/welcome", get(web_onboarding::service_mode_page))
+                app
             };
 
             let app = if route_policy.requires_authentication() {

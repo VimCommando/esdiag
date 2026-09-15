@@ -18,7 +18,46 @@ extern crate elasticsearch as es;
 use crate::data::{Application, Uri};
 use eyre::{Result, eyre};
 use reqwest::Method;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
+
+/// Preserves each client's response without depending on fork-only conversions.
+pub enum ClientResponse {
+    Elasticsearch(es::http::response::Response),
+    Http(reqwest::Response),
+}
+
+impl ClientResponse {
+    pub fn status(&self) -> reqwest::StatusCode {
+        match self {
+            Self::Elasticsearch(response) => {
+                reqwest::StatusCode::from_u16(response.status_code().as_u16()).expect("valid HTTP status code")
+            }
+            Self::Http(response) => response.status(),
+        }
+    }
+
+    pub async fn text(self) -> Result<String> {
+        match self {
+            Self::Elasticsearch(response) => Ok(response.text().await?),
+            Self::Http(response) => Ok(response.text().await?),
+        }
+    }
+
+    pub async fn bytes(self) -> Result<bytes::Bytes> {
+        match self {
+            Self::Elasticsearch(response) => Ok(response.bytes().await?),
+            Self::Http(response) => Ok(response.bytes().await?),
+        }
+    }
+
+    pub async fn json<T: DeserializeOwned>(self) -> Result<T> {
+        match self {
+            Self::Elasticsearch(response) => Ok(response.json().await?),
+            Self::Http(response) => Ok(response.json().await?),
+        }
+    }
+}
 
 // Inspect the whole transport error chain, but never expose URLs or credentials.
 fn connection_failure(error: &(dyn std::error::Error + 'static)) -> String {
@@ -101,7 +140,7 @@ impl Client {
         headers: &HashMap<String, String>,
         path: &str,
         body: Option<&[u8]>,
-    ) -> Result<reqwest::Response> {
+    ) -> Result<ClientResponse> {
         tracing::debug!("Request: {method} {path}");
         match self {
             Client::Elasticsearch(client) => {
@@ -129,10 +168,16 @@ impl Client {
                 let response = client
                     .send(method, path, header_map, Option::<&serde_json::Value>::None, body, None)
                     .await?;
-                Ok(response.into())
+                Ok(ClientResponse::Elasticsearch(response))
             }
-            Client::Kibana(client) => client.request(method, headers, path, body).await,
-            Client::Logstash(client) => client.request(method, headers, path, body).await,
+            Client::Kibana(client) => client
+                .request(method, headers, path, body)
+                .await
+                .map(ClientResponse::Http),
+            Client::Logstash(client) => client
+                .request(method, headers, path, body)
+                .await
+                .map(ClientResponse::Http),
         }
     }
 
@@ -348,5 +393,45 @@ mod connection_failure_tests {
                 .wrap_err("Failed to send request");
             assert_eq!(connection_failure(error.as_ref()), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+    use axum::{Json, Router, http::StatusCode, routing::get};
+    use serde_json::json;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn published_elasticsearch_response_preserves_status_and_body() {
+        let app = Router::new().route(
+            "/_compatibility",
+            get(|| async { (StatusCode::CREATED, Json(json!({ "created": true }))) }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let address = listener.local_addr().expect("local address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test application");
+        });
+        let client = Client::Elasticsearch(
+            ElasticsearchBuilder::new(format!("http://{address}").parse().expect("server URL"))
+                .build()
+                .expect("Elasticsearch client"),
+        );
+        for body_format in ["json", "text", "bytes"] {
+            let response = client
+                .request(Method::GET, &HashMap::new(), "/_compatibility", None)
+                .await
+                .expect("Elasticsearch request");
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let body: serde_json::Value = match body_format {
+                "json" => response.json().await.expect("JSON response"),
+                "text" => serde_json::from_str(&response.text().await.expect("text response")).unwrap(),
+                _ => serde_json::from_slice(&response.bytes().await.expect("bytes response")).unwrap(),
+            };
+            assert_eq!(body, json!({ "created": true }));
+        }
+        server.abort();
     }
 }

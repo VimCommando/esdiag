@@ -5457,11 +5457,11 @@ limitations under the License.
 Apache License 2.0
 
 #### Used by
-- [elasticsearch]( https://github.com/elastic/elasticsearch-rs ) 9.1.0-alpha.1
 - [allocator-api2]( https://github.com/zakarumych/allocator-api2 ) 0.2.21
 - [android_system_properties]( https://github.com/nical/android_system_properties ) 0.1.6
 - [dary_heap]( https://github.com/hanmertens/dary_heap ) 0.3.9
 - [dyn-clone]( https://github.com/dtolnay/dyn-clone ) 1.0.20
+- [elasticsearch]( https://github.com/elastic/elasticsearch-rs ) 9.1.0-alpha.1
 - [ident_case]( https://github.com/TedDriggs/ident_case ) 1.0.1
 - [include-flate-codegen]( https://github.com/SOF3/include-flate.git ) 0.3.4
 - [include-flate-compress]( https://github.com/SOF3/include-flate.git ) 0.3.4
@@ -5949,7 +5949,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Elastic License 2.0
 
 #### Used by
-- [esdiag]( https://github.com/elastic/esdiag ) 0.17.0-SNAPSHOT
+- [esdiag]( https://github.com/elastic/esdiag ) 0.17.0-rc1
 
 #### License
 ```
@@ -7725,4 +7725,3 @@ Permission is granted to anyone to use this software for any purpose, including 
      3. This notice may not be removed or altered from any source distribution.
 
 ```
-

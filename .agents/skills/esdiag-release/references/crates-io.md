@@ -29,7 +29,7 @@ cargo publish --dry-run --locked --package "$CRATE"
 ```
 
 These commands validate the actual registry package and metadata. Resolve any
-generated-file changes, including `NOTICE.txt`, before committing the release.
+generated-file changes, including `NOTICES.md`, before committing the release.
 
 ## Publication
 

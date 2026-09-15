@@ -45,7 +45,7 @@ EOF
 cat >"$fake_bin/esdiag" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-  --version) printf 'esdiag %s\n' "${FAKE_ESDIAG_VERSION:-0.17.0-SNAPSHOT}" ;;
+  --version) printf 'esdiag %s\n' "${FAKE_ESDIAG_VERSION:-0.17.0-rc1}" ;;
   setup) printf 'setup\n' >>"${FAKE_ESDIAG_LOG}" ;;
   serve) printf 'serve %s\n' "$*" >>"${FAKE_ESDIAG_LOG}"; while :; do sleep 60; done ;;
 esac
@@ -85,7 +85,7 @@ export FAKE_CLIPBOARD="$tmp/clipboard" FAKE_UI_LOG="$tmp/ui.log"
 
 # Shell, help, platform adapters, and repository-independent execution.
 bash -n "$script"
-[[ "$($script version)" == "0.17.0-SNAPSHOT" ]] || fail version
+[[ "$($script version)" == "0.17.0-rc1" ]] || fail version
 PATH="$fake_bin:$PATH" ESDIAG_TEST_OS=Darwin "$script" help >"$tmp/help-macos"
 PATH="$fake_bin:$PATH" ESDIAG_TEST_OS=Linux "$script" help >"$tmp/help-linux"
 PATH="$fake_bin:$PATH" ESDIAG_TEST_OS=Linux ESDIAG_TEST_WSL=true "$script" help >"$tmp/help-wsl"
@@ -136,7 +136,7 @@ PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" "$script" down --r
 PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" "$script" reset --runtime podman --state-dir "$tmp/core" --force
 FAKE_ESDIAG_VERSION=0.0.0 PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" \
     "$script" up --runtime podman --state-dir "$tmp/mismatched-core" --stack=core --pull never --open-browser=false 2>"$tmp/mismatched-core.err" && fail 'mismatched core binary was accepted'
-assert_contains "$tmp/mismatched-core.err" 'requires an ESDiag 0.17.0-SNAPSHOT binary'
+assert_contains "$tmp/mismatched-core.err" 'requires an ESDiag 0.17.0-rc1 binary'
 
 # Idempotence, status/auth/log secrecy, raw secrets, setup, down, and reset.
 password=$(sed -n 's/^ELASTIC_PASSWORD=//p' "$tmp/secure/.env")
