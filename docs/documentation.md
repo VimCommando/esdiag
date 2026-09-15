@@ -21,3 +21,4 @@ New users should start with [Set up ESDiag](setup/index.md).
 
 - [Command-line interface reference](command-line.md)
 - [LLM configuration guide](llm-setup-guide.md)
+- [ESDiag 0.17 release notes](release_notes/0.17.md)

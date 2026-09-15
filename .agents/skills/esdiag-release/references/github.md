@@ -29,6 +29,13 @@ Build curated notes from verified changes after `PREVIOUS`. Prioritize
 user-visible features, compatibility changes, operations, and important fixes.
 End with a link to the release branch `CHANGELOG.md`.
 
+Keep the canonical notes at `docs/release_notes/SERIES.md` using OKF
+frontmatter with `status: draft` and `version: VERSION`. Follow the
+[branching reference](branching.md) for the full metadata and publication
+lifecycle. Upload only the Markdown body to GitHub, omitting the YAML
+frontmatter. Synchronize the document's version, title, heading, and
+`status: published` with the actual publication.
+
 In `.github/workflows/release-esdiag-local.yml`:
 
 - Trigger numeric tags with `"[0-9]*.[0-9]*.[0-9]*"`.
