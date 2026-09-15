@@ -125,20 +125,12 @@ pub fn kibana_url_with_space(kibana_url: &str, space: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{append_kibana_space, get_kibana_space};
-    use std::sync::Mutex;
-
-    fn env_lock() -> &'static Mutex<()> {
-        crate::test_env_lock()
-    }
 
     #[test]
     fn explicit_default_space_removes_existing_prefix() {
-        let _guard = env_lock().lock().expect("env lock");
-        let previous = std::env::var_os("ESDIAG_KIBANA_SPACE");
+        let mut env = crate::TestEnv::new();
         for value in ["_default", "", "  _default  ", "default"] {
-            unsafe {
-                std::env::set_var("ESDIAG_KIBANA_SPACE", value);
-            }
+            env.set("ESDIAG_KIBANA_SPACE", value);
             assert_eq!(get_kibana_space(), None);
             assert_eq!(
                 append_kibana_space("https://kb/s/ops/app/home?x=1#hash"),
@@ -150,30 +142,20 @@ mod tests {
                 "https://kb/proxy/app/home"
             );
         }
-        unsafe {
-            match previous {
-                Some(value) => std::env::set_var("ESDIAG_KIBANA_SPACE", value),
-                None => std::env::remove_var("ESDIAG_KIBANA_SPACE"),
-            }
-        }
     }
 
     #[test]
     fn default_kibana_space_is_esdiag() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::remove_var("ESDIAG_KIBANA_SPACE");
-        }
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_KIBANA_SPACE");
 
         assert_eq!(get_kibana_space().as_deref(), Some("esdiag"));
     }
 
     #[test]
     fn append_kibana_space_replaces_existing_space_and_preserves_path() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_KIBANA_SPACE", "support");
-        }
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_KIBANA_SPACE", "support");
 
         assert_eq!(
             append_kibana_space("https://kb:5601/s/foo/app/home"),
@@ -195,10 +177,8 @@ mod tests {
 
     #[test]
     fn append_kibana_space_inserts_space_before_existing_path() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_KIBANA_SPACE", "support");
-        }
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_KIBANA_SPACE", "support");
 
         assert_eq!(
             append_kibana_space("https://kb:5601/app/home?foo=bar#hash"),
@@ -208,10 +188,8 @@ mod tests {
 
     #[test]
     fn append_kibana_space_omits_space_segment_when_env_is_empty() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_KIBANA_SPACE", "");
-        }
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_KIBANA_SPACE", "");
 
         assert_eq!(
             append_kibana_space("https://kb:5601/app/home"),

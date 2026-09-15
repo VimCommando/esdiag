@@ -1949,35 +1949,14 @@ mod tests {
         );
     }
 
-    struct WebFeaturesEnvGuard {
-        previous: Option<String>,
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl Drop for WebFeaturesEnvGuard {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(value) => unsafe { std::env::set_var("ESDIAG_WEB_FEATURES", value) },
-                None => unsafe { std::env::remove_var("ESDIAG_WEB_FEATURES") },
-            }
-        }
-    }
-
     fn with_web_features_env<T>(value: Option<&str>, test: impl FnOnce() -> T) -> T {
-        let env_guard = WebFeaturesEnvGuard {
-            _guard: crate::test_env_lock()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-            previous: std::env::var("ESDIAG_WEB_FEATURES").ok(),
-        };
+        let mut env = crate::TestEnv::new();
         match value {
-            Some(value) => unsafe { std::env::set_var("ESDIAG_WEB_FEATURES", value) },
-            None => unsafe { std::env::remove_var("ESDIAG_WEB_FEATURES") },
+            Some(value) => env.set("ESDIAG_WEB_FEATURES", value),
+            None => env.remove("ESDIAG_WEB_FEATURES"),
         }
 
-        let result = test();
-        drop(env_guard);
-        result
+        test()
     }
 
     #[tokio::test]
@@ -2123,18 +2102,12 @@ mod tests {
 
     #[test]
     fn user_mode_ignores_invalid_service_job_cap_env() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_SERVICE_JOB_CAP", "0");
-            std::env::set_var("ESDIAG_SERVICE_OWNER_JOB_CAP", "0");
-        }
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_SERVICE_JOB_CAP", "0");
+        env.set("ESDIAG_SERVICE_OWNER_JOB_CAP", "0");
 
         let policy = ServerPolicy::new(RuntimeMode::User).expect("user policy ignores service caps");
 
-        unsafe {
-            std::env::remove_var("ESDIAG_SERVICE_JOB_CAP");
-            std::env::remove_var("ESDIAG_SERVICE_OWNER_JOB_CAP");
-        }
         assert_eq!(policy.job_caps().global, JobConcurrencyCaps::default().global);
         assert_eq!(policy.job_caps().per_owner, JobConcurrencyCaps::default().per_owner);
     }

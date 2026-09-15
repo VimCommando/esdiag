@@ -3564,9 +3564,16 @@ mod tests {
     use tempfile::TempDir;
     use url::Url;
 
-    fn env_lock() -> &'static Mutex<()> {
+    /// Serializes environment-mutating tests in this binary. The binary's tests
+    /// run in their own process and cannot reach the library's `TestEnv`, so
+    /// they share this lock instead. Poisoning is recovered rather than
+    /// propagated; otherwise one failing test cascades into every later
+    /// environment test.
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn setup_env() -> TempDir {
@@ -3714,7 +3721,7 @@ mod tests {
     #[cfg(feature = "agent")]
     #[test]
     fn agent_builder_space_requires_a_space_segment_pair() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         unsafe {
             std::env::remove_var("ESDIAG_KIBANA_SPACE");
         }
@@ -3732,7 +3739,7 @@ mod tests {
     #[cfg(feature = "agent")]
     #[test]
     fn agent_builder_space_explicit_default_overrides_url() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         let previous = std::env::var_os("ESDIAG_KIBANA_SPACE");
         let viewer = Url::parse("https://kb.example/s/support").unwrap();
         for value in ["_default", "", "  _default  "] {
@@ -3971,7 +3978,7 @@ mod tests {
     #[cfg(feature = "keystore")]
     #[test]
     fn saved_job_stdout_is_not_replaced_with_a_terminal_outcome() {
-        let _env_guard = env_lock().lock().expect("lock environment");
+        let _env_guard = env_guard();
         let _tmp = setup_env();
         let job = Job::try_new(
             Identifiers::default(),
@@ -4102,7 +4109,7 @@ mod tests {
 
     #[test]
     fn local_preset_accepts_shared_core_state_and_rejects_unknown_modes() {
-        let _guard = env_lock().lock().expect("environment lock");
+        let _guard = env_guard();
         let state = TempDir::new().expect("temporary local state");
         std::fs::write(
             state.path().join(".env"),
@@ -4157,7 +4164,7 @@ mod tests {
 
     #[test]
     fn managed_full_container_preset_separates_internal_and_public_kibana_urls() {
-        let _guard = env_lock().lock().expect("environment lock");
+        let _guard = env_guard();
         unsafe {
             std::env::set_var("ESDIAG_CONTAINER_LOCAL_STACK", "full");
             std::env::set_var("ESDIAG_OUTPUT_URL", "http://elasticsearch:9200");
@@ -4398,7 +4405,7 @@ mod tests {
     #[cfg(feature = "keystore")]
     #[test]
     fn derive_collect_job_requires_known_host_input() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         let _tmp = setup_env();
         let err = match derive_collect_job(
             "https://example.com",
@@ -4419,7 +4426,7 @@ mod tests {
     #[cfg(feature = "keystore")]
     #[test]
     fn derive_collect_job_uses_output_dir_without_save_dir() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         let _tmp = setup_env();
         let host = KnownHost::new_no_auth(
             Application::Elasticsearch,
@@ -4444,7 +4451,7 @@ mod tests {
     #[cfg(feature = "keystore")]
     #[test]
     fn derive_process_job_requires_explicit_output() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         let _tmp = setup_env();
         let host = KnownHost::new_no_auth(
             Application::Elasticsearch,
@@ -4480,7 +4487,7 @@ mod tests {
 
     #[test]
     fn agent_mode_auto_enables_from_claudecode_env() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         unsafe {
             std::env::set_var("CLAUDECODE", "1");
         }
@@ -4548,7 +4555,7 @@ mod tests {
 
     #[test]
     fn host_secret_auth_resolution_detects_apikey() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         let _tmp = setup_env();
         upsert_secret_auth("api-secret", SecretAuth::apikey("secret-key"), "pw").expect("save api secret");
 
@@ -4558,7 +4565,7 @@ mod tests {
 
     #[test]
     fn host_secret_auth_resolution_detects_basic() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         let _tmp = setup_env();
         upsert_secret_auth("basic-secret", SecretAuth::basic("elastic", "secret-password"), "pw")
             .expect("save basic secret");
@@ -4569,7 +4576,7 @@ mod tests {
 
     #[test]
     fn host_secret_auth_resolution_reads_named_secret() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         let _tmp = setup_env();
         upsert_secret_auth("host-fallback", SecretAuth::apikey("secret-key"), "pw").expect("save fallback secret");
 
@@ -4580,7 +4587,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_runtime_mode_prefers_explicit_flag_over_env() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         unsafe {
             std::env::set_var("ESDIAG_MODE", "service");
         }
@@ -4597,7 +4604,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_runtime_mode_uses_env_when_flag_missing() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         unsafe {
             std::env::set_var("ESDIAG_MODE", "service");
         }
@@ -4614,7 +4621,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_runtime_mode_defaults_to_user_without_flag_or_env() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         unsafe {
             std::env::remove_var("ESDIAG_MODE");
         }
@@ -4640,7 +4647,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_exporter_requires_configuration_when_output_is_omitted() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         unsafe {
             std::env::remove_var("ESDIAG_OUTPUT_URL");
             std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
@@ -4658,7 +4665,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_exporter_explicit_output_precedes_runtime_environment() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         unsafe {
             std::env::remove_var("ESDIAG_OUTPUT_URL");
             std::env::set_var("ESDIAG_OUTPUT_APIKEY", "runtime-secret");
@@ -4678,7 +4685,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_exporter_uses_runtime_environment_when_output_is_omitted() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         unsafe {
             std::env::set_var("ESDIAG_OUTPUT_URL", "http://localhost:9200");
             std::env::set_var("ESDIAG_OUTPUT_APIKEY", "runtime-secret");
@@ -4699,7 +4706,7 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_exporter_rejects_partial_runtime_environment_without_leaking_secrets() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_guard();
         unsafe {
             std::env::set_var("ESDIAG_OUTPUT_URL", "http://localhost:9200");
             std::env::remove_var("ESDIAG_OUTPUT_APIKEY");

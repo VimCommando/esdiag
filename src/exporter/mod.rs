@@ -591,24 +591,9 @@ mod tests {
 
     use super::{ArchiveExporter, Exporter, format_directory_label};
     use crate::data::{Application, HostRole, KnownHost, KnownHostBuilder, Uri};
-    use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
+    use std::{collections::BTreeMap, path::PathBuf, time::Duration};
     use tempfile::TempDir;
     use url::Url;
-
-    fn env_lock() -> &'static Mutex<()> {
-        crate::test_env_lock()
-    }
-
-    fn setup_env() -> TempDir {
-        let tmp = TempDir::new().expect("temp dir");
-        let hosts = tmp.path().join("hosts.yml");
-        let keystore = tmp.path().join("secrets.yml");
-        unsafe {
-            std::env::set_var("ESDIAG_HOSTS", &hosts);
-            std::env::set_var("ESDIAG_KEYSTORE", &keystore);
-        }
-        tmp
-    }
 
     #[test]
     fn format_directory_label_preserves_existing_trailing_separator() {
@@ -730,8 +715,7 @@ mod tests {
 
     #[test]
     fn kibana_link_prefers_saved_viewer_host() {
-        let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let mut env = crate::TestEnv::new();
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -752,10 +736,8 @@ mod tests {
                 .expect("viewer host"),
         );
         KnownHost::write_hosts_yml(&hosts).expect("write hosts");
-        unsafe {
-            std::env::set_var("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
-            std::env::remove_var("ESDIAG_KIBANA_SPACE");
-        }
+        env.set("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
+        env.remove("ESDIAG_KIBANA_SPACE");
 
         let exporter = Exporter::try_from(Uri::try_from("send-host").expect("host uri")).expect("exporter");
         let kibana_link = exporter
@@ -764,29 +746,17 @@ mod tests {
 
         assert!(kibana_link.starts_with("https://kb.example:5601/s/esdiag/app/dashboards#/view/"));
         assert_eq!(exporter.outcome_uri(), "https://kb.example:5601/s/esdiag");
-
-        unsafe {
-            std::env::remove_var("ESDIAG_KIBANA_URL");
-        }
     }
 
     #[test]
     fn kibana_link_is_omitted_for_non_cluster_outputs() {
-        let _guard = env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        unsafe {
-            std::env::set_var("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
-            std::env::set_var("ESDIAG_KIBANA_SPACE", "ops");
-        }
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_KIBANA_URL", "https://env-kb.example:5601");
+        env.set("ESDIAG_KIBANA_SPACE", "ops");
 
         let stream = Exporter::default();
-        let directory = Exporter::try_from(Uri::Directory(tmp.path().to_path_buf())).expect("directory exporter");
+        let directory = Exporter::try_from(Uri::Directory(env.tmp.path().to_path_buf())).expect("directory exporter");
         assert!(stream.kibana_link("diag-123", 1_700_000_000_000).is_none());
         assert!(directory.kibana_link("diag-123", 1_700_000_000_000).is_none());
-
-        unsafe {
-            std::env::remove_var("ESDIAG_KIBANA_URL");
-            std::env::remove_var("ESDIAG_KIBANA_SPACE");
-        }
     }
 }

@@ -34,8 +34,12 @@ pub mod setup;
 /// Upload raw diagnostic archives to Elastic Upload Service
 pub mod uploader;
 
+/// Private to `TestEnv`, which is the only supported way to take it. Callers
+/// that locked it directly used `.expect()`, so a panicking test poisoned the
+/// mutex and every later environment test failed with `PoisonError` instead of
+/// its own result.
 #[cfg(test)]
-pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {
+fn test_env_lock() -> &'static std::sync::Mutex<()> {
     use std::sync::{Mutex, OnceLock};
 
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
