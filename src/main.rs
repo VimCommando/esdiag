@@ -3564,21 +3564,87 @@ mod tests {
     use tempfile::TempDir;
     use url::Url;
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    /// Mirrors the library's `TestEnv` for this binary's test process, which
+    /// links the library without its `cfg(test)` items and so cannot use that
+    /// type directly.
+    ///
+    /// Serializes environment-mutating tests, captures every variable it
+    /// changes, and restores it on drop so a panicking test cannot leak values
+    /// into later tests. Poisoning is recovered rather than propagated;
+    /// otherwise one failing test cascades into every later environment test.
+    struct TestEnv {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        previous: Vec<(&'static str, Option<OsString>)>,
+        tmp: TempDir,
     }
 
-    fn setup_env() -> TempDir {
-        let tmp = TempDir::new().expect("temp dir");
-        let hosts = tmp.path().join("hosts.yml");
-        let keystore = tmp.path().join("secrets.yml");
-        unsafe {
-            std::env::set_var("ESDIAG_HOSTS", &hosts);
-            std::env::set_var("ESDIAG_KEYSTORE", &keystore);
-            std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
+    impl TestEnv {
+        fn new() -> Self {
+            static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+            let guard = LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+            let tmp = TempDir::new().expect("temp dir");
+            let config_dir = tmp.path().join(".esdiag");
+            std::fs::create_dir_all(&config_dir).expect("create config dir");
+
+            let mut env = Self {
+                _guard: guard,
+                previous: Vec::new(),
+                tmp,
+            };
+            let home = env.tmp.path().to_path_buf();
+            env.set("HOME", &home);
+            env.set("USERPROFILE", &home);
+            env.set("ESDIAG_HOSTS", config_dir.join("hosts.yml"));
+            env.set("ESDIAG_KEYSTORE", config_dir.join("secrets.yml"));
+            env.set("ESDIAG_SETTINGS", config_dir.join("settings.yml"));
+            env.remove("ESDIAG_KEYSTORE_PASSWORD");
+            env
         }
-        tmp
+
+        fn set(&mut self, key: &'static str, value: impl AsRef<std::ffi::OsStr>) {
+            self.capture(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
+
+        fn remove(&mut self, key: &'static str) {
+            self.capture(key);
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
+
+        fn capture(&mut self, key: &'static str) {
+            if self.previous.iter().any(|(existing, _)| *existing == key) {
+                return;
+            }
+            self.previous.push((key, std::env::var_os(key)));
+        }
+    }
+
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            for (key, value) in self.previous.drain(..).rev() {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
+    /// A `TestEnv` with the keystore already unlocked.
+    fn setup_env() -> TestEnv {
+        let mut env = TestEnv::new();
+        env.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
+        env
     }
 
     #[test]
@@ -3714,10 +3780,8 @@ mod tests {
     #[cfg(feature = "agent")]
     #[test]
     fn agent_builder_space_requires_a_space_segment_pair() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::remove_var("ESDIAG_KIBANA_SPACE");
-        }
+        let mut env = TestEnv::new();
+        env.remove("ESDIAG_KIBANA_SPACE");
 
         assert_eq!(
             agent_builder_space(&Url::parse("https://kb.example/app/s").expect("url")),
@@ -3732,22 +3796,13 @@ mod tests {
     #[cfg(feature = "agent")]
     #[test]
     fn agent_builder_space_explicit_default_overrides_url() {
-        let _guard = env_lock().lock().expect("env lock");
-        let previous = std::env::var_os("ESDIAG_KIBANA_SPACE");
+        let mut env = TestEnv::new();
         let viewer = Url::parse("https://kb.example/s/support").unwrap();
         for value in ["_default", "", "  _default  "] {
-            unsafe {
-                std::env::set_var("ESDIAG_KIBANA_SPACE", value);
-            }
+            env.set("ESDIAG_KIBANA_SPACE", value);
             let location =
                 esdiag::agent::builder::AgentBuilderLocation::new(viewer.clone(), agent_builder_space(&viewer));
             assert_eq!(location.space(), None);
-        }
-        unsafe {
-            match previous {
-                Some(value) => std::env::set_var("ESDIAG_KIBANA_SPACE", value),
-                None => std::env::remove_var("ESDIAG_KIBANA_SPACE"),
-            }
         }
     }
 
@@ -3971,8 +4026,7 @@ mod tests {
     #[cfg(feature = "keystore")]
     #[test]
     fn saved_job_stdout_is_not_replaced_with_a_terminal_outcome() {
-        let _env_guard = env_lock().lock().expect("lock environment");
-        let _tmp = setup_env();
+        let _env = setup_env();
         let job = Job::try_new(
             Identifiers::default(),
             Input::Collect {
@@ -4102,16 +4156,14 @@ mod tests {
 
     #[test]
     fn local_preset_accepts_shared_core_state_and_rejects_unknown_modes() {
-        let _guard = env_lock().lock().expect("environment lock");
+        let mut env = TestEnv::new();
         let state = TempDir::new().expect("temporary local state");
         std::fs::write(
             state.path().join(".env"),
             "STACK_MODE=core\nESDIAG_ELASTICSEARCH_PORT=19200\nESDIAG_KIBANA_PORT=15601\nESDIAG_PORT=12501\nESDIAG_OUTPUT_APIKEY=local-key\n",
         )
         .expect("write local state");
-        unsafe {
-            std::env::set_var("ESDIAG_LOCAL_DIR", state.path());
-        }
+        env.set("ESDIAG_LOCAL_DIR", state.path());
 
         let preset = detected_esdiag_local_preset().expect("read core local state");
         assert_eq!(preset.elasticsearch_url, "http://localhost:19200");
@@ -4150,39 +4202,22 @@ mod tests {
 
         std::fs::write(state.path().join(".env"), "STACK_MODE=unknown\n").expect("write unsupported state");
         assert!(detected_esdiag_local_preset().is_none());
-        unsafe {
-            std::env::remove_var("ESDIAG_LOCAL_DIR");
-        }
     }
 
     #[test]
     fn managed_full_container_preset_separates_internal_and_public_kibana_urls() {
-        let _guard = env_lock().lock().expect("environment lock");
-        unsafe {
-            std::env::set_var("ESDIAG_CONTAINER_LOCAL_STACK", "full");
-            std::env::set_var("ESDIAG_OUTPUT_URL", "http://elasticsearch:9200");
-            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "container-key");
-            std::env::set_var("ESDIAG_KIBANA_INTERNAL_URL", "http://kibana:5601/s/esdiag");
-            std::env::set_var("ESDIAG_KIBANA_PUBLIC_URL", "http://127.0.0.1:5601/s/esdiag");
-        }
+        let mut env = TestEnv::new();
+        env.set("ESDIAG_CONTAINER_LOCAL_STACK", "full");
+        env.set("ESDIAG_OUTPUT_URL", "http://elasticsearch:9200");
+        env.set("ESDIAG_OUTPUT_APIKEY", "container-key");
+        env.set("ESDIAG_KIBANA_INTERNAL_URL", "http://kibana:5601/s/esdiag");
+        env.set("ESDIAG_KIBANA_PUBLIC_URL", "http://127.0.0.1:5601/s/esdiag");
 
         let preset = detected_esdiag_local_preset().expect("read full container state");
         assert_eq!(preset.elasticsearch_url, "http://elasticsearch:9200");
         assert_eq!(preset.kibana_api_url, "http://kibana:5601/s/esdiag");
         assert_eq!(preset.kibana_url, "http://127.0.0.1:5601/s/esdiag");
         assert_eq!(preset.apikey.as_deref(), Some("container-key"));
-
-        for variable in [
-            "ESDIAG_CONTAINER_LOCAL_STACK",
-            "ESDIAG_OUTPUT_URL",
-            "ESDIAG_OUTPUT_APIKEY",
-            "ESDIAG_KIBANA_INTERNAL_URL",
-            "ESDIAG_KIBANA_PUBLIC_URL",
-        ] {
-            unsafe {
-                std::env::remove_var(variable);
-            }
-        }
     }
 
     #[test]
@@ -4398,8 +4433,7 @@ mod tests {
     #[cfg(feature = "keystore")]
     #[test]
     fn derive_collect_job_requires_known_host_input() {
-        let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         let err = match derive_collect_job(
             "https://example.com",
             "diag-dir",
@@ -4419,8 +4453,7 @@ mod tests {
     #[cfg(feature = "keystore")]
     #[test]
     fn derive_collect_job_uses_output_dir_without_save_dir() {
-        let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         let host = KnownHost::new_no_auth(
             Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("valid url"),
@@ -4444,8 +4477,7 @@ mod tests {
     #[cfg(feature = "keystore")]
     #[test]
     fn derive_process_job_requires_explicit_output() {
-        let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         let host = KnownHost::new_no_auth(
             Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("valid url"),
@@ -4480,17 +4512,11 @@ mod tests {
 
     #[test]
     fn agent_mode_auto_enables_from_claudecode_env() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("CLAUDECODE", "1");
-        }
+        let mut env = TestEnv::new();
+        env.set("CLAUDECODE", "1");
 
         let cli = Cli::parse_from(["esdiag", "keystore", "status"]);
         assert!(is_agent_mode(&cli));
-
-        unsafe {
-            std::env::remove_var("CLAUDECODE");
-        }
     }
 
     #[test]
@@ -4548,8 +4574,7 @@ mod tests {
 
     #[test]
     fn host_secret_auth_resolution_detects_apikey() {
-        let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         upsert_secret_auth("api-secret", SecretAuth::apikey("secret-key"), "pw").expect("save api secret");
 
         let resolved = resolve_host_secret_auth(Some("api-secret")).expect("resolve auth");
@@ -4558,8 +4583,7 @@ mod tests {
 
     #[test]
     fn host_secret_auth_resolution_detects_basic() {
-        let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         upsert_secret_auth("basic-secret", SecretAuth::basic("elastic", "secret-password"), "pw")
             .expect("save basic secret");
 
@@ -4569,8 +4593,7 @@ mod tests {
 
     #[test]
     fn host_secret_auth_resolution_reads_named_secret() {
-        let _guard = env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         upsert_secret_auth("host-fallback", SecretAuth::apikey("secret-key"), "pw").expect("save fallback secret");
 
         let resolved = resolve_host_secret_auth(Some("host-fallback")).expect("resolve auth");
@@ -4580,44 +4603,30 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_runtime_mode_prefers_explicit_flag_over_env() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_MODE", "service");
-        }
+        let mut env = TestEnv::new();
+        env.set("ESDIAG_MODE", "service");
 
         let resolved = resolve_serve_runtime_mode(Some(RuntimeMode::User)).expect("resolve mode");
 
         assert_eq!(resolved, RuntimeMode::User);
-
-        unsafe {
-            std::env::remove_var("ESDIAG_MODE");
-        }
     }
 
     #[cfg(feature = "server")]
     #[test]
     fn serve_runtime_mode_uses_env_when_flag_missing() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_MODE", "service");
-        }
+        let mut env = TestEnv::new();
+        env.set("ESDIAG_MODE", "service");
 
         let resolved = resolve_serve_runtime_mode(None).expect("resolve mode");
 
         assert_eq!(resolved, RuntimeMode::Service);
-
-        unsafe {
-            std::env::remove_var("ESDIAG_MODE");
-        }
     }
 
     #[cfg(feature = "server")]
     #[test]
     fn serve_runtime_mode_defaults_to_user_without_flag_or_env() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::remove_var("ESDIAG_MODE");
-        }
+        let mut env = TestEnv::new();
+        env.remove("ESDIAG_MODE");
 
         let resolved = resolve_serve_runtime_mode(None).expect("resolve mode");
 
@@ -4640,13 +4649,11 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_exporter_requires_configuration_when_output_is_omitted() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_URL");
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
-            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
-        }
+        let mut env = TestEnv::new();
+        env.remove("ESDIAG_OUTPUT_URL");
+        env.remove("ESDIAG_OUTPUT_APIKEY");
+        env.remove("ESDIAG_OUTPUT_USERNAME");
+        env.remove("ESDIAG_OUTPUT_PASSWORD");
 
         let err = match resolve_serve_exporter(None) {
             Ok(_) => panic!("omitted output without a configured deployment must fail"),
@@ -4658,54 +4665,39 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_exporter_explicit_output_precedes_runtime_environment() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_URL");
-            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "runtime-secret");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
-            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
-        }
+        let mut env = TestEnv::new();
+        env.remove("ESDIAG_OUTPUT_URL");
+        env.set("ESDIAG_OUTPUT_APIKEY", "runtime-secret");
+        env.remove("ESDIAG_OUTPUT_USERNAME");
+        env.remove("ESDIAG_OUTPUT_PASSWORD");
 
         let exporter = resolve_serve_exporter(Some("-".to_string())).expect("resolve explicit output");
 
         assert_eq!(exporter.target_uri(), "stdio://stdout");
-
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
-        }
     }
 
     #[cfg(feature = "server")]
     #[test]
     fn serve_exporter_uses_runtime_environment_when_output_is_omitted() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_OUTPUT_URL", "http://localhost:9200");
-            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "runtime-secret");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
-            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
-        }
+        let mut env = TestEnv::new();
+        env.set("ESDIAG_OUTPUT_URL", "http://localhost:9200");
+        env.set("ESDIAG_OUTPUT_APIKEY", "runtime-secret");
+        env.remove("ESDIAG_OUTPUT_USERNAME");
+        env.remove("ESDIAG_OUTPUT_PASSWORD");
 
         let exporter = resolve_serve_exporter(None).expect("resolve runtime output");
 
         assert_eq!(exporter.target_uri(), "http://localhost:9200/");
-
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_URL");
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
-        }
     }
 
     #[cfg(feature = "server")]
     #[test]
     fn serve_exporter_rejects_partial_runtime_environment_without_leaking_secrets() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_OUTPUT_URL", "http://localhost:9200");
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
-            std::env::set_var("ESDIAG_OUTPUT_USERNAME", "do-not-print-this-secret");
-            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
-        }
+        let mut env = TestEnv::new();
+        env.set("ESDIAG_OUTPUT_URL", "http://localhost:9200");
+        env.remove("ESDIAG_OUTPUT_APIKEY");
+        env.set("ESDIAG_OUTPUT_USERNAME", "do-not-print-this-secret");
+        env.remove("ESDIAG_OUTPUT_PASSWORD");
 
         let err = match resolve_serve_exporter(None) {
             Ok(_) => panic!("partial output must fail closed"),
@@ -4714,11 +4706,6 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("ESDIAG_OUTPUT_USERNAME and ESDIAG_OUTPUT_PASSWORD"));
         assert!(!message.contains("do-not-print-this-secret"));
-
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_URL");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
-        }
     }
 }
 

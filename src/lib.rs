@@ -34,8 +34,12 @@ pub mod setup;
 /// Upload raw diagnostic archives to Elastic Upload Service
 pub mod uploader;
 
+/// Private to `TestEnv`, which is the only supported way to take it. Callers
+/// that locked it directly used `.expect()`, so a panicking test poisoned the
+/// mutex and every later environment test failed with `PoisonError` instead of
+/// its own result.
 #[cfg(test)]
-pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {
+fn test_env_lock() -> &'static std::sync::Mutex<()> {
     use std::sync::{Mutex, OnceLock};
 
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -46,6 +50,7 @@ pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {
 pub(crate) struct TestEnv {
     _guard: std::sync::MutexGuard<'static, ()>,
     previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    previous_cwd: Option<std::path::PathBuf>,
     pub tmp: tempfile::TempDir,
     pub hosts_path: std::path::PathBuf,
     pub keystore_path: std::path::PathBuf,
@@ -66,6 +71,7 @@ impl TestEnv {
         let mut env = Self {
             _guard: guard,
             previous: Vec::new(),
+            previous_cwd: None,
             tmp,
             hosts_path,
             keystore_path,
@@ -101,6 +107,17 @@ impl TestEnv {
         }
     }
 
+    /// Changes the process working directory, restoring the original on drop.
+    /// The directory is process-global like the variables above, and it must
+    /// be restored before `tmp` is removed or later tests inherit a cwd that
+    /// no longer exists.
+    pub(crate) fn set_current_dir(&mut self, path: impl AsRef<std::path::Path>) {
+        if self.previous_cwd.is_none() {
+            self.previous_cwd = std::env::current_dir().ok();
+        }
+        std::env::set_current_dir(path).expect("set current dir");
+    }
+
     fn capture(&mut self, key: &'static str) {
         if self.previous.iter().any(|(existing, _)| *existing == key) {
             return;
@@ -112,6 +129,9 @@ impl TestEnv {
 #[cfg(test)]
 impl Drop for TestEnv {
     fn drop(&mut self) {
+        if let Some(cwd) = self.previous_cwd.take() {
+            let _ = std::env::set_current_dir(cwd);
+        }
         for (key, value) in self.previous.drain(..).rev() {
             unsafe {
                 match value {

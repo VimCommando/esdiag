@@ -992,25 +992,13 @@ mod tests {
     use crate::data::Application;
     use crate::data::{HostRole, Job, JobOutput, KnownHostBuilder, SavedJobs, save_saved_jobs};
     use crate::job::model::{Input, Process, SaveTarget, SendTarget};
-    use crate::test_env_lock;
-    use tempfile::TempDir;
     use url::Url;
 
-    fn setup_env() -> (TempDir, PathBuf, PathBuf) {
-        let tmp = TempDir::new().expect("temp dir");
-        let config_dir = tmp.path().join(".esdiag");
-        std::fs::create_dir_all(&config_dir).expect("create config dir");
-        let keystore_path = config_dir.join("secrets.yml");
-        let unlock_path = config_dir.join("keystore.unlock");
-        let hosts_path = config_dir.join("hosts.yml");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-            std::env::set_var("USERPROFILE", tmp.path());
-            std::env::set_var("ESDIAG_KEYSTORE", &keystore_path);
-            std::env::set_var("ESDIAG_HOSTS", &hosts_path);
-            std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
-        }
-        (tmp, keystore_path, unlock_path)
+    fn setup_env() -> (crate::TestEnv, PathBuf, PathBuf) {
+        let env = crate::TestEnv::new();
+        let keystore_path = env.keystore_path.clone();
+        let unlock_path = keystore_path.with_file_name("keystore.unlock");
+        (env, keystore_path, unlock_path)
     }
 
     #[test]
@@ -1027,7 +1015,6 @@ mod tests {
 
     #[test]
     fn expired_unlock_lease_is_removed_and_not_used() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, unlock_path) = setup_env();
 
         create_keystore("pw").expect("create keystore");
@@ -1044,7 +1031,6 @@ mod tests {
 
     #[test]
     fn rotate_keystore_password_preserves_secret_and_unlock_lease() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, _unlock_path) = setup_env();
 
         create_keystore("pw").expect("create keystore");
@@ -1065,7 +1051,6 @@ mod tests {
 
     #[test]
     fn clear_unlock_lease_treats_non_file_paths_as_absent() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, unlock_path) = setup_env();
         std::fs::create_dir_all(&unlock_path).expect("create unlock directory");
 
@@ -1075,7 +1060,6 @@ mod tests {
 
     #[test]
     fn stale_unlock_lease_for_secret_commands_falls_back_to_prompt() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, unlock_path) = setup_env();
         create_keystore("current-pw").expect("create keystore");
         write_unlock_lease_until("stale-pw", current_epoch_seconds() + 300).expect("write lease");
@@ -1095,7 +1079,6 @@ mod tests {
 
     #[test]
     fn stale_unlock_lease_for_keystore_password_is_cleared_and_rejected() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, unlock_path) = setup_env();
         create_keystore("current-pw").expect("create keystore");
         write_unlock_lease_until("stale-pw", current_epoch_seconds() + 300).expect("write lease");
@@ -1110,7 +1093,6 @@ mod tests {
 
     #[test]
     fn unlock_status_clears_stale_lease_when_keystore_password_changed() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, unlock_path) = setup_env();
         create_keystore("current-pw").expect("create keystore");
         write_unlock_lease_until("stale-pw", current_epoch_seconds() + 300).expect("write lease");
@@ -1127,7 +1109,6 @@ mod tests {
 
     #[test]
     fn unlock_status_clears_lease_when_keystore_is_absent() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, unlock_path) = setup_env();
         write_unlock_lease_until("pw", current_epoch_seconds() + 300).expect("write lease");
 
@@ -1143,7 +1124,6 @@ mod tests {
 
     #[test]
     fn absent_keystore_unlock_lease_is_cleared_and_rejected() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, unlock_path) = setup_env();
         write_unlock_lease_until("pw", current_epoch_seconds() + 300).expect("write lease");
 
@@ -1157,7 +1137,6 @@ mod tests {
 
     #[test]
     fn absent_keystore_unlock_lease_for_secret_commands_is_cleared_before_prompt() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, unlock_path) = setup_env();
         write_unlock_lease_until("pw", current_epoch_seconds() + 300).expect("write lease");
 
@@ -1176,7 +1155,6 @@ mod tests {
 
     #[test]
     fn secure_output_file_rejects_preexisting_paths() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, keystore_path, _unlock_path) = setup_env();
         std::fs::write(&keystore_path, "occupied").expect("seed existing file");
 
@@ -1188,7 +1166,6 @@ mod tests {
 
     #[test]
     fn write_unlock_lease_saturates_large_ttls() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, _unlock_path) = setup_env();
         create_keystore("pw").expect("create keystore");
 
@@ -1200,7 +1177,6 @@ mod tests {
 
     #[test]
     fn encrypted_envelopes_persist_current_kdf_params() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, keystore_path, unlock_path) = setup_env();
 
         create_keystore("pw").expect("create keystore");
@@ -1225,32 +1201,23 @@ mod tests {
     /// and one this backend cannot answer — see the ADR's threat model.
     #[test]
     fn unlock_lease_does_not_decrypt_under_a_different_machine_context() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let (_tmp, _keystore_path, unlock_path) = setup_env();
-        let original_user = env::var("USER").ok();
+        let (mut test_env, _keystore_path, unlock_path) = setup_env();
 
         create_keystore("keystore-password").expect("create keystore");
         write_unlock_lease("keystore-password", Duration::from_secs(300)).expect("write unlock lease");
         assert!(read_unlock_lease().expect("read own lease").is_some());
 
         let stolen = std::fs::read_to_string(&unlock_path).expect("read unlock file");
-        unsafe { env::set_var("USER", "someone-else") };
+        test_env.set("USER", "someone-else");
         std::fs::write(&unlock_path, &stolen).expect("restore the exfiltrated lease");
 
         let lease = read_unlock_lease().expect("reading a foreign lease is not an error");
-        unsafe {
-            match original_user {
-                Some(user) => env::set_var("USER", user),
-                None => env::remove_var("USER"),
-            }
-        }
 
         assert!(lease.is_none(), "a lease from another context must not decrypt");
     }
 
     #[test]
     fn unlock_file_and_keystore_envelope_do_not_disclose_plaintext_material() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, keystore_path, unlock_path) = setup_env();
 
         create_keystore("keystore-password").expect("create keystore");
@@ -1279,7 +1246,6 @@ mod tests {
     /// material were not wrapped (ADR-0011).
     #[test]
     fn debug_output_redacts_every_secret_carrier() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, _unlock_path) = setup_env();
 
         create_keystore("keystore-password").expect("create keystore");
@@ -1321,7 +1287,6 @@ mod tests {
 
     #[test]
     fn saved_secret_entries_are_role_agnostic_without_direction_field() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, _unlock_path) = setup_env();
 
         create_keystore("pw").expect("create keystore");
@@ -1375,42 +1340,27 @@ ciphertext: ""
 
     #[test]
     fn relative_keystore_path_does_not_require_parent_creation() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = TempDir::new().expect("temp dir");
-        let cwd = std::env::current_dir().expect("current dir");
-        unsafe {
-            std::env::set_current_dir(tmp.path()).expect("set current dir");
-            std::env::set_var("ESDIAG_KEYSTORE", "secrets.yml");
-        }
+        let mut test_env = crate::TestEnv::new();
+        let tmp_dir = test_env.tmp.path().to_path_buf();
+        test_env.set_current_dir(tmp_dir);
+        test_env.set("ESDIAG_KEYSTORE", "secrets.yml");
 
         let path = get_keystore_path().expect("relative keystore path");
         assert_eq!(path, PathBuf::from("secrets.yml"));
-
-        unsafe {
-            std::env::set_current_dir(cwd).expect("restore current dir");
-            std::env::remove_var("ESDIAG_KEYSTORE");
-        }
     }
 
     #[test]
     fn env_keystore_path_read_does_not_create_missing_parent_dirs() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = TempDir::new().expect("temp dir");
-        let keystore_path = tmp.path().join("nested").join("secrets.yml");
-        unsafe {
-            std::env::set_var("ESDIAG_KEYSTORE", &keystore_path);
-        }
+        let mut test_env = crate::TestEnv::new();
+        let keystore_path = test_env.tmp.path().join("nested").join("secrets.yml");
+        test_env.set_path("ESDIAG_KEYSTORE", keystore_path.clone());
 
         let path = get_keystore_path().expect("keystore path");
         assert_eq!(path, keystore_path);
         assert!(
-            !tmp.path().join("nested").exists(),
+            !test_env.tmp.path().join("nested").exists(),
             "read path lookup should not create missing parent directories"
         );
-
-        unsafe {
-            std::env::remove_var("ESDIAG_KEYSTORE");
-        }
     }
 
     fn save_secret_backed_host(secret_id: &str, host_name: &str) {
@@ -1434,7 +1384,6 @@ ciphertext: ""
 
     #[test]
     fn remove_secret_blocks_direct_host_reference() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, _unlock_path) = setup_env();
         authenticate("pw").expect("create keystore");
         upsert_secret_auth(
@@ -1453,7 +1402,6 @@ ciphertext: ""
 
     #[test]
     fn remove_secret_reports_saved_job_references() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, _unlock_path) = setup_env();
         authenticate("pw").expect("create keystore");
         upsert_secret_auth(
@@ -1492,7 +1440,6 @@ ciphertext: ""
 
     #[test]
     fn remove_secret_succeeds_when_unreferenced() {
-        let _guard = test_env_lock().lock().expect("env lock");
         let (_tmp, _keystore_path, _unlock_path) = setup_env();
         authenticate("pw").expect("create keystore");
         upsert_secret_auth("unused-secret", SecretAuth::apikey("super-secret-api-key"), "pw").expect("store secret");
