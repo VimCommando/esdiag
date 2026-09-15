@@ -53,7 +53,7 @@ Read only the target references required by the release:
 2. Fetch `upstream` and `origin` with pruning. Fast-forward local `main` to
    `upstream/main`; push `origin/main` when the fork is behind.
 3. Set the stable version on `BRANCH`, update all version-sensitive files and
-   `NOTICE.txt`, then run the baseline validation. For a standalone crate
+   `NOTICES.md`, then run the baseline validation. For a standalone crate
    target, update and validate only that package's version and follow the
    crates.io reference:
 
