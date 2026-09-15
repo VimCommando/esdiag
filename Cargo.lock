@@ -1422,7 +1422,8 @@ dependencies = [
 [[package]]
 name = "elasticsearch"
 version = "9.1.0-alpha.1"
-source = "git+https://github.com/VimCommando/elasticsearch-rs?rev=2eff23f3d908c177b8ecc03c4a8af0f8080d7a80#2eff23f3d908c177b8ecc03c4a8af0f8080d7a80"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12bb303aa6e1d28c0c86b6fbfe484fd0fd3f512629aeed1ac4f6b85f81d9834a"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1526,7 +1527,7 @@ dependencies = [
 
 [[package]]
 name = "esdiag"
-version = "0.17.0-SNAPSHOT"
+version = "0.17.0-rc1"
 dependencies = [
  "aes-gcm-siv",
  "askama",

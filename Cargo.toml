@@ -1,6 +1,6 @@
 [package]
 name = "esdiag"
-version = "0.17.0-SNAPSHOT"
+version = "0.17.0-rc1"
 description = "Elastic Stack diagnostic collector and processor"
 repository = "https://github.com/elastic/esdiag"
 homepage = "https://github.com/elastic/esdiag"
@@ -33,7 +33,7 @@ bytes = "1.11.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 clap = { version = "4.6", features = ["derive"] }
 datastar = { version = "0.3.1", features = ["axum"] }
-elasticsearch = { version = "9.1.0-alpha.1", git = "https://github.com/VimCommando/elasticsearch-rs", rev = "2eff23f3d908c177b8ecc03c4a8af0f8080d7a80" }
+elasticsearch = "9.1.0-alpha.1"
 eyre = "0.6.12"
 futures = "0.3"
 indexmap = { version = "2.14.0", features = ["serde"] }
