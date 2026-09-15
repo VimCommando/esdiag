@@ -2006,10 +2006,7 @@ mod tests {
 
     #[test]
     fn legacy_hosts_auth_resolves_without_keystore() {
-        let (_tmp, _hosts, _keystore) = setup_env();
-        unsafe {
-            std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
-        }
+        let (_test_env, _hosts, _keystore) = setup_env();
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2033,13 +2030,10 @@ mod tests {
 
     #[test]
     fn explicit_secret_missing_keystore_fails() {
-        let (_tmp, _hosts, _keystore) = setup_env();
-        unsafe {
-            std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
-            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "env-key");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
-            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
-        }
+        let (mut test_env, _hosts, _keystore) = setup_env();
+        test_env.set("ESDIAG_OUTPUT_APIKEY", "env-key");
+        test_env.remove("ESDIAG_OUTPUT_USERNAME");
+        test_env.remove("ESDIAG_OUTPUT_PASSWORD");
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2059,9 +2053,6 @@ mod tests {
         let host = KnownHost::get_known(&"secret-only".to_string()).expect("host");
         let err = host.get_auth().expect_err("auth should fail");
         assert!(err.to_string().contains("missing-secret"));
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
-        }
     }
 
     #[test]
@@ -2069,9 +2060,6 @@ mod tests {
         let (_tmp, _hosts, _keystore) = setup_env();
         upsert_secret_auth("lease-secret", SecretAuth::apikey("unlock-key"), "pw").expect("upsert secret");
         write_unlock_lease("pw", std::time::Duration::from_secs(300)).expect("write unlock lease");
-        unsafe {
-            std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
-        }
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2152,10 +2140,8 @@ mod tests {
 
     #[test]
     fn explicit_secret_takes_precedence_over_legacy_fields() {
-        let (_tmp, _hosts, _keystore) = setup_env();
-        unsafe {
-            std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
-        }
+        let (mut test_env, _hosts, _keystore) = setup_env();
+        test_env.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
 
         upsert_secret_auth("custom-secret", SecretAuth::apikey("secret-key"), "pw").expect("upsert secret");
 
@@ -2181,10 +2167,8 @@ mod tests {
 
     #[test]
     fn no_secret_uses_legacy_auth_without_keystore_lookup() {
-        let (_tmp, _hosts, _keystore) = setup_env();
-        unsafe {
-            std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
-        }
+        let (mut test_env, _hosts, _keystore) = setup_env();
+        test_env.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
 
         upsert_secret_auth("prod-es", SecretAuth::apikey("keystore-key"), "pw").expect("upsert secret");
 
@@ -2230,10 +2214,8 @@ mod tests {
 
     #[test]
     fn migrate_hosts_moves_legacy_credentials_to_keystore() {
-        let (_tmp, hosts_path, _keystore) = setup_env();
-        unsafe {
-            std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
-        }
+        let (mut test_env, hosts_path, _keystore) = setup_env();
+        test_env.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
 
         let mut hosts = BTreeMap::new();
         hosts.insert(

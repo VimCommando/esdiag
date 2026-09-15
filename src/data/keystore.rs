@@ -1201,24 +1201,17 @@ mod tests {
     /// and one this backend cannot answer — see the ADR's threat model.
     #[test]
     fn unlock_lease_does_not_decrypt_under_a_different_machine_context() {
-        let (_tmp, _keystore_path, unlock_path) = setup_env();
-        let original_user = env::var("USER").ok();
+        let (mut test_env, _keystore_path, unlock_path) = setup_env();
 
         create_keystore("keystore-password").expect("create keystore");
         write_unlock_lease("keystore-password", Duration::from_secs(300)).expect("write unlock lease");
         assert!(read_unlock_lease().expect("read own lease").is_some());
 
         let stolen = std::fs::read_to_string(&unlock_path).expect("read unlock file");
-        unsafe { env::set_var("USER", "someone-else") };
+        test_env.set("USER", "someone-else");
         std::fs::write(&unlock_path, &stolen).expect("restore the exfiltrated lease");
 
         let lease = read_unlock_lease().expect("reading a foreign lease is not an error");
-        unsafe {
-            match original_user {
-                Some(user) => env::set_var("USER", user),
-                None => env::remove_var("USER"),
-            }
-        }
 
         assert!(lease.is_none(), "a lease from another context must not decrypt");
     }
@@ -1347,27 +1340,25 @@ ciphertext: ""
 
     #[test]
     fn relative_keystore_path_does_not_require_parent_creation() {
-        let mut env = crate::TestEnv::new();
-        let cwd = std::env::current_dir().expect("current dir");
-        std::env::set_current_dir(env.tmp.path()).expect("set current dir");
-        env.set("ESDIAG_KEYSTORE", "secrets.yml");
+        let mut test_env = crate::TestEnv::new();
+        let tmp_dir = test_env.tmp.path().to_path_buf();
+        test_env.set_current_dir(tmp_dir);
+        test_env.set("ESDIAG_KEYSTORE", "secrets.yml");
 
         let path = get_keystore_path().expect("relative keystore path");
         assert_eq!(path, PathBuf::from("secrets.yml"));
-
-        std::env::set_current_dir(cwd).expect("restore current dir");
     }
 
     #[test]
     fn env_keystore_path_read_does_not_create_missing_parent_dirs() {
-        let mut env = crate::TestEnv::new();
-        let keystore_path = env.tmp.path().join("nested").join("secrets.yml");
-        env.set_path("ESDIAG_KEYSTORE", keystore_path.clone());
+        let mut test_env = crate::TestEnv::new();
+        let keystore_path = test_env.tmp.path().join("nested").join("secrets.yml");
+        test_env.set_path("ESDIAG_KEYSTORE", keystore_path.clone());
 
         let path = get_keystore_path().expect("keystore path");
         assert_eq!(path, keystore_path);
         assert!(
-            !env.tmp.path().join("nested").exists(),
+            !test_env.tmp.path().join("nested").exists(),
             "read path lookup should not create missing parent directories"
         );
     }
