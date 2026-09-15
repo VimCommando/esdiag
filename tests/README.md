@@ -97,6 +97,22 @@ processing once that processor is implemented. By default the suite still
 collects from Kibana but skips processing that collected Kibana diagnostic so
 the release gate only covers supported workflows.
 
+## Agent Skill Plugin Suite
+
+`tests/plugin.sh` checks the portable Agent Skill and host manifests without
+network access. It verifies generated-package parity, drift detection, script-free
+packaging, reachable native command guides, valid manifests, and matching versions.
+
+Run it from the repository root:
+
+```sh
+./tests/plugin.sh
+./tests/plugin.sh --only test_skill_routes_to_native_commands
+```
+
+The suite requires `rg` and `tq`. It checks package structure and documented command
+routing; native command behavior is covered by the Rust tests.
+
 ## Fixture Archive Regeneration
 
 `tests/bin/regenerate-fixture-archives.sh` rebuilds the checked-in
@@ -119,3 +135,20 @@ The script requires `cargo`, `curl`, and `docker` by default. Set
 `CONTAINER_RUNTIME=podman` to use Podman instead. It starts temporary Elastic
 Stack containers and uses a temporary directory for the Logstash pipeline
 configuration.
+
+## Mixed-version provenance writes
+
+`tests/provenance_writers_tests.rs` installs the checkout's Elasticsearch assets
+and tests legacy, current, and dual-name payloads against report, Elasticsearch
+node, and Logstash node streams. It checks direct and bulk writes, term queries,
+aggregations, and a subsequent rollover.
+
+Run only against a disposable Elasticsearch cluster with security disabled.
+The test replaces ESDiag templates and rolls over its test streams.
+
+```sh
+ESDIAG_TEST_ES_URL=http://localhost:19278 cargo test --test provenance_writers_tests -- --ignored --nocapture
+```
+
+The test is ignored by default. Elasticsearch 9.4.2 on
+Ironhide is the regression environment for mixed-version provenance writes.

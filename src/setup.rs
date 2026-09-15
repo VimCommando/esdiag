@@ -4,7 +4,7 @@
 
 use crate::{
     client::Client,
-    data::Product,
+    data::Application,
     embeds::{Assets, KIBANA_ASSETS_BUNDLE},
 };
 //use bytes::Bytes;
@@ -19,6 +19,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use url::Url;
 use zip::ZipArchive;
 
 // Subdirectory for templates and configs files
@@ -116,12 +117,217 @@ fn default_headers() -> HashMap<String, String> {
     HashMap::from([("Content-Type".to_string(), "application/json".to_string())])
 }
 
-fn should_skip_asset(asset: &Asset, security_enabled: bool) -> bool {
-    asset.requires_security && !security_enabled
+/// Every ESDiag-owned index, whichever generation created it.
+const ESDIAG_INDEX_PATTERN: &str = "*-esdiag*";
+
+/// The renamed `diagnostic.*` provenance fields as `(current, legacy)` pairs
+/// (ADR-0001, bridged by ADR-0014).
+const PROVENANCE_RENAMES: [(&str, &str); 2] = [("application", "product"), ("platform", "orchestration")];
+
+/// The alias mapping an index created before the provenance rename is missing.
+///
+/// A field alias must point at a concrete field, so no single index can carry
+/// both names as aliases: the direction is fixed by which name that index stores.
+/// New templates keep both names writable with reciprocal `copy_to`. Historical
+/// indices still need a query-only alias because adding a concrete field would
+/// leave previously indexed documents unsearchable through that name.
+///
+/// Returns `None` when there is nothing to bridge — a new-generation index, one
+/// already carrying the alias, or a mapping with no provenance fields at all —
+/// which is what makes running this on every setup idempotent.
+fn provenance_alias_patch(diagnostic_properties: &Value) -> Option<Value> {
+    let mut aliases = serde_json::Map::new();
+    for (current, legacy) in PROVENANCE_RENAMES {
+        let stores_legacy_name = diagnostic_properties
+            .get(legacy)
+            .and_then(|mapping| mapping.get("type"))
+            .and_then(Value::as_str)
+            .is_some_and(|field_type| field_type != "alias");
+        if stores_legacy_name && diagnostic_properties.get(current).is_none() {
+            aliases.insert(
+                current.to_string(),
+                serde_json::json!({ "type": "alias", "path": format!("diagnostic.{legacy}") }),
+            );
+        }
+    }
+
+    if aliases.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "properties": { "diagnostic": { "properties": Value::Object(aliases) } }
+    }))
+}
+
+/// The indices needing a provenance alias, paired with the mapping patch each one
+/// needs, read from a `GET <pattern>/_mapping` response.
+fn provenance_alias_patches(mappings: &Value) -> Vec<(String, Value)> {
+    let Some(indices) = mappings.as_object() else {
+        return Vec::new();
+    };
+    indices
+        .iter()
+        .filter_map(|(index, mapping)| {
+            let properties = mapping
+                .pointer("/mappings/properties/diagnostic/properties")
+                .unwrap_or(&Value::Null);
+            provenance_alias_patch(properties).map(|patch| (index.clone(), patch))
+        })
+        .collect()
+}
+
+/// Existing aliases cannot accept writes, and unlinked concrete fields can split
+/// search results. Neither can be repaired by installing a new template.
+fn provenance_mapping_warnings(properties: &Value) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (current, legacy) in PROVENANCE_RENAMES {
+        for name in [current, legacy] {
+            if properties[name]["type"] == "alias" {
+                warnings.push(format!(
+                    "diagnostic.{name} is a query-only alias and rejects writers using that name; \
+                     roll over the data stream after setup before mixing writer versions"
+                ));
+            }
+        }
+        let concrete = |name: &str| properties[name]["type"].as_str().is_some_and(|kind| kind != "alias");
+        let copies_to = |from: &str, to: &str| {
+            let target = Value::String(format!("diagnostic.{to}"));
+            let copy = &properties[from]["copy_to"];
+            copy == &target || copy.as_array().is_some_and(|targets| targets.contains(&target))
+        };
+        if concrete(current) && concrete(legacy) && !(copies_to(current, legacy) && copies_to(legacy, current)) {
+            warnings.push(format!(
+                "diagnostic.{current} and diagnostic.{legacy} are unlinked concrete fields; \
+                 historical search results may be split. Roll over for future writes and \
+                 reindex historical documents if both names must find them"
+            ));
+        }
+    }
+    warnings
+}
+
+/// Bridge the provenance rename on indices that predate it (ADR-0014).
+///
+/// Templates only govern indices created after they are installed, so this is the
+/// other half of the bridge: without it a dashboard querying the current field
+/// name silently matches nothing in historical indices. Failures are reported and
+/// returned to the caller so the CLI can report partial installation while
+/// allowing the remaining assets to be installed.
+async fn install_provenance_aliases(client: &Client) -> Result<Vec<String>> {
+    let headers = default_headers();
+    let path = format!("/{ESDIAG_INDEX_PATTERN}/_mapping?ignore_unavailable=true&allow_no_indices=true");
+    let response = client.request(Method::GET, &headers, &path, None).await?;
+    if !response.status().is_success() {
+        return Err(eyre!(
+            "Reading ESDiag index mappings returned {}: {}",
+            response.status(),
+            response.text().await.unwrap_or_default()
+        ));
+    }
+
+    let mappings: Value = response.json().await?;
+    if let Some(indices) = mappings.as_object() {
+        for (index, mapping) in indices {
+            let properties = mapping
+                .pointer("/mappings/properties/diagnostic/properties")
+                .unwrap_or(&Value::Null);
+            for warning in provenance_mapping_warnings(properties) {
+                tracing::warn!("{index}: {warning}");
+            }
+        }
+    }
+    let patches = provenance_alias_patches(&mappings);
+    if patches.is_empty() {
+        tracing::debug!("No pre-rename ESDiag indices need a provenance alias");
+        return Ok(vec![]);
+    }
+
+    let mut failures = Vec::new();
+    for (index, patch) in &patches {
+        let body = serde_json::to_vec(patch)?;
+        let result = client
+            .request(Method::PUT, &headers, &format!("/{index}/_mapping"), Some(&body))
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => {
+                tracing::debug!("Aliased the current provenance names onto {index}");
+            }
+            Ok(response) => {
+                failures.push(index.clone());
+                tracing::warn!(
+                    "Could not add the provenance alias to {index}: {} {}",
+                    response.status(),
+                    response.text().await.unwrap_or_default()
+                );
+            }
+            Err(err) => {
+                failures.push(index.clone());
+                tracing::warn!("Could not add the provenance alias to {index}: {err}");
+            }
+        }
+    }
+
+    tracing::info!(
+        "Bridged provenance field names on {} of {} pre-rename indices",
+        patches.len() - failures.len(),
+        patches.len()
+    );
+    if patches.len() > failures.len() {
+        tracing::warn!(
+            "Added query-only provenance aliases. Roll over the affected data streams after setup before mixing writer versions."
+        );
+    }
+    Ok(failures)
+}
+
+fn should_skip_asset(asset: &Asset, security_assets_supported: bool) -> bool {
+    asset.requires_security && !security_assets_supported
 }
 
 async fn send_asset(client: &Client, asset: &Asset, path: &Path, contents: &[u8], named: bool) -> Result<()> {
     send_asset_with_allowed_statuses(client, asset, path, contents, named, &[]).await
+}
+
+/// Adapt only template settings. ILM fields in diagnostic mappings are source data.
+fn serverless_asset_contents(asset: &Asset, contents: &[u8]) -> Result<Vec<u8>> {
+    if !is_template_asset(asset) {
+        return Ok(contents.to_vec());
+    }
+    let mut body: Value = serde_json::from_slice(contents)?;
+    if let Some(settings) = body.pointer_mut("/template/settings") {
+        remove_serverless_ilm_settings(settings, "");
+    }
+    // Serverless requires lifecycle management even for long-lived reports.
+    if let Some(lifecycle) = body.pointer_mut("/template/lifecycle")
+        && lifecycle.get("enabled") == Some(&Value::Bool(false))
+    {
+        *lifecycle = serde_json::json!({"enabled": true, "data_retention": "3650d"});
+    }
+    Ok(serde_json::to_vec(&body)?)
+}
+
+fn is_template_asset(asset: &Asset) -> bool {
+    matches!(
+        asset.endpoint.trim_matches('/'),
+        "_component_template" | "_index_template"
+    )
+}
+
+fn remove_serverless_ilm_settings(value: &mut Value, prefix: &str) {
+    if let Some(settings) = value.as_object_mut() {
+        settings.retain(|key, value| {
+            let path = if prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{prefix}.{key}")
+            };
+            if matches!(path.as_str(), "index.lifecycle.name" | "index.lifecycle.prefer_ilm") {
+                return false;
+            }
+            remove_serverless_ilm_settings(value, &path);
+            !value.as_object().is_some_and(|object| object.is_empty())
+        });
+    }
 }
 
 async fn send_asset_with_allowed_statuses(
@@ -136,8 +342,8 @@ async fn send_asset_with_allowed_statuses(
     let endpoint = match named {
         true => &format!(
             "{}/{}{}",
-            &asset.endpoint,
-            &stem,
+            asset.endpoint,
+            stem,
             asset.suffix.clone().unwrap_or("".to_string()),
         ),
         false => &asset.endpoint,
@@ -170,30 +376,72 @@ async fn send_asset_with_allowed_statuses(
     }
 }
 
-/// Submit saved assets to the client APIs
+/// Mapping updates that could not be completed after asset installation.
+#[derive(Default)]
+pub struct SetupReport {
+    pub failed_indices: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+impl SetupReport {
+    pub fn is_complete(&self) -> bool {
+        self.failed_indices.is_empty() && self.warnings.is_empty()
+    }
+}
+
+/// Install assets, requiring complete mapping updates before returning success.
 pub async fn assets(client: &Client) -> Result<()> {
+    let report = assets_report(client).await?;
+    if !report.is_complete() {
+        let failed_indices = if report.failed_indices.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " These indices could not be updated: {}.",
+                report.failed_indices.join(", ")
+            )
+        };
+        let warnings = if report.warnings.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", report.warnings.join(" "))
+        };
+        return Err(eyre!("Asset installation was partial.{}{}", failed_indices, warnings));
+    }
+    Ok(())
+}
+
+pub async fn assets_report(client: &Client) -> Result<SetupReport> {
+    let mut report = SetupReport::default();
     let embedded_assets = EmbeddedAssets::new()?;
-    if Product::from(client) == Product::Kibana {
-        return kibana_assets(client, &embedded_assets).await;
+    if Application::from(client) == Application::Kibana {
+        kibana_assets(client, &embedded_assets).await?;
+        return Ok(report);
     }
 
     // load asset list from ./assets/{product}/assets.yml
     let assets = parse_assets_yml(client.into(), &embedded_assets)?;
 
     // Check security status
-    let security_enabled = client
-        .has_security_enabled()
-        .await
-        .wrap_err("Failed to determine security status")?;
-
-    if !security_enabled {
+    let serverless = client.is_serverless().await?;
+    let security_enabled = serverless
+        || client
+            .has_security_enabled()
+            .await
+            .wrap_err("Failed to determine security status")?;
+    if serverless {
+        tracing::info!(
+            "Serverless security is always enabled. Skipping bundled security-dependent assets; configure project roles separately."
+        );
+    } else if !security_enabled {
         tracing::info!("Security is disabled on the cluster. Security-dependent assets will be skipped.");
     }
+    let supports_security_assets = security_enabled && !serverless;
 
     let mut error_count = 0;
 
     for asset in assets {
-        if should_skip_asset(&asset, security_enabled) {
+        if should_skip_asset(&asset, supports_security_assets) {
             tracing::debug!("Skipping security-dependent asset: {}", &asset.name);
             continue;
         }
@@ -206,20 +454,40 @@ pub async fn assets(client: &Client) -> Result<()> {
         if !dir_files.is_empty() {
             // do something with the directory
             for (file_path, contents) in dir_files {
+                let contents = if serverless && is_template_asset(&asset) {
+                    std::borrow::Cow::Owned(serverless_asset_contents(&asset, &contents)?)
+                } else {
+                    contents
+                };
                 tracing::debug!("file.path: {:?}", file_path);
                 match send_asset(client, &asset, &file_path, &contents, true).await {
                     Ok(res) => tracing::debug!("Response: {:?}", res),
                     Err(e) => {
                         tracing::error!("Failed to send asset: {e:?}");
+                        report.warnings.push(format!(
+                            "Failed to install {} asset {}. Check setup logs and rerun setup.",
+                            client,
+                            file_path.display()
+                        ));
                         error_count += 1;
                     }
                 }
             }
         } else if let Some(contents) = embedded_assets.get_file(&path) {
+            let contents = if serverless && is_template_asset(&asset) {
+                std::borrow::Cow::Owned(serverless_asset_contents(&asset, &contents)?)
+            } else {
+                contents
+            };
             // do something with the file
             tracing::debug!("file.path: {:?}", &path);
             if let Err(e) = send_asset(client, &asset, &path, &contents, false).await {
                 tracing::error!("Failed to send asset: {e:?}");
+                report.warnings.push(format!(
+                    "Failed to install {} asset {}. Check setup logs and rerun setup.",
+                    client,
+                    path.display()
+                ));
                 error_count += 1;
             }
         } else {
@@ -227,13 +495,108 @@ pub async fn assets(client: &Client) -> Result<()> {
             return Err(eyre!("Asset not found: {}", asset.name));
         }
     }
+    // The templates just installed only shape indices created from here on, so
+    // existing ones still answer to whichever provenance names they were created
+    // with (ADR-0014). Elasticsearch owns those indices, so the bridge is only
+    // meaningful there — asking any other product for its mappings would warn
+    // about a call that never made sense.
+    if matches!(client, Client::Elasticsearch(_)) {
+        match install_provenance_aliases(client).await {
+            Ok(indices) => report.failed_indices = indices,
+            Err(err) => {
+                tracing::warn!("Could not bridge provenance field names on existing ESDiag indices: {err}");
+                report.warnings.push("Could not inspect or update existing index mappings. Check connectivity and mapping privileges, then rerun setup.".to_string());
+            }
+        }
+        if !report.failed_indices.is_empty() {
+            report.warnings.push("Check the failed indices for mapping limits or write blocks. For a total-fields-limit error, raise index.mapping.total_fields.limit, then rerun setup.".to_string());
+        }
+    }
+
     if error_count == 0 {
-        tracing::info!("completed setup for {client}");
-        Ok(())
+        tracing::info!("finished asset installation for {client}");
+        Ok(report)
     } else {
         tracing::error!("{error_count} errors in setup for {client}");
-        Err(eyre!("{error_count} errors in setup for {client}"))
+        Ok(report)
     }
+}
+
+/// Checks the minimum ESDiag asset set required for processing and Agent Builder.
+///
+/// This is deliberately read-only and inexpensive enough for onboarding status:
+/// the Elasticsearch ingest pipeline proves processing assets are present, while
+/// the default Kibana agent must have the ESDiag diagnostic skill attached.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AssetStatus {
+    Installed,
+    Missing,
+    #[default]
+    Unknown,
+}
+
+pub async fn asset_statuses(
+    elasticsearch: &Client,
+    kibana: &Client,
+    kibana_url: Option<&str>,
+) -> (AssetStatus, AssetStatus) {
+    let headers = HashMap::new();
+    let pipeline = elasticsearch.request(Method::GET, &headers, "_ingest/pipeline/esdiag", None);
+    let agent_path = kibana_agent_path(kibana_url);
+    let agent = kibana.request(Method::GET, &headers, &agent_path, None);
+    let (pipeline, agent) = tokio::join!(pipeline, agent);
+
+    let elasticsearch_assets = match pipeline {
+        Ok(response) if response.status().is_success() => AssetStatus::Installed,
+        Ok(response) if response.status() == StatusCode::NOT_FOUND => AssetStatus::Missing,
+        Ok(_) | Err(_) => AssetStatus::Unknown,
+    };
+    let kibana_assets = match agent {
+        Ok(response) if response.status().is_success() => match response.json::<Value>().await {
+            Ok(agent) => {
+                let installed = agent
+                    .get("configuration")
+                    .and_then(|configuration| configuration.get("skill_ids"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|skills| {
+                        skills
+                            .iter()
+                            .any(|skill| skill.as_str() == Some("agentic-diagnostic-assistant"))
+                    });
+                if installed {
+                    AssetStatus::Installed
+                } else {
+                    AssetStatus::Missing
+                }
+            }
+            Err(_) => AssetStatus::Unknown,
+        },
+        Ok(response) if response.status() == StatusCode::NOT_FOUND => AssetStatus::Missing,
+        Ok(_) | Err(_) => AssetStatus::Unknown,
+    };
+
+    (elasticsearch_assets, kibana_assets)
+}
+
+pub async fn assets_installed(elasticsearch: &Client, kibana: &Client) -> bool {
+    let (elasticsearch_assets, kibana_assets) = asset_statuses(elasticsearch, kibana, None).await;
+    elasticsearch_assets == AssetStatus::Installed && kibana_assets == AssetStatus::Installed
+}
+
+fn kibana_agent_path(kibana_url: Option<&str>) -> String {
+    let url = kibana_url
+        .map(str::to_string)
+        .or_else(|| std::env::var("ESDIAG_KIBANA_URL").ok());
+    url.and_then(|url| {
+        Url::parse(&url).ok().and_then(|url| {
+            let segments = url.path_segments()?.collect::<Vec<_>>();
+            segments
+                .windows(2)
+                .find(|segments| segments[0] == "s")
+                .map(|segments| format!("s/{}/api/agent_builder/agents/elastic-ai-agent", segments[1]))
+        })
+    })
+    .unwrap_or_else(|| "/api/agent_builder/agents/elastic-ai-agent".to_string())
 }
 
 /// Start and verify a trial license before loading Enterprise-only Kibana assets.
@@ -241,6 +604,11 @@ pub async fn ensure_agent_builder_license(client: &Client) -> Result<()> {
     let Client::Elasticsearch(_) = client else {
         return Err(eyre!("an Elasticsearch client is required to start the trial license"));
     };
+
+    if client.is_serverless().await? {
+        tracing::info!("Serverless manages feature entitlements; skipping the Elasticsearch trial license API");
+        return Ok(());
+    }
 
     if agent_builder_license_is_active(&current_license(client).await?) {
         return Ok(());
@@ -294,7 +662,11 @@ fn agent_builder_license_is_active(response: &Value) -> bool {
 }
 
 async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Result<()> {
-    let bundle = kibana_bundle(embedded_assets)?.read_all()?;
+    let mut bundle = kibana_bundle(embedded_assets)?.read_all()?;
+    target_kibana_bundle(&mut bundle, crate::env::get_kibana_space().as_deref())?;
+    if client.is_serverless().await? {
+        adapt_serverless_kibana_bundle(&mut bundle);
+    }
     let Client::Kibana(kibana) = client else {
         return Err(eyre!("expected Kibana client"));
     };
@@ -337,6 +709,61 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
 
     tracing::info!("completed setup for {client}");
     Ok(())
+}
+
+fn target_kibana_bundle(bundle: &mut SyncBundle, space: Option<&str>) -> Result<()> {
+    let target = space.unwrap_or("default");
+    if target == "esdiag" {
+        return Ok(());
+    }
+    if bundle.by_space.len() != 1 || !bundle.by_space.contains_key("esdiag") {
+        return Err(eyre!(
+            "Expected a single esdiag asset space before selecting a destination"
+        ));
+    }
+    let mut assets = bundle.by_space.remove("esdiag").expect("checked asset space");
+    let prefix = space
+        .map(|s| format!("/s/{}", urlencoding::encode(s)))
+        .unwrap_or_default();
+    for value in assets
+        .saved_objects
+        .iter_mut()
+        .chain(&mut assets.workflows)
+        .chain(&mut assets.agents)
+        .chain(&mut assets.tools)
+        .chain(&mut assets.skills)
+    {
+        rewrite_kibana_asset_links(value, &prefix);
+    }
+    bundle.by_space.insert(target.to_string(), assets);
+    if space.is_none() {
+        bundle.spaces.clear();
+    } else {
+        for definition in &mut bundle.spaces {
+            definition["id"] = Value::String(target.to_string());
+            definition["name"] = Value::String(target.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn rewrite_kibana_asset_links(value: &mut Value, prefix: &str) {
+    match value {
+        Value::String(text) => *text = text.replace("/s/esdiag/", &format!("{prefix}/")),
+        Value::Array(values) => values.iter_mut().for_each(|v| rewrite_kibana_asset_links(v, prefix)),
+        Value::Object(values) => values.values_mut().for_each(|v| rewrite_kibana_asset_links(v, prefix)),
+        _ => {}
+    }
+}
+
+fn adapt_serverless_kibana_bundle(bundle: &mut SyncBundle) {
+    for space in &mut bundle.spaces {
+        if let Some(space) = space.as_object_mut() {
+            // Serverless fixes the solution and disallows space feature visibility controls.
+            space.remove("solution");
+            space.remove("disabledFeatures");
+        }
+    }
 }
 
 fn saved_objects_bundle(bundle: &SyncBundle) -> SyncBundle {
@@ -458,7 +885,7 @@ async fn attach_skills_to_default_agent(client: &Client, space_id: &str, skill_i
     if skill_ids.is_empty() {
         return Ok(());
     }
-    let path = format!("s/{space_id}/api/agent_builder/agents/elastic-ai-agent");
+    let path = default_agent_path(space_id);
     let response = client.request(Method::GET, &HashMap::new(), &path, None).await?;
     let status = response.status();
     if !status.is_success() {
@@ -467,7 +894,21 @@ async fn attach_skills_to_default_agent(client: &Client, space_id: &str, skill_i
             response.text().await?
         ));
     }
-    let mut agent: Value = response.json().await?;
+    let agent: Value = response.json().await?;
+    let update = default_agent_skill_update(agent, skill_ids)?;
+    send_kibana_json_with_method(client, Method::PUT, &path, &update, false).await
+}
+
+fn default_agent_path(space_id: &str) -> String {
+    let endpoint = "api/agent_builder/agents/elastic-ai-agent";
+    if space_id == "default" {
+        endpoint.to_string()
+    } else {
+        format!("s/{}/{endpoint}", urlencoding::encode(space_id))
+    }
+}
+
+fn default_agent_skill_update(mut agent: Value, skill_ids: &[String]) -> Result<Value> {
     let configuration = agent
         .get_mut("configuration")
         .and_then(Value::as_object_mut)
@@ -482,13 +923,9 @@ async fn attach_skills_to_default_agent(client: &Client, space_id: &str, skill_i
             configured_skills.push(Value::String(skill_id.clone()));
         }
     }
-    if let Some(agent) = agent.as_object_mut() {
-        agent.remove("id");
-        agent.remove("readonly");
-        agent.remove("type");
-        agent.remove("created_by");
-    }
-    send_kibana_json_with_method(client, Method::PUT, &path, &agent, false).await
+    // The update API accepts a partial body. Read responses also contain server-owned
+    // fields such as access_control.entries that must not be echoed into an update.
+    Ok(serde_json::json!({ "configuration": configuration }))
 }
 
 async fn send_kibana_json_with_method(
@@ -516,18 +953,157 @@ async fn send_kibana_json_with_method(
 }
 
 /// Parses the assets YAML file for the given exporter. Currently only supports Elasticsearch.
-fn parse_assets_yml(product: Product, assets_store: &EmbeddedAssets) -> Result<Vec<Asset>> {
-    let filename = format!("{}/{}", product.to_string().to_lowercase(), ASSETS_FILE);
+fn parse_assets_yml(application: Application, assets_store: &EmbeddedAssets) -> Result<Vec<Asset>> {
+    let filename = format!("{}/{}", application.key(), ASSETS_FILE);
     let contents = assets_store
         .get_file(Path::new(&filename))
         .ok_or(eyre!("embedded assets did not contain expected file {filename}"))?;
-    let assets = serde_yaml::from_slice(&contents)?;
+    let assets = yaml_serde::from_slice(&contents)?;
     Ok(assets)
 }
 
 #[cfg(test)]
+#[path = "setup/serverless_tests.rs"]
+mod serverless_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `diagnostic` properties an index created from the current templates
+    /// carries, read from the template itself so the test moves with it.
+    fn template_diagnostic_properties() -> Value {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/elasticsearch/component_templates/esdiag@metadata.json");
+        let template: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read metadata template")).expect("parse");
+        template["template"]["mappings"]["properties"]["diagnostic"]["properties"].clone()
+    }
+
+    /// Which concrete field a provenance name resolves to in one index's mapping.
+    fn resolves_to(diagnostic_properties: &Value, field: &str) -> Option<String> {
+        let mapping = diagnostic_properties.get(field)?;
+        match mapping["type"].as_str()? {
+            "alias" => Some(mapping["path"].as_str().expect("alias path").to_string()),
+            _ => Some(format!("diagnostic.{field}")),
+        }
+    }
+
+    /// The mapping of an index created before the provenance rename.
+    fn pre_rename_diagnostic_properties() -> Value {
+        serde_json::json!({
+            "product": { "type": "keyword" },
+            "orchestration": { "type": "keyword" },
+            "uuid": { "type": "keyword" },
+        })
+    }
+
+    /// Applies a `_mapping` patch the way Elasticsearch would, so the assertion is
+    /// about the mapping the index ends up with rather than the request body.
+    fn patched(diagnostic_properties: &Value, patch: &Value) -> Value {
+        let mut properties = diagnostic_properties.clone();
+        let target = properties.as_object_mut().expect("diagnostic properties");
+        let added = patch["properties"]["diagnostic"]["properties"]
+            .as_object()
+            .expect("patch properties");
+        for (field, mapping) in added {
+            target.insert(field.clone(), mapping.clone());
+        }
+        properties
+    }
+
+    #[test]
+    fn both_provenance_names_resolve_in_either_index_generation() {
+        let new_index = template_diagnostic_properties();
+        for (current, legacy) in PROVENANCE_RENAMES {
+            assert_eq!(new_index[current]["type"], "keyword");
+            assert_eq!(new_index[legacy]["type"], "keyword");
+        }
+        assert!(provenance_mapping_warnings(&new_index).is_empty());
+        assert!(
+            provenance_alias_patch(&new_index).is_none(),
+            "a new index needs no patch, so setup is idempotent"
+        );
+
+        let old_index = pre_rename_diagnostic_properties();
+        assert_eq!(
+            resolves_to(&old_index, "application"),
+            None,
+            "before the patch, the current name resolves to nothing in a historical index"
+        );
+
+        let patch = provenance_alias_patch(&old_index).expect("a pre-rename index needs the mirrored aliases");
+        let old_index = patched(&old_index, &patch);
+        assert_eq!(
+            resolves_to(&old_index, "application"),
+            resolves_to(&old_index, "product"),
+            "after the patch, an old index stores `product` and aliases `application` to it"
+        );
+        assert_eq!(
+            resolves_to(&old_index, "orchestration"),
+            resolves_to(&old_index, "platform")
+        );
+        assert!(
+            provenance_alias_patch(&old_index).is_none(),
+            "re-running setup over a patched index is a no-op"
+        );
+    }
+
+    #[test]
+    fn provenance_warnings_identify_aliases_and_unlinked_fields() {
+        let old = pre_rename_diagnostic_properties();
+        assert!(provenance_mapping_warnings(&old).is_empty());
+        let patch = provenance_alias_patch(&old).unwrap();
+        assert_eq!(provenance_mapping_warnings(&patched(&old, &patch)).len(), 2);
+        let split = serde_json::json!({
+            "application": {"type": "keyword"},
+            "product": {"type": "keyword"}
+        });
+        assert!(provenance_mapping_warnings(&split)[0].contains("unlinked concrete fields"));
+        assert!(provenance_alias_patch(&split).is_none());
+        let alias = serde_json::json!({
+            "application": {"type": "keyword"},
+            "product": {"type": "alias", "path": "diagnostic.application"}
+        });
+        assert!(provenance_mapping_warnings(&alias)[0].contains("diagnostic.product is a query-only alias"));
+        assert!(provenance_mapping_warnings(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn provenance_alias_patch_skips_mappings_with_nothing_to_bridge() {
+        assert!(provenance_alias_patch(&Value::Null).is_none());
+        assert!(provenance_alias_patch(&serde_json::json!({ "uuid": { "type": "keyword" } })).is_none());
+        assert!(
+            provenance_alias_patch(&serde_json::json!({
+                "product": { "type": "alias", "path": "diagnostic.application" },
+                "application": { "type": "keyword" },
+            }))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn provenance_alias_patches_select_only_the_pre_rename_indices() {
+        let mappings = serde_json::json!({
+            ".ds-metrics-node-esdiag-2024.01.01-000001": {
+                "mappings": { "properties": { "diagnostic": { "properties": pre_rename_diagnostic_properties() } } }
+            },
+            ".ds-metrics-node-esdiag-2026.07.01-000002": {
+                "mappings": { "properties": { "diagnostic": { "properties": template_diagnostic_properties() } } }
+            },
+            "unrelated-esdiag-lookalike": { "mappings": { "properties": { "message": { "type": "text" } } } },
+        });
+
+        let patches = provenance_alias_patches(&mappings);
+
+        assert_eq!(patches.len(), 1, "only the historical backing index is patched");
+        let (index, patch) = &patches[0];
+        assert_eq!(index, ".ds-metrics-node-esdiag-2024.01.01-000001");
+        assert_eq!(
+            patch["properties"]["diagnostic"]["properties"]["application"],
+            serde_json::json!({ "type": "alias", "path": "diagnostic.product" })
+        );
+    }
 
     #[test]
     fn test_asset_deserialization_with_requires_security() {
@@ -540,7 +1116,7 @@ mod tests {
   endpoint: "_ingest/pipeline"
   method: "PUT"
 "#;
-        let assets: Vec<Asset> = serde_yaml::from_str(yaml).unwrap();
+        let assets: Vec<Asset> = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(assets.len(), 2);
         assert_eq!(assets[0].name, "roles");
         assert!(assets[0].requires_security);

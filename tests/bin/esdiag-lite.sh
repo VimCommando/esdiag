@@ -72,8 +72,8 @@ test_generated_functions() {
   assert_contains "$skipped" searchable_snapshots_cache_stats
   get_api_ilm_explain
   assert_contains "$requests" '/*/_ilm/explain?human&expand_wildcards=all:commercial/ilm_explain.json'
-  get_api_settings
-  assert_contains "$requests" '/_settings?human&expand_wildcards=all:settings.json'
+  get_api_indices_settings
+  assert_contains "$requests" '/_settings?human&expand_wildcards=all:indices_settings.json'
 }
 
 test_generated_collection_failures() {

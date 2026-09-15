@@ -1,7 +1,7 @@
 #[cfg(feature = "keystore")]
 use super::keystore;
 use super::{ServerState, append_body_event, execute_script_event, html_event, signal_event};
-use crate::data::{HostRole, KnownHost, Settings, Uri};
+use crate::data::{ApplicationConfig, HostRole, KnownHost, Uri};
 use crate::exporter::Exporter;
 use crate::server::template::{self, SettingsModal};
 use askama::Template;
@@ -13,13 +13,21 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-pub async fn get_modal(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
+pub async fn get_modal(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> Response {
+    let owner = match state.resolve_user_email(&headers) {
+        Ok((_, user)) => user,
+        Err(err) if state.server_policy.requires_authentication() => {
+            tracing::warn!("Settings modal denied: {}", err);
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        Err(_) => super::DEFAULT_OWNER.to_string(),
+    };
     let can_update_exporter = state.server_policy.allows_exporter_updates();
     let allows_local_runtime_features = state.server_policy.allows_local_runtime_features();
-    let settings = if allows_local_runtime_features {
-        Settings::load().unwrap_or_default()
+    let selected_configured_output = if allows_local_runtime_features {
+        ApplicationConfig::load().ok().and_then(|config| config.output.default)
     } else {
-        Settings::default()
+        None
     };
     let exporter = state.exporter.read().await.clone();
     let (output_options, selected_output, _exporter_label) = if allows_local_runtime_features {
@@ -33,7 +41,7 @@ pub async fn get_modal(State(state): State<Arc<ServerState>>) -> impl IntoRespon
             &hosts_by_name,
             &send_hosts,
             &exporter,
-            settings.active_target.as_deref(),
+            selected_configured_output.as_deref(),
         )
     } else {
         let selected_output = exporter.target_uri();
@@ -57,10 +65,13 @@ pub async fn get_modal(State(state): State<Arc<ServerState>>) -> impl IntoRespon
     };
 
     match modal.render() {
-        Ok(html) => state.publish_event(append_body_event(html)),
-        Err(err) => state.publish_event(html_event(format!("<div>Error: {}</div>", err))),
+        Ok(html) => state.publish_event_for_owner(&owner, append_body_event(html)),
+        Err(err) => {
+            tracing::error!("Failed to render settings modal: {}", err);
+            state.publish_event_for_owner(&owner, html_event("<div>Error rendering settings modal.</div>"));
+        }
     }
-    StatusCode::NO_CONTENT
+    StatusCode::NO_CONTENT.into_response()
 }
 
 #[derive(Deserialize, Default)]
@@ -74,34 +85,39 @@ pub async fn update_settings(
     headers: HeaderMap,
     datastar::axum::ReadSignals(signals): datastar::axum::ReadSignals<super::SettingsUpdateSignals>,
 ) -> Response {
-    match state.resolve_user_email(&headers) {
-        Ok(_) => {}
-        Err(err) if state.server_policy.requires_iap_headers() => {
+    let owner = match state.resolve_user_email(&headers) {
+        Ok((_, user)) => user,
+        Err(err) if state.server_policy.requires_authentication() => {
             tracing::warn!("Settings update denied: {}", err);
             return StatusCode::UNAUTHORIZED.into_response();
         }
-        Err(_) => {}
-    }
+        Err(_) => super::DEFAULT_OWNER.to_string(),
+    };
 
     if !state.server_policy.allows_local_runtime_features() {
         let form = signals.settings;
         if let Some(kibana) = form.kibana_url {
             *state.kibana_url.write().await = kibana;
         }
-        clear_settings_errors(&state);
-        state.publish_event(html_event(
-            r#"
+        clear_settings_errors(&state, &owner);
+        state.publish_event_for_owner(
+            &owner,
+            html_event(
+                r#"
             <div id="settings-modal" data-init="window.location.reload();">
                 Reloading...
             </div>
             "#,
-        ));
+            ),
+        );
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    let settings = Settings::load().unwrap_or_default();
-    let prior_active_target = settings.active_target.clone();
-    let mut next_settings = settings.clone();
+    let mut config = ApplicationConfig::load().unwrap_or_else(|err| {
+        tracing::warn!("Unable to load shared application configuration: {err}");
+        ApplicationConfig::new()
+    });
+    let prior_active_target = config.output.default.clone();
     let form = signals.settings;
     let target = form.target.as_deref().unwrap_or("").trim().to_string();
     let current_exporter = state.exporter.read().await.clone();
@@ -115,27 +131,40 @@ pub async fn update_settings(
         let err_msg =
             "Inline host creation from output settings is no longer supported. Use /settings instead.".to_string();
         tracing::warn!("{}", err_msg);
-        return settings_error_response(&state, prior_active_target.as_deref(), err_msg).await;
+        return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
     } else if target_changed {
         match KnownHost::get_known(&target) {
             Some(host) if host.has_role(HostRole::Send) => {
-                next_settings.active_target = Some(target.clone());
+                let Some(viewer_name) = host.viewer() else {
+                    let err_msg = format!("Output target '{target}' has no linked Kibana viewer.");
+                    return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
+                };
+                let Some(viewer) = KnownHost::get_known(&viewer_name.to_string()) else {
+                    let err_msg = format!("Output target '{target}' references an unknown Kibana viewer.");
+                    return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
+                };
+                if !viewer.has_role(HostRole::View) {
+                    let err_msg = format!("Output target '{target}' has an invalid Kibana viewer.");
+                    return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
+                }
+                config.output.default = Some(target.clone());
             }
             Some(_) => {
                 let err_msg = format!("Output target '{}' is not a send-capable host.", target);
                 tracing::warn!("{}", err_msg);
-                return settings_error_response(&state, prior_active_target.as_deref(), err_msg).await;
+                return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
             }
             None => {
-                next_settings.active_target = None;
+                let err_msg =
+                    "Output settings now require a saved linked Elasticsearch and Kibana deployment. Use /welcome or /settings."
+                        .to_string();
+                return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
             }
         }
     }
 
-    // 2. Process kibana URL
-    if let Some(kibana) = form.kibana_url {
-        next_settings.kibana_url = Some(kibana.clone());
-    }
+    // A user-mode output always takes its Kibana URL from the linked viewer.
+    // Ignore the legacy free-form field rather than persisting an unlinked URL.
 
     let mut validated_exporter = None;
 
@@ -152,6 +181,7 @@ pub async fn update_settings(
             if host_requires_keystore(&host) && keystore_password.is_none() {
                 return secure_host_unlock_required_response(
                     &state,
+                    &owner,
                     headers.clone(),
                     prior_active_target.as_deref(),
                     secure_saved_output_error_message(),
@@ -182,7 +212,7 @@ pub async fn update_settings(
                 Err(e) => {
                     let err_msg = format!("Invalid output target: {}", e);
                     tracing::error!("{}", err_msg);
-                    return settings_error_response(&state, prior_active_target.as_deref(), err_msg).await;
+                    return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
                 }
             };
             Exporter::try_from(exporter_uri).map_err(|e| format!("Failed to construct exporter: {}", e))
@@ -194,19 +224,24 @@ pub async fn update_settings(
             }
             Err(err_msg) => {
                 tracing::error!("{}", err_msg);
-                return settings_error_response(&state, prior_active_target.as_deref(), err_msg).await;
+                return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
             }
         }
     }
 
-    // 4. Save settings to disk after validation succeeds
-    if let Err(e) = next_settings.save() {
-        let err_msg = format!("Failed to save settings: {}", e);
+    // 4. Persist the shared application reference after validation succeeds.
+    if let Err(e) = config.save() {
+        let err_msg = format!("Failed to save shared application configuration: {}", e);
         tracing::error!("{}", err_msg);
-        return settings_error_response(&state, prior_active_target.as_deref(), err_msg).await;
+        return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
     }
 
-    if let Some(kibana_url) = next_settings.kibana_url.clone() {
+    if target_changed
+        && let Some(kibana_url) = KnownHost::get_known(&target)
+            .and_then(|host| host.viewer().map(|name| name.to_string()))
+            .and_then(|viewer_name| KnownHost::get_known(&viewer_name))
+            .and_then(|viewer| viewer.concrete_url().map(|url| url.to_string()))
+    {
         *state.kibana_url.write().await = kibana_url;
     }
 
@@ -215,47 +250,49 @@ pub async fn update_settings(
     }
 
     // 5. Build response to remove modal and update exporter text
-    clear_settings_errors(&state);
+    clear_settings_errors(&state, &owner);
     let html = r#"
         <div id="settings-modal" data-init="window.location.reload();">
             Reloading...
         </div>
         "#;
-    state.publish_event(html_event(html));
+    state.publish_event_for_owner(&owner, html_event(html));
 
     StatusCode::NO_CONTENT.into_response()
 }
 
 async fn settings_error_response(
     state: &Arc<ServerState>,
+    owner: &str,
     prior_active_target: Option<&str>,
     err_msg: String,
 ) -> Response {
-    state.publish_event(signal_event(
-        footer_selection_signal_payload(state, prior_active_target).await,
-    ));
-    state.publish_event(execute_script_event(render_settings_error_script(&err_msg)));
+    state.publish_event_for_owner(
+        owner,
+        signal_event(footer_selection_signal_payload(state, prior_active_target).await),
+    );
+    state.publish_event_for_owner(owner, execute_script_event(render_settings_error_script(&err_msg)));
     StatusCode::NO_CONTENT.into_response()
 }
 
 async fn secure_host_unlock_required_response(
     state: &Arc<ServerState>,
+    owner: &str,
     headers: HeaderMap,
     prior_active_target: Option<&str>,
     err_msg: String,
 ) -> Response {
     #[cfg(feature = "keystore")]
     {
-        let _ = headers;
-        let _ = keystore::get_unlock_modal(State(state.clone())).await;
+        let _ = keystore::get_unlock_modal(State(state.clone()), headers).await;
     }
     #[cfg(not(feature = "keystore"))]
     let _ = headers;
-    settings_error_response(state, prior_active_target, err_msg).await
+    settings_error_response(state, owner, prior_active_target, err_msg).await
 }
 
-fn clear_settings_errors(state: &Arc<ServerState>) {
-    state.publish_event(execute_script_event(render_settings_error_script("")));
+fn clear_settings_errors(state: &Arc<ServerState>, owner: &str) {
+    state.publish_event_for_owner(owner, execute_script_event(render_settings_error_script("")));
 }
 
 fn host_requires_keystore(host: &KnownHost) -> bool {
@@ -323,7 +360,7 @@ fn render_settings_error_script(err_msg: &str) -> String {
 mod tests {
     use super::{get_modal, update_settings};
     use crate::{
-        data::{HostRole, KnownHost, Product, Settings, Uri, authenticate},
+        data::{Application, HostRole, KnownHost, Settings, Uri, authenticate},
         exporter::Exporter,
         server::{RuntimeMode, ServerEvent, ServerPolicy, SettingsUpdateSignals, test_server_state},
     };
@@ -333,33 +370,11 @@ mod tests {
         response::IntoResponse,
     };
     use datastar::axum::ReadSignals;
-    use std::{
-        collections::BTreeMap,
-        path::PathBuf,
-        sync::{Arc, Mutex},
-    };
-    use tempfile::TempDir;
+    use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
     use url::Url;
 
-    fn env_lock() -> &'static Mutex<()> {
-        crate::test_env_lock()
-    }
-
-    fn setup_env() -> (TempDir, PathBuf, PathBuf) {
-        let tmp = TempDir::new().expect("temp dir");
-        let config_dir = tmp.path().join(".esdiag");
-        std::fs::create_dir_all(&config_dir).expect("create config dir");
-        let hosts_path = config_dir.join("hosts.yml");
-        let keystore_path = config_dir.join("secrets.yml");
-        let settings_path = config_dir.join("settings.yml");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-            std::env::set_var("USERPROFILE", tmp.path());
-            std::env::set_var("ESDIAG_HOSTS", &hosts_path);
-            std::env::set_var("ESDIAG_KEYSTORE", &keystore_path);
-            std::env::set_var("ESDIAG_SETTINGS", &settings_path);
-        }
-        (tmp, hosts_path, keystore_path)
+    fn setup_env() -> crate::TestEnv {
+        crate::TestEnv::new()
     }
 
     fn write_hosts(hosts: BTreeMap<String, KnownHost>) {
@@ -369,21 +384,30 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "keystore")]
     async fn secure_saved_host_selection_prompts_unlock_when_locked() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
         authenticate("pw").expect("create keystore");
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "secure-es".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
-                None,
+                Some("secure-kb".to_string()),
                 false,
                 Some("secure-es".to_string()),
                 None,
+            ),
+        );
+        hosts.insert(
+            "secure-kb".to_string(),
+            KnownHost::new_no_auth(
+                Application::Kibana,
+                Url::parse("http://localhost:5601").expect("viewer url"),
+                vec![HostRole::View],
+                None,
+                false,
             ),
         );
         write_hosts(hosts);
@@ -411,7 +435,7 @@ mod tests {
         let mut saw_secure_revert = false;
         while let Ok(event) = events.try_recv() {
             match event {
-                ServerEvent::Signals(payload) => {
+                ServerEvent::Signals { payload, .. } => {
                     if payload.contains(&format!(r#""settings":{{"target":"{}"}}"#, expected_target)) {
                         saw_target_revert = true;
                     }
@@ -419,10 +443,10 @@ mod tests {
                         saw_secure_revert = true;
                     }
                 }
-                ServerEvent::AppendBody(html) if html.contains("keystore-unlock-modal") => {
+                ServerEvent::AppendBody { html, .. } if html.contains("keystore-unlock-modal") => {
                     saw_unlock_modal = true;
                 }
-                ServerEvent::ExecuteScript(script)
+                ServerEvent::ExecuteScript { script, .. }
                     if script.contains("Unlock it before selecting secure saved outputs") =>
                 {
                     saw_unlock_message = true;
@@ -439,14 +463,13 @@ mod tests {
 
     #[tokio::test]
     async fn settings_modal_includes_live_exporter_option_when_no_saved_target_selected() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "saved-host".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -461,11 +484,11 @@ mod tests {
             Exporter::try_from(Uri::Directory(PathBuf::from("/tmp/output"))).expect("directory exporter");
         let mut events = state.subscribe_events();
 
-        let response = get_modal(State(state)).await.into_response();
+        let response = get_modal(State(state), HeaderMap::new()).await.into_response();
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let event = events.try_recv().expect("modal render event");
-        let ServerEvent::AppendBody(html) = event else {
+        let ServerEvent::AppendBody { html, .. } = event else {
             panic!("expected modal html");
         };
         assert!(html.contains(r#"option value="file:///tmp/output/" selected"#));
@@ -474,14 +497,13 @@ mod tests {
 
     #[tokio::test]
     async fn collect_only_host_cannot_be_selected_as_output_target() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "collector-only".to_string(),
             KnownHost::new_no_auth(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Collect],
                 None,
@@ -511,7 +533,7 @@ mod tests {
         let mut saw_error = false;
         while let Ok(event) = events.try_recv() {
             match event {
-                ServerEvent::Signals(payload) => {
+                ServerEvent::Signals { payload, .. } => {
                     if payload.contains(&format!(r#""settings":{{"target":"{}"}}"#, expected_target)) {
                         saw_target_revert = true;
                     }
@@ -519,7 +541,7 @@ mod tests {
                         saw_secure_revert = true;
                     }
                 }
-                ServerEvent::ExecuteScript(script)
+                ServerEvent::ExecuteScript { script, .. }
                     if script.contains("collector-only") && script.contains("send-capable host") =>
                 {
                     saw_error = true;
@@ -533,20 +555,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn service_mode_settings_modal_requires_iap_header() {
+        let _env = setup_env();
+
+        let mut state = test_server_state();
+        let state_mut = Arc::get_mut(&mut state).expect("unique state");
+        state_mut.runtime_mode = RuntimeMode::Service;
+        state_mut.server_policy = ServerPolicy::defaults(RuntimeMode::Service);
+
+        let response = get_modal(State(state), HeaderMap::new()).await.into_response();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn service_mode_settings_modal_does_not_touch_local_runtime_features() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, hosts_path, _keystore_path) = setup_env();
-        let settings_path = std::env::var_os("ESDIAG_SETTINGS")
-            .map(PathBuf::from)
-            .expect("settings path env");
+        let env = setup_env();
+        let hosts_path = env.hosts_path.clone();
+        let settings_path = env.settings_path.clone();
 
         let mut state = test_server_state();
         let state_mut = Arc::get_mut(&mut state).expect("unique state");
         state_mut.runtime_mode = RuntimeMode::Service;
         state_mut.server_policy = ServerPolicy::defaults(RuntimeMode::Service);
         let mut events = state.subscribe_events();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Goog-Authenticated-User-Email",
+            HeaderValue::from_static("accounts.google.com:test@example.com"),
+        );
 
-        let response = get_modal(State(state)).await.into_response();
+        let response = get_modal(State(state), headers).await.into_response();
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let _ = events.try_recv().expect("modal render event");
@@ -562,8 +601,7 @@ mod tests {
 
     #[tokio::test]
     async fn service_mode_settings_update_requires_iap_header() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         let mut state = test_server_state();
         let state_mut = Arc::get_mut(&mut state).expect("unique state");
@@ -580,8 +618,7 @@ mod tests {
 
     #[tokio::test]
     async fn service_mode_settings_update_accepts_iap_header() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         let mut state = test_server_state();
         let state_mut = Arc::get_mut(&mut state).expect("unique state");
@@ -605,8 +642,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_target_keeps_existing_output_selection() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
 
         Settings {
             active_target: Some("stdout".to_string()),
@@ -627,20 +663,19 @@ mod tests {
         assert_eq!(state.exporter.read().await.target_uri(), original_target);
         let saved = Settings::load().expect("reload settings");
         assert_eq!(saved.active_target.as_deref(), Some("stdout"));
-        assert_eq!(saved.kibana_url.as_deref(), Some("https://new-kibana.example"));
+        assert_eq!(saved.kibana_url.as_deref(), Some("https://old-kibana.example"));
     }
 
     #[tokio::test]
     async fn unchanged_saved_target_does_not_require_unlock_for_kibana_only_update() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts_path, _keystore_path) = setup_env();
+        let _tmp = setup_env();
         authenticate("pw").expect("create keystore");
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "secure-es".to_string(),
             KnownHost::new_legacy_apikey(
-                Product::Elasticsearch,
+                Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
@@ -669,11 +704,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let saved = Settings::load().expect("reload settings");
         assert_eq!(saved.active_target.as_deref(), Some("secure-es"));
-        assert_eq!(saved.kibana_url.as_deref(), Some("https://new-kibana.example"));
+        assert_eq!(saved.kibana_url.as_deref(), Some("https://old-kibana.example"));
 
         let mut saw_unlock_modal = false;
         while let Ok(event) = events.try_recv() {
-            if let ServerEvent::AppendBody(html) = event
+            if let ServerEvent::AppendBody { html, .. } = event
                 && html.contains("keystore-unlock-modal")
             {
                 saw_unlock_modal = true;

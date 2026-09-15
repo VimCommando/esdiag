@@ -24,7 +24,7 @@ impl From<DataStreams> for Lookup<DataStreamDocument> {
         data_streams.data_streams.drain(..).for_each(|mut data_stream| {
             data_stream.build();
             let name = data_stream.name.clone();
-            let mut indices: Indices = data_stream.indices.drain(..).collect();
+            let mut indices: Indices = std::mem::take(&mut data_stream.indices);
             let write_index = indices.len() - 1;
             let write_data_stream = data_stream.clone().set_write_index(true);
 

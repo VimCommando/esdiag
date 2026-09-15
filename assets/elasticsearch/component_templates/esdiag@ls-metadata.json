@@ -1,7 +1,8 @@
 {
   "_meta": {
     "managed": false,
-    "description": "ESDiag common Logstash metadata mappings"
+    "description": "ESDiag common Logstash metadata mappings",
+    "compatibility_debt": "Keep both provenance names writable with reciprocal copy_to until legacy writers and dashboards retire and old indices age out. Existing alias mappings require rollover after setup for mixed-version writes; historical aliases remain query-only. See ADR-0014."
   },
   "template": {
     "mappings": {
@@ -35,6 +36,22 @@
             "uuid": {
               "ignore_above": 1024,
               "type": "keyword"
+            },
+            "platform": {
+              "type": "keyword",
+              "copy_to": "diagnostic.orchestration"
+            },
+            "orchestration": {
+              "type": "keyword",
+              "copy_to": "diagnostic.platform"
+            },
+            "application": {
+              "type": "keyword",
+              "copy_to": "diagnostic.product"
+            },
+            "product": {
+              "type": "keyword",
+              "copy_to": "diagnostic.application"
             }
           }
         },
@@ -49,5 +66,5 @@
       }
     }
   },
-  "version": 2
+  "version": 3
 }

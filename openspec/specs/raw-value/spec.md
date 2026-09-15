@@ -1,7 +1,8 @@
 # Capability: raw-value
 
 ## Purpose
-TBD: Implement raw-value capability for efficient JSON parsing without building full DOM.
+
+Preserve flexible JSON payloads as raw values to avoid unnecessary object allocations.
 
 ## Requirements
 

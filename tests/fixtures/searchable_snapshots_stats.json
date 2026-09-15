@@ -1,0 +1,29 @@
+{
+  "_shards": {"total": 1, "successful": 1, "failed": 0},
+  "total": [],
+  "indices": {
+    "partial-snapshot-index": {
+      "total": [
+        {
+          "file_ext": "cfe",
+          "num_files": 1,
+          "open_count": 2,
+          "close_count": 1,
+          "size": {"total": "491b", "total_in_bytes": 491, "min_in_bytes": 491, "max_in_bytes": 491, "average_in_bytes": 491},
+          "contiguous_bytes_read": {"count": 13928, "min": 491, "max": 491, "sum": 6838648},
+          "non_contiguous_bytes_read": {"count": 0, "min": 0, "max": 0, "sum": 0},
+          "cached_bytes_read": {"count": 1, "min": 491, "max": 491, "sum": 491},
+          "index_cache_bytes_read": {"count": 0, "min": 0, "max": 0, "sum": 0},
+          "cached_bytes_written": {"count": 1, "min": 491, "max": 491, "sum": 491, "time": "1ms", "time_in_nanos": 1000000},
+          "direct_bytes_read": {"count": 0, "min": 0, "max": 0, "sum": 0, "time": "0s", "time_in_nanos": 0},
+          "optimized_bytes_read": {"count": 0, "min": 0, "max": 0, "sum": 0, "time": "0s", "time_in_nanos": 0},
+          "forward_seeks": {"small": {"count": 0, "min": 0, "max": 0, "sum": 0}, "large": {"count": 0, "min": 0, "max": 0, "sum": 0}},
+          "backward_seeks": {"small": {"count": 0, "min": 0, "max": 0, "sum": 0}, "large": {"count": 0, "min": 0, "max": 0, "sum": 0}},
+          "blob_store_bytes_requested": {"count": 1, "min": 491, "max": 491, "sum": 491},
+          "lucene_bytes_read": {"count": 1, "min": 491, "max": 491, "sum": 491},
+          "current_index_cache_fills": 0
+        }
+      ]
+    }
+  }
+}

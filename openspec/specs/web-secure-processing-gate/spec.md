@@ -2,7 +2,7 @@
 
 Define the keystore unlock preflight required before processing secure hosts that depend on local keychain-backed secrets.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Secure Host Processing Requires Unlocked Keystore
 The system SHALL block starting diagnostic processing for secure hosts that depend on keychain-backed secrets when the keystore is locked.

@@ -1,7 +1,8 @@
 # Support Diagnostics Parity
 
 ## Purpose
-TBD: Ensure esdiag achieves feature parity with legacy Support Diagnostics tool for log and API collection.
+
+Define raw API and log collection coverage compatible with Support Diagnostics.
 
 ## Requirements
 

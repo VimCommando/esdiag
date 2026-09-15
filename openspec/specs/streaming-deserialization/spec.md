@@ -1,3 +1,9 @@
+## Purpose
+
+Define incremental parsing and buffer reuse for large diagnostic payloads.
+
+## Requirements
+
 ### Requirement: Memory-efficient processing of large diagnostic payloads
 The processing pipeline SHALL avoid loading large top-level JSON structures (arrays or objects) entirely into memory. Instead, it MUST process individual elements or key-value pairs in a streaming manner.
 

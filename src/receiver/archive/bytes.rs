@@ -5,10 +5,10 @@
 use super::resolve_archive_path;
 use crate::{
     processor::{DataSource, SourceContext, StreamingDataSource},
-    receiver::{Receive, ReceiveMultiple},
+    receiver::{MissingSource, Receive, ReceiveMultiple},
 };
 use bytes::Bytes;
-use eyre::{Result, eyre};
+use eyre::{Result, WrapErr, eyre};
 use futures::stream::BoxStream;
 use serde::de::DeserializeOwned;
 use std::{
@@ -63,8 +63,18 @@ impl Receive for ArchiveBytesReceiver {
                         Ok(file) => file,
                         Err(_) => return Err(eyre!("Failed to read file {filename} from archive")),
                     };
-                    let reader = BufReader::new(file);
-                    let data: T = serde_json::from_reader(reader)?;
+                    let mut reader = BufReader::new(file);
+                    if !crate::receiver::source_has_json(&mut reader)? {
+                        last_resolve_error = Some(
+                            MissingSource::Empty {
+                                path: filename.to_string(),
+                            }
+                            .into(),
+                        );
+                        continue;
+                    }
+                    let data: T = serde_json::from_reader(reader)
+                        .wrap_err_with(|| format!("Failed to parse {filename} for {}", T::name()))?;
                     return Ok(data);
                 }
                 Err(e) => {
@@ -76,7 +86,7 @@ impl Receive for ArchiveBytesReceiver {
 
         match last_resolve_error {
             Some(e) => Err(e),
-            None => Err(eyre!("No candidate source files available for {}", T::name())),
+            None => Err(MissingSource::NoCandidates { source: T::name() }.into()),
         }
     }
 
@@ -141,6 +151,14 @@ impl ArchiveBytesReceiver {
         };
         let reader = BufReader::new(file);
         serde_json::from_reader(reader).map_err(Into::into)
+    }
+
+    /// Whether the bundle contains `dir` as a directory component within the
+    /// receiver's working subdirectory. Used for platform indicators such as
+    /// the `syscalls` folder.
+    pub async fn has_bundle_dir(&self, dir: &str) -> bool {
+        let archive = self.archive.read().await;
+        super::archive_has_dir(archive.file_names(), self.subdir.as_ref(), dir)
     }
 
     pub fn set_source_product(&self, product: &'static str) -> Result<()> {
