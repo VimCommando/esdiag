@@ -24,6 +24,9 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Restored the published Elasticsearch client dependency with a response compatibility adapter so ESDiag can be packaged from registry dependencies.
+- Updated workspace dependency requirements and the lockfile for the 0.18 development cycle, and regenerated third-party notices.
+
 - Changed `elasticrc` to parse schema-keyed `ServiceConfig<T>` values that resolve into typed runtime `Service<T>` values.
 
 - Enabled failure stores for new diagnostic data streams so rejected documents can be inspected and recovered.
