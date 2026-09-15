@@ -66,6 +66,14 @@ If the series branch already exists, inspect it instead of resetting it.
 - Check whether PREVIOUS is an ancestor of the cut. Set the release branch's
   RELEASE_NOTES_START_TAG explicitly when it is not; do not trust GitHub's
   automatically inferred range.
+- Store notes in `docs/release_notes/SERIES.md` with the repository's OKF YAML
+  frontmatter: `type: Reference`, title, description, tags, `status: draft`,
+  and `version: RELEASE_VERSION`. Keep the series filename stable as candidates
+  change; update the version, title, and heading together.
+- Link the notes from `docs/documentation.md`. Keep status in frontmatter
+  rather than duplicating it in prose. At official publication, update the
+  version to the published version and set `status: published`; a published RC
+  is still a prerelease and must not be presented as a stable release.
 - Commit draft notes with the release PR. A GitHub draft can reserve the future
   release tag without pushing that tag; mark RC drafts as prereleases and record
   that their final target must be verified after the PR merges.
