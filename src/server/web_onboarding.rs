@@ -641,7 +641,9 @@ async fn save_output_stage(state: &Arc<ServerState>, form: OutputForm, keystore_
         .map_err(|err| err.to_string())?;
     let viewer_client = Client::try_from(Uri::try_from(viewer_candidate).map_err(|err| err.to_string())?)
         .map_err(|err| err.to_string())?;
-    if output_client.test_connection().await.is_err() || viewer_client.test_connection().await.is_err() {
+    let output_valid = output_client.test_connection().await.is_ok();
+    let viewer_valid = viewer_client.test_connection().await.is_ok();
+    if !output_valid || !viewer_valid {
         return Err(
             "The Elasticsearch and Kibana output endpoints must both validate before configuration is changed."
                 .to_string(),
