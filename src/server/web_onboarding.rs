@@ -217,6 +217,7 @@ struct JourneyModel {
     show_collection: bool,
     show_default_job: bool,
     show_complete: bool,
+    collection_deferred: bool,
     keystore_ready: bool,
     keystore_unlocked: bool,
     output_name: String,
@@ -276,6 +277,7 @@ async fn render_page(state: &Arc<ServerState>, headers: &HeaderMap, message: Str
         show_collection: model.show_collection,
         show_default_job: model.show_default_job,
         show_complete: model.show_complete,
+        collection_deferred: model.collection_deferred,
         keystore_ready: model.keystore_ready,
         keystore_unlocked: model.keystore_unlocked,
         output_name: model.output_name,
@@ -320,6 +322,7 @@ async fn render_panel(state: &Arc<ServerState>, message: String) -> Result<Strin
         show_collection: model.show_collection,
         show_default_job: model.show_default_job,
         show_complete: model.show_complete,
+        collection_deferred: model.collection_deferred,
         keystore_ready: model.keystore_ready,
         keystore_unlocked: model.keystore_unlocked,
         output_name: model.output_name,
@@ -436,6 +439,7 @@ async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
         show_collection,
         show_default_job,
         show_complete: stage == WelcomeStage::Complete,
+        collection_deferred: readiness.collection_deferred,
         keystore_ready: readiness.keystore_ready,
         keystore_unlocked,
         output_name,
@@ -991,6 +995,22 @@ mod tests {
 
         assert!(html.contains("Add later"));
         assert!(html.contains("/welcome/collection/later"));
+    }
+
+    #[test]
+    fn deferred_journey_does_not_claim_the_default_workflow_is_configured() {
+        let html = Welcome {
+            stage: "complete".to_string(),
+            show_complete: true,
+            collection_deferred: true,
+            ..Welcome::default()
+        }
+        .render()
+        .expect("render deferred journey");
+
+        assert!(html.contains("Diagnostic source deferred"));
+        assert!(html.contains("no diagnostic source or default workflow"));
+        assert!(!html.contains("Your default diagnostic workflow is configured."));
     }
 
     #[test]

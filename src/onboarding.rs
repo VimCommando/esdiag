@@ -46,6 +46,7 @@ impl OnboardingReadiness {
         self.is_complete()
             || (self.collection_deferred
                 && self.user_configured
+                && !self.collect_host_configured
                 && match self.workflow {
                     Some(OnboardingWorkflow::CollectOnly) => true,
                     Some(OnboardingWorkflow::CollectAndProcess) => {
@@ -243,6 +244,7 @@ pub fn save_collect_host(input: CollectHostInput, keystore_password: Option<&str
     if let Some(existing) = hosts.get(&input.name).cloned() {
         hosts.insert(input.name, existing.with_role(HostRole::Collect));
         KnownHost::write_hosts_yml(&hosts)?;
+        clear_collection_deferral()?;
         return Ok(());
     }
 
@@ -266,6 +268,7 @@ pub fn save_collect_host(input: CollectHostInput, keystore_password: Option<&str
     };
     hosts.insert(input.name, host);
     KnownHost::write_hosts_yml(&hosts)?;
+    clear_collection_deferral()?;
     Ok(())
 }
 
@@ -295,6 +298,16 @@ pub fn replace_collect_host(input: CollectHostInput, keystore_password: Option<&
     let mut hosts = KnownHost::parse_hosts_yml()?;
     hosts.insert(input.name, host);
     KnownHost::write_hosts_yml(&hosts)?;
+    clear_collection_deferral()?;
+    Ok(())
+}
+
+fn clear_collection_deferral() -> Result<()> {
+    let mut config = ApplicationConfig::load()?;
+    if config.collection_deferred {
+        config.collection_deferred = false;
+        config.save()?;
+    }
     Ok(())
 }
 
@@ -520,6 +533,30 @@ mod tests {
         assert!(deferred.collection_deferred);
         assert!(!deferred.is_complete());
         assert!(deferred.can_enter_application());
+    }
+
+    #[test]
+    fn saving_a_collection_source_clears_collection_deferral() {
+        let _env = crate::TestEnv::new();
+        save_user("operator@example.com".to_string()).expect("save user");
+        save_workflow(OnboardingWorkflow::CollectOnly).expect("save collect-only workflow");
+        defer_collection().expect("defer collection");
+
+        save_collect_host(
+            CollectHostInput {
+                name: "collect-es".to_string(),
+                app: Application::Elasticsearch,
+                url: Url::parse("https://collect.example:9200").expect("url"),
+                secret_id: None,
+                auth: None,
+            },
+            None,
+        )
+        .expect("save collect host");
+
+        let readiness = inspect().expect("saved source readiness");
+        assert!(!readiness.collection_deferred);
+        assert!(!readiness.can_enter_application());
     }
 
     #[test]
