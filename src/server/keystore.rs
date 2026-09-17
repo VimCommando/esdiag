@@ -381,6 +381,15 @@ pub async fn bootstrap(State(state): State<Arc<ServerState>>, Form(form): Form<K
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    #[cfg(feature = "setup")]
+    if let Err(err) = super::web_onboarding::reload_configured_output(&state, Some(&password)).await {
+        state.publish_event(signal_event(
+            json!({ "message": format!("Failed to reload configured output: {err}") }).to_string(),
+        ));
+        tracing::error!("Configured output reload failed after keystore bootstrap: {err}");
+        return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
     state.set_keystore_unlocked(password).await;
     state.publish_event(signal_event(
         r#"{"keystore":{"password":"","invalid":false,"confirm":false}}"#,
@@ -416,6 +425,15 @@ pub async fn unlock(
 
     match authenticate(&password) {
         Ok(_) => {
+            #[cfg(feature = "setup")]
+            if let Err(err) = super::web_onboarding::reload_configured_output(&state, Some(&password)).await {
+                state.publish_event(signal_event(
+                    json!({ "message": format!("Failed to reload configured output: {err}") }).to_string(),
+                ));
+                tracing::error!("Configured output reload failed after keystore unlock: {err}");
+                return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+
             state.set_keystore_unlocked(password).await;
             state.publish_event(signal_event(r#"{"keystore":{"password":"","invalid":false}}"#));
             state.publish_event(execute_script_event(

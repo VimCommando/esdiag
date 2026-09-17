@@ -1110,6 +1110,8 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 tracing::info!("Starting ESDiag server");
                 let runtime_mode = resolve_serve_runtime_mode(mode)?;
                 let explicit_output = output.is_some();
+                let onboarding_output_configured =
+                    inspect_onboarding().is_ok_and(|readiness| readiness.output_configured);
                 let (exporter, output_status) = match resolve_serve_exporter(output) {
                     Ok(exporter) => (exporter, "configured"),
                     Err(err)
@@ -1118,8 +1120,15 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                             && inspect_onboarding()
                                 .is_ok_and(|readiness| !readiness.is_complete() || !readiness.output_configured) =>
                     {
-                        tracing::info!("Starting user-mode web onboarding without a configured output: {err}");
-                        (onboarding_exporter()?, "unconfigured")
+                        tracing::info!("Starting user-mode web onboarding without a ready output: {err}");
+                        (
+                            onboarding_exporter()?,
+                            if onboarding_output_configured {
+                                "configured"
+                            } else {
+                                "unconfigured"
+                            },
+                        )
                     }
                     Err(err) => return Err(err),
                 };

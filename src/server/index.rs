@@ -93,6 +93,11 @@ pub async fn handler(
                     && readiness.workflow == Some(OnboardingWorkflow::CollectAndProcess)
                     && readiness.output_configured
                     && !readiness.output_from_environment
+                    && ApplicationConfig::load()
+                        .ok()
+                        .and_then(|config| config.output.default)
+                        .and_then(|name| KnownHost::get_known(&name))
+                        .is_some_and(|host| host.requires_keystore_secret())
                     && !state.is_keystore_unlocked().await;
                 !readiness.can_enter_application() || deferred_secure_output
             }
