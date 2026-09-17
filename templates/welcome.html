@@ -1,12 +1,13 @@
 <content
     id="welcome"
-    data-signals:welcome.message="'{{ message }}'"
-    data-signals:welcome.output-location="'{{ output_location }}'"
+    data-signals:welcome.output-location="{{ output_location|json }}"
     data-signals:_welcome-provisioning="false"
 >
     <onboarding-flow>
         <section-title>Welcome to ESDiag</section-title>
-        <p class="error" role="alert" data-show="$welcome.message" data-text="$welcome.message"></p>
+        {% if !message.is_empty() %}
+        <p class="error" role="alert">{{ message }}</p>
+        {% endif %}
 
         <steps aria-label="ESDiag setup steps">
             <ol>
@@ -162,7 +163,7 @@
                             <button class="button" type="submit">Create keystore</button>
                         </form>
                     </credential-gate>
-                    {% else if !keystore_unlocked && (stage == "output" || workflow_value == "process-existing") %}
+                    {% else if !keystore_unlocked && (stage == "output" || workflow_value == "process-existing" || (collection_deferred && output_requires_keystore)) %}
                     <credential-gate>
                         <p>Unlock the keystore before configuring the diagnostic cluster.</p>
                         <form data-on:submit__prevent="@post('/welcome/keystore', {contentType: 'form'})">
@@ -382,6 +383,11 @@
                         </button>
                     </form>
                     {% endif %}
+                    {% if stage == "collection" %}
+                    <form data-on:submit__prevent="@post('/welcome/collection/later', {contentType: 'form'})">
+                        <button class="button" type="submit">Add later</button>
+                    </form>
+                    {% endif %}
                 </li>
                 {% endif %}
 
@@ -417,8 +423,13 @@
 
                 {% if show_complete %}
                 <li>
+                    {% if collection_deferred %}
+                    <h2>Diagnostic source deferred</h2>
+                    <p>ESDiag is ready to open, but no diagnostic source or default workflow is configured yet.</p>
+                    {% else %}
                     <h2>Ready</h2>
                     <p>Your default diagnostic workflow is configured.</p>
+                    {% endif %}
                     <a class="button" href="/">Open ESDiag</a>
                 </li>
                 {% endif %}

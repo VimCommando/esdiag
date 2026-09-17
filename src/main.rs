@@ -38,8 +38,9 @@ use esdiag::{
     env::LOG_LEVEL,
     exporter::Exporter,
     onboarding::{
-        CollectHostInput, OutputDeploymentInput, inspect as inspect_onboarding, save_collect_host, save_default_job,
-        save_default_processing_job, save_output_deployment, save_user, save_workflow,
+        CollectHostInput, OutputDeploymentInput, clear_collection_deferral, inspect as inspect_onboarding,
+        save_collect_host, save_default_job, save_default_processing_job, save_output_deployment, save_user,
+        save_workflow,
     },
     processor::{CollectionResult, DiagnosticOutcome, Identifiers, default_collect_archive_name},
     receiver::{
@@ -1108,14 +1109,33 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
             } => {
                 tracing::info!("Starting ESDiag server");
                 let runtime_mode = resolve_serve_runtime_mode(mode)?;
-                let exporter = match resolve_serve_exporter(output) {
-                    Ok(exporter) => exporter,
+                let explicit_output = output.is_some();
+                let onboarding_output_configured =
+                    inspect_onboarding().is_ok_and(|readiness| readiness.output_configured);
+                let (exporter, output_status) = match resolve_serve_exporter(output) {
+                    Ok(exporter) => (
+                        exporter,
+                        if explicit_output || onboarding_output_configured {
+                            "configured"
+                        } else {
+                            "unconfigured"
+                        },
+                    ),
                     Err(err)
                         if runtime_mode == RuntimeMode::User
-                            && inspect_onboarding().is_ok_and(|readiness| !readiness.is_complete()) =>
+                            && !explicit_output
+                            && inspect_onboarding()
+                                .is_ok_and(|readiness| !readiness.is_complete() || !readiness.output_configured) =>
                     {
-                        tracing::info!("Starting user-mode web onboarding without a configured output: {err}");
-                        onboarding_exporter()?
+                        tracing::info!("Starting user-mode web onboarding without a ready output: {err}");
+                        (
+                            onboarding_exporter()?,
+                            if onboarding_output_configured {
+                                "configured"
+                            } else {
+                                "unconfigured"
+                            },
+                        )
                     }
                     Err(err) => return Err(err),
                 };
@@ -1151,7 +1171,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                             address: bound_addr.ip().to_string(),
                             port: bound_addr.port(),
                             runtime_mode: runtime_mode.to_string(),
-                            output: "configured".to_string(),
+                            output: output_status.to_string(),
                         },
                     )?;
                 }
@@ -1929,14 +1949,21 @@ fn maybe_materialize_template_target(target: &str) -> Result<Option<KnownHost>> 
 }
 
 async fn save_host(name: &str, host: KnownHost, action: &str, validate_connection: bool) -> Result<String> {
+    let is_collect_host = host.has_role(HostRole::Collect);
     if validate_connection {
         let uri = Uri::try_from(host.clone())?;
         let validation_summary = validate_host_connection(name, uri).await?;
         let hostfile = host.save(name)?;
+        if is_collect_host {
+            clear_collection_deferral()?;
+        }
         tracing::info!("Host {name} successfully saved to {hostfile}");
         return Ok(format!("{validation_summary}\nHost '{name}' {action} in {hostfile}"));
     }
     let hostfile = host.save(name)?;
+    if is_collect_host {
+        clear_collection_deferral()?;
+    }
     tracing::info!("Host {name} successfully saved to {hostfile}");
     Ok(format!("Host '{name}' {action} in {hostfile}"))
 }
@@ -1964,8 +1991,13 @@ fn cleanup_settings_after_host_delete(name: &str) -> Result<()> {
 }
 
 fn delete_host_from_cli(name: &str) -> Result<String> {
-    let path = KnownHost::remove_saved(name)?;
-    if let Err(err) = cleanup_settings_after_host_delete(name) {
+    let name = name.to_string();
+    let is_collect_host = KnownHost::get_known(&name).is_some_and(|host| host.has_role(HostRole::Collect));
+    let path = KnownHost::remove_saved(&name)?;
+    if is_collect_host {
+        clear_collection_deferral()?;
+    }
+    if let Err(err) = cleanup_settings_after_host_delete(&name) {
         eprintln!(
             "Warning: host '{}' was removed, but failed to update settings: {err}",
             name
@@ -2029,25 +2061,23 @@ enum OutputLocation {
 
 fn prompt_onboarding_workflow() -> Result<OnboardingWorkflow> {
     loop {
-        println!("Will you be processing diagnostics, or only collecting?");
-        println!("  1. Process diagnostics");
-        println!("  2. Only collect diagnostics");
-        match prompt_with_default("Selection", "1")?.to_ascii_lowercase().as_str() {
-            "1" | "process" | "processing" => {
-                println!("Will you collect new diagnostics, process existing diagnostics, or both?");
-                println!("  1. Collect and process new diagnostics");
-                println!("  2. Process existing diagnostics");
-                println!("  3. Both new and existing diagnostics");
-                match prompt_with_default("Selection", "3")?.to_ascii_lowercase().as_str() {
-                    "1" | "collect" => return Ok(OnboardingWorkflow::CollectAndProcess),
-                    "2" | "existing" => return Ok(OnboardingWorkflow::ProcessExisting),
-                    "3" | "both" => return Ok(OnboardingWorkflow::CollectAndProcess),
-                    _ => println!("Choose 1, 2, or 3."),
-                }
-            }
-            "2" | "collect" | "collect-only" => return Ok(OnboardingWorkflow::CollectOnly),
-            _ => println!("Choose 1 or 2."),
+        println!("Will you collect new diagnostics, process existing diagnostics, or both?");
+        println!("  1. Only collect new diagnostics");
+        println!("  2. Process existing diagnostics");
+        println!("  3. Both new and existing diagnostics");
+        if let Some(workflow) = parse_onboarding_workflow(&prompt_with_default("Selection", "3")?) {
+            return Ok(workflow);
         }
+        println!("Choose 1, 2, or 3.");
+    }
+}
+
+fn parse_onboarding_workflow(selection: &str) -> Option<OnboardingWorkflow> {
+    match selection.trim().to_ascii_lowercase().as_str() {
+        "1" | "collect" | "collecting" | "collect-only" => Some(OnboardingWorkflow::CollectOnly),
+        "2" | "process" | "processing" | "existing" | "process-existing" => Some(OnboardingWorkflow::ProcessExisting),
+        "3" | "both" | "collect-and-process" => Some(OnboardingWorkflow::CollectAndProcess),
+        _ => None,
     }
 }
 
@@ -3486,6 +3516,29 @@ mod tests {
         assert_eq!(super::parse_confirmation("", true), Some(true));
         assert_eq!(super::parse_confirmation(" YES ", false), Some(true));
         assert_eq!(super::parse_confirmation("No", true), Some(false));
+    }
+
+    #[test]
+    fn onboarding_workflow_uses_one_three_option_selection() {
+        use esdiag::data::OnboardingWorkflow;
+
+        assert_eq!(
+            super::parse_onboarding_workflow("1"),
+            Some(OnboardingWorkflow::CollectOnly)
+        );
+        assert_eq!(
+            super::parse_onboarding_workflow("2"),
+            Some(OnboardingWorkflow::ProcessExisting)
+        );
+        assert_eq!(
+            super::parse_onboarding_workflow("3"),
+            Some(OnboardingWorkflow::CollectAndProcess)
+        );
+        assert_eq!(
+            super::parse_onboarding_workflow("both"),
+            Some(OnboardingWorkflow::CollectAndProcess)
+        );
+        assert_eq!(super::parse_onboarding_workflow("invalid"), None);
     }
 
     #[test]

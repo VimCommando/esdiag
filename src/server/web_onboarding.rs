@@ -2,8 +2,8 @@ use super::{ServerState, get_theme_dark, html_event, signal_event};
 use crate::{
     client::Client,
     data::{
-        Application, ApplicationConfig, HostRole, KnownHost, KnownHostBuilder, OnboardingWorkflow, OutputDeployment,
-        SecretAuth, Uri, authenticate, keystore_exists, list_secret_names, load_saved_jobs,
+        Application, ApplicationConfig, HostRole, KnownHost, OnboardingWorkflow, OutputDeployment, SecretAuth, Uri,
+        authenticate, keystore_exists, list_secret_names, load_saved_jobs,
     },
     exporter::Exporter,
     onboarding::{self, CollectHostInput, OutputDeploymentInput},
@@ -103,6 +103,10 @@ pub(crate) async fn save_keystore(State(state): State<Arc<ServerState>>, Form(fo
                 return refresh(&state, format!("Failed to migrate existing host credentials: {err}")).await;
             }
             state.set_keystore_unlocked(password).await;
+            let password = state.keystore_password().await;
+            if let Err(err) = reload_configured_output(&state, password.as_deref()).await {
+                return refresh(&state, format!("Failed to reload the configured output: {err}")).await;
+            }
             refresh(&state, String::new()).await
         }
         Err(message) => refresh(&state, message).await,
@@ -180,6 +184,14 @@ pub(crate) async fn save_collection(
     refresh(&state, result.err().unwrap_or_default()).await
 }
 
+pub(crate) async fn defer_collection(State(state): State<Arc<ServerState>>) -> Response {
+    let password = state.keystore_password().await;
+    let result = reload_configured_output(&state, password.as_deref())
+        .await
+        .and_then(|_| onboarding::defer_collection().map_err(|err| err.to_string()));
+    refresh(&state, result.err().unwrap_or_default()).await
+}
+
 pub(crate) async fn save_default_job(
     State(state): State<Arc<ServerState>>,
     Form(form): Form<DefaultJobForm>,
@@ -212,6 +224,8 @@ struct JourneyModel {
     show_collection: bool,
     show_default_job: bool,
     show_complete: bool,
+    collection_deferred: bool,
+    output_requires_keystore: bool,
     keystore_ready: bool,
     keystore_unlocked: bool,
     output_name: String,
@@ -271,6 +285,8 @@ async fn render_page(state: &Arc<ServerState>, headers: &HeaderMap, message: Str
         show_collection: model.show_collection,
         show_default_job: model.show_default_job,
         show_complete: model.show_complete,
+        collection_deferred: model.collection_deferred,
+        output_requires_keystore: model.output_requires_keystore,
         keystore_ready: model.keystore_ready,
         keystore_unlocked: model.keystore_unlocked,
         output_name: model.output_name,
@@ -315,6 +331,8 @@ async fn render_panel(state: &Arc<ServerState>, message: String) -> Result<Strin
         show_collection: model.show_collection,
         show_default_job: model.show_default_job,
         show_complete: model.show_complete,
+        collection_deferred: model.collection_deferred,
+        output_requires_keystore: model.output_requires_keystore,
         keystore_ready: model.keystore_ready,
         keystore_unlocked: model.keystore_unlocked,
         output_name: model.output_name,
@@ -343,8 +361,14 @@ async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
         tracing::warn!("Unable to load application configuration for onboarding: {err}");
         ApplicationConfig::new()
     });
-    let readiness = onboarding::inspect().unwrap_or_default();
-    let runtime_output = runtime_output_status().await;
+    let (readiness, output_configured) = match onboarding::inspect() {
+        Ok(readiness) => {
+            let output_configured = readiness.output_configured;
+            (readiness, Ok(output_configured))
+        }
+        Err(err) => (onboarding::OnboardingReadiness::default(), Err(err.to_string())),
+    };
+    let runtime_output = runtime_output_status(output_configured).await;
     let workflow = config.workflow;
     let processes_diagnostics = workflow.is_some_and(OnboardingWorkflow::processes_diagnostics);
     let collects_diagnostics = workflow.is_some_and(OnboardingWorkflow::collects_diagnostics);
@@ -353,9 +377,9 @@ async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
         WelcomeStage::Identity
     } else if processes_diagnostics && !readiness.output_configured {
         WelcomeStage::Output
-    } else if collects_diagnostics && !readiness.collect_host_configured {
+    } else if collects_diagnostics && !readiness.collect_host_configured && !readiness.collection_deferred {
         WelcomeStage::Collection
-    } else if collects_diagnostics && !readiness.default_job_configured {
+    } else if collects_diagnostics && readiness.collect_host_configured && !readiness.default_job_configured {
         WelcomeStage::DefaultJob
     } else {
         WelcomeStage::Complete
@@ -418,7 +442,9 @@ async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
             stage,
             WelcomeStage::Collection | WelcomeStage::DefaultJob | WelcomeStage::Complete
         );
-    let show_default_job = collects_diagnostics && matches!(stage, WelcomeStage::DefaultJob | WelcomeStage::Complete);
+    let show_default_job = collects_diagnostics
+        && readiness.collect_host_configured
+        && matches!(stage, WelcomeStage::DefaultJob | WelcomeStage::Complete);
 
     JourneyModel {
         stage,
@@ -429,6 +455,8 @@ async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
         show_collection,
         show_default_job,
         show_complete: stage == WelcomeStage::Complete,
+        collection_deferred: readiness.collection_deferred,
+        output_requires_keystore: readiness.output_requires_keystore,
         keystore_ready: readiness.keystore_ready,
         keystore_unlocked,
         output_name,
@@ -494,7 +522,7 @@ fn is_local_output_url(value: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn runtime_output_status() -> RuntimeOutputStatus {
+async fn runtime_output_status(output_configured: Result<bool, String>) -> RuntimeOutputStatus {
     let output_url = std::env::var("ESDIAG_OUTPUT_URL").ok();
     let declared = output_url.is_some();
     let mut status = RuntimeOutputStatus {
@@ -507,10 +535,20 @@ async fn runtime_output_status() -> RuntimeOutputStatus {
             .unwrap_or_default(),
         ..RuntimeOutputStatus::default()
     };
+    if !declared {
+        match output_configured {
+            Ok(false) => return status,
+            Ok(true) => {}
+            Err(err) => {
+                tracing::warn!("Unable to inspect onboarding output state: {err}");
+                return status;
+            }
+        }
+    }
     let deployment = match OutputDeployment::resolve(None, true) {
         Ok(deployment) => deployment,
         Err(err) => {
-            tracing::warn!("Unable to resolve environment-provided onboarding output: {err}");
+            tracing::warn!("Unable to resolve configured onboarding output: {err}");
             return status;
         }
     };
@@ -593,6 +631,40 @@ fn workflow_from_form(value: &str) -> Result<OnboardingWorkflow, eyre::Report> {
     }
 }
 
+pub(crate) async fn reload_configured_output(state: &Arc<ServerState>, password: Option<&str>) -> Result<(), String> {
+    if !state.onboarding || crate::data::runtime_output_is_declared() {
+        return Ok(());
+    }
+    let config = ApplicationConfig::load().map_err(|err| err.to_string())?;
+    if !config.workflow.is_some_and(OnboardingWorkflow::processes_diagnostics) {
+        return Ok(());
+    }
+    let Some(output_name) = config.output.default else {
+        return Ok(());
+    };
+    let output = KnownHost::get_known(&output_name)
+        .ok_or_else(|| "The configured Elasticsearch output host could not be reloaded.".to_string())?;
+    let viewer_url = output
+        .viewer()
+        .and_then(|name| KnownHost::get_known(&name.to_string()))
+        .and_then(|viewer| viewer.concrete_url().map(ToString::to_string));
+    let requires_keystore_secret = output.requires_keystore_secret();
+    let exporter = if requires_keystore_secret {
+        let password = password.ok_or_else(|| "Unlock the keystore before using the configured output.".to_string())?;
+        crate::data::with_scoped_keystore_password(password.to_string(), async move {
+            Exporter::try_from(output).map_err(|err| err.to_string())
+        })
+        .await?
+    } else {
+        Exporter::try_from(output).map_err(|err| err.to_string())?
+    };
+    *state.exporter.write().await = exporter;
+    if let Some(viewer_url) = viewer_url {
+        *state.kibana_url.write().await = viewer_url;
+    }
+    Ok(())
+}
+
 fn stage_name(stage: WelcomeStage) -> &'static str {
     match stage {
         WelcomeStage::Identity => "identity",
@@ -619,24 +691,17 @@ async fn save_output_stage(state: &Arc<ServerState>, form: OutputForm, keystore_
     }
 
     let auth = SecretAuth::apikey(api_key);
-    let output_candidate = KnownHostBuilder::new(output_url.clone())
-        .application(Application::Elasticsearch)
-        .roles(vec![HostRole::Send])
-        .viewer(Some(form.viewer_name.clone()))
-        .secret(Some(form.output_name.clone()))
-        .build_with_secret_auth(auth.clone())
+    let output_candidate = onboarding::validation_host(output_url.clone(), Application::Elasticsearch, auth.clone())
         .map_err(|err| err.to_string())?;
-    let viewer_candidate = KnownHostBuilder::new(viewer_url.clone())
-        .application(Application::Kibana)
-        .roles(vec![HostRole::View])
-        .secret(Some(form.output_name.clone()))
-        .build_with_secret_auth(auth.clone())
+    let viewer_candidate = onboarding::validation_host(viewer_url.clone(), Application::Kibana, auth.clone())
         .map_err(|err| err.to_string())?;
-    let output_client = Client::try_from(Uri::try_from(output_candidate.clone()).map_err(|err| err.to_string())?)
+    let output_client = Client::try_from(Uri::try_from(output_candidate).map_err(|err| err.to_string())?)
         .map_err(|err| err.to_string())?;
     let viewer_client = Client::try_from(Uri::try_from(viewer_candidate).map_err(|err| err.to_string())?)
         .map_err(|err| err.to_string())?;
-    if output_client.test_connection().await.is_err() || viewer_client.test_connection().await.is_err() {
+    let output_valid = output_client.test_connection().await.is_ok();
+    let viewer_valid = viewer_client.test_connection().await.is_ok();
+    if !output_valid || !viewer_valid {
         return Err(
             "The Elasticsearch and Kibana output endpoints must both validate before configuration is changed."
                 .to_string(),
@@ -660,8 +725,12 @@ async fn save_output_stage(state: &Arc<ServerState>, form: OutputForm, keystore_
     config.output.authenticated_on = Some(chrono::Utc::now().to_rfc3339());
     config.save().map_err(|err| err.to_string())?;
 
-    let exporter = Exporter::try_from(Uri::try_from(output_candidate).map_err(|err| err.to_string())?)
-        .map_err(|err| err.to_string())?;
+    let output = KnownHost::get_known(&form.output_name)
+        .ok_or_else(|| "The saved Elasticsearch output host could not be reloaded.".to_string())?;
+    let exporter = crate::data::with_scoped_keystore_password(keystore_password.to_string(), async move {
+        Exporter::try_from(output).map_err(|err| err.to_string())
+    })
+    .await?;
     *state.exporter.write().await = exporter;
     *state.kibana_url.write().await = viewer_url.to_string();
     Ok(())
@@ -701,11 +770,7 @@ async fn save_collection_stage(form: CollectionForm, keystore_password: &str) ->
         return Err("A collection API key is required.".to_string());
     }
     let auth = SecretAuth::apikey(api_key);
-    let candidate = KnownHostBuilder::new(url.clone())
-        .application(Application::Elasticsearch)
-        .roles(vec![HostRole::Collect])
-        .secret(Some(form.name.clone()))
-        .build_with_secret_auth(auth.clone())
+    let candidate = onboarding::validation_host(url.clone(), Application::Elasticsearch, auth.clone())
         .map_err(|err| err.to_string())?;
     let client =
         Client::try_from(Uri::try_from(candidate).map_err(|err| err.to_string())?).map_err(|err| err.to_string())?;
@@ -802,10 +867,12 @@ async fn provision_local_output_stage(state: &Arc<ServerState>, keystore_passwor
 
 #[cfg(test)]
 mod tests {
-    use super::{is_local_output_url, journey_model, workflow_from_form, workflow_processes_diagnostics};
+    use super::{
+        is_local_output_url, journey_model, runtime_output_status, workflow_from_form, workflow_processes_diagnostics,
+    };
     use crate::{
         data::{OnboardingWorkflow, authenticate},
-        onboarding::{save_user, save_workflow},
+        onboarding::{defer_collection, save_user, save_workflow},
         server::{
             template::{Welcome, WelcomeStage},
             test_server_state,
@@ -830,6 +897,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_onboarding_output_is_expected_state() {
+        let _env = crate::TestEnv::new();
+
+        let status = runtime_output_status(Ok(false)).await;
+
+        assert!(!status.declared);
+        assert!(!status.configured);
+    }
+
+    #[tokio::test]
     async fn processing_workflow_advances_to_cluster_configuration() {
         let _env = crate::TestEnv::new();
         let state = test_server_state();
@@ -841,6 +918,22 @@ mod tests {
         assert_eq!(journey_model(&state).await.stage, WelcomeStage::Output);
         authenticate("password").expect("create keystore");
         assert_eq!(journey_model(&state).await.stage, WelcomeStage::Output);
+    }
+
+    #[tokio::test]
+    async fn deferred_collection_skips_the_source_dependent_default_job() {
+        let _env = crate::TestEnv::new();
+        let state = test_server_state();
+        save_user("operator@example.com".to_string()).expect("save user");
+        save_workflow(OnboardingWorkflow::CollectOnly).expect("save workflow");
+        assert_eq!(journey_model(&state).await.stage, WelcomeStage::Collection);
+
+        defer_collection().expect("defer collection");
+
+        let model = journey_model(&state).await;
+        assert_eq!(model.stage, WelcomeStage::Complete);
+        assert!(!model.show_default_job);
+        assert!(model.show_complete);
     }
 
     #[test]
@@ -873,6 +966,21 @@ mod tests {
         assert!(!local_form.contains("output_url"));
         assert!(html.contains(r#"type="password""#));
         assert!(!html.contains("api-key-that-must-not-escape"));
+    }
+
+    #[test]
+    fn onboarding_messages_are_rendered_as_text_not_expressions() {
+        let html = Welcome {
+            message: "Secret 'Remote' was not found in keystore".to_string(),
+            ..Welcome::default()
+        }
+        .render()
+        .expect("render onboarding message");
+
+        assert!(html.contains("Remote"));
+        assert!(html.contains(r#"class="error" role="alert""#));
+        assert!(!html.contains("data-signals:welcome.message"));
+        assert!(!html.contains("data-text=\"$welcome.message\""));
     }
 
     #[test]
@@ -932,6 +1040,56 @@ mod tests {
         assert!(!html.contains("Diagnostic Source</h2>"));
         assert!(!html.contains("Default Diagnostic</h2>"));
         assert!(!html.contains("Ready</h2>"));
+    }
+
+    #[test]
+    fn collection_stage_offers_to_add_a_source_later() {
+        let html = Welcome {
+            stage: "collection".to_string(),
+            workflow_value: "collect-only".to_string(),
+            show_collection: true,
+            ..Welcome::default()
+        }
+        .render()
+        .expect("render collection stage");
+
+        assert!(html.contains("Add later"));
+        assert!(html.contains("/welcome/collection/later"));
+    }
+
+    #[test]
+    fn deferred_journey_does_not_claim_the_default_workflow_is_configured() {
+        let html = Welcome {
+            stage: "complete".to_string(),
+            show_complete: true,
+            collection_deferred: true,
+            ..Welcome::default()
+        }
+        .render()
+        .expect("render deferred journey");
+
+        assert!(html.contains("Diagnostic source deferred"));
+        assert!(html.contains("no diagnostic source or default workflow"));
+        assert!(!html.contains("Your default diagnostic workflow is configured."));
+    }
+
+    #[test]
+    fn deferred_secure_processing_shows_the_keystore_unlock_form() {
+        let html = Welcome {
+            stage: "complete".to_string(),
+            processes_diagnostics: true,
+            show_cluster: true,
+            collection_deferred: true,
+            output_requires_keystore: true,
+            keystore_ready: true,
+            keystore_unlocked: false,
+            ..Welcome::default()
+        }
+        .render()
+        .expect("render deferred secure processing");
+
+        assert!(html.contains("Unlock the keystore before configuring the diagnostic cluster."));
+        assert!(html.contains(r#"data-on:submit__prevent="@post('/welcome/keystore', {contentType: 'form'})""#));
     }
 
     #[test]

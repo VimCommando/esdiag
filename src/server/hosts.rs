@@ -660,9 +660,17 @@ pub async fn update_host(State(state): State<Arc<ServerState>>, Json(payload): J
 pub async fn delete_host(State(state): State<Arc<ServerState>>, Form(form): Form<HostDeleteForm>) -> Response {
     let mut hosts = KnownHost::parse_hosts_yml().map_err(to_message);
     if let Ok(ref mut hosts) = hosts {
+        let was_collect_host = hosts
+            .get(form.name.trim())
+            .is_some_and(|host| host.has_role(HostRole::Collect));
         hosts.remove(form.name.trim());
         return match KnownHost::write_hosts_yml(hosts) {
-            Ok(_) => patch_hosts_panel_response(&state).await,
+            Ok(_) => {
+                if was_collect_host && let Err(err) = crate::onboarding::clear_collection_deferral() {
+                    return (StatusCode::BAD_REQUEST, to_message(err)).into_response();
+                }
+                patch_hosts_panel_response(&state).await
+            }
             Err(err) => (StatusCode::BAD_REQUEST, to_message(err)).into_response(),
         };
     }
@@ -1178,6 +1186,12 @@ async fn apply_upsert_host(state: &Arc<ServerState>, form: HostUpsertForm) -> Re
     };
 
     let mut hosts: BTreeMap<String, KnownHost> = KnownHost::parse_hosts_yml().map_err(to_message)?;
+    let previous_collect_host = form
+        .original_name
+        .as_deref()
+        .and_then(|name| hosts.get(name))
+        .is_some_and(|host| host.has_role(HostRole::Collect))
+        || hosts.get(name).is_some_and(|host| host.has_role(HostRole::Collect));
     let mut settings = Settings::load().map_err(to_message)?;
     let mut settings_changed = false;
     if let Some(original_name) = form.original_name {
@@ -1192,6 +1206,9 @@ async fn apply_upsert_host(state: &Arc<ServerState>, form: HostUpsertForm) -> Re
     }
     hosts.insert(name.to_string(), host);
     KnownHost::write_hosts_yml(&hosts).map_err(to_message)?;
+    if previous_collect_host || hosts.get(name).is_some_and(|host| host.has_role(HostRole::Collect)) {
+        crate::onboarding::clear_collection_deferral().map_err(to_message)?;
+    }
 
     if settings
         .active_target
@@ -1564,15 +1581,25 @@ async fn delete_host_row(hosts: &[template::HostsTableRow], row_id: usize) -> Re
 
     let mut host_map = KnownHost::parse_hosts_yml().map_err(to_message);
     if let Ok(ref mut host_map) = host_map {
+        let was_collect_host = host_map
+            .get(host.name.trim())
+            .is_some_and(|saved| saved.has_role(HostRole::Collect));
         host_map.remove(host.name.trim());
         return match KnownHost::write_hosts_yml(host_map) {
-            Ok(_) => sse_response(vec![
-                clear_row_signal_patch("hosts", row_id).as_datastar_event().to_string(),
-                patch_host_error_event(""),
-                PatchElements::new_remove(host_row_selector(row_id))
-                    .as_datastar_event()
-                    .to_string(),
-            ]),
+            Ok(_) => {
+                if was_collect_host && let Err(err) = crate::onboarding::clear_collection_deferral() {
+                    let message = to_message(err);
+                    tracing::warn!("Host delete for row {} failed: {}", row_id, message);
+                    return sse_response(vec![patch_host_error_event(&message)]);
+                }
+                sse_response(vec![
+                    clear_row_signal_patch("hosts", row_id).as_datastar_event().to_string(),
+                    patch_host_error_event(""),
+                    PatchElements::new_remove(host_row_selector(row_id))
+                        .as_datastar_event()
+                        .to_string(),
+                ])
+            }
             Err(err) => {
                 let message = to_message(err);
                 tracing::warn!("Host delete for row {} failed: {}", row_id, message);

@@ -599,6 +599,7 @@ impl Server {
                     .route("/welcome/output/local", post(web_onboarding::provision_local_output))
                     .route("/welcome/output/setup", post(web_onboarding::install_output_assets))
                     .route("/welcome/collection", post(web_onboarding::save_collection))
+                    .route("/welcome/collection/later", post(web_onboarding::defer_collection))
                     .route("/welcome/default-job", post(web_onboarding::save_default_job))
             } else {
                 app.route("/welcome", get(web_onboarding::service_mode_page))

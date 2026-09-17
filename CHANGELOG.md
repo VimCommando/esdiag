@@ -69,6 +69,13 @@ published release notes, maintenance branches, and tagged history.
 - Changed `esdiag local up` to open the web onboarding page instead of the web UI root.
 - Changed the Advanced page to open on the New collection tab, with Existing available as the second tab.
 - Changed local-stack onboarding to show a spinner while Elasticsearch and Kibana start, then clear the status when both are running.
+- Changed terminal onboarding to select collection-only, existing processing, or both in one three-option prompt.
+- Changed web onboarding to let users add a diagnostic source later without blocking access to ESDiag.
+- Changed web onboarding to validate new host credentials before saving their keystore references and safely display quoted errors.
+- Changed user-mode onboarding startup to report an unconfigured output accurately and suppress expected missing-output warnings.
+- Changed the web interface to use stable Datastar 1.0.3 instead of a release candidate.
+- Changed the global web event stream to close while a page is hidden, preventing stale connections from delaying navigation.
+- Moved repository maintenance utilities to an unpublished workspace crate so Cargo installation includes only the `esdiag` executable.
 - Changed web onboarding to report Elasticsearch and Kibana asset status separately and provide install or reinstall actions.
 - Changed the Remote cluster configuration step to show unknown asset status until a remote deployment is saved.
 - Changed local-stack onboarding to report the detected container runtime separately from its stack-management method.

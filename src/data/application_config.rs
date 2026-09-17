@@ -22,10 +22,16 @@ pub struct ApplicationConfig {
     pub user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<OnboardingWorkflow>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub collection_deferred: bool,
     #[serde(default, skip_serializing_if = "OutputConfig::is_empty")]
     pub output: OutputConfig,
     #[serde(default, skip_serializing_if = "JobConfig::is_empty")]
     pub job: JobConfig,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +207,7 @@ mod tests {
             version: 1,
             user: Some("reno@example.com".to_string()),
             workflow: Some(OnboardingWorkflow::CollectAndProcess),
+            collection_deferred: true,
             output: OutputConfig {
                 default: Some("output-elasticsearch".to_string()),
                 ..OutputConfig::default()
@@ -218,6 +225,7 @@ mod tests {
         assert!(written.contains("default: output-elasticsearch"));
         assert!(written.contains("default: production-standard"));
         assert!(written.contains("workflow: collect-and-process"));
+        assert!(written.contains("collection_deferred: true"));
         for forbidden in ["apikey", "password", "authorization", "https://es.example"] {
             assert!(!written.contains(forbidden), "{forbidden} must not be serialized");
         }
