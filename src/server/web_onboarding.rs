@@ -358,8 +358,14 @@ async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
         tracing::warn!("Unable to load application configuration for onboarding: {err}");
         ApplicationConfig::new()
     });
-    let readiness = onboarding::inspect().unwrap_or_default();
-    let runtime_output = runtime_output_status(readiness.output_configured).await;
+    let (readiness, output_configured) = match onboarding::inspect() {
+        Ok(readiness) => {
+            let output_configured = readiness.output_configured;
+            (readiness, Ok(output_configured))
+        }
+        Err(err) => (onboarding::OnboardingReadiness::default(), Err(err.to_string())),
+    };
+    let runtime_output = runtime_output_status(output_configured).await;
     let workflow = config.workflow;
     let processes_diagnostics = workflow.is_some_and(OnboardingWorkflow::processes_diagnostics);
     let collects_diagnostics = workflow.is_some_and(OnboardingWorkflow::collects_diagnostics);
@@ -512,7 +518,7 @@ fn is_local_output_url(value: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn runtime_output_status(output_configured: bool) -> RuntimeOutputStatus {
+async fn runtime_output_status(output_configured: Result<bool, String>) -> RuntimeOutputStatus {
     let output_url = std::env::var("ESDIAG_OUTPUT_URL").ok();
     let declared = output_url.is_some();
     let mut status = RuntimeOutputStatus {
@@ -525,8 +531,15 @@ async fn runtime_output_status(output_configured: bool) -> RuntimeOutputStatus {
             .unwrap_or_default(),
         ..RuntimeOutputStatus::default()
     };
-    if !declared && !output_configured {
-        return status;
+    if !declared {
+        match output_configured {
+            Ok(false) => return status,
+            Ok(true) => {}
+            Err(err) => {
+                tracing::warn!("Unable to inspect onboarding output state: {err}");
+                return status;
+            }
+        }
     }
     let deployment = match OutputDeployment::resolve(None, true) {
         Ok(deployment) => deployment,
@@ -883,7 +896,7 @@ mod tests {
     async fn missing_onboarding_output_is_expected_state() {
         let _env = crate::TestEnv::new();
 
-        let status = runtime_output_status(false).await;
+        let status = runtime_output_status(Ok(false)).await;
 
         assert!(!status.declared);
         assert!(!status.configured);
