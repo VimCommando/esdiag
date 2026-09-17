@@ -1114,7 +1114,8 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                     Err(err)
                         if runtime_mode == RuntimeMode::User
                             && !explicit_output
-                            && inspect_onboarding().is_ok_and(|readiness| !readiness.output_configured) =>
+                            && inspect_onboarding()
+                                .is_ok_and(|readiness| !readiness.is_complete() || !readiness.output_configured) =>
                     {
                         tracing::info!("Starting user-mode web onboarding without a configured output: {err}");
                         (onboarding_exporter()?, "unconfigured")
