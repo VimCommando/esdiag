@@ -1,12 +1,13 @@
 <content
     id="welcome"
-    data-signals:welcome.message="'{{ message }}'"
-    data-signals:welcome.output-location="'{{ output_location }}'"
+    data-signals:welcome.output-location="{{ output_location|json }}"
     data-signals:_welcome-provisioning="false"
 >
     <onboarding-flow>
         <section-title>Welcome to ESDiag</section-title>
-        <p class="error" role="alert" data-show="$welcome.message" data-text="$welcome.message"></p>
+        {% if !message.is_empty() %}
+        <p class="error" role="alert">{{ message }}</p>
+        {% endif %}
 
         <steps aria-label="ESDiag setup steps">
             <ol>
@@ -380,6 +381,11 @@
                         <button class="button" type="submit">
                             {% if collect_name.is_empty() %}Save source{% else %}Update source{% endif %}
                         </button>
+                    </form>
+                    {% endif %}
+                    {% if stage == "collection" %}
+                    <form data-on:submit__prevent="@post('/welcome/collection/later', {contentType: 'form'})">
+                        <button class="button" type="submit">Add later</button>
                     </form>
                     {% endif %}
                 </li>

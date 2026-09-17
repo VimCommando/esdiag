@@ -63,6 +63,10 @@ of `esdiag init`. It opens `/welcome`, where the same workflow is persisted in
 stages. The keystore password and endpoint API keys use masked form controls
 and are never stored in browser state or `esdiag.yml`.
 
+At the Diagnostic Source stage, choose **Add later** to open ESDiag without a
+collection host or source-dependent default job. Return to `/welcome` when you
+are ready to add the source.
+
 When `ESDIAG_OUTPUT_URL` and `ESDIAG_KIBANA_URL` provide the runtime output,
 web onboarding treats that deployment as the diagnostic cluster. It validates
 both authenticated endpoints and checks the processing and Agent Builder asset

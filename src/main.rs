@@ -1108,14 +1108,14 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
             } => {
                 tracing::info!("Starting ESDiag server");
                 let runtime_mode = resolve_serve_runtime_mode(mode)?;
-                let exporter = match resolve_serve_exporter(output) {
-                    Ok(exporter) => exporter,
+                let (exporter, output_status) = match resolve_serve_exporter(output) {
+                    Ok(exporter) => (exporter, "configured"),
                     Err(err)
                         if runtime_mode == RuntimeMode::User
                             && inspect_onboarding().is_ok_and(|readiness| !readiness.is_complete()) =>
                     {
                         tracing::info!("Starting user-mode web onboarding without a configured output: {err}");
-                        onboarding_exporter()?
+                        (onboarding_exporter()?, "unconfigured")
                     }
                     Err(err) => return Err(err),
                 };
@@ -1151,7 +1151,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                             address: bound_addr.ip().to_string(),
                             port: bound_addr.port(),
                             runtime_mode: runtime_mode.to_string(),
-                            output: "configured".to_string(),
+                            output: output_status.to_string(),
                         },
                     )?;
                 }
@@ -2029,25 +2029,23 @@ enum OutputLocation {
 
 fn prompt_onboarding_workflow() -> Result<OnboardingWorkflow> {
     loop {
-        println!("Will you be processing diagnostics, or only collecting?");
-        println!("  1. Process diagnostics");
-        println!("  2. Only collect diagnostics");
-        match prompt_with_default("Selection", "1")?.to_ascii_lowercase().as_str() {
-            "1" | "process" | "processing" => {
-                println!("Will you collect new diagnostics, process existing diagnostics, or both?");
-                println!("  1. Collect and process new diagnostics");
-                println!("  2. Process existing diagnostics");
-                println!("  3. Both new and existing diagnostics");
-                match prompt_with_default("Selection", "3")?.to_ascii_lowercase().as_str() {
-                    "1" | "collect" => return Ok(OnboardingWorkflow::CollectAndProcess),
-                    "2" | "existing" => return Ok(OnboardingWorkflow::ProcessExisting),
-                    "3" | "both" => return Ok(OnboardingWorkflow::CollectAndProcess),
-                    _ => println!("Choose 1, 2, or 3."),
-                }
-            }
-            "2" | "collect" | "collect-only" => return Ok(OnboardingWorkflow::CollectOnly),
-            _ => println!("Choose 1 or 2."),
+        println!("Will you collect new diagnostics, process existing diagnostics, or both?");
+        println!("  1. Only collect new diagnostics");
+        println!("  2. Process existing diagnostics");
+        println!("  3. Both new and existing diagnostics");
+        if let Some(workflow) = parse_onboarding_workflow(&prompt_with_default("Selection", "3")?) {
+            return Ok(workflow);
         }
+        println!("Choose 1, 2, or 3.");
+    }
+}
+
+fn parse_onboarding_workflow(selection: &str) -> Option<OnboardingWorkflow> {
+    match selection.trim().to_ascii_lowercase().as_str() {
+        "1" | "collect" | "collecting" | "collect-only" => Some(OnboardingWorkflow::CollectOnly),
+        "2" | "process" | "processing" | "existing" | "process-existing" => Some(OnboardingWorkflow::ProcessExisting),
+        "3" | "both" | "collect-and-process" => Some(OnboardingWorkflow::CollectAndProcess),
+        _ => None,
     }
 }
 
@@ -3486,6 +3484,29 @@ mod tests {
         assert_eq!(super::parse_confirmation("", true), Some(true));
         assert_eq!(super::parse_confirmation(" YES ", false), Some(true));
         assert_eq!(super::parse_confirmation("No", true), Some(false));
+    }
+
+    #[test]
+    fn onboarding_workflow_uses_one_three_option_selection() {
+        use esdiag::data::OnboardingWorkflow;
+
+        assert_eq!(
+            super::parse_onboarding_workflow("1"),
+            Some(OnboardingWorkflow::CollectOnly)
+        );
+        assert_eq!(
+            super::parse_onboarding_workflow("2"),
+            Some(OnboardingWorkflow::ProcessExisting)
+        );
+        assert_eq!(
+            super::parse_onboarding_workflow("3"),
+            Some(OnboardingWorkflow::CollectAndProcess)
+        );
+        assert_eq!(
+            super::parse_onboarding_workflow("both"),
+            Some(OnboardingWorkflow::CollectAndProcess)
+        );
+        assert_eq!(super::parse_onboarding_workflow("invalid"), None);
     }
 
     #[test]

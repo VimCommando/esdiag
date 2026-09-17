@@ -27,6 +27,22 @@ and require confirmation before replacement.
 - **WHEN** the user opens the web interface
 - **THEN** it does not require onboarding before normal diagnostic controls are available
 
+#### Scenario: Server starts onboarding without an output
+
+- **GIVEN** no output deployment is configured
+- **WHEN** the user-mode server starts web onboarding
+- **THEN** its structured readiness result reports the output as unconfigured
+- **AND** onboarding treats the missing output as expected state without warning on each render
+
+#### Scenario: Diagnostic source is deferred
+
+- **GIVEN** the user selected a workflow that collects diagnostics
+- **AND** any required output deployment is configured
+- **WHEN** the user chooses to add the diagnostic source later
+- **THEN** onboarding preserves the selected workflow and opens the normal application
+- **AND** it does not require a source-dependent default job
+- **AND** the user can return to onboarding to configure the source
+
 ### Requirement: Browser Credential Protection
 
 The web onboarding flow SHALL accept credentials only through password-masked
@@ -40,6 +56,19 @@ storage, URLs, application configuration, or logs.
 - **THEN** the browser masks the value
 - **AND** the server stores it through the encrypted keystore
 - **AND** subsequent browser state contains no copy of the key
+
+#### Scenario: User validates a new diagnostic source
+
+- **WHEN** the user submits a new source and API key
+- **THEN** the server validates the endpoint with the submitted key before creating its keystore reference
+- **AND** a validation error remains browser text rather than an executable expression
+
+#### Scenario: User validates the first output deployment
+
+- **WHEN** the user submits new Elasticsearch and Kibana output endpoints and an API key
+- **THEN** the server validates both endpoints with the submitted key before creating their keystore references
+- **AND** successful validation persists the linked hosts and selected output
+- **AND** the shared event stream patches the next onboarding stage
 
 ### Requirement: Service-Mode Onboarding Boundary
 

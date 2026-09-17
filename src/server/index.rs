@@ -87,7 +87,7 @@ pub async fn handler(
     if state.onboarding
         && allows_local_runtime_features
         && onboarding::inspect()
-            .map(|readiness| !readiness.is_complete())
+            .map(|readiness| !readiness.can_enter_application())
             .unwrap_or(true)
     {
         return Redirect::to("/welcome").into_response();
