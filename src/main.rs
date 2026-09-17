@@ -38,8 +38,9 @@ use esdiag::{
     env::LOG_LEVEL,
     exporter::Exporter,
     onboarding::{
-        CollectHostInput, OutputDeploymentInput, inspect as inspect_onboarding, save_collect_host, save_default_job,
-        save_default_processing_job, save_output_deployment, save_user, save_workflow,
+        CollectHostInput, OutputDeploymentInput, clear_collection_deferral, inspect as inspect_onboarding,
+        save_collect_host, save_default_job, save_default_processing_job, save_output_deployment, save_user,
+        save_workflow,
     },
     processor::{CollectionResult, DiagnosticOutcome, Identifiers, default_collect_archive_name},
     receiver::{
@@ -1932,14 +1933,21 @@ fn maybe_materialize_template_target(target: &str) -> Result<Option<KnownHost>> 
 }
 
 async fn save_host(name: &str, host: KnownHost, action: &str, validate_connection: bool) -> Result<String> {
+    let is_collect_host = host.has_role(HostRole::Collect);
     if validate_connection {
         let uri = Uri::try_from(host.clone())?;
         let validation_summary = validate_host_connection(name, uri).await?;
         let hostfile = host.save(name)?;
+        if is_collect_host {
+            clear_collection_deferral()?;
+        }
         tracing::info!("Host {name} successfully saved to {hostfile}");
         return Ok(format!("{validation_summary}\nHost '{name}' {action} in {hostfile}"));
     }
     let hostfile = host.save(name)?;
+    if is_collect_host {
+        clear_collection_deferral()?;
+    }
     tracing::info!("Host {name} successfully saved to {hostfile}");
     Ok(format!("Host '{name}' {action} in {hostfile}"))
 }
@@ -1967,8 +1975,13 @@ fn cleanup_settings_after_host_delete(name: &str) -> Result<()> {
 }
 
 fn delete_host_from_cli(name: &str) -> Result<String> {
-    let path = KnownHost::remove_saved(name)?;
-    if let Err(err) = cleanup_settings_after_host_delete(name) {
+    let name = name.to_string();
+    let is_collect_host = KnownHost::get_known(&name).is_some_and(|host| host.has_role(HostRole::Collect));
+    let path = KnownHost::remove_saved(&name)?;
+    if is_collect_host {
+        clear_collection_deferral()?;
+    }
+    if let Err(err) = cleanup_settings_after_host_delete(&name) {
         eprintln!(
             "Warning: host '{}' was removed, but failed to update settings: {err}",
             name

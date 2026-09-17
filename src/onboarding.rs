@@ -302,7 +302,7 @@ pub fn replace_collect_host(input: CollectHostInput, keystore_password: Option<&
     Ok(())
 }
 
-fn clear_collection_deferral() -> Result<()> {
+pub fn clear_collection_deferral() -> Result<()> {
     let mut config = ApplicationConfig::load()?;
     if config.collection_deferred {
         config.collection_deferred = false;
