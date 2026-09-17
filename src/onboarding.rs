@@ -21,6 +21,7 @@ pub struct OnboardingReadiness {
     pub output_from_environment: bool,
     pub collect_host_configured: bool,
     pub default_job_configured: bool,
+    pub collection_deferred: bool,
 }
 
 impl OnboardingReadiness {
@@ -39,6 +40,19 @@ impl OnboardingReadiness {
                 }
                 None => false,
             }
+    }
+
+    pub fn can_enter_application(&self) -> bool {
+        self.is_complete()
+            || (self.collection_deferred
+                && self.user_configured
+                && match self.workflow {
+                    Some(OnboardingWorkflow::CollectOnly) => true,
+                    Some(OnboardingWorkflow::CollectAndProcess) => {
+                        self.output_configured && (self.output_from_environment || self.keystore_ready)
+                    }
+                    Some(OnboardingWorkflow::ProcessExisting) | None => false,
+                })
     }
 }
 
@@ -63,7 +77,7 @@ pub struct CollectHostInput {
 
 /// Build a transient validation target without resolving an unsaved secret.
 /// Persisted hosts are built separately and contain only a keystore reference.
-pub fn output_validation_host(url: Url, app: Application, auth: SecretAuth) -> Result<KnownHost> {
+pub fn validation_host(url: Url, app: Application, auth: SecretAuth) -> Result<KnownHost> {
     let mut host = KnownHostBuilder::new(url).application(app).build()?;
     match auth {
         SecretAuth::ApiKey { apikey } => host.legacy_apikey = Some(apikey),
@@ -73,6 +87,10 @@ pub fn output_validation_host(url: Url, app: Application, auth: SecretAuth) -> R
         }
     }
     Ok(host)
+}
+
+pub fn output_validation_host(url: Url, app: Application, auth: SecretAuth) -> Result<KnownHost> {
+    validation_host(url, app, auth)
 }
 
 pub fn inspect() -> Result<OnboardingReadiness> {
@@ -103,6 +121,7 @@ pub fn inspect() -> Result<OnboardingReadiness> {
         output_from_environment,
         collect_host_configured,
         default_job_configured,
+        collection_deferred: config.collection_deferred,
     })
 }
 
@@ -146,7 +165,40 @@ pub fn save_user(user: String) -> Result<ApplicationConfig> {
 
 pub fn save_workflow(workflow: OnboardingWorkflow) -> Result<ApplicationConfig> {
     let mut config = ApplicationConfig::load()?;
+    if config.workflow != Some(workflow) {
+        config.collection_deferred = false;
+    }
     config.workflow = Some(workflow);
+    config.save()?;
+    Ok(config)
+}
+
+pub fn defer_collection() -> Result<ApplicationConfig> {
+    let readiness = inspect()?;
+    if !readiness.user_configured {
+        return Err(eyre!(
+            "Configure a diagnostic user before deferring the diagnostic source"
+        ));
+    }
+    match readiness.workflow {
+        Some(OnboardingWorkflow::CollectOnly) => {}
+        Some(OnboardingWorkflow::CollectAndProcess)
+            if readiness.output_configured && (readiness.output_from_environment || readiness.keystore_ready) => {}
+        Some(OnboardingWorkflow::CollectAndProcess) => {
+            return Err(eyre!(
+                "Configure the diagnostic output before deferring the diagnostic source"
+            ));
+        }
+        Some(OnboardingWorkflow::ProcessExisting) | None => {
+            return Err(eyre!("The selected workflow does not use a diagnostic source"));
+        }
+    }
+    if readiness.collect_host_configured {
+        return Err(eyre!("A diagnostic source is already configured"));
+    }
+
+    let mut config = ApplicationConfig::load()?;
+    config.collection_deferred = true;
     config.save()?;
     Ok(config)
 }
@@ -303,13 +355,13 @@ fn validate_name(name: &str, kind: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
-    async fn validation_uses_unsaved_credentials_without_reading_or_writing_keystore() {
+    async fn transient_validation_uses_unsaved_credentials_without_reading_or_writing_keystore() {
         let _env = crate::TestEnv::new();
         for app in [
             crate::data::Application::Elasticsearch,
             crate::data::Application::Kibana,
         ] {
-            let host = super::output_validation_host(
+            let host = super::validation_host(
                 url::Url::parse("http://127.0.0.1:9200").unwrap(),
                 app,
                 crate::data::SecretAuth::apikey("new-unsaved-key"),
@@ -325,8 +377,9 @@ mod tests {
     }
 
     use super::{
-        CollectHostInput, OnboardingReadiness, OutputDeploymentInput, inspect, replace_collect_host, save_collect_host,
-        save_default_job, save_default_processing_job, save_output_deployment, save_user, save_workflow,
+        CollectHostInput, OnboardingReadiness, OutputDeploymentInput, defer_collection, inspect, replace_collect_host,
+        save_collect_host, save_default_job, save_default_processing_job, save_output_deployment, save_user,
+        save_workflow,
     };
     use crate::data::{
         Application, ApplicationConfig, HostRole, Job, KnownHost, KnownHostBuilder, OnboardingWorkflow, SecretAuth,
@@ -449,6 +502,36 @@ mod tests {
         .expect("save collect host");
         save_default_processing_job("default".to_string(), "collect-es".to_string()).expect("save default job");
         assert!(inspect().expect("collect-and-process readiness").is_complete());
+    }
+
+    #[test]
+    fn collection_can_be_deferred_without_marking_the_workflow_complete() {
+        let _env = crate::TestEnv::new();
+        save_user("operator@example.com".to_string()).expect("save user");
+        save_workflow(OnboardingWorkflow::CollectOnly).expect("save collect-only workflow");
+
+        let initial = inspect().expect("initial readiness");
+        assert!(!initial.is_complete());
+        assert!(!initial.can_enter_application());
+
+        defer_collection().expect("defer collection");
+
+        let deferred = inspect().expect("deferred readiness");
+        assert!(deferred.collection_deferred);
+        assert!(!deferred.is_complete());
+        assert!(deferred.can_enter_application());
+    }
+
+    #[test]
+    fn changing_workflow_clears_collection_deferral() {
+        let _env = crate::TestEnv::new();
+        save_user("operator@example.com".to_string()).expect("save user");
+        save_workflow(OnboardingWorkflow::CollectOnly).expect("save collect-only workflow");
+        defer_collection().expect("defer collection");
+
+        save_workflow(OnboardingWorkflow::CollectAndProcess).expect("change workflow");
+
+        assert!(!inspect().expect("changed readiness").collection_deferred);
     }
 
     #[test]

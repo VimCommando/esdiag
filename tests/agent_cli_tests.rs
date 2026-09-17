@@ -236,19 +236,11 @@ fn saved_job_stdout_export_remains_an_ndjson_stream() {
 }
 
 #[cfg(feature = "server")]
-#[test]
-fn serve_emits_readiness_outcome_before_waiting_for_shutdown() {
-    let home = setup_home();
+fn read_server_readiness(home: &TempDir, args: &[String]) -> serde_json::Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_esdiag"));
     command
-        .args([
-            "--format",
-            "json",
-            "serve",
-            "--port",
-            "0",
-            home.path().to_str().expect("temporary path"),
-        ])
+        .args(["--format", "json", "serve", "--port", "0"])
+        .args(args)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .env("ESDIAG_HOSTS", home.path().join(".esdiag").join("hosts.yml"))
@@ -284,8 +276,30 @@ fn serve_emits_readiness_outcome_before_waiting_for_shutdown() {
     child.kill().expect("stop server");
     child.wait().expect("wait for server");
 
-    let outcome: serde_json::Value = serde_json::from_str(&line).expect("parse JSON readiness");
+    serde_json::from_str(&line).expect("parse JSON readiness")
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn serve_emits_readiness_outcome_before_waiting_for_shutdown() {
+    let home = setup_home();
+    let outcome = read_server_readiness(&home, &[home.path().display().to_string()]);
+
     assert_eq!(outcome["result"], "server_ready");
     assert_eq!(outcome["address"], "0.0.0.0");
     assert!(outcome["port"].as_u64().is_some_and(|port| port > 0));
+    assert_eq!(outcome["output"], "configured");
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn onboarding_server_reports_an_unconfigured_output() {
+    let home = setup_home();
+    let outcome = read_server_readiness(
+        &home,
+        &["--mode".to_string(), "user".to_string(), "--onboarding".to_string()],
+    );
+
+    assert_eq!(outcome["result"], "server_ready");
+    assert_eq!(outcome["output"], "unconfigured");
 }
