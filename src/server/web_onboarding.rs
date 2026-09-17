@@ -614,7 +614,10 @@ fn workflow_from_form(value: &str) -> Result<OnboardingWorkflow, eyre::Report> {
     }
 }
 
-async fn reload_configured_output(state: &Arc<ServerState>, password: Option<&str>) -> Result<(), String> {
+pub(crate) async fn reload_configured_output(state: &Arc<ServerState>, password: Option<&str>) -> Result<(), String> {
+    if crate::data::runtime_output_is_declared() {
+        return Ok(());
+    }
     let config = ApplicationConfig::load().map_err(|err| err.to_string())?;
     if !config.workflow.is_some_and(OnboardingWorkflow::processes_diagnostics) {
         return Ok(());
@@ -622,17 +625,22 @@ async fn reload_configured_output(state: &Arc<ServerState>, password: Option<&st
     let Some(output_name) = config.output.default else {
         return Ok(());
     };
-    let password = password.ok_or_else(|| "Unlock the keystore before using the configured output.".to_string())?;
     let output = KnownHost::get_known(&output_name)
         .ok_or_else(|| "The configured Elasticsearch output host could not be reloaded.".to_string())?;
     let viewer_url = output
         .viewer()
         .and_then(|name| KnownHost::get_known(&name.to_string()))
         .and_then(|viewer| viewer.concrete_url().map(ToString::to_string));
-    let exporter = crate::data::with_scoped_keystore_password(password.to_string(), async move {
-        Exporter::try_from(output).map_err(|err| err.to_string())
-    })
-    .await?;
+    let requires_keystore_secret = output.requires_keystore_secret();
+    let exporter = if requires_keystore_secret {
+        let password = password.ok_or_else(|| "Unlock the keystore before using the configured output.".to_string())?;
+        crate::data::with_scoped_keystore_password(password.to_string(), async move {
+            Exporter::try_from(output).map_err(|err| err.to_string())
+        })
+        .await?
+    } else {
+        Exporter::try_from(output).map_err(|err| err.to_string())?
+    };
     *state.exporter.write().await = exporter;
     if let Some(viewer_url) = viewer_url {
         *state.kibana_url.write().await = viewer_url;
