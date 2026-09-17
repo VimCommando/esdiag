@@ -6,7 +6,8 @@
 
 use crate::data::{
     Application, ApplicationConfig, HostRole, Job, JobOutput, KnownHost, KnownHostBuilder, OnboardingWorkflow,
-    SavedJobs, SecretAuth, keystore_exists, runtime_output_is_declared, save_saved_jobs, upsert_secret_auth,
+    OutputDeployment, SavedJobs, SecretAuth, keystore_exists, runtime_output_is_declared, save_saved_jobs,
+    upsert_secret_auth,
 };
 use crate::job::model::Input;
 use eyre::{Result, eyre};
@@ -101,14 +102,19 @@ pub fn inspect() -> Result<OnboardingReadiness> {
     let hosts = KnownHost::parse_hosts_yml()?;
     let jobs = crate::data::load_saved_jobs()?;
 
-    let output_from_environment = runtime_output_is_declared();
-    let output_configured = output_from_environment
-        || config
+    let output_declared_by_environment = runtime_output_is_declared();
+    let output_from_environment = output_declared_by_environment && OutputDeployment::resolve(None, true).is_ok();
+    let output_configured = if output_declared_by_environment {
+        output_from_environment
+    } else {
+        config
             .output
             .default
             .as_ref()
-            .is_some_and(|name| hosts.get(name).is_some_and(valid_output_host));
+            .is_some_and(|name| hosts.get(name).is_some_and(valid_output_host))
+    };
     let output_requires_keystore = !output_from_environment
+        && !output_declared_by_environment
         && config
             .output
             .default
@@ -153,7 +159,7 @@ fn workflow_job_is_valid(
         Some(OnboardingWorkflow::CollectAndProcess) => {
             matches!(
                 job.process().map(|process| &process.export),
-                Some(JobOutput::Environment) if runtime_output_is_declared()
+                Some(JobOutput::Environment) if environment_output_is_configured()
             ) || matches!(
                 job.process().map(|process| &process.export),
                 Some(JobOutput::KnownHost { name }) if Some(name.as_str()) == output
@@ -161,6 +167,10 @@ fn workflow_job_is_valid(
         }
         Some(OnboardingWorkflow::ProcessExisting) | None => false,
     }
+}
+
+fn environment_output_is_configured() -> bool {
+    runtime_output_is_declared() && OutputDeployment::resolve(None, true).is_ok()
 }
 
 pub fn save_user(user: String) -> Result<ApplicationConfig> {
@@ -546,6 +556,49 @@ mod tests {
         assert!(deferred.collection_deferred);
         assert!(!deferred.is_complete());
         assert!(deferred.can_enter_application());
+    }
+
+    #[test]
+    fn deferred_processing_requires_a_usable_output() {
+        let deferred = OnboardingReadiness {
+            user_configured: true,
+            workflow: Some(OnboardingWorkflow::CollectAndProcess),
+            output_configured: true,
+            output_requires_keystore: true,
+            collection_deferred: true,
+            ..OnboardingReadiness::default()
+        };
+        assert!(!deferred.can_enter_application());
+
+        let unlocked = OnboardingReadiness {
+            keystore_ready: true,
+            ..deferred.clone()
+        };
+        assert!(unlocked.can_enter_application());
+
+        let no_auth = OnboardingReadiness {
+            output_requires_keystore: false,
+            ..deferred.clone()
+        };
+        assert!(no_auth.can_enter_application());
+
+        let environment = OnboardingReadiness {
+            output_from_environment: true,
+            ..deferred
+        };
+        assert!(environment.can_enter_application());
+    }
+
+    #[test]
+    fn partial_environment_output_does_not_complete_readiness() {
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_OUTPUT_URL", "https://output.example:9200");
+        save_user("operator@example.com".to_string()).expect("save user");
+        save_workflow(OnboardingWorkflow::ProcessExisting).expect("save workflow");
+
+        let readiness = inspect().expect("inspect partial environment");
+        assert!(!readiness.output_configured);
+        assert!(!readiness.output_from_environment);
     }
 
     #[test]
