@@ -10,7 +10,7 @@ rust-version = "1.89"
 license = "Elastic-2.0"
 
 [workspace]
-members = [".", "crates/elasticrc"]
+members = [".", "crates/elasticrc", "crates/repo-tools"]
 resolver = "3"
 
 [features]
