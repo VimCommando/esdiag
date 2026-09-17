@@ -423,8 +423,13 @@
 
                 {% if show_complete %}
                 <li>
+                    {% if collection_deferred %}
+                    <h2>Diagnostic source deferred</h2>
+                    <p>ESDiag is ready to open, but no diagnostic source or default workflow is configured yet.</p>
+                    {% else %}
                     <h2>Ready</h2>
                     <p>Your default diagnostic workflow is configured.</p>
+                    {% endif %}
                     <a class="button" href="/">Open ESDiag</a>
                 </li>
                 {% endif %}
