@@ -163,7 +163,7 @@
                             <button class="button" type="submit">Create keystore</button>
                         </form>
                     </credential-gate>
-                    {% else if !keystore_unlocked && (stage == "output" || workflow_value == "process-existing") %}
+                    {% else if !keystore_unlocked && (stage == "output" || workflow_value == "process-existing" || (collection_deferred && output_requires_keystore)) %}
                     <credential-gate>
                         <p>Unlock the keystore before configuring the diagnostic cluster.</p>
                         <form data-on:submit__prevent="@post('/welcome/keystore', {contentType: 'form'})">

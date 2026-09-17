@@ -225,6 +225,7 @@ struct JourneyModel {
     show_default_job: bool,
     show_complete: bool,
     collection_deferred: bool,
+    output_requires_keystore: bool,
     keystore_ready: bool,
     keystore_unlocked: bool,
     output_name: String,
@@ -285,6 +286,7 @@ async fn render_page(state: &Arc<ServerState>, headers: &HeaderMap, message: Str
         show_default_job: model.show_default_job,
         show_complete: model.show_complete,
         collection_deferred: model.collection_deferred,
+        output_requires_keystore: model.output_requires_keystore,
         keystore_ready: model.keystore_ready,
         keystore_unlocked: model.keystore_unlocked,
         output_name: model.output_name,
@@ -330,6 +332,7 @@ async fn render_panel(state: &Arc<ServerState>, message: String) -> Result<Strin
         show_default_job: model.show_default_job,
         show_complete: model.show_complete,
         collection_deferred: model.collection_deferred,
+        output_requires_keystore: model.output_requires_keystore,
         keystore_ready: model.keystore_ready,
         keystore_unlocked: model.keystore_unlocked,
         output_name: model.output_name,
@@ -453,6 +456,7 @@ async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
         show_default_job,
         show_complete: stage == WelcomeStage::Complete,
         collection_deferred: readiness.collection_deferred,
+        output_requires_keystore: readiness.output_requires_keystore,
         keystore_ready: readiness.keystore_ready,
         keystore_unlocked,
         output_name,
@@ -1067,6 +1071,25 @@ mod tests {
         assert!(html.contains("Diagnostic source deferred"));
         assert!(html.contains("no diagnostic source or default workflow"));
         assert!(!html.contains("Your default diagnostic workflow is configured."));
+    }
+
+    #[test]
+    fn deferred_secure_processing_shows_the_keystore_unlock_form() {
+        let html = Welcome {
+            stage: "complete".to_string(),
+            processes_diagnostics: true,
+            show_cluster: true,
+            collection_deferred: true,
+            output_requires_keystore: true,
+            keystore_ready: true,
+            keystore_unlocked: false,
+            ..Welcome::default()
+        }
+        .render()
+        .expect("render deferred secure processing");
+
+        assert!(html.contains("Unlock the keystore before configuring the diagnostic cluster."));
+        assert!(html.contains(r#"data-on:submit__prevent="@post('/welcome/keystore', {contentType: 'form'})""#));
     }
 
     #[test]
