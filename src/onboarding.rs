@@ -19,6 +19,7 @@ pub struct OnboardingReadiness {
     pub workflow: Option<OnboardingWorkflow>,
     pub output_configured: bool,
     pub output_from_environment: bool,
+    pub output_requires_keystore: bool,
     pub collect_host_configured: bool,
     pub default_job_configured: bool,
     pub collection_deferred: bool,
@@ -50,7 +51,8 @@ impl OnboardingReadiness {
                 && match self.workflow {
                     Some(OnboardingWorkflow::CollectOnly) => true,
                     Some(OnboardingWorkflow::CollectAndProcess) => {
-                        self.output_configured && (self.output_from_environment || self.keystore_ready)
+                        self.output_configured
+                            && (self.output_from_environment || !self.output_requires_keystore || self.keystore_ready)
                     }
                     Some(OnboardingWorkflow::ProcessExisting) | None => false,
                 })
@@ -106,6 +108,13 @@ pub fn inspect() -> Result<OnboardingReadiness> {
             .default
             .as_ref()
             .is_some_and(|name| hosts.get(name).is_some_and(valid_output_host));
+    let output_requires_keystore = !output_from_environment
+        && config
+            .output
+            .default
+            .as_ref()
+            .and_then(|name| hosts.get(name))
+            .is_some_and(KnownHost::requires_keystore_secret);
     let collect_host_configured = hosts.values().any(|host| host.has_role(HostRole::Collect));
     let default_job_configured = config
         .job
@@ -120,6 +129,7 @@ pub fn inspect() -> Result<OnboardingReadiness> {
         workflow: config.workflow,
         output_configured,
         output_from_environment,
+        output_requires_keystore,
         collect_host_configured,
         default_job_configured,
         collection_deferred: config.collection_deferred,
@@ -184,7 +194,10 @@ pub fn defer_collection() -> Result<ApplicationConfig> {
     match readiness.workflow {
         Some(OnboardingWorkflow::CollectOnly) => {}
         Some(OnboardingWorkflow::CollectAndProcess)
-            if readiness.output_configured && (readiness.output_from_environment || readiness.keystore_ready) => {}
+            if readiness.output_configured
+                && (readiness.output_from_environment
+                    || !readiness.output_requires_keystore
+                    || readiness.keystore_ready) => {}
         Some(OnboardingWorkflow::CollectAndProcess) => {
             return Err(eyre!(
                 "Configure the diagnostic output before deferring the diagnostic source"
