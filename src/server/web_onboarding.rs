@@ -103,6 +103,10 @@ pub(crate) async fn save_keystore(State(state): State<Arc<ServerState>>, Form(fo
                 return refresh(&state, format!("Failed to migrate existing host credentials: {err}")).await;
             }
             state.set_keystore_unlocked(password).await;
+            let password = state.keystore_password().await;
+            if let Err(err) = reload_configured_output(&state, password.as_deref()).await {
+                return refresh(&state, format!("Failed to reload the configured output: {err}")).await;
+            }
             refresh(&state, String::new()).await
         }
         Err(message) => refresh(&state, message).await,
@@ -181,7 +185,10 @@ pub(crate) async fn save_collection(
 }
 
 pub(crate) async fn defer_collection(State(state): State<Arc<ServerState>>) -> Response {
-    let result = onboarding::defer_collection().map_err(|err| err.to_string());
+    let password = state.keystore_password().await;
+    let result = reload_configured_output(&state, password.as_deref())
+        .await
+        .and_then(|_| onboarding::defer_collection().map_err(|err| err.to_string()));
     refresh(&state, result.err().unwrap_or_default()).await
 }
 
@@ -605,6 +612,32 @@ fn workflow_from_form(value: &str) -> Result<OnboardingWorkflow, eyre::Report> {
         "collect-and-process" => Ok(OnboardingWorkflow::CollectAndProcess),
         _ => Err(eyre::eyre!("Choose a supported onboarding workflow.")),
     }
+}
+
+async fn reload_configured_output(state: &Arc<ServerState>, password: Option<&str>) -> Result<(), String> {
+    let config = ApplicationConfig::load().map_err(|err| err.to_string())?;
+    if !config.workflow.is_some_and(OnboardingWorkflow::processes_diagnostics) {
+        return Ok(());
+    }
+    let Some(output_name) = config.output.default else {
+        return Ok(());
+    };
+    let password = password.ok_or_else(|| "Unlock the keystore before using the configured output.".to_string())?;
+    let output = KnownHost::get_known(&output_name)
+        .ok_or_else(|| "The configured Elasticsearch output host could not be reloaded.".to_string())?;
+    let viewer_url = output
+        .viewer()
+        .and_then(|name| KnownHost::get_known(&name.to_string()))
+        .and_then(|viewer| viewer.concrete_url().map(ToString::to_string));
+    let exporter = crate::data::with_scoped_keystore_password(password.to_string(), async move {
+        Exporter::try_from(output).map_err(|err| err.to_string())
+    })
+    .await?;
+    *state.exporter.write().await = exporter;
+    if let Some(viewer_url) = viewer_url {
+        *state.kibana_url.write().await = viewer_url;
+    }
+    Ok(())
 }
 
 fn stage_name(stage: WelcomeStage) -> &'static str {

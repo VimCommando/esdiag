@@ -3,6 +3,8 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{ServerState, get_theme_dark, template};
+#[cfg(all(feature = "keystore", feature = "setup"))]
+use crate::data::OnboardingWorkflow;
 use crate::data::{Application, ApplicationConfig, HostRole, KnownHost, Settings, is_collectable_app};
 #[cfg(feature = "keystore")]
 use crate::data::{Job, load_saved_jobs_async};
@@ -84,12 +86,23 @@ pub async fn handler(
     let user_initial = user_email.chars().next().unwrap_or('_').to_ascii_uppercase();
     let allows_local_runtime_features = state.server_policy.allows_local_runtime_features();
     #[cfg(all(feature = "keystore", feature = "setup"))]
-    if state.onboarding
-        && allows_local_runtime_features
-        && onboarding::inspect()
-            .map(|readiness| !readiness.can_enter_application())
-            .unwrap_or(true)
-    {
+    let onboarding_blocked = if state.onboarding && allows_local_runtime_features {
+        match onboarding::inspect() {
+            Ok(readiness) => {
+                let deferred_secure_output = readiness.collection_deferred
+                    && readiness.workflow == Some(OnboardingWorkflow::CollectAndProcess)
+                    && readiness.output_configured
+                    && !readiness.output_from_environment
+                    && !state.is_keystore_unlocked().await;
+                !readiness.can_enter_application() || deferred_secure_output
+            }
+            Err(_) => true,
+        }
+    } else {
+        false
+    };
+    #[cfg(all(feature = "keystore", feature = "setup"))]
+    if onboarding_blocked {
         return Redirect::to("/welcome").into_response();
     }
     let theme_dark = get_theme_dark(&headers);
