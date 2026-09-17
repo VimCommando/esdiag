@@ -16,19 +16,19 @@ runtime. ADR-0006 explains why.
 Check for drift:
 
 ```sh
-cargo run --bin reconcile-sources -- \
+cargo run -p repo-tools --bin reconcile-sources -- \
   --support-diagnostics ../support-diagnostics --check
 ```
 
 Apply the upstream fields:
 
 ```sh
-cargo run --bin reconcile-sources -- \
+cargo run -p repo-tools --bin reconcile-sources -- \
   --support-diagnostics ../support-diagnostics
 ```
 
-Run `cargo test` afterward. The tests validate source keys, version ranges, and
-required fields.
+Run `cargo test -p repo-tools` afterward. The tests validate source keys, version
+ranges, and required fields.
 
 ## What the tool changes
 

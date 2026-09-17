@@ -69,6 +69,7 @@ published release notes, maintenance branches, and tagged history.
 - Changed `esdiag local up` to open the web onboarding page instead of the web UI root.
 - Changed the Advanced page to open on the New collection tab, with Existing available as the second tab.
 - Changed local-stack onboarding to show a spinner while Elasticsearch and Kibana start, then clear the status when both are running.
+- Moved repository maintenance utilities to an unpublished workspace crate so Cargo installation includes only the `esdiag` executable.
 - Changed web onboarding to report Elasticsearch and Kibana asset status separately and provide install or reinstall actions.
 - Changed the Remote cluster configuration step to show unknown asset status until a remote deployment is saved.
 - Changed local-stack onboarding to report the detected container runtime separately from its stack-management method.

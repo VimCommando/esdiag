@@ -20,6 +20,7 @@ Top-Level Layout
 ├── .gitignore
 ├── assets/
 ├── bin/
+├── crates/
 ├── desktop/
 ├── docker/
 ├── docs/
@@ -35,6 +36,7 @@ Top-Level Layout
 - `.gitignore`: Root ignore rules for generated files, local artifacts, and other untracked content that should not be committed.
 - `assets/`: Elastic Stack assets installed into target environments, such as configuration and setup content used by `esdiag setup`.
 - `bin/`: User-facing helpers including standalone `esdiag-local`, repository build wrapper `esdiag-control`, and `esdiag-lite.sh`.
+- `crates/`: Additional workspace packages, including the published `elasticrc` library and unpublished `repo-tools` maintainer utilities.
 - `desktop/`: Tauri desktop app root, including desktop config, capabilities, icons, packaging assets, and desktop-only build scripts.
 - `gen/`: Generated Tauri schema output at the repo root during desktop builds; this directory is build output and is not tracked.
 - `docker/`: Container and Compose definitions for local and packaging-related workflows.
@@ -44,6 +46,12 @@ Top-Level Layout
 - `src/`: Rust application and library source code.
 - `templates/`: Askama HTML templates that power the web UI.
 - `tests/`: Integration-style tests, CLI tests, runtime tests, and test fixtures.
+
+Workspace Crates
+----------------
+
+- `crates/elasticrc/`: Published library for reading and resolving Elastic CLI context configuration.
+- `crates/repo-tools/`: Unpublished binaries used only for repository maintenance. Run them with `cargo run -p repo-tools --bin <tool>`.
 
 `src/` First-Level Layout
 -------------------------

@@ -107,8 +107,8 @@ Maintainers generate its API functions from `lite`-tagged entries in
 `assets/elasticsearch/sources.yml`:
 
 ```sh
-cargo run --bin esdiag-lite-generate
-cargo run --bin esdiag-lite-generate --check
+cargo run -p repo-tools --bin esdiag-lite-generate
+cargo run -p repo-tools --bin esdiag-lite-generate --check
 ```
 
 The generator updates and checks both `esdiag-lite.sh` and `esdiag-lite.ps1`.
