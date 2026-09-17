@@ -1113,7 +1113,14 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 let onboarding_output_configured =
                     inspect_onboarding().is_ok_and(|readiness| readiness.output_configured);
                 let (exporter, output_status) = match resolve_serve_exporter(output) {
-                    Ok(exporter) => (exporter, "configured"),
+                    Ok(exporter) => (
+                        exporter,
+                        if explicit_output || onboarding_output_configured {
+                            "configured"
+                        } else {
+                            "unconfigured"
+                        },
+                    ),
                     Err(err)
                         if runtime_mode == RuntimeMode::User
                             && !explicit_output

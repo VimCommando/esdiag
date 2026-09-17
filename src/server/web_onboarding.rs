@@ -628,7 +628,7 @@ fn workflow_from_form(value: &str) -> Result<OnboardingWorkflow, eyre::Report> {
 }
 
 pub(crate) async fn reload_configured_output(state: &Arc<ServerState>, password: Option<&str>) -> Result<(), String> {
-    if crate::data::runtime_output_is_declared() {
+    if !state.onboarding || crate::data::runtime_output_is_declared() {
         return Ok(());
     }
     let config = ApplicationConfig::load().map_err(|err| err.to_string())?;
