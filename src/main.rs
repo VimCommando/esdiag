@@ -808,6 +808,9 @@ fn parse_http_response_details(status: u16, body: &str) -> HttpResponseDetails {
 
 fn http_response_details(error: &eyre::Report) -> Option<HttpResponseDetails> {
     for cause in error.chain() {
+        if let Some(kibana_sync::Error::ApiResponse { status, body }) = cause.downcast_ref::<kibana_sync::Error>() {
+            return Some(parse_http_response_details(status.as_u16(), body));
+        }
         if let Some(error) = cause.downcast_ref::<ElasticsearchRequestError>() {
             return Some(parse_http_response_details(error.status.as_u16(), &error.body));
         }
@@ -3091,7 +3094,7 @@ async fn run_agent_ask_for_output(
     let completion = agent_client
         .ask(request, |progress| render_agent_progress(&agent_name, progress))
         .await
-        .map_err(|error| eyre!(error))?;
+        .map_err(agent_failure_report)?;
 
     Ok(CommandResult::outcome(CliOutcome::AgentResponse {
         conversation_id: completion.conversation_id,
@@ -3102,6 +3105,11 @@ async fn run_agent_ask_for_output(
             output_tokens: usage.output_tokens,
         }),
     }))
+}
+
+#[cfg(feature = "agent")]
+fn agent_failure_report(error: AgentFailure) -> eyre::Report {
+    eyre::Report::new(error)
 }
 
 #[cfg(feature = "agent")]
@@ -3576,8 +3584,8 @@ mod tests {
     }
     #[cfg(feature = "agent")]
     use super::{
-        AgentCommands, AgentSkillTarget, SkillInstallationFailure, agent_builder_space, install_skill_targets,
-        process_ask_prompt, readable_agent_name,
+        AgentCommands, AgentSkillTarget, SkillInstallationFailure, agent_builder_space, agent_failure_report,
+        install_skill_targets, process_ask_prompt, readable_agent_name,
     };
     use super::{
         Cli, Commands, HostCommands, KeystoreCommands, classify_failure, colorize_keystore_lock_status,
@@ -3910,7 +3918,7 @@ mod tests {
     #[cfg(feature = "agent")]
     #[test]
     fn agent_builder_conflicts_are_conflict_failures() {
-        let error = eyre::Report::new(AgentFailure::Http { status: 409 });
+        let error = agent_failure_report(AgentFailure::Http { status: 409 });
 
         let failure = structured_failure(&error);
         let value = serde_json::to_value(failure).expect("serialize failure");
@@ -3957,6 +3965,23 @@ mod tests {
         ));
 
         assert_eq!(classify_failure(&error), CliFailureCategory::Conflict);
+    }
+
+    #[test]
+    fn kibana_sync_conflicts_are_conflict_failures() {
+        let error = eyre::Report::new(kibana_sync::Error::context(
+            "workflow sync failed",
+            kibana_sync::Error::api_response(
+                reqwest::StatusCode::CONFLICT,
+                r#"{"error":"Conflict","message":"workflow already exists","statusCode":409}"#,
+            ),
+        ));
+
+        let failure = structured_failure(&error);
+        let value = serde_json::to_value(failure).expect("serialize failure");
+
+        assert_eq!(value["category"], CliFailureCategory::Conflict.as_str());
+        assert_eq!(value["status"], 409);
     }
 
     #[test]
