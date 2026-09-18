@@ -1443,7 +1443,7 @@ impl KnownHost {
                 Ok(hosts)
             }
             false => {
-                tracing::info!("No hosts file found at {:?}", path);
+                tracing::debug!("No hosts file found at {:?}", path);
                 Ok(BTreeMap::new())
             }
         }
@@ -1824,22 +1824,11 @@ impl From<KnownHost> for Url {
 mod tests {
     use super::*;
     use crate::data::{get_secret, upsert_secret_auth, write_unlock_lease};
-    use std::sync::Mutex;
-    use tempfile::TempDir;
-
-    fn env_lock() -> &'static Mutex<()> {
-        crate::test_env_lock()
-    }
-
-    fn setup_env() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
-        let tmp = TempDir::new().expect("temp dir");
-        let hosts = tmp.path().join("hosts.yml");
-        let keystore = tmp.path().join("secrets.yml");
-        unsafe {
-            std::env::set_var("ESDIAG_HOSTS", &hosts);
-            std::env::set_var("ESDIAG_KEYSTORE", &keystore);
-        }
-        (tmp, hosts, keystore)
+    fn setup_env() -> (crate::TestEnv, std::path::PathBuf, std::path::PathBuf) {
+        let env = crate::TestEnv::new();
+        let hosts = env.hosts_path.clone();
+        let keystore = env.keystore_path.clone();
+        (env, hosts, keystore)
     }
 
     fn write_hosts(hosts: BTreeMap<String, KnownHost>) {
@@ -1848,7 +1837,6 @@ mod tests {
 
     #[test]
     fn roles_default_to_collect_when_omitted() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
 
         let mut hosts = BTreeMap::new();
@@ -1870,7 +1858,6 @@ mod tests {
 
     #[test]
     fn invalid_send_role_on_kibana_is_rejected() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
 
         let mut hosts = BTreeMap::new();
@@ -1890,7 +1877,6 @@ mod tests {
 
     #[test]
     fn list_by_role_filters_mixed_inventory() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
 
         let mut hosts = BTreeMap::new();
@@ -1937,7 +1923,6 @@ mod tests {
 
     #[test]
     fn viewer_requires_send_role_on_source_host() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -1966,7 +1951,6 @@ mod tests {
 
     #[test]
     fn viewer_must_reference_view_role_host() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -1995,7 +1979,6 @@ mod tests {
 
     #[test]
     fn viewer_reference_valid_when_source_send_and_target_view() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2023,11 +2006,7 @@ mod tests {
 
     #[test]
     fn legacy_hosts_auth_resolves_without_keystore() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts, _keystore) = setup_env();
-        unsafe {
-            std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
-        }
+        let (_test_env, _hosts, _keystore) = setup_env();
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2051,14 +2030,10 @@ mod tests {
 
     #[test]
     fn explicit_secret_missing_keystore_fails() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts, _keystore) = setup_env();
-        unsafe {
-            std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
-            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "env-key");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
-            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
-        }
+        let (mut test_env, _hosts, _keystore) = setup_env();
+        test_env.set("ESDIAG_OUTPUT_APIKEY", "env-key");
+        test_env.remove("ESDIAG_OUTPUT_USERNAME");
+        test_env.remove("ESDIAG_OUTPUT_PASSWORD");
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2078,20 +2053,13 @@ mod tests {
         let host = KnownHost::get_known(&"secret-only".to_string()).expect("host");
         let err = host.get_auth().expect_err("auth should fail");
         assert!(err.to_string().contains("missing-secret"));
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
-        }
     }
 
     #[test]
     fn explicit_secret_uses_unlock_lease_when_env_password_is_absent() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
         upsert_secret_auth("lease-secret", SecretAuth::apikey("unlock-key"), "pw").expect("upsert secret");
         write_unlock_lease("pw", std::time::Duration::from_secs(300)).expect("write unlock lease");
-        unsafe {
-            std::env::remove_var("ESDIAG_KEYSTORE_PASSWORD");
-        }
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2172,11 +2140,8 @@ mod tests {
 
     #[test]
     fn explicit_secret_takes_precedence_over_legacy_fields() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts, _keystore) = setup_env();
-        unsafe {
-            std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
-        }
+        let (mut test_env, _hosts, _keystore) = setup_env();
+        test_env.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
 
         upsert_secret_auth("custom-secret", SecretAuth::apikey("secret-key"), "pw").expect("upsert secret");
 
@@ -2202,11 +2167,8 @@ mod tests {
 
     #[test]
     fn no_secret_uses_legacy_auth_without_keystore_lookup() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, _hosts, _keystore) = setup_env();
-        unsafe {
-            std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
-        }
+        let (mut test_env, _hosts, _keystore) = setup_env();
+        test_env.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
 
         upsert_secret_auth("prod-es", SecretAuth::apikey("keystore-key"), "pw").expect("upsert secret");
 
@@ -2252,11 +2214,8 @@ mod tests {
 
     #[test]
     fn migrate_hosts_moves_legacy_credentials_to_keystore() {
-        let _guard = env_lock().lock().expect("env lock");
-        let (_tmp, hosts_path, _keystore) = setup_env();
-        unsafe {
-            std::env::set_var("ESDIAG_KEYSTORE_PASSWORD", "pw");
-        }
+        let (mut test_env, hosts_path, _keystore) = setup_env();
+        test_env.set("ESDIAG_KEYSTORE_PASSWORD", "pw");
 
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2440,7 +2399,6 @@ mod tests {
 
     #[test]
     fn write_hosts_yml_omits_false_accept_invalid_certs() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, hosts_path, _keystore) = setup_env();
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2465,7 +2423,6 @@ mod tests {
 
     #[test]
     fn write_hosts_yml_keeps_true_accept_invalid_certs() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, hosts_path, _keystore) = setup_env();
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2490,7 +2447,6 @@ mod tests {
 
     #[test]
     fn write_hosts_yml_rejects_plaintext_legacy_hosts() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts_path, _keystore) = setup_env();
         let mut hosts = BTreeMap::new();
         hosts.insert(
@@ -2566,7 +2522,6 @@ mod tests {
 
     #[test]
     fn remove_saved_deletes_existing_host_and_errors_for_missing() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
 
         let mut hosts = BTreeMap::new();
@@ -2592,7 +2547,6 @@ mod tests {
 
     #[test]
     fn list_saved_summaries_returns_sorted_rows() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
 
         let mut hosts = BTreeMap::new();
@@ -2640,7 +2594,6 @@ mod tests {
 
     #[test]
     fn template_hosts_serialize_round_trip_and_resolve_default_product() {
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
 
         let mut hosts = BTreeMap::new();
@@ -2715,8 +2668,6 @@ url: https://platform.example
             .build()
             .expect_err("missing id placeholder should fail");
         assert!(err.to_string().contains("must include the `{id}` placeholder"));
-
-        let _guard = env_lock().lock().expect("env lock");
         let (_tmp, _hosts, _keystore) = setup_env();
         let host = KnownHostBuilder::new_template("https://example.com/{id}".to_string())
             .build()

@@ -93,17 +93,22 @@ impl From<Option<bool>> for ScrubMode {
 
 impl std::error::Error for MissingSource {}
 
+// Skip JSON whitespace without allocating a second copy of the source payload.
 pub(crate) fn has_json_content<R: BufRead>(reader: &mut R) -> std::io::Result<bool> {
     loop {
         let buffer = reader.fill_buf()?;
         if buffer.is_empty() {
             return Ok(false);
         }
-        if buffer.iter().any(|byte| !matches!(byte, b' ' | b'\n' | b'\r' | b'\t')) {
+        let whitespace = buffer
+            .iter()
+            .take_while(|b| matches!(b, b' ' | b'\n' | b'\r' | b'\t'))
+            .count();
+        let found = whitespace < buffer.len();
+        reader.consume(whitespace);
+        if found {
             return Ok(true);
         }
-        let length = buffer.len();
-        reader.consume(length);
     }
 }
 
@@ -609,6 +614,27 @@ mod tests {
     use crate::data::{Application, KnownHostBuilder};
     use std::io::{BufReader, Cursor};
     use url::Url;
+
+    #[test]
+    fn source_probe_handles_whitespace_across_buffers_without_consuming_json() {
+        for input in ["", " \n\r\t \n"] {
+            let mut reader = std::io::BufReader::with_capacity(2, input.as_bytes());
+            assert!(!super::has_json_content(&mut reader).unwrap());
+        }
+        let mut reader = std::io::BufReader::with_capacity(2, b" \n\r\t {\"value\":42}  ".as_slice());
+        assert!(super::has_json_content(&mut reader).unwrap());
+        let value: serde_json::Value = serde_json::from_reader(reader).unwrap();
+        assert_eq!(value, serde_json::json!({"value":42}));
+    }
+
+    #[test]
+    fn source_probe_leaves_malformed_or_trailing_json_as_parse_errors() {
+        for input in [" {", "null null", "invalid"] {
+            let mut reader = std::io::BufReader::with_capacity(2, input.as_bytes());
+            assert!(super::has_json_content(&mut reader).unwrap());
+            assert!(serde_json::from_reader::<_, serde_json::Value>(reader).is_err());
+        }
+    }
 
     fn directory_receiver() -> Receiver {
         let root = tempfile::tempdir().expect("temp diagnostic root");

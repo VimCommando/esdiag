@@ -10,7 +10,18 @@ esdiag keystore status
 If `unlock_active` is false, ask the user to run `esdiag keystore unlock` in
 their terminal. Keep credentials out of the conversation.
 
+## Install the skill
+
+When asked to install this skill for a coding agent, run `esdiag agent skills`.
+It installs the running binary's embedded skill offline. Use `--target` when
+agent detection needs an explicit target; preserve modified installations
+unless the user requests replacement.
+
 ## Collect
+
+Collect only when the user requests a new diagnostic or approves a saved job.
+For an existing diagnostic or a general analysis question, use Agent Builder
+without collecting fresh data.
 
 Collect from a saved host into an existing directory:
 
@@ -64,10 +75,18 @@ Process and ask Agent Builder about the result in one command:
 esdiag process <input> [output] --ask "<question>"
 ```
 
+Read the exact `diagnostic.id` from the command's structured YAML or JSON result
+when composing a later analysis request.
+
 `--ask` needs a Kibana-enabled output deployment and cannot be combined with
 output `-`.
 
 ## Analyze
+
+Agent Builder requests use the output deployment's inference model and may
+incur inference charges. The configured credential needs Agent Builder access
+and read access to the diagnostic data. Missing privileges or model configuration
+require deployment setup; do not repeatedly retry the analysis.
 
 Ask the configured Agent Builder agent about an existing diagnostic:
 

@@ -18,10 +18,20 @@ update changelog content.
 
 ## Project Rules
 
-- Prefer issue numbers over PR numbers on bullets.
-- Use a PR number only when there is no explicit issue reference to cite.
+- Follow the target repository's guidance on which issue trackers and references
+  are appropriate for its changelog.
+- In this repository, the root `AGENTS.md` requires references only to verified
+  public `elastic/esdiag` issues. Do not include private repository issue links,
+  qualified references, or their bare issue numbers here. Never reuse a private
+  issue number in a public URL. In another repository, follow that repository's
+  own `AGENTS.md` or equivalent guidance instead.
+- Prefer issue numbers over PR numbers on bullets when the target repository's
+  guidance permits references.
+- Use a PR number only when there is no explicit issue reference to cite and the
+  target repository's guidance permits PR references.
 - Add `#123` references inline at the end of the bullet whenever they can be
-  verified from GitHub history or release notes.
+  verified from GitHub history or release notes and the target repository allows
+  that reference.
 - Only include a `Fixed` bullet if the change clearly closed or resolved a GitHub
   issue, or if release notes explicitly frame it as a bug fix.
 
@@ -54,19 +64,20 @@ When updating changelog content:
 4. For each candidate bullet:
    - choose the correct section (`Added`, `Changed`, `Fixed`, etc.)
    - reduce it to a single user-facing item
-   - attach an issue number if verified
-   - otherwise attach a PR number if verified
+   - attach an issue number if verified and allowed by the repository's guidance
+   - otherwise attach a verified PR number if allowed
+   - omit the reference if neither qualifies
 5. Remove or rewrite bullets that cannot be supported by the sources.
 
 ## GitHub Verification Guidance
 
-- Use release notes to recover issue and PR references that are not obvious from
-  commit messages.
-- If a commit maps to a PR and that PR says `Resolves #123`, cite `#123` instead
-  of the PR number.
-- If a PR is the only clean reference, cite the PR number.
-- If neither issue nor PR can be verified confidently, omit the reference instead
-  of guessing.
+- Use release notes, PRs, and commit history to find the corresponding issue.
+  Verify the repository as well as the issue number.
+- A PR's `Resolves #123` refers to its own repository unless explicitly qualified;
+  it does not establish that issue #123 in another repository is the same issue.
+- In this repository, private issue links are not allowed in changelog entries.
+  In another repository, follow its citation rules. If a verified source cannot
+  be cited, keep the supported changelog bullet without a reference.
 
 ## PR Review Use
 
@@ -74,7 +85,7 @@ During PR review workflows, check changelog updates for:
 
 - correct Keep a Changelog structure
 - one feature per `Added` bullet
-- issue-first reference policy
+- verified references that follow the target repository's citation rules
 - `Fixed` bullets limited to verified fixes
 - no invented versions or unsupported claims
 - accurate `Unreleased` scope for the branch being reviewed

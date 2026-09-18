@@ -1283,10 +1283,4 @@
 
         {% include "components/service_link_parser.js" %}
     </script>
-    {% if show_keystore_bootstrap %}
-    <div
-        id="keystore-bootstrap-init"
-        data-init="@get('/keystore/bootstrap-modal', {filterSignals: {exclude: /.*/}})"
-    ></div>
-    {% endif %}
 </content>

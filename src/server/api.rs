@@ -206,7 +206,12 @@ pub async fn service_link(
             Ok(outcome) => {
                 let report = outcome.report.as_ref().expect("successful Process has a report");
                 state
-                    .record_outcome(&owner, report.outcome(), report.diagnostic.docs.errors)
+                    .record_outcome(
+                        &owner,
+                        report.outcome(),
+                        report.diagnostic.docs.created,
+                        report.diagnostic.docs.errors,
+                    )
                     .await;
                 let response = diagnostic_result_entries(&outcome);
 
@@ -386,7 +391,12 @@ pub async fn api_key(
             Ok(outcome) => {
                 let report = outcome.report.as_ref().expect("successful Process has a report");
                 state
-                    .record_outcome(&owner, report.outcome(), report.diagnostic.docs.errors)
+                    .record_outcome(
+                        &owner,
+                        report.outcome(),
+                        report.diagnostic.docs.created,
+                        report.diagnostic.docs.errors,
+                    )
                     .await;
                 let response = diagnostic_result_entries(&outcome);
 

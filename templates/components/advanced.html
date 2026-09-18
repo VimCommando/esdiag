@@ -16,8 +16,8 @@
     data-on:datastar-fetch-error="$loading = false; $processing = false; $message = evt.detail.error || 'Request failed'"
     data-on:datastar-fetch-retries-failed="$loading = false; $processing = false"
     data-on:change="@post('/jobs/draft', {filterSignals: {include: /^(job)(\.|$)/}})"
-    data-signals:job.collect.mode="'upload'"
-    data-signals:job.collect.source="'upload-file'"
+    data-signals:job.collect.mode="'collect'"
+    data-signals:job.collect.source="{% if runtime_mode == "user" %}'known-host'{% else %}'api-key'{% endif %}"
     data-signals:job.collect.known_host="''"
     data-signals:job.collect.diagnostic_type="'standard'"
     data-signals:job.collect.save="false"
@@ -84,17 +84,6 @@
             <card-body>
             <tab-links class="stage-options">
                 <button
-                    class="tab active"
-                    data-on:click="{
-                        $job.collect.mode = 'upload',
-                        $job.collect.source = $job.collect.source === 'service-link' ? 'service-link' : 'upload-file',
-                        $job.collect.source !== 'service-link' ? ($job.collect.save = false, $archive.download_token = '') : null
-                    }"
-                    data-class:active="$job.collect.mode === 'upload'"
-                >
-                    Existing
-                </button>
-                <button
                     class="tab"
                     data-on:click="{
                         $job.collect.mode = 'collect',
@@ -103,6 +92,17 @@
                     data-class:active="$job.collect.mode === 'collect'"
                 >
                     New
+                </button>
+                <button
+                    class="tab"
+                    data-on:click="{
+                        $job.collect.mode = 'upload',
+                        $job.collect.source = $job.collect.source === 'service-link' ? 'service-link' : 'upload-file',
+                        $job.collect.source !== 'service-link' ? ($job.collect.save = false, $archive.download_token = '') : null
+                    }"
+                    data-class:active="$job.collect.mode === 'upload'"
+                >
+                    Existing
                 </button>
             </tab-links>
 
@@ -1067,10 +1067,4 @@
             renderProcessOptions();
         });
     </script>
-    {% if show_keystore_bootstrap %}
-    <div
-        id="keystore-bootstrap-init"
-        data-init="@get('/keystore/bootstrap-modal', {filterSignals: {exclude: /.*/}})"
-    ></div>
-    {% endif %}
 </content>

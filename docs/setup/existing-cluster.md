@@ -63,11 +63,43 @@ validate the role and resolve its credentials.
 
 ## Install assets
 
+Kibana assets install into the `esdiag` space unless `ESDIAG_KIBANA_SPACE`
+selects another destination. To install into Kibana's default space:
+
+```sh
+ESDIAG_KIBANA_SPACE=_default esdiag setup esdiag-less
+```
+
+Replace `esdiag-less` with your configured deployment or Kibana host name.
+`_default` skips space creation and omits `/s/{space}` from asset requests and
+links. An empty value or Kibana's `default` ID also selects the default space. A named value such as
+`support` installs into that space. An explicit selection overrides a space
+prefix in the configured Kibana URL. Keep the same environment setting when
+running `process`, `serve`, or `agent ask` so their links use that destination.
+
 The output needs ESDiag templates and ingest pipelines:
 
 ```sh
 esdiag setup diagnostics-output
 ```
+
+On Elasticsearch Serverless, `setup` detects the deployment, omits unsupported
+ILM settings, and keeps the 30-day data stream retention policy for ordinary
+diagnostic data. Diagnostic reports are retained indefinitely. It installs
+templates and ingest pipelines and skips bundled security-dependent role
+assets. Configure project roles separately. Serverless security is always
+enabled; a `410 Gone` security usage response also reports security as enabled.
+
+Run `esdiag setup <saved-kibana-host>` to install the Kibana assets separately.
+On Serverless, the ESDiag space uses the project's solution and feature
+visibility. Guided setup skips the stateful Elasticsearch trial-license API;
+Agent Builder access depends on the project's feature tier.
+
+ILM, shard, node, and snapshot dashboards remain available for analyzing
+diagnostics collected from stateful clusters. Those fields describe the
+source cluster, not the Serverless destination. See the
+[Serverless asset audit](../reference/serverless-assets.md) for compatibility
+details and repeatable verification.
 
 Run this with a credential that can install assets. If normal ingestion uses a
 less-privileged credential, replace the saved secret after setup:

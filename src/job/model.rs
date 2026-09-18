@@ -138,6 +138,8 @@ pub struct Process {
 pub enum ExportTarget {
     /// A saved known host (an Elasticsearch output cluster).
     KnownHost { name: String },
+    /// The output deployment supplied through `ESDIAG_OUTPUT_*` at execution time.
+    Environment,
     /// A local newline-delimited JSON file.
     File { path: PathBuf },
     /// A local directory of per-stream files.

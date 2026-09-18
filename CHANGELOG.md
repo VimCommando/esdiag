@@ -18,12 +18,34 @@ published release notes, maintenance branches, and tagged history.
 - Added `esdiag process --ask` to start an Agent Builder conversation about a newly processed diagnostic with its identifier included automatically (#379).
 - Added `esdiag agent skills` to install the running binary's offline, version-matched ESDiag skill for Claude Code, Codex, and OpenCode (#379).
 - Added `esdiag local` to provision and manage a local Elastic Stack through a Rust-owned lifecycle, with core as the default and an explicit full-container override.
+- Added resumable user-mode web onboarding at `/welcome`, including masked keystore and API-key forms for configuring a diagnostic workflow.
 - Added optional Elastic Upload Service forwarding to `esdiag-lite.sh` for newly collected and existing ZIP archives.
 - Added `esdiag-lite.ps1` for version-aware Elasticsearch diagnostic collection on Windows PowerShell.
 - Added receiver-stage normalization for malformed IPv4 values in scrubbed diagnostics, with `--scrubbed` CLI flag and upload checkbox (#330).
 
 ### Changed
 
+- Made source-tree notice generation opt-in so Cargo package verification and registry installation use committed notices.
+- Limited web onboarding to builds with both keystore and setup support, preserving host and keystore management in builds without setup.
+- Restored the published Elasticsearch client dependency with a response compatibility adapter so ESDiag can be packaged from registry dependencies.
+- Updated workspace dependency requirements and the lockfile for the 0.18 development cycle, and regenerated third-party notices.
+
+- Changed `elasticrc` to parse schema-keyed `ServiceConfig<T>` values that resolve into typed runtime `Service<T>` values.
+
+- Enabled failure stores for new diagnostic data streams so rejected documents can be inspected and recovered.
+
+- Changed local startup to retry transient Elasticsearch authentication failures while security initializes.
+- Changed the managed native server to use local output credentials and report early exits with a log path.
+- Changed onboarding to return to output selection when replacement is declined.
+- Changed API key source menus to use consecutive numbering when local credentials are unavailable.
+- Changed endpoint validation to distinguish network failures using the underlying error chain.
+- Changed duplicate keystore-secret failures to report the `conflict` outcome category.
+- Changed onboarding to show workflow changes when resuming and changing a saved workflow.
+- Changed onboarding to offer only available credential sources.
+- Changed onboarding to prompt for a diagnostic user without defaulting to the shell username.
+- Changed keystore replacement errors to suggest the `update` command.
+- Changed `esdiag local --help` to list the local-stack commands.
+- Changed Kibana asset setup to honor `ESDIAG_KIBANA_SPACE`, with `_default` selecting the default space and unprefixed API and dashboard URLs.
 - Changed diagnostic platform fields to serialize stable hyphenated platform keys (#347).
 - Changed platform detection to identify Elastic Cloud Hosted bundles from a cluster license issued to `Elastic Cloud`, so API-only hosted bundles no longer report an unknown platform (#347).
 - Changed collection and processing source selection to use canonical registry keys and added a maintainer reconciliation utility for upstream support-diagnostics sources (#348).
@@ -46,12 +68,58 @@ published release notes, maintenance branches, and tagged history.
 - Changed `esdiag init` to offer a binary-owned core local stack when local
   processing has no existing deployment.
 - Changed `esdiag init` to defer opening a newly created local-stack web UI until every onboarding stage completes.
+- Changed `esdiag local up` to open the web onboarding page instead of the web UI root.
+- Changed the Advanced page to open on the New collection tab, with Existing available as the second tab.
+- Changed local-stack onboarding to show a spinner while Elasticsearch and Kibana start, then clear the status when both are running.
+- Changed web onboarding to report Elasticsearch and Kibana asset status separately and provide install or reinstall actions.
+- Changed the Remote cluster configuration step to show unknown asset status until a remote deployment is saved.
+- Changed local-stack onboarding to report the detected container runtime separately from its stack-management method.
+- Changed web onboarding to recognize environment-provided diagnostic clusters, validate their authenticated Elasticsearch and Kibana endpoints, and report whether required ESDiag assets are installed.
+- Changed user-mode web output selection to persist shared `esdiag.yml` preferences, with a backup-backed migration for representable legacy `settings.yml` targets.
 - Changed `esdiag-local` to retain `auto`, `core`, or `full` stack mode per
   deployment. Core mode uses the matching native binary and avoids an ESDiag
   container; full mode preserves the containerized runtime.
 
 ### Fixed
 
+- Fixed unresolved saved hosts displaying the wrong application while editing.
+- Avoided buffering an extra copy of each JSON source when processing diagnostic directories and archives.
+
+- Fixed the Lifecycle Overview dashboard resetting the global time filter to the default 15-minute window on cold load, which hid diagnostic data; it now stores a 90-day range so lifecycle data is visible by default (#365).
+
+- Ported the released web statistics and active serve-output fixes to the unified job runner, counting created documents from completed reports (#380, #381).
+
+- Kept browser upload processing connected while its card is replaced, allowing completion links and statistics to arrive.
+- Created the runtime report directory when saving diagnostics from a fresh service environment.
+- Mapped optional diagnostic case numbers so Diagnostic List controls work before any case number is ingested.
+- Removed an empty Search Summary visualization that rendered an error instead of content.
+
+- Explicitly mapped the HTTP maximum warning-header size setting, preventing node-settings rejection without changing shared dynamic-template suppression rules.
+- Fixed successful Logstash diagnostics reporting partial outcomes because parsed sources were not recorded as parsed.
+- Resolved imported Kibana dashboard and data-view IDs before generating diagnostic links, including imports that assign new IDs in another space.
+- Fixed duplicate upload result cards by replacing the existing upload card when processing starts.
+- Fixed dashboard navigation panels rejected by current Kibana by removing obsolete saved-object IDs and duplicate references.
+- Fixed node HTTP and transport settings indexing when both `type` and `type.default` are present, preserving both values.
+- Included bulk rejection reason samples in diagnostic report warnings and hosted result cards.
+
+- Fixed Serverless setup rejecting the diagnostic report lifecycle by requesting 3650-day retention with lifecycle enabled.
+- Fixed Elasticsearch asset rejections preventing the combined setup command from installing Kibana assets.
+- Fixed indexing failures naming the submitted stream instead of the destination returned after ingest rerouting.
+- Fixed cluster settings with both `rest.incremental_bulk` and its sub-settings being rejected during indexing.
+- Fixed unpaired output hosts linking to an unrelated environment Kibana viewer.
+- Fixed documents redirected to a failure store being counted as successfully indexed diagnostic documents.
+
+- Fixed first-run output validation trying to read a pasted API key from the keystore before it had been saved.
+- Fixed onboarding accepting invalid confirmations and aborting on invalid URLs or default-job host selections; output validation now identifies endpoint failures and offers a retry.
+- Fixed local-stack startup failures deleting the files needed to retrieve credentials, retry startup, or stop running containers.
+- Fixed local-stack readiness checks panicking inside the async runtime and rejecting reachable ESDiag services that require authentication.
+- Fixed processing results omitting rejected-document counts and affected indices.
+- Fixed setup results reporting incomplete mapping updates without a partial outcome and recovery guidance.
+
+- Fixed legacy diagnostic writers being rejected after rollover by keeping both provenance field names writable and searchable; setup now warns about incompatible existing mappings.
+- Fixed Serverless setup failures caused by security and license probes (#390).
+- Fixed Serverless asset installation failures caused by unsupported ILM template settings, Kibana space controls, and read-only fields in default-agent updates (#390).
+- Fixed searchable-snapshot documents being rejected by Elasticsearch by placing their stats mappings under `searchable_snapshot`.
 - Fixed `esdiag local` launcher execution and structured outcomes for help output and forwarded state directories (#382).
 - Fixed compilation of every `server`, `setup`, and `keystore` feature combination, including `--no-default-features` (#347).
 - Fixed the file, stream, and directory exporters reporting a fabricated HTTP `200` request status; they now report the reserved `0` that means "no HTTP transport", so a real Elasticsearch response is distinguishable from a local write (#350).
@@ -64,6 +132,33 @@ published release notes, maintenance branches, and tagged history.
 
 - Clarified credential custody so saved credentials are mediated by the user-mode keystore, service-mode outputs use runtime-provided credentials, and ad-hoc input API keys remain transient (#352).
 - Wrapped every API key, password, and cached keystore password in a redacting type, so credential material renders as a marker in debug and log output and can only be serialized where a field opts in (#352).
+
+## [0.16.5] - 2026-08-20
+
+### Fixed
+
+- Fixed the shared web statistics counter so completed jobs add their processed documents (#380).
+- Fixed web processing with an explicit `serve` output so it no longer requires `ESDIAG_OUTPUT_URL`.
+
+## [0.16.4] - 2026-08-07
+
+### Changed
+
+- Changed container builds to use `Cargo.lock` for reproducible dependency resolution.
+- Updated bundled dependencies and third-party notices.
+- Added required crates.io package metadata.
+
+## [0.16.2] - 2026-08-07
+
+### Changed
+
+- Changed the Elasticsearch client dependency to use its crates.io release, allowing ESDiag to be published to crates.io.
+
+## [0.16.1] - 2026-07-26
+
+### Fixed
+
+- Fixed index settings ingestion for clusters containing standard indices without a searchable snapshot `repository_uuid` (#362).
 
 ## [0.16.0] - 2026-07-11
 
@@ -260,7 +355,11 @@ published release notes, maintenance branches, and tagged history.
   fail on invalid zip paths (#177).
 - Fixed ECK diagnostic path handling for correctly structured archives (#179).
 
-[Unreleased]: https://github.com/elastic/esdiag/compare/0.16.0...main
+[Unreleased]: https://github.com/elastic/esdiag/compare/0.16.5...main
+[0.16.5]: https://github.com/elastic/esdiag/compare/0.16.4...0.16.5
+[0.16.4]: https://github.com/elastic/esdiag/compare/0.16.2...0.16.4
+[0.16.2]: https://github.com/elastic/esdiag/compare/0.16.1...0.16.2
+[0.16.1]: https://github.com/elastic/esdiag/compare/0.16.0...0.16.1
 [0.16.0]: https://github.com/elastic/esdiag/compare/0.15.0...0.16.0
 [0.15.0]: https://github.com/elastic/esdiag/compare/0.14.2...0.15.0
 [0.14]: https://github.com/elastic/esdiag/compare/0.13.0...0.14.2

@@ -22,10 +22,12 @@ mod settings;
 mod stats;
 mod template;
 mod theme;
+#[cfg(all(feature = "keystore", feature = "setup"))]
+mod web_onboarding;
 
 use super::processor::{DiagnosticOutcome, Identifiers};
 use crate::{
-    data::{KnownHost, Uri},
+    data::{KnownHost, Settings, Uri},
     exporter::Exporter,
 };
 use askama::Template;
@@ -431,6 +433,7 @@ pub struct ServerStartOptions<'a> {
     pub auth_provider: Option<AuthProvider>,
     pub job_caps: Option<JobConcurrencyCaps>,
     pub web_features: Option<&'a str>,
+    pub onboarding: bool,
 }
 
 impl Server {
@@ -469,7 +472,7 @@ impl Server {
     pub async fn start_with_options(
         bind_addr: [u8; 4],
         port: u16,
-        mut exporter: Exporter,
+        exporter: Exporter,
         kibana_url: String,
         runtime_mode: RuntimeMode,
         options: ServerStartOptions<'_>,
@@ -477,7 +480,6 @@ impl Server {
         let (_, rx) = mpsc::channel::<(Identifiers, Bytes)>(1);
         let rx = Arc::new(RwLock::new(rx));
         let rx_clone = rx.clone();
-        let docs_rx = exporter.get_docs_rx();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (stats_updates_tx, stats_updates_rx) = watch::channel(0u64);
 
@@ -488,6 +490,20 @@ impl Server {
             options.job_caps,
             options.web_features,
         )?;
+        if runtime_mode == RuntimeMode::User {
+            match Settings::migrate_to_application_config() {
+                Ok(crate::data::LegacySettingsMigration::Migrated) => {
+                    tracing::info!("Migrated legacy user output settings to esdiag.yml");
+                }
+                Ok(crate::data::LegacySettingsMigration::NotRepresentable) => {
+                    tracing::info!("Legacy user settings require web onboarding before they can be migrated");
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!("Unable to inspect legacy user settings for migration: {err}");
+                }
+            }
+        }
         let route_policy = server_policy.clone();
 
         // Create shared state
@@ -504,19 +520,12 @@ impl Server {
             stats_updates_rx,
             runtime_mode,
             server_policy: server_policy.clone(),
+            onboarding: options.onboarding,
             #[cfg(feature = "keystore")]
             keystore_rate_limit: Arc::new(std::sync::Mutex::new(keystore::KeystoreRateLimit::default())),
         });
 
         stats::spawn_stats_publisher(state.clone(), state.event_sender());
-
-        let docs_state = state.clone();
-        tokio::spawn(async move {
-            let mut docs_rx = docs_rx;
-            while let Some(doc_count) = docs_rx.recv().await {
-                docs_state.add_docs_count(doc_count).await;
-            }
-        });
 
         let handle = axum_server::Handle::new();
         let handle_clone = handle.clone();
@@ -579,6 +588,20 @@ impl Server {
                     .route("/jobs/saved/{name}", delete(saved_jobs::delete_saved_job))
             } else {
                 app
+            };
+
+            #[cfg(all(feature = "keystore", feature = "setup"))]
+            let app = if route_policy.allows_local_runtime_features() {
+                app.route("/welcome", get(web_onboarding::page))
+                    .route("/welcome/identity", post(web_onboarding::save_identity))
+                    .route("/welcome/keystore", post(web_onboarding::save_keystore))
+                    .route("/welcome/output", post(web_onboarding::save_output))
+                    .route("/welcome/output/local", post(web_onboarding::provision_local_output))
+                    .route("/welcome/output/setup", post(web_onboarding::install_output_assets))
+                    .route("/welcome/collection", post(web_onboarding::save_collection))
+                    .route("/welcome/default-job", post(web_onboarding::save_default_job))
+            } else {
+                app.route("/welcome", get(web_onboarding::service_mode_page))
             };
 
             #[cfg(feature = "keystore")]
@@ -694,6 +717,7 @@ pub struct ServerState {
     pub retained_bundles: Arc<RwLock<HashMap<String, RetainedBundle>>>,
     pub runtime_mode: RuntimeMode,
     pub server_policy: ServerPolicy,
+    pub onboarding: bool,
     #[cfg(feature = "keystore")]
     pub keystore_rate_limit: Arc<std::sync::Mutex<keystore::KeystoreRateLimit>>,
     stats: Arc<RwLock<Stats>>,
@@ -710,7 +734,6 @@ pub(crate) struct KeystorePageState {
     pub can_use_keystore: bool,
     pub locked: bool,
     pub lock_time: i64,
-    pub show_bootstrap: bool,
 }
 
 #[cfg(not(feature = "keystore"))]
@@ -809,8 +832,9 @@ impl ServerState {
         Ok((identity.authenticated, identity.user))
     }
 
-    pub async fn record_success(&self, owner: &str, _docs: u32, errors: u32) {
+    pub async fn record_success(&self, owner: &str, docs: u32, errors: u32) {
         let mut stats = self.stats.write().await;
+        stats.docs.total += docs as usize;
         stats.docs.errors += errors as usize;
         stats.jobs.total += 1;
         stats.jobs.success += 1;
@@ -822,13 +846,14 @@ impl ServerState {
         self.notify_stats_changed();
     }
 
-    pub async fn record_outcome(&self, owner: &str, outcome: DiagnosticOutcome, errors: u32) {
+    pub async fn record_outcome(&self, owner: &str, outcome: DiagnosticOutcome, docs: u32, errors: u32) {
         if outcome != DiagnosticOutcome::Failed {
-            self.record_success(owner, 0, errors).await;
+            self.record_success(owner, docs, errors).await;
             return;
         }
 
         let mut stats = self.stats.write().await;
+        stats.docs.total += docs as usize;
         stats.docs.errors += errors as usize;
         stats.jobs.total += 1;
         stats.jobs.failed += 1;
@@ -871,13 +896,6 @@ impl ServerState {
                 owners.remove(owner);
             }
         }
-    }
-
-    pub async fn add_docs_count(&self, doc_count: usize) {
-        let mut stats = self.stats.write().await;
-        stats.docs.total += doc_count;
-        drop(stats);
-        self.notify_stats_changed();
     }
 
     pub async fn get_stats(&self) -> Stats {
@@ -1226,6 +1244,7 @@ pub(crate) fn test_server_state() -> Arc<ServerState> {
         retained_bundles: Arc::new(RwLock::new(HashMap::new())),
         runtime_mode,
         server_policy: ServerPolicy::defaults(runtime_mode),
+        onboarding: false,
         #[cfg(feature = "keystore")]
         keystore_rate_limit: Arc::new(std::sync::Mutex::new(keystore::KeystoreRateLimit::default())),
         shutdown: watch::channel(false).1,
@@ -1864,6 +1883,7 @@ mod tests {
             retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             runtime_mode: mode,
             server_policy: ServerPolicy::defaults(mode),
+            onboarding: false,
             #[cfg(feature = "keystore")]
             keystore_rate_limit: Arc::new(std::sync::Mutex::new(super::keystore::KeystoreRateLimit::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
@@ -1876,11 +1896,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_reports_count_created_documents_once() {
+        let state = test_state(RuntimeMode::User);
+        state
+            .record_outcome("test@example.com", DiagnosticOutcome::Complete, 487, 0)
+            .await;
+        state
+            .record_outcome("test@example.com", DiagnosticOutcome::Partial, 10, 2)
+            .await;
+        let stats = state.get_stats().await;
+        assert_eq!(stats.docs.total, 497);
+        assert_eq!(stats.docs.errors, 2);
+        assert_eq!(stats.jobs.total, 2);
+    }
+
+    #[tokio::test]
     async fn record_outcome_counts_failed_outcome_as_failed_job() {
         let state = test_state(RuntimeMode::User);
 
         state
-            .record_outcome("test@example.com", DiagnosticOutcome::Failed, 2)
+            .record_outcome("test@example.com", DiagnosticOutcome::Failed, 3, 2)
             .await;
 
         let stats = state.stats.read().await;
@@ -1888,6 +1923,7 @@ mod tests {
         assert_eq!(stats.jobs.success, 0);
         assert_eq!(stats.jobs.failed, 1);
         assert_eq!(stats.docs.errors, 2);
+        assert_eq!(stats.docs.total, 3);
     }
 
     #[tokio::test]
@@ -1916,35 +1952,24 @@ mod tests {
         );
     }
 
-    struct WebFeaturesEnvGuard {
-        previous: Option<String>,
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl Drop for WebFeaturesEnvGuard {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(value) => unsafe { std::env::set_var("ESDIAG_WEB_FEATURES", value) },
-                None => unsafe { std::env::remove_var("ESDIAG_WEB_FEATURES") },
-            }
-        }
-    }
-
     fn with_web_features_env<T>(value: Option<&str>, test: impl FnOnce() -> T) -> T {
-        let env_guard = WebFeaturesEnvGuard {
-            _guard: crate::test_env_lock()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-            previous: std::env::var("ESDIAG_WEB_FEATURES").ok(),
-        };
+        let mut env = crate::TestEnv::new();
         match value {
-            Some(value) => unsafe { std::env::set_var("ESDIAG_WEB_FEATURES", value) },
-            None => unsafe { std::env::remove_var("ESDIAG_WEB_FEATURES") },
+            Some(value) => env.set("ESDIAG_WEB_FEATURES", value),
+            None => env.remove("ESDIAG_WEB_FEATURES"),
         }
 
-        let result = test();
-        drop(env_guard);
-        result
+        test()
+    }
+
+    #[tokio::test]
+    async fn successful_job_records_processed_documents_in_shared_stats() {
+        let state = test_server_state();
+
+        state.record_success("test@example.com", 4636, 0).await;
+
+        let stats = state.get_stats().await;
+        assert_eq!(stats.docs.total, 4636);
     }
 
     #[test]
@@ -2080,18 +2105,12 @@ mod tests {
 
     #[test]
     fn user_mode_ignores_invalid_service_job_cap_env() {
-        let _guard = crate::test_env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_SERVICE_JOB_CAP", "0");
-            std::env::set_var("ESDIAG_SERVICE_OWNER_JOB_CAP", "0");
-        }
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_SERVICE_JOB_CAP", "0");
+        env.set("ESDIAG_SERVICE_OWNER_JOB_CAP", "0");
 
         let policy = ServerPolicy::new(RuntimeMode::User).expect("user policy ignores service caps");
 
-        unsafe {
-            std::env::remove_var("ESDIAG_SERVICE_JOB_CAP");
-            std::env::remove_var("ESDIAG_SERVICE_OWNER_JOB_CAP");
-        }
         assert_eq!(policy.job_caps().global, JobConcurrencyCaps::default().global);
         assert_eq!(policy.job_caps().per_owner, JobConcurrencyCaps::default().per_owner);
     }

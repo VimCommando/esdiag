@@ -1,7 +1,7 @@
 use super::{ServerState, get_theme_dark, template};
 use crate::data::{
-    Application, HostRole, KnownHost, KnownHostBuilder, SecretAuth, Settings, keystore_exists, list_secret_entries,
-    remove_secret, resolve_secret_auth, upsert_secret_auth,
+    Application, HostRole, KnownHost, KnownHostBuilder, SecretAuth, Settings, list_secret_entries, remove_secret,
+    resolve_secret_auth, upsert_secret_auth,
 };
 use askama::Template;
 use axum::{
@@ -178,7 +178,6 @@ pub async fn page(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> 
     let user_initial = user_email.chars().next().unwrap_or('_').to_ascii_uppercase();
     let (keystore_locked, keystore_lock_time) = state.keystore_status().await;
     let can_use_keystore = cfg!(feature = "keystore") && state.server_policy.allows_local_runtime_features();
-    let show_keystore_bootstrap = can_use_keystore && !keystore_exists().unwrap_or(false);
 
     let (hosts, clusters) = read_host_and_cluster_rows();
     let (secrets, secret_ids) = if keystore_locked {
@@ -221,7 +220,6 @@ pub async fn page(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> 
         can_use_keystore,
         keystore_locked,
         keystore_lock_time,
-        show_keystore_bootstrap,
         hosts_panel_html,
         secrets_panel_html,
         clusters_panel_html,

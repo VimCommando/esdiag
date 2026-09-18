@@ -196,6 +196,8 @@ fn keystore_add_rejects_duplicate_secret() {
         String::from_utf8_lossy(&second_add.stderr).contains("already exists"),
         "expected duplicate-secret error"
     );
+    let outcome: serde_json::Value = yaml_serde::from_slice(&second_add.stdout).expect("structured failure");
+    assert_eq!(outcome["category"], "conflict");
 
     let secret = get_secret("prod-es", "pw")
         .expect("read secret")

@@ -320,10 +320,22 @@ async fn execute_unified_web_job(
     if let Some(report) = outcome.report.as_ref() {
         let diagnostic_outcome = report.outcome();
         if execution_error.is_some() {
-            state.record_failure(owner).await;
+            state
+                .record_outcome(
+                    owner,
+                    DiagnosticOutcome::Failed,
+                    report.diagnostic.docs.created,
+                    report.diagnostic.docs.errors,
+                )
+                .await;
         } else {
             state
-                .record_outcome(owner, diagnostic_outcome, report.diagnostic.docs.errors)
+                .record_outcome(
+                    owner,
+                    diagnostic_outcome,
+                    report.diagnostic.docs.created,
+                    report.diagnostic.docs.errors,
+                )
                 .await;
         }
         started.store(false, Ordering::SeqCst);
@@ -688,8 +700,12 @@ fn explicit_process_selection(signals: &JobRunSignals) -> Result<Option<ProcessS
     }))
 }
 
-fn processing_job_event(_replace_existing_entry: bool, _job_id: u64, template: impl askama::Template) -> ServerEvent {
-    job_feed_event(template)
+fn processing_job_event(replace_existing_entry: bool, job_id: u64, template: impl askama::Template) -> ServerEvent {
+    if replace_existing_entry {
+        replace_job_event(job_id, template)
+    } else {
+        job_feed_event(template)
+    }
 }
 
 fn terminal_job_event(replace_existing_entry: bool, job_id: u64, template: impl askama::Template) -> ServerEvent {
@@ -703,6 +719,7 @@ fn terminal_job_event(replace_existing_entry: bool, job_id: u64, template: impl 
 async fn select_processed_exporter(state: Arc<ServerState>, signals: &JobRunSignals) -> Result<Exporter> {
     match signals.job.send.mode {
         SendMode::Remote => {
+            let configured = state.exporter.read().await.clone();
             let Some(target) = signals
                 .job
                 .send
@@ -711,10 +728,9 @@ async fn select_processed_exporter(state: Arc<ServerState>, signals: &JobRunSign
                 .map(str::trim)
                 .filter(|target| !target.is_empty())
             else {
-                return Exporter::try_from(Uri::try_from_output_env()?);
+                return Ok(configured);
             };
 
-            let configured = state.exporter.read().await.clone();
             if target == configured.target_uri() {
                 Ok(configured)
             } else {
@@ -935,6 +951,22 @@ async fn send_terminal_signal(tx: &mpsc::Sender<ServerEvent>, state: &ServerStat
 #[cfg(test)]
 #[allow(clippy::await_holding_lock)]
 mod tests {
+    #[test]
+    fn uploaded_job_updates_the_existing_card_when_processing_starts() {
+        let event = super::processing_job_event(
+            true,
+            42,
+            super::template::JobProcessing {
+                job_id: 42,
+                source: "uploaded diagnostic.zip",
+            },
+        );
+        assert!(
+            matches!(event, super::ServerEvent::ReplaceSelector { selector, html, .. }
+            if selector == "#job-42" && html.contains("id=\"job-42\""))
+        );
+    }
+
     use super::{
         completed_heading, completed_status_class, download_service_link_to_path, run_job, select_processed_exporter,
         skipped_child_reason, validate_job_request, validate_local_send_uri, validate_remote_send_uri,
@@ -949,17 +981,10 @@ mod tests {
         },
     };
     use axum::{Router, http::StatusCode, routing::get};
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use std::{collections::HashMap, sync::Arc};
     use tokio::net::TcpListener;
     use tokio::sync::{RwLock, broadcast, mpsc, watch};
     use url::Url;
-
-    fn env_lock() -> &'static Mutex<()> {
-        crate::test_env_lock()
-    }
 
     fn test_state(mode: RuntimeMode) -> ServerState {
         let (stats_updates_tx, stats_updates_rx) = watch::channel(0u64);
@@ -970,6 +995,7 @@ mod tests {
             retained_bundles: Arc::new(RwLock::new(HashMap::<String, RetainedBundle>::new())),
             runtime_mode: mode,
             server_policy: ServerPolicy::defaults(mode),
+            onboarding: false,
             #[cfg(feature = "keystore")]
             keystore_rate_limit: Arc::new(std::sync::Mutex::new(
                 crate::server::keystore::KeystoreRateLimit::default(),
@@ -1228,114 +1254,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_send_without_ui_target_uses_output_environment() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("ESDIAG_OUTPUT_URL", "http://localhost:9200");
-            std::env::set_var("ESDIAG_OUTPUT_APIKEY", "runtime-secret");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
-            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
-        }
-
+    async fn remote_send_without_ui_target_uses_active_serve_output() {
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_OUTPUT_URL", "http://unused-environment.example:9200");
         let state = Arc::new(test_state(RuntimeMode::User));
-        let mut signals = JobRunSignals::default();
-        signals.job.send.mode = SendMode::Remote;
-        signals.job.send.remote_target = None;
-
-        let selected = select_processed_exporter(state, &signals)
-            .await
-            .expect("select environment exporter");
-        assert_eq!(selected.target_uri(), "http://localhost:9200/");
-
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_URL");
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
+        let output_dir = tempfile::tempdir().unwrap();
+        let configured =
+            Exporter::try_from(Uri::try_from(output_dir.path().to_string_lossy().to_string()).unwrap()).unwrap();
+        *state.exporter.write().await = configured.clone();
+        for target in [None, Some(" ".to_string())] {
+            let mut signals = JobRunSignals::default();
+            signals.job.send.mode = SendMode::Remote;
+            signals.job.send.remote_target = target;
+            let selected = select_processed_exporter(state.clone(), &signals).await.unwrap();
+            assert_eq!(selected.target_uri(), configured.target_uri());
         }
-    }
-
-    #[tokio::test]
-    async fn remote_send_without_ui_target_or_environment_fails() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_URL");
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
-            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
-        }
-
-        let state = Arc::new(test_state(RuntimeMode::User));
-        let mut signals = JobRunSignals::default();
-        signals.job.send.mode = SendMode::Remote;
-        signals.job.send.remote_target = None;
-
-        let err = match select_processed_exporter(state, &signals).await {
-            Ok(_) => panic!("missing UI target and environment must fail"),
-            Err(err) => err,
-        };
-        assert!(err.to_string().contains("ESDIAG_OUTPUT_URL is not defined"));
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn remote_setup_failure_replaces_processing_entry_and_clears_ui_state() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::remove_var("ESDIAG_OUTPUT_URL");
-            std::env::remove_var("ESDIAG_OUTPUT_APIKEY");
-            std::env::remove_var("ESDIAG_OUTPUT_USERNAME");
-            std::env::remove_var("ESDIAG_OUTPUT_PASSWORD");
-        }
-
-        let host = KnownHostBuilder::new(Url::parse("http://cluster.example:9200").unwrap())
-            .roles(vec![HostRole::Collect])
-            .build()
-            .unwrap();
-        let mut signals = JobRunSignals::default();
-        signals.job.collect.source = CollectSource::ApiKey;
-        signals.job.send.mode = SendMode::Remote;
-        signals.job.send.remote_target = None;
-        let job = JobRequest {
-            owner: "Anonymous".to_string(),
-            identifiers: Default::default(),
-            input: JobInput::FromRemoteHost {
-                source: "http://cluster.example:9200".to_string(),
-                host,
-                diagnostic_type: "standard".to_string(),
-            },
-        };
-        let (tx, mut rx) = mpsc::channel(8);
-
-        run_job(
-            Arc::new(test_state(RuntimeMode::User)),
-            signals,
-            42,
-            "Anonymous".to_string(),
-            tx,
-            job,
-            false,
-        )
-        .await;
-
-        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert!(matches!(
-            events.first(),
-            Some(ServerEvent::JobFeed { html, .. })
-                if html.contains("id=\"job-42\"") && html.contains("Processing")
-        ));
-        assert!(events.iter().any(|event| matches!(
-            event,
-            ServerEvent::ReplaceSelector { selector, html, .. }
-                if selector == "#job-42"
-                    && html.contains("id=\"job-42\"")
-                    && html.contains("Processing Failed")
-                    && html.contains("ESDIAG_OUTPUT_URL is not defined")
-        )));
-        assert!(events.iter().any(|event| matches!(
-            event,
-            ServerEvent::Signals { payload, .. }
-                if payload.contains(r#""loading":false"#)
-                    && payload.contains(r#""processing":false"#)
-        )));
     }
 
     #[tokio::test]

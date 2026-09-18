@@ -240,6 +240,23 @@ mod tests {
         assert!(!request.contains("/s/marketing/s/marketing/"));
     }
 
+    #[cfg(feature = "setup")]
+    #[tokio::test]
+    async fn default_setup_space_sends_unprefixed_requests_despite_viewer_space() {
+        let request = capture_single_request(|mut url| async move {
+            url.set_path("/s/old-space");
+            let client = KibanaClient::try_new(url, Auth::None).unwrap();
+            let sync = client.sync_client(Vec::new()).unwrap();
+            let default = sync.space("default").unwrap();
+            default
+                .request(Method::GET, &HashMap::new(), "/api/saved_objects/_find", None)
+                .await
+                .unwrap();
+        })
+        .await;
+        assert!(request.starts_with("GET /api/saved_objects/_find HTTP/1.1"));
+    }
+
     #[tokio::test]
     async fn multipart_request_uses_shared_client_form_upload_shape() {
         let request = capture_single_request(|url| async move {

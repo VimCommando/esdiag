@@ -48,15 +48,6 @@ fn diagnostic_properties(template: &Value) -> &Value {
     &template["template"]["mappings"]["properties"]["diagnostic"]["properties"]
 }
 
-fn canonical_diagnostic_field(properties: &Value, field: &str) -> String {
-    let mapping = &properties[field];
-    if mapping["type"].as_str() == Some("alias") {
-        mapping["path"].as_str().expect("alias path").to_string()
-    } else {
-        format!("diagnostic.{field}")
-    }
-}
-
 fn collect_rs_files(root: &Path, files: &mut Vec<std::path::PathBuf>) {
     for entry in fs::read_dir(root).unwrap_or_else(|err| panic!("read dir {}: {}", root.display(), err)) {
         let entry = entry.expect("read directory entry");
@@ -191,23 +182,19 @@ fn logstash_templates_allow_concrete_logstash_datasets() {
 }
 
 #[test]
-fn metadata_templates_map_new_provenance_fields_and_transitional_aliases() {
+fn metadata_templates_accept_both_writer_generations() {
     let templates = [
         diagnostic_properties(&component_template("esdiag@metadata.json")).clone(),
         diagnostic_properties(&component_template("esdiag@ls-metadata.json")).clone(),
         diagnostic_properties(&index_template("metrics-diagnostic.json")).clone(),
     ];
-
     for properties in templates {
-        assert_eq!(properties["platform"]["type"].as_str(), Some("keyword"));
-        assert_eq!(properties["application"]["type"].as_str(), Some("keyword"));
-        assert_eq!(properties["product"]["type"].as_str(), Some("alias"));
-        assert_eq!(properties["product"]["path"].as_str(), Some("diagnostic.application"));
-        assert_eq!(properties["orchestration"]["type"].as_str(), Some("alias"));
-        assert_eq!(
-            properties["orchestration"]["path"].as_str(),
-            Some("diagnostic.platform")
-        );
+        for (current, legacy) in [("application", "product"), ("platform", "orchestration")] {
+            for (from, to) in [(current, legacy), (legacy, current)] {
+                assert_eq!(properties[from]["type"], "keyword", "{from} must accept writes");
+                assert_eq!(properties[from]["copy_to"], format!("diagnostic.{to}"));
+            }
+        }
     }
 }
 
@@ -270,22 +257,6 @@ fn saved_data_view_patterns() -> Vec<(String, String)> {
     patterns
 }
 
-#[test]
-fn new_index_templates_resolve_both_provenance_names() {
-    // The mirrored half of the bridge — the alias a pre-rename index needs — is
-    // installed by `setup`, and covered by
-    // `setup::tests::both_provenance_names_resolve_in_either_index_generation`.
-    let properties = diagnostic_properties(&component_template("esdiag@metadata.json")).clone();
-    assert_eq!(
-        canonical_diagnostic_field(&properties, "application"),
-        canonical_diagnostic_field(&properties, "product")
-    );
-    assert_eq!(
-        canonical_diagnostic_field(&properties, "platform"),
-        canonical_diagnostic_field(&properties, "orchestration")
-    );
-}
-
 /// The dashboard layer used to be unverifiable, so ADR-0015 left it to review
 /// discipline. The saved objects now live in the repository, so the convention is
 /// checkable: a title that does not pin `-esdiag` also matches indices ESDiag does
@@ -308,10 +279,7 @@ fn shipped_data_views_follow_the_stream_naming_contract() {
     );
 }
 
-/// Keeps the transitional aliases and their consumers honest in both directions:
-/// an alias may not be dropped while a shipped saved object still queries the
-/// legacy name, and once none do, this test is what reports that the debt is
-/// collectable (ADR-0014).
+/// Keep legacy fields searchable while shipped saved objects still use them.
 #[test]
 fn shipped_saved_objects_only_query_provenance_names_the_templates_define() {
     let properties = diagnostic_properties(&component_template("esdiag@metadata.json")).clone();
@@ -331,10 +299,10 @@ fn shipped_saved_objects_only_query_provenance_names_the_templates_define() {
         .map(|(_, field)| field.as_str())
         .collect();
     for legacy in legacy_names {
-        let alias_installed = properties[legacy]["type"].as_str() == Some("alias");
+        let field_installed = properties.get(legacy).is_some();
         assert!(
-            !still_legacy.contains(legacy) || alias_installed,
-            "saved objects still query diagnostic.{legacy}, so its alias must stay installed"
+            !still_legacy.contains(legacy) || field_installed,
+            "saved objects still query diagnostic.{legacy}, so its field must stay installed"
         );
     }
 }

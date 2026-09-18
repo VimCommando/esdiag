@@ -135,6 +135,11 @@ pub enum CliOutcome {
     },
     SetupCompleted {
         targets: Vec<String>,
+        outcome: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        failed_indices: Vec<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
     },
     LocalStack {
         command: String,
@@ -218,11 +223,22 @@ pub struct DiagnosticResult {
     pub id: String,
     pub product: String,
     pub documents: u32,
+    pub documents_failed: u32,
+    pub outcome: crate::processor::DiagnosticOutcome,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub indexing_failures: Vec<IndexingFailure>,
     pub duration_ms: u128,
     pub source: String,
     pub output: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kibana_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IndexingFailure {
+    pub index: String,
+    pub documents_failed: u32,
+    pub category: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -399,6 +415,7 @@ pub struct AgentRecovery {
 #[serde(rename_all = "snake_case")]
 pub enum CliFailureCategory {
     InvalidInput,
+    Conflict,
     NotFound,
     AuthenticationFailed,
     CollectionFailed,
@@ -413,6 +430,7 @@ impl CliFailureCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidInput => "invalid_input",
+            Self::Conflict => "conflict",
             Self::NotFound => "not_found",
             Self::AuthenticationFailed => "authentication_failed",
             Self::CollectionFailed => "collection_failed",
@@ -516,6 +534,9 @@ mod tests {
             id: "prod-es@2026-08-10~a1b2".to_string(),
             product: "Elasticsearch".to_string(),
             documents: 42,
+            documents_failed: 0,
+            outcome: crate::processor::DiagnosticOutcome::Complete,
+            indexing_failures: vec![],
             duration_ms: 125,
             source: "primary".to_string(),
             output: "stdio://stdout".to_string(),
@@ -607,6 +628,9 @@ mod tests {
                         id: "prod-es@2026-08-10~a1b2".to_string(),
                         product: "Elasticsearch".to_string(),
                         documents: 42,
+                        documents_failed: 0,
+                        outcome: crate::processor::DiagnosticOutcome::Complete,
+                        indexing_failures: vec![],
                         duration_ms: 125,
                         source: "primary".to_string(),
                         output: "file:///tmp/report.ndjson".to_string(),

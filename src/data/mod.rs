@@ -31,11 +31,12 @@ pub(crate) use keystore::get_active_unlock_keystore_password;
 #[cfg(all(feature = "server", feature = "keystore"))]
 pub(crate) use keystore::list_secret_entries;
 pub use keystore::{
-    BasicSecret, SecretAuth, SecretEntry, UnlockLease, UnlockStatus, add_secret, authenticate, clear_unlock_lease,
-    create_keystore, default_unlock_ttl, get_keystore_password, get_keystore_path, get_password_for_secret_commands,
-    get_secret, get_unlock_path, get_unlock_status, keystore_exists, list_secret_names, parse_unlock_ttl,
-    read_unlock_lease, remove_secret, resolve_secret_auth, rotate_keystore_password, update_secret, upsert_secret_auth,
-    validate_existing_keystore_password, with_scoped_keystore_password, write_unlock_lease,
+    BasicSecret, SecretAlreadyExists, SecretAuth, SecretEntry, UnlockLease, UnlockStatus, add_secret, authenticate,
+    clear_unlock_lease, create_keystore, default_unlock_ttl, get_keystore_password, get_keystore_path,
+    get_password_for_secret_commands, get_secret, get_unlock_path, get_unlock_status, keystore_exists,
+    list_secret_names, parse_unlock_ttl, read_unlock_lease, remove_secret, resolve_secret_auth,
+    rotate_keystore_password, update_secret, upsert_secret_auth, validate_existing_keystore_password,
+    with_scoped_keystore_password, write_unlock_lease,
 };
 #[cfg(all(test, feature = "server"))]
 pub(crate) use known_host::write_hosts_yml_for_tests;
@@ -43,7 +44,7 @@ pub use known_host::{
     CredentialDirection, ElasticCloud, HostRole, HostRoute, KnownHost, KnownHostBuilder, KnownHostCliUpdate,
     ResolvedKnownHost,
 };
-pub use output_deployment::{OutputDeployment, OutputDeploymentSource};
+pub use output_deployment::{OutputDeployment, OutputDeploymentSource, runtime_output_is_declared};
 pub use platform::Platform;
 pub use saved_jobs::{
     CollectMode, CollectSource, DraftTargetAvailability, Job, JobBuilder, JobDraft, JobDraftCollect, JobDraftProcess,
@@ -51,7 +52,7 @@ pub use saved_jobs::{
     NeedsAction, NeedsCollect, ProcessMode, SavedJobs, SendMode, load_saved_jobs, load_saved_jobs_async,
     save_saved_jobs, with_saved_jobs_async,
 };
-pub use settings::Settings;
+pub use settings::{LegacySettingsMigration, Settings};
 pub use uri::Uri;
 
 use crate::env;
@@ -87,6 +88,7 @@ pub fn save_file<T: Serialize>(filename: &str, content: &T) -> Result<()> {
         .join(env::get_string("ESDIAG_HOME")?)
         .join("last_run")
         .join(filename);
+    std::fs::create_dir_all(home_file.parent().expect("last_run directory"))?;
     let mut file = OpenOptions::new().create(true).append(true).open(home_file)?;
     let body = serde_json::to_string(&content)?;
     file.write_all(body.as_bytes())?;
@@ -201,6 +203,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Application, collect_application};
+
+    #[test]
+    fn save_file_creates_missing_last_run_and_appends_records() {
+        let mut env = crate::TestEnv::new();
+        let home = env.tmp.path().join("new-runtime-home");
+        env.set_path("ESDIAG_HOME", home.clone());
+        super::save_file("report.json", &serde_json::json!({"id":1})).unwrap();
+        super::save_file("report.json", &serde_json::json!({"id":2})).unwrap();
+        let contents = std::fs::read_to_string(home.join("last_run/report.json")).unwrap();
+        let records: Vec<serde_json::Value> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records, vec![serde_json::json!({"id":1}), serde_json::json!({"id":2})]);
+    }
 
     #[test]
     fn collect_application_accepts_every_api_collectable_application() {
