@@ -837,6 +837,7 @@ fn structured_failure(error: &eyre::Report) -> CliFailure {
     if let Some(agent_failure) = error.downcast_ref::<AgentFailure>() {
         let category = match agent_failure {
             AgentFailure::Http { status: 401 | 403 } => CliFailureCategory::AuthenticationFailed,
+            AgentFailure::Http { status: 409 } => CliFailureCategory::Conflict,
             AgentFailure::Http { status: 404 } => CliFailureCategory::NotFound,
             AgentFailure::Http { status: 500..=599 } | AgentFailure::Remote | AgentFailure::Protocol { .. } => {
                 CliFailureCategory::Internal
@@ -3904,6 +3905,18 @@ mod tests {
             value["recovery"]["kibana_url"],
             "https://kb.example/app/agent_builder/conversations/conv-123"
         );
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn agent_builder_conflicts_are_conflict_failures() {
+        let error = eyre::Report::new(AgentFailure::Http { status: 409 });
+
+        let failure = structured_failure(&error);
+        let value = serde_json::to_value(failure).expect("serialize failure");
+
+        assert_eq!(value["category"], CliFailureCategory::Conflict.as_str());
+        assert_eq!(value["status"], 409);
     }
 
     #[test]

@@ -681,30 +681,9 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
         })
         .collect::<Vec<_>>();
     let sync_client = kibana.sync_client(spaces)?;
-    let expected_bundle = bundle.clone();
-    let mut sync_summary = SyncSummary::default();
-
-    let saved_objects_bundle = saved_objects_bundle(&bundle);
-    accumulate_sync_summary(
-        &mut sync_summary,
-        push_sync(&sync_client, &saved_objects_bundle, &SyncOptions::default()).await?,
-    );
+    sync_kibana_bundle(&sync_client, &bundle).await?;
 
     let agent_builder_bundle = agent_builder_bundle(bundle);
-    for asset_kind in [
-        KibanaAssetKind::Workflows,
-        KibanaAssetKind::Tools,
-        KibanaAssetKind::Skills,
-        KibanaAssetKind::Agents,
-    ] {
-        let asset_bundle = kibana_asset_bundle(&agent_builder_bundle, asset_kind);
-        accumulate_sync_summary(
-            &mut sync_summary,
-            push_sync(&sync_client, &asset_bundle, &SyncOptions::default()).await?,
-        );
-    }
-    ensure_sync_completed(&expected_bundle, &sync_summary)?;
-
     for (space_id, space_bundle) in &agent_builder_bundle.by_space {
         let skill_ids = space_bundle
             .skills
@@ -716,6 +695,31 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
 
     tracing::info!("completed setup for {client}");
     Ok(())
+}
+
+async fn sync_kibana_bundle(client: &kibana_sync::KibanaClient, bundle: &SyncBundle) -> Result<()> {
+    let mut summary = SyncSummary::default();
+    accumulate_sync_result(
+        bundle,
+        &mut summary,
+        push_sync(client, &saved_objects_bundle(bundle), &SyncOptions::default()).await,
+    )?;
+
+    let agent_builder_bundle = agent_builder_bundle(bundle.clone());
+    for asset_kind in [
+        KibanaAssetKind::Workflows,
+        KibanaAssetKind::Tools,
+        KibanaAssetKind::Skills,
+        KibanaAssetKind::Agents,
+    ] {
+        let asset_bundle = kibana_asset_bundle(&agent_builder_bundle, asset_kind);
+        accumulate_sync_result(
+            bundle,
+            &mut summary,
+            push_sync(client, &asset_bundle, &SyncOptions::default()).await,
+        )?;
+    }
+    ensure_sync_completed(bundle, &summary)
 }
 
 fn target_kibana_bundle(bundle: &mut SyncBundle, space: Option<&str>) -> Result<()> {
@@ -844,6 +848,54 @@ fn accumulate_sync_summary(total: &mut SyncSummary, summary: SyncSummary) {
     total.tools_applied += summary.tools_applied;
     total.skills_attempted += summary.skills_attempted;
     total.skills_applied += summary.skills_applied;
+}
+
+fn accumulate_sync_result<E>(
+    bundle: &SyncBundle,
+    total: &mut SyncSummary,
+    result: std::result::Result<SyncSummary, E>,
+) -> Result<()>
+where
+    E: std::fmt::Display,
+{
+    match result {
+        Ok(summary) => {
+            accumulate_sync_summary(total, summary);
+            Ok(())
+        }
+        Err(error) => Err(eyre!("{}: {error}", sync_progress(bundle, total))),
+    }
+}
+
+fn sync_progress(bundle: &SyncBundle, summary: &SyncSummary) -> String {
+    let expected_saved_objects = bundle
+        .by_space
+        .values()
+        .map(|space| space.saved_objects.len())
+        .sum::<usize>();
+    let expected_workflows = bundle
+        .by_space
+        .values()
+        .map(|space| space.workflows.len())
+        .sum::<usize>();
+    let expected_agents = bundle.by_space.values().map(|space| space.agents.len()).sum::<usize>();
+    let expected_tools = bundle.by_space.values().map(|space| space.tools.len()).sum::<usize>();
+    let expected_skills = bundle.by_space.values().map(|space| space.skills.len()).sum::<usize>();
+    format!(
+        "Kibana sync failed after applying spaces {}/{}, saved objects {}/{}, workflows {}/{}, agents {}/{}, tools {}/{}, skills {}/{}",
+        summary.spaces_applied,
+        bundle.spaces.len(),
+        summary.saved_objects_applied,
+        expected_saved_objects,
+        summary.workflows_applied,
+        expected_workflows,
+        summary.agents_applied,
+        expected_agents,
+        summary.tools_applied,
+        expected_tools,
+        summary.skills_applied,
+        expected_skills,
+    )
 }
 
 fn ensure_sync_completed(bundle: &SyncBundle, summary: &SyncSummary) -> Result<()> {
@@ -1283,6 +1335,109 @@ mod tests {
         assert!(error.to_string().contains("saved objects 1/1"));
         assert!(error.to_string().contains("workflows 0/1"));
         assert!(error.to_string().contains("skills 0/1"));
+    }
+
+    #[test]
+    fn sync_error_preserves_counts_from_completed_phases() {
+        let mut bundle = SyncBundle::default();
+        bundle.by_space.insert(
+            "default".to_string(),
+            kibana_sync::sync::SpaceBundle {
+                saved_objects: vec![serde_json::json!({"id": "object-1"})],
+                workflows: vec![serde_json::json!({"id": "workflow-1"})],
+                ..kibana_sync::sync::SpaceBundle::default()
+            },
+        );
+        let mut summary = SyncSummary {
+            saved_objects_attempted: 1,
+            saved_objects_applied: 1,
+            ..SyncSummary::default()
+        };
+
+        let error = accumulate_sync_result(&bundle, &mut summary, Err::<SyncSummary, _>("workflow request failed"))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("saved objects 1/1"));
+        assert!(error.to_string().contains("workflows 0/1"));
+        assert!(error.to_string().contains("workflow request failed"));
+    }
+
+    #[tokio::test]
+    async fn repeated_kibana_sync_updates_existing_workflow() {
+        use kibana_sync::test_support::{MockResponse, TestServer};
+
+        let workflow = serde_json::json!({
+            "id": "workflow-1",
+            "name": "Diagnostic workflow",
+            "definition": {"name": "desired"}
+        });
+        let item_path = "/api/workflows/workflow/workflow-1";
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: serde_json::json!({"version": {"number": "9.4.2"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: item_path,
+                status: 404,
+                body: serde_json::json!({}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/api/workflows/workflow",
+                status: 200,
+                body: serde_json::json!({}),
+            },
+            MockResponse {
+                method: "GET",
+                path: item_path,
+                status: 200,
+                body: serde_json::json!({
+                    "id": "workflow-1",
+                    "readonly": false,
+                    "definition": {"name": "existing"}
+                }),
+            },
+            MockResponse {
+                method: "PUT",
+                path: item_path,
+                status: 200,
+                body: serde_json::json!({}),
+            },
+        ]);
+        let client = server.client().unwrap();
+        let mut bundle = SyncBundle::default();
+        bundle.by_space.insert(
+            "default".to_string(),
+            kibana_sync::sync::SpaceBundle {
+                workflows: vec![workflow.clone()],
+                ..kibana_sync::sync::SpaceBundle::default()
+            },
+        );
+
+        sync_kibana_bundle(&client, &bundle).await.unwrap();
+        sync_kibana_bundle(&client, &bundle).await.unwrap();
+
+        let requests = server.requests();
+        assert!(requests.iter().all(|request| request.method != "HEAD"));
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| (request.method.as_str(), request.path.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("GET", "/api/status"),
+                ("GET", item_path),
+                ("POST", "/api/workflows/workflow"),
+                ("GET", item_path),
+                ("PUT", item_path),
+            ]
+        );
+        let update = requests.iter().find(|request| request.method == "PUT").unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&update.body).unwrap(), workflow);
     }
 
     #[test]
