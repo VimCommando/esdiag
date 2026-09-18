@@ -249,6 +249,8 @@ esdiag setup diagnostics-output
 ```
 
 Run setup before the first ingest and after an upgrade that changes assets.
+You can rerun setup safely; existing Kibana workflows and other managed assets
+are updated to the bundled definitions.
 The credential needs permission to install them.
 
 ## `collect`
