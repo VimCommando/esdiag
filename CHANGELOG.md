@@ -87,6 +87,9 @@ published release notes, maintenance branches, and tagged history.
 
 ### Fixed
 
+- Fixed repeated `esdiag setup` runs failing when a bundled Kibana workflow already exists.
+- Fixed incomplete Kibana setup summaries omitting assets installed before a later failure.
+- Fixed HTTP 409 failures reporting the `invalid_input` category instead of `conflict`.
 - Fixed unresolved saved hosts displaying the wrong application while editing.
 - Avoided buffering an extra copy of each JSON source when processing diagnostic directories and archives.
 

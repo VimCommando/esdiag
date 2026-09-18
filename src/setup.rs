@@ -681,10 +681,14 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
         })
         .collect::<Vec<_>>();
     let sync_client = kibana.sync_client(spaces)?;
+    let expected_bundle = bundle.clone();
+    let mut sync_summary = SyncSummary::default();
 
     let saved_objects_bundle = saved_objects_bundle(&bundle);
-    let saved_objects_summary = push_sync(&sync_client, &saved_objects_bundle, &SyncOptions::default()).await?;
-    ensure_sync_completed(&saved_objects_bundle, &saved_objects_summary)?;
+    accumulate_sync_summary(
+        &mut sync_summary,
+        push_sync(&sync_client, &saved_objects_bundle, &SyncOptions::default()).await?,
+    );
 
     let agent_builder_bundle = agent_builder_bundle(bundle);
     for asset_kind in [
@@ -694,9 +698,12 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
         KibanaAssetKind::Agents,
     ] {
         let asset_bundle = kibana_asset_bundle(&agent_builder_bundle, asset_kind);
-        let summary = push_sync(&sync_client, &asset_bundle, &SyncOptions::default()).await?;
-        ensure_sync_completed(&asset_bundle, &summary)?;
+        accumulate_sync_summary(
+            &mut sync_summary,
+            push_sync(&sync_client, &asset_bundle, &SyncOptions::default()).await?,
+        );
     }
+    ensure_sync_completed(&expected_bundle, &sync_summary)?;
 
     for (space_id, space_bundle) in &agent_builder_bundle.by_space {
         let skill_ids = space_bundle
@@ -822,6 +829,21 @@ fn kibana_asset_bundle(bundle: &SyncBundle, asset_kind: KibanaAssetKind) -> Sync
         }
     }
     asset_bundle
+}
+
+fn accumulate_sync_summary(total: &mut SyncSummary, summary: SyncSummary) {
+    total.spaces_attempted += summary.spaces_attempted;
+    total.spaces_applied += summary.spaces_applied;
+    total.saved_objects_attempted += summary.saved_objects_attempted;
+    total.saved_objects_applied += summary.saved_objects_applied;
+    total.workflows_attempted += summary.workflows_attempted;
+    total.workflows_applied += summary.workflows_applied;
+    total.agents_attempted += summary.agents_attempted;
+    total.agents_applied += summary.agents_applied;
+    total.tools_attempted += summary.tools_attempted;
+    total.tools_applied += summary.tools_applied;
+    total.skills_attempted += summary.skills_attempted;
+    total.skills_applied += summary.skills_applied;
 }
 
 fn ensure_sync_completed(bundle: &SyncBundle, summary: &SyncSummary) -> Result<()> {
@@ -1233,12 +1255,33 @@ mod tests {
         bundle.by_space.insert(
             "esdiag".to_string(),
             kibana_sync::sync::SpaceBundle {
+                saved_objects: vec![serde_json::json!({"id": "object-1"})],
+                workflows: vec![serde_json::json!({"id": "workflow-1"})],
                 skills: vec![serde_json::json!({"id": "skill-1"})],
                 ..kibana_sync::sync::SpaceBundle::default()
             },
         );
 
-        let error = ensure_sync_completed(&bundle, &SyncSummary::default()).unwrap_err();
+        let mut summary = SyncSummary::default();
+        accumulate_sync_summary(
+            &mut summary,
+            SyncSummary {
+                saved_objects_attempted: 1,
+                saved_objects_applied: 1,
+                ..SyncSummary::default()
+            },
+        );
+        accumulate_sync_summary(
+            &mut summary,
+            SyncSummary {
+                workflows_attempted: 1,
+                ..SyncSummary::default()
+            },
+        );
+
+        let error = ensure_sync_completed(&bundle, &summary).unwrap_err();
+        assert!(error.to_string().contains("saved objects 1/1"));
+        assert!(error.to_string().contains("workflows 0/1"));
         assert!(error.to_string().contains("skills 0/1"));
     }
 

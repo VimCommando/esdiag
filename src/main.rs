@@ -727,6 +727,7 @@ fn classify_failure(error: &eyre::Report) -> CliFailureCategory {
     if let Some(response) = http_response_details(error) {
         return match response.status {
             401 | 403 => CliFailureCategory::AuthenticationFailed,
+            409 => CliFailureCategory::Conflict,
             404 => CliFailureCategory::NotFound,
             500..=599 => CliFailureCategory::Internal,
             _ => CliFailureCategory::InvalidInput,
@@ -3931,6 +3932,18 @@ mod tests {
         ));
 
         assert_eq!(classify_failure(&error), CliFailureCategory::AuthenticationFailed);
+    }
+
+    #[test]
+    fn conflict_responses_are_conflict_failures() {
+        let error = eyre::Report::new(KibanaRequestError::new(
+            reqwest::StatusCode::CONFLICT,
+            r#"{"statusCode":409,"error":"Conflict","message":"resource already exists"}"#.to_string(),
+            5,
+            80,
+        ));
+
+        assert_eq!(classify_failure(&error), CliFailureCategory::Conflict);
     }
 
     #[test]
