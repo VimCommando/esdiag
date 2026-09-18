@@ -856,14 +856,14 @@ fn accumulate_sync_result<E>(
     result: std::result::Result<SyncSummary, E>,
 ) -> Result<()>
 where
-    E: std::fmt::Display,
+    E: std::error::Error + Send + Sync + 'static,
 {
     match result {
         Ok(summary) => {
             accumulate_sync_summary(total, summary);
             Ok(())
         }
-        Err(error) => Err(eyre!("{}: {error}", sync_progress(bundle, total))),
+        Err(error) => Err(eyre::Report::new(error).wrap_err(sync_progress(bundle, total))),
     }
 }
 
@@ -1354,12 +1354,19 @@ mod tests {
             ..SyncSummary::default()
         };
 
-        let error = accumulate_sync_result(&bundle, &mut summary, Err::<SyncSummary, _>("workflow request failed"))
-            .unwrap_err();
+        let error = accumulate_sync_result(
+            &bundle,
+            &mut summary,
+            Err::<SyncSummary, _>(std::io::Error::other("workflow request failed")),
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("saved objects 1/1"));
         assert!(error.to_string().contains("workflows 0/1"));
-        assert!(error.to_string().contains("workflow request failed"));
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().map(std::io::Error::kind),
+            Some(std::io::ErrorKind::Other)
+        );
     }
 
     #[tokio::test]
