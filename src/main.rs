@@ -932,8 +932,19 @@ fn collection_outcome(result: CollectionResult, upload_destination: Option<Strin
     }
 }
 
+fn child_failure_message(child: &esdiag::job::outcome::ChildExecutionOutcome) -> Option<&str> {
+    child.export_error().or_else(|| child.execution_error())
+}
+
+fn has_child_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) -> bool {
+    outcome
+        .children
+        .iter()
+        .any(|child| child_failure_message(child).is_some())
+}
+
 fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) -> String {
-    let failures = outcome
+    let mut failures = outcome
         .stages
         .iter()
         .filter_map(|stage| match &stage.status {
@@ -942,6 +953,9 @@ fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) ->
             esdiag::job::outcome::StageStatus::Succeeded | esdiag::job::outcome::StageStatus::Skipped(_) => None,
         })
         .collect::<Vec<_>>();
+    failures.extend(outcome.children.iter().filter_map(|child| {
+        child_failure_message(child).map(|error| format!("Included diagnostic {} failed: {error}", child.path))
+    }));
     if failures.is_empty() {
         "Job did not complete successfully".to_string()
     } else {
@@ -955,6 +969,10 @@ fn execution_process_result(outcome: &esdiag::job::outcome::ExecutionOutcome) ->
         .children
         .iter()
         .map(|child| match (child.diagnostic_outcome, child.report()) {
+            (_, Some(report)) if let Some(error) = child_failure_message(child) => IncludedDiagnosticResult::Failed {
+                source: child.path.clone(),
+                error: error.to_string(),
+            },
             (DiagnosticOutcome::Skipped(_), _) => IncludedDiagnosticResult::Skipped {
                 source: child.path.clone(),
                 product: Some(esdiag::processor::display_label(child.application(), child.platform())),
@@ -1612,7 +1630,10 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 )?;
                 let outcome = esdiag::job::executor::execute_with_context(job, context).await;
                 let process = execution_process_result(&outcome);
-                if !outcome.succeeded() || outcome.diagnostic_outcome() == Some(DiagnosticOutcome::Failed) {
+                if !outcome.succeeded()
+                    || outcome.diagnostic_outcome() == Some(DiagnosticOutcome::Failed)
+                    || has_child_execution_failure(&outcome)
+                {
                     let message = format_execution_failure(&outcome);
                     return Err(JobExecutionFailure::new(
                         FailedStage::Process,
@@ -3809,6 +3830,29 @@ mod tests {
             agent_builder_space(&Url::parse("https://kb.example/app/s/support").expect("url")),
             None
         );
+    }
+
+    #[test]
+    fn included_report_failure_is_not_rendered_as_completed() {
+        let mut child_execution =
+            esdiag::job::outcome::ExecutionOutcome::new(esdiag::job::context::ExecutionIdentity::new(2, "test"));
+        child_execution.record(
+            esdiag::job::outcome::Stage::Export,
+            esdiag::job::outcome::StageStatus::Failed("report write failed".to_string()),
+        );
+        let child = esdiag::job::outcome::ChildExecutionOutcome {
+            path: "child-es".to_string(),
+            execution: Box::new(child_execution),
+            diagnostic_outcome: DiagnosticOutcome::Partial,
+            application: Some(Application::Elasticsearch),
+            platform: esdiag::data::Platform::ECK,
+            runtime: Some(1),
+        };
+        let mut outcome =
+            esdiag::job::outcome::ExecutionOutcome::new(esdiag::job::context::ExecutionIdentity::new(1, "test"));
+        outcome.children.push(child);
+        assert!(super::has_child_execution_failure(&outcome));
+        assert!(super::format_execution_failure(&outcome).contains("child-es"));
     }
 
     #[cfg(feature = "agent")]
