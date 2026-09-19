@@ -935,7 +935,6 @@ fn collection_outcome(result: CollectionResult, upload_destination: Option<Strin
 fn child_failure_message(child: &esdiag::job::outcome::ChildExecutionOutcome) -> Option<&str> {
     child
         .export_error()
-        .or_else(|| child.execution_error())
         .or_else(|| (child.diagnostic_outcome == DiagnosticOutcome::Failed).then_some("included diagnostic failed"))
 }
 
