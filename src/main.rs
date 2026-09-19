@@ -1613,7 +1613,17 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 let outcome = esdiag::job::executor::execute_with_context(job, context).await;
                 let process = execution_process_result(&outcome);
                 if !outcome.succeeded() || outcome.diagnostic_outcome() == Some(DiagnosticOutcome::Failed) {
-                    return Err(eyre!("{}", format_execution_failure(&outcome)));
+                    let message = format_execution_failure(&outcome);
+                    return Err(JobExecutionFailure::new(
+                        FailedStage::Process,
+                        JobOutcome {
+                            processed: outcome.report.is_some(),
+                            execution: Some(outcome),
+                            ..JobOutcome::default()
+                        },
+                        eyre!(message),
+                    )
+                    .into());
                 }
                 if stdout_owned {
                     Ok(CommandResult::stream())
