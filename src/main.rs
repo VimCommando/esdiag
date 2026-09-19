@@ -969,7 +969,7 @@ fn execution_process_result(outcome: &esdiag::job::outcome::ExecutionOutcome) ->
         .children
         .iter()
         .map(|child| match (child.diagnostic_outcome, child.report()) {
-            (_, Some(report)) if let Some(error) = child_failure_message(child) => IncludedDiagnosticResult::Failed {
+            (_, Some(_)) if let Some(error) = child_failure_message(child) => IncludedDiagnosticResult::Failed {
                 source: child.path.clone(),
                 error: error.to_string(),
             },
@@ -3834,16 +3834,22 @@ mod tests {
 
     #[test]
     fn included_report_failure_is_not_rendered_as_completed() {
-        let mut child_execution =
-            esdiag::job::outcome::ExecutionOutcome::new(esdiag::job::context::ExecutionIdentity::new(2, "test"));
-        child_execution.record(
-            esdiag::job::outcome::Stage::Export,
-            esdiag::job::outcome::StageStatus::Failed("report write failed".to_string()),
-        );
+        let child_execution = esdiag::job::outcome::ExecutionOutcome {
+            identity: esdiag::job::context::ExecutionIdentity::new(2, "test"),
+            stages: vec![esdiag::job::outcome::StageOutcome {
+                stage: esdiag::job::outcome::Stage::Export,
+                status: esdiag::job::outcome::StageStatus::Failed("report write failed".to_string()),
+            }],
+            collection: None,
+            report: None,
+            children: Vec::new(),
+            retained_bundle: None,
+            upload: None,
+        };
         let child = esdiag::job::outcome::ChildExecutionOutcome {
             path: "child-es".to_string(),
             execution: Box::new(child_execution),
-            diagnostic_outcome: DiagnosticOutcome::Partial,
+            diagnostic_outcome: esdiag::processor::DiagnosticOutcome::Partial,
             application: Some(Application::Elasticsearch),
             platform: esdiag::data::Platform::ECK,
             runtime: Some(1),
