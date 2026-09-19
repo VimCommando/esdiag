@@ -933,7 +933,10 @@ fn collection_outcome(result: CollectionResult, upload_destination: Option<Strin
 }
 
 fn child_failure_message(child: &esdiag::job::outcome::ChildExecutionOutcome) -> Option<&str> {
-    child.export_error().or_else(|| child.execution_error())
+    child
+        .export_error()
+        .or_else(|| child.execution_error())
+        .or_else(|| (child.diagnostic_outcome == DiagnosticOutcome::Failed).then_some("included diagnostic failed"))
 }
 
 fn has_child_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) -> bool {
@@ -3836,10 +3839,7 @@ mod tests {
     fn included_report_failure_is_not_rendered_as_completed() {
         let child_execution = esdiag::job::outcome::ExecutionOutcome {
             identity: esdiag::job::context::ExecutionIdentity::new(2, "test"),
-            stages: vec![esdiag::job::outcome::StageOutcome {
-                stage: esdiag::job::outcome::Stage::Export,
-                status: esdiag::job::outcome::StageStatus::Failed("report write failed".to_string()),
-            }],
+            stages: Vec::new(),
             collection: None,
             report: None,
             children: Vec::new(),
@@ -3849,7 +3849,7 @@ mod tests {
         let child = esdiag::job::outcome::ChildExecutionOutcome {
             path: "child-es".to_string(),
             execution: Box::new(child_execution),
-            diagnostic_outcome: esdiag::processor::DiagnosticOutcome::Partial,
+            diagnostic_outcome: esdiag::processor::DiagnosticOutcome::Failed,
             application: Some(Application::Elasticsearch),
             platform: esdiag::data::Platform::ECK,
             runtime: Some(1),
