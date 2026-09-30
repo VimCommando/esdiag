@@ -19,7 +19,7 @@ Each archive must contain exactly these root entries:
 ```text
 esdiag
 LICENSE.txt
-NOTICE.txt
+NOTICES.md
 ```
 
 The checksum file contains exactly one lowercase SHA-256 record per archive.
@@ -58,7 +58,7 @@ gh release upload "$TAG" \
 ```
 
 Intel macOS uses the tagged GitHub source archive rather than a native asset.
-It must contain `Cargo.toml`, `Cargo.lock`, `LICENSE.txt`, and `NOTICE.txt`, and
+It must contain `Cargo.toml`, `Cargo.lock`, `LICENSE.txt`, and `NOTICES.md`, and
 declare the release `VERSION`.
 
 ## Formula Update
@@ -84,9 +84,16 @@ brew install --build-from-source elastic/tools/esdiag
 brew test elastic/tools/esdiag
 ```
 
-Commit the Formula update and open a PR against `elastic/homebrew-tools`. No
-bottle publication is required: Apple Silicon macOS and Linux use verified
-upstream binaries, while Intel macOS builds the locked tagged source.
+Create a branch from the current `elastic/homebrew-tools` `main`, commit only
+the Formula update, and open the PR using the release operator's GitHub
+identity. Wait for the normal pull-request checks and require every check to
+pass. Record the PR URL in the release handoff. The Homebrew target is complete
+when that PR exists and its checks pass.
+
+The release operator supplies the exact `VERSION`; release discovery does not
+run on a schedule. No bottle publication is required: Apple Silicon macOS and
+Linux use verified upstream binaries, while Intel macOS builds the locked
+tagged source.
 
 If a public release has missing or incorrect assets, cut a new patch release;
 do not mutate the published release.

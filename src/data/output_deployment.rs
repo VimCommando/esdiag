@@ -118,7 +118,7 @@ impl OutputDeployment {
     }
 }
 
-fn runtime_output_is_declared() -> bool {
+pub fn runtime_output_is_declared() -> bool {
     env::var_os("ESDIAG_OUTPUT_URL").is_some()
 }
 

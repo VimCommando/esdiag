@@ -5,6 +5,68 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::{TempDir, tempdir};
 
+#[test]
+fn searchable_snapshot_template_matches_processed_documents() {
+    use std::io::Write;
+
+    let input = tempdir().expect("temporary archive directory");
+    let archive = input.path().join("searchable-snapshots.zip");
+    fs::copy("tests/archives/elasticsearch-api-diagnostics-9.3.3.zip", &archive).expect("copy fixture");
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&archive)
+        .expect("open archive");
+    let mut zip = zip::ZipWriter::new_append(file).expect("append archive");
+    zip.start_file(
+        "commercial/searchable_snapshots_stats.json",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .expect("start stats file");
+    zip.write_all(include_bytes!("fixtures/searchable_snapshots_stats.json"))
+        .expect("write stats fixture");
+    zip.finish().expect("finish archive");
+
+    let output = process_archive(&archive);
+    let docs = read_docs(&output, "metrics-searchable_snapshot-esdiag.ndjson");
+    assert_eq!(docs.len(), 1);
+    let doc = &docs[0];
+    assert_eq!(doc["index"]["name"], "partial-snapshot-index");
+    assert_eq!(doc["data_stream"]["dataset"], "searchable_snapshot");
+
+    let template: Value = serde_json::from_str(include_str!(
+        "../assets/elasticsearch/index_templates/metrics-searchable_snapshot.json"
+    ))
+    .expect("parse template");
+    let properties = &template["template"]["mappings"]["properties"];
+    assert_eq!(properties["index"]["type"], "object");
+    assert_eq!(properties["index"]["properties"]["name"]["type"], "keyword");
+    assert_eq!(properties["searchable_snapshot"]["type"], "object");
+    let mappings = properties["searchable_snapshot"]["properties"]
+        .as_object()
+        .expect("stats mappings");
+    let stats = doc["searchable_snapshot"].as_object().expect("stats object");
+    assert_eq!(
+        mappings.len(),
+        stats.len(),
+        "every declared stats field must be exercised"
+    );
+    for (field, value) in stats {
+        assert!(
+            properties.get(field).is_none(),
+            "{field} must not be mapped at the root"
+        );
+        let expected_type = if value.is_object() {
+            "object"
+        } else if value.is_string() {
+            "keyword"
+        } else {
+            "long"
+        };
+        assert_eq!(mappings[field]["type"], expected_type, "searchable_snapshot.{field}");
+    }
+}
+
 fn archive_fixtures() -> Vec<PathBuf> {
     let archives_dir = Path::new("tests/archives");
     let mut archives = Vec::new();

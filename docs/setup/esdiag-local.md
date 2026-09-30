@@ -52,6 +52,10 @@ The stack binds these default endpoints to loopback:
 - Elasticsearch: `http://127.0.0.1:9200`
 - Kibana: `http://127.0.0.1:5601`
 
+When `esdiag local up` opens a browser, it starts at the ESDiag onboarding page:
+`http://127.0.0.1:2501/welcome`. Use `esdiag local open` to open the web UI
+root instead.
+
 ## Configure ESDiag
 
 Run the initializer at an interactive terminal:
@@ -97,7 +101,7 @@ For Elastic Inference Service:
 See Elastic's
 [self-managed EIS setup](https://www.elastic.co/docs/explore-analyze/elastic-inference/connect-self-managed-cluster-to-eis)
 for account and billing details. For a local OpenAI-compatible model, see the
-[LLM configuration guide](../llm-setup-guide.md).
+[local LLM guide](local-llm.md).
 
 ## Process an archive
 

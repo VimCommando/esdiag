@@ -1,63 +1,65 @@
 ---
 type: Reference
-title: "Evolve the indexed data model via field aliases"
+title: "Evolve indexed provenance with writable fields and historical aliases"
 status: accepted
 tags: [repository, adr]
 ---
 
-# Evolve the indexed data model via field aliases
+# Evolve indexed provenance with writable fields and historical aliases
 
-ADR-0001's split lands in the indexed docs as `diagnostic.application` (replacing
-`diagnostic.product`) and `diagnostic.platform` (replacing
-`diagnostic.orchestration`). These provenance-field renames are bridged with
-**Elasticsearch field aliases** so old and new dashboards keep working across old and
-new indices during the transition; the aliases are removed later. This is the third
-compatibility strategy, distinct from owned-file rewrite (ADR-0009) and
-received-artifact tolerance (ADR-0010).
+ADR-0001 replaces `diagnostic.product` with `diagnostic.application` and
+`diagnostic.orchestration` with `diagnostic.platform`. Both writer generations
+must coexist on shared diagnostics clusters, including after rollover.
 
 ## Context
 
-Indexed data is *semi-owned*: ESDiag controls the templates going forward (installed
-by `setup`), but **cannot rewrite historical indices** produced by older versions. So
-neither rewrite-on-first-read nor pure read-tolerance fits — field aliases bridge the
-rename without touching stored documents. Adding an alias to a historical index is a
-mapping addition, not a rewrite: no document changes and no reindex, which is what
-makes the mirrored half of the bridge available at all.
+ESDiag controls templates installed by `setup`, but templates only affect new
+indices. The original alias migration preserved searches while rejecting writes
+from released 0.16.x writers on new indices. Elasticsearch field aliases cannot
+accept values.
 
 ## Decisions
 
-- **`diagnostic.application` replaces `diagnostic.product`.** Both names resolve to the
-  same underlying field via aliases in both directions, so dashboards querying either
-  name work on both old and new indices during the transition. "Both directions" is a
-  property of the *index pattern* a dashboard queries, not of one index: an alias must
-  point at a concrete field, so each index carries exactly one of the pair as an alias,
-  in whichever direction its own stored name dictates. The templates give every new
-  index the legacy name as an alias; `setup` installs the mirror image — the current
-  name as an alias to the stored legacy one — on indices that predate the rename. Both
-  halves are needed, because a pattern spanning both generations resolves a name only
-  if every index it touches does.
-- **`diagnostic.platform` replaces `diagnostic.orchestration`.** The old field name
-  resolves to the new one through a transitional alias while historical dashboards
-  and retained indices age out. The rename is not just the indexed field: the
-  `orchestration` term is retired everywhere, including the in-code identifier and
-  its derivation point (`Processor::start`, `mod.rs:420`, which derives it from the
-  product and propagates it to children) — all become `platform`, sourced from the
-  split `Platform` of ADR-0001.
-- **Aliases are transitional** and removed once dashboards are updated and old indices
-  age out of retention.
+- New indices map all four names as concrete keyword fields. Each pair uses
+  reciprocal `copy_to`, so documents written with either name are searchable and
+  aggregatable through both names. This covers report, Elasticsearch, and
+  Logstash metadata templates.
+- Writers keep emitting their own field names. No writer upgrade is required
+  before installing these templates. Copying happens in the mapping, including
+  for direct report writes and bulk requests without an ingest pipeline.
+- `copy_to` copies indexed values without changing ordinary `_source`. It does
+  not recurse. If a document supplies different values for both names, both
+  fields index both values. Writers should send one name per pair or agreeing
+  values. Synthetic source may expose the indexed copies.
+- Historical indices retain their concrete fields. `setup` still adds the
+  current name as a query-only alias when only the legacy name exists, preserving
+  searches over documents already stored there.
+- `setup` warns about existing aliases that reject writes and about two concrete
+  names without reciprocal copying, where historical searches may be split.
+  It does not rewrite historical documents or roll over streams automatically.
 
-## Consequences
+## Upgrade and recovery
 
-- No reindex and no clean break — historical indices remain queryable by both old and
-  new dashboards for the alias lifetime.
-- **`setup` acquires a bridging step over existing indices**, which is best-effort by
-  design: an index that cannot take a mapping update (closed, frozen, or write-blocked)
-  costs the legacy-name resolution for that one index and must not fail installing the
-  assets.
-- The removable aliases are the migration's only debt. Half the removal trigger is now
-  verifiable in the repository: the dashboards are shipped Kibana saved objects, so a
-  test reports which provenance names they still query and refuses to let an alias be
-  dropped while one depends on it. The other half — historical indices aging out of
-  retention — remains operational.
-- Confirms the compat trilogy: **owned files → rewrite** (0009), **received artifacts →
-  tolerate** (0010), **indexed data → field aliases** (this ADR).
+1. Install the corrected templates with `esdiag setup`.
+2. Before mixing writer versions, roll over each affected data stream whose
+   current write index has a provenance alias. For example, use
+   `POST /metrics-diagnostic-esdiag/_rollover` for reports. This applies to both
+   pre-rename indices with current-name aliases and indices created by the
+   earlier branch templates with legacy-name aliases. Installing templates alone
+   cannot change those existing field types. For standalone indices, write to a
+   replacement index created with the corrected mappings.
+3. Retry rejected diagnostics after rollover. Historical aliases remain useful
+   for searches. If both names already exist as unlinked concrete fields,
+   reindex into corrected mappings to make historical documents searchable under
+   either name. Rollover fixes future writes only.
+
+The copied values are indexed under both fields, increasing storage compared
+with an alias. Retire the legacy fields and copying only after legacy writers
+and dashboards are retired and old indices age out. The shipped saved-object
+regression test checks dashboard references; writer retirement remains an
+operational requirement.
+
+See Elasticsearch's [copy_to reference](https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/copy-to)
+for indexing and source behavior. The opt-in test
+`tests/provenance_writers_tests.rs` verifies both writer generations through real
+Elasticsearch indexing, queries, aggregations, and rollover.

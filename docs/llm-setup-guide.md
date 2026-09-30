@@ -47,55 +47,8 @@ requirements in Elastic's
 
 ## Local OpenAI-compatible model
 
-Use this path when Kibana can reach a local or organization-managed
-OpenAI-compatible endpoint. Ollama is one example.
-
-Start the model before you configure Kibana:
-
-```sh
-ollama pull llama3.2
-```
-
-Check the endpoint from the machine that can reach it:
-
-```sh
-curl http://localhost:11434/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama3.2",
-    "messages": [{"role": "user", "content": "Say hello!"}]
-  }'
-```
-
-## Add the connector
-
-1. In Kibana, open **Stack Management > Connectors**.
-2. Select **Create connector**, then select **OpenAI**.
-3. Select **Other OpenAI-compatible service**.
-4. Set the model name to the exact name served by the endpoint, such as
-   `llama3.2`.
-5. Enter the endpoint URL that Kibana can reach.
-6. Save the connector and select it as the default model in **GenAI Settings**.
-
-For Kibana on the same machine as Ollama, the endpoint is usually:
-
-```text
-http://localhost:11434/v1/chat/completions
-```
-
-For Kibana in a container, use an address the container can reach. On Docker
-Desktop this is commonly:
-
-```text
-http://host.docker.internal:11434/v1/chat/completions
-```
-
-The connector form may require an API key even when the local endpoint does
-not. Use a value that meets the form requirement, and do not reuse a real
-credential.
-
-## Check the agent
-
-Open **AI Agent** in the `esdiag` space. Select the connector and confirm
-**Elastic AI Agent** is selected. Process a non-sensitive archive with
-`esdiag process --ask` or ask a question with `esdiag agent ask`.
+Register the model as an Elasticsearch `chat_completion` inference endpoint.
+The Elasticsearch node, rather than Kibana, must be able to reach the model
+server. See
+[Connect Agent Builder to a local LLM](setup/local-llm.md) for Kibana Dev
+Tools requests, equivalent `elastic` CLI commands, and Agent Builder checks.

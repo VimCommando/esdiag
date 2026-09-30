@@ -70,10 +70,12 @@ pub async fn submit(
                 }
             };
 
+            // The first processing patch replaces this card and removes data-init.
+            // Keep its SSE request alive until the terminal card and signals arrive.
             let upload_file_element = format!(
                 r#"<div id="job-{job_id}"
                     class="status-box history-item status-processing"
-                    data-init="$loading=false; $file_upload.job_id={job_id}; if ({can_use_keystore} && $keystore.locked && $output.secure) {{ $_pending_job_action = 'upload-process'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process', {{filterSignals: {{exclude: /.*/}}}}); }} else {{ @post('/upload/process', {{openWhenHidden: true, filterSignals: {{include: /^(metadata|archive|job|file_upload)(\.|$)/}}}}); }}"
+                    data-init="$loading=false; $file_upload.job_id={job_id}; if ({can_use_keystore} && $keystore.locked && $output.secure) {{ $_pending_job_action = 'upload-process'; $message = 'Unlock keystore to continue...'; @get('/keystore/modal/process', {{filterSignals: {{exclude: /.*/}}}}); }} else {{ @post('/upload/process', {{requestCancellation: 'disabled', openWhenHidden: true, filterSignals: {{include: /^(metadata|archive|job|file_upload)(\.|$)/}}}}); }}"
                 >
                     <div class="spinner"></div>
                     <span>Processing diagnostic</span>

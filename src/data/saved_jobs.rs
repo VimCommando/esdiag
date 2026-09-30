@@ -520,6 +520,7 @@ impl JobOutput {
     pub fn target_uri(&self) -> String {
         match self {
             Self::KnownHost { name } => name.clone(),
+            Self::Environment => "environment".to_string(),
             Self::File { path } => path.display().to_string(),
             Self::Directory { output_dir } => output_dir.display().to_string(),
             Self::Stdout => "-".to_string(),
@@ -530,6 +531,7 @@ impl JobOutput {
     fn label(&self) -> String {
         match self {
             Self::KnownHost { name } => name.clone(),
+            Self::Environment => "environment".to_string(),
             Self::File { path } => path.display().to_string(),
             Self::Directory { output_dir } => format!("dir:{}", output_dir.display()),
             Self::Stdout => "stdout".to_string(),
@@ -585,6 +587,10 @@ impl JobOutput {
             Self::KnownHost { name } => {
                 signals.send.mode = SendMode::Remote;
                 signals.send.remote_target = Some(name.clone());
+            }
+            Self::Environment => {
+                signals.send.mode = SendMode::Remote;
+                signals.send.remote_target = None;
             }
             Self::Directory { output_dir } => {
                 signals.send.mode = SendMode::Local;
@@ -968,16 +974,14 @@ fn get_jobs_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{data::Application, data::HostRole, test_env_lock};
-    use tempfile::TempDir;
+    use crate::{data::Application, data::HostRole};
 
-    fn setup_env() -> TempDir {
-        let tmp = TempDir::new().expect("temp dir");
-        let hosts = tmp.path().join("hosts.yml");
-        unsafe {
-            std::env::set_var("ESDIAG_HOSTS", &hosts);
-        }
-        tmp
+    /// Returns the environment guard and the directory holding `hosts.yml`,
+    /// which is where saved jobs are written alongside it.
+    fn setup_env() -> (crate::TestEnv, std::path::PathBuf) {
+        let env = crate::TestEnv::new();
+        let dir = env.hosts_path.parent().expect("config dir").to_path_buf();
+        (env, dir)
     }
 
     fn save_collect_host(name: &str) {
@@ -1012,22 +1016,20 @@ mod tests {
 
     #[test]
     fn save_saved_jobs_writes_schema_version() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
+        let (_env, dir) = setup_env();
 
         let mut jobs = SavedJobs::default();
         jobs.insert("first".to_string(), test_job("first"));
         save_saved_jobs(&jobs).expect("save jobs");
 
-        let content = std::fs::read_to_string(tmp.path().join("jobs.yml")).expect("read jobs");
+        let content = std::fs::read_to_string(dir.join("jobs.yml")).expect("read jobs");
         assert!(content.contains("schema_version: 2"));
         assert!(content.contains("jobs:"));
     }
 
     #[test]
     fn save_saved_jobs_rejects_runtime_binding_before_write() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
+        let (_env, dir) = setup_env();
         let runtime_job = Job::try_new(
             Identifiers::default(),
             Input::CollectBinding {
@@ -1047,17 +1049,16 @@ mod tests {
         let error = save_saved_jobs(&jobs).expect_err("runtime job must not persist");
 
         assert!(error.to_string().contains("only stable known-host Collect inputs"));
-        assert!(!tmp.path().join("jobs.yml").exists());
+        assert!(!dir.join("jobs.yml").exists());
     }
 
     #[test]
     fn save_saved_jobs_rejects_runtime_output_binding_without_overwriting_existing_jobs() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
+        let (_env, dir) = setup_env();
         let mut stable_jobs = SavedJobs::default();
         stable_jobs.insert("stable".to_string(), test_job("stable"));
         save_saved_jobs(&stable_jobs).expect("save stable jobs");
-        let before = std::fs::read(tmp.path().join("jobs.yml")).expect("saved jobs bytes");
+        let before = std::fs::read(dir.join("jobs.yml")).expect("saved jobs bytes");
 
         let runtime_output = crate::job::model::BindingKey::try_new("one-use-exporter").expect("binding key");
         let runtime_job = Job::try_new(
@@ -1085,15 +1086,14 @@ mod tests {
 
         assert!(error.to_string().contains("stable outputs"));
         assert_eq!(
-            std::fs::read(tmp.path().join("jobs.yml")).expect("saved jobs remain unchanged"),
+            std::fs::read(dir.join("jobs.yml")).expect("saved jobs remain unchanged"),
             before
         );
     }
 
     #[test]
     fn save_saved_jobs_overwrites_existing_file() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
 
         let mut jobs = SavedJobs::default();
         jobs.insert("first".to_string(), test_job("first"));
@@ -1123,9 +1123,8 @@ mod tests {
 
     #[test]
     fn absent_schema_version_is_treated_as_v1_and_migrates_each_action() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         write_jobs(
             &path,
             r#"
@@ -1197,9 +1196,8 @@ process-job:
 
     #[test]
     fn legacy_upload_without_save_dir_migrates_to_a_temporary_bundle() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         write_jobs(
             &path,
             r#"
@@ -1223,9 +1221,8 @@ upload-job:
 
     #[test]
     fn legacy_selection_the_current_registry_rejects_migrates_as_authored() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         write_jobs(
             &path,
             r#"
@@ -1265,9 +1262,8 @@ stale-selection-job:
 
     #[test]
     fn legacy_process_without_save_dir_migrates_to_streaming() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         write_jobs(
             &path,
             r#"
@@ -1290,9 +1286,8 @@ streaming-job:
 
     #[test]
     fn legacy_job_named_schema_version_is_not_treated_as_version_marker() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         write_jobs(
             &path,
             r#"
@@ -1314,9 +1309,8 @@ schema_version:
 
     #[test]
     fn versioned_document_with_malformed_schema_version_is_rejected() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         write_jobs(
             &path,
             r#"
@@ -1340,9 +1334,8 @@ jobs:
 
     #[test]
     fn legacy_process_selection_is_canonicalized_during_migration() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         write_jobs(
             &path,
             r#"
@@ -1372,9 +1365,8 @@ process-job:
 
     #[test]
     fn legacy_process_selection_defaults_product_and_diagnostic_type() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         write_jobs(
             &path,
             r#"
@@ -1404,9 +1396,8 @@ process-job:
 
     #[test]
     fn v1_load_rewrites_once_and_second_load_is_direct() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         write_jobs(
             &path,
             r#"
@@ -1433,9 +1424,8 @@ collect-job:
 
     #[test]
     fn current_version_loads_directly_without_rewrite() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        let path = tmp.path().join("jobs.yml");
+        let (_env, dir) = setup_env();
+        let path = dir.join("jobs.yml");
         let mut jobs = SavedJobs::default();
         jobs.insert("current".to_string(), test_job("prod"));
         write_saved_jobs_document(&path, &jobs).expect("write current jobs");
@@ -1461,7 +1451,7 @@ collect-job:
             }
         }
 
-        let tmp = TempDir::new().expect("temp dir");
+        let tmp = tempfile::TempDir::new().expect("temp dir");
         let path = tmp.path().join("jobs.yml");
         std::fs::write(&path, "original: true\n").expect("seed original");
 
@@ -1507,8 +1497,7 @@ collect-job:
 
     #[test]
     fn collect_only_job_uses_download_dir_as_output_dir() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         save_collect_host("prod");
 
         let mut signals = JobSignals::default();
@@ -1559,8 +1548,7 @@ collect-job:
 
     #[test]
     fn job_signals_preserve_local_known_host_output() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         save_collect_host("prod");
         save_collect_host("monitoring");
 
@@ -1581,10 +1569,9 @@ collect-job:
 
     #[test]
     fn job_signals_preserve_local_directory_output() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let tmp = setup_env();
+        let (_env, dir) = setup_env();
         save_collect_host("prod");
-        let output_dir = tmp.path().join("output");
+        let output_dir = dir.join("output");
         std::fs::create_dir(&output_dir).expect("create output dir");
 
         let mut signals = JobSignals::default();
@@ -1604,8 +1591,7 @@ collect-job:
 
     #[test]
     fn job_draft_round_trips_processed_and_raw_remote_targets_independently() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         save_collect_host("prod");
         save_collect_host("monitoring");
         let job = Job::try_new(
@@ -1766,8 +1752,7 @@ collect-job:
 
     #[test]
     fn collect_job_requires_output_dir() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         save_collect_host("prod");
 
         let err = match Job::builder().collect_from("prod").expect("known host").collect_to("") {
@@ -1780,8 +1765,7 @@ collect-job:
 
     #[test]
     fn collect_job_rejects_separate_save_dir() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
         save_collect_host("prod");
 
         let err = match Job::builder()
@@ -1802,8 +1786,7 @@ collect-job:
 
     #[test]
     fn job_builder_rejects_unknown_collect_host() {
-        let _guard = test_env_lock().lock().expect("env lock");
-        let _tmp = setup_env();
+        let _env = setup_env();
 
         let err = match Job::builder().collect_from("missing") {
             Ok(_) => panic!("unknown hosts should be rejected"),

@@ -1,7 +1,7 @@
 #[cfg(feature = "keystore")]
 use super::keystore;
 use super::{ServerState, append_body_event, execute_script_event, html_event, signal_event};
-use crate::data::{HostRole, KnownHost, Settings, Uri};
+use crate::data::{ApplicationConfig, HostRole, KnownHost, Uri};
 use crate::exporter::Exporter;
 use crate::server::template::{self, SettingsModal};
 use askama::Template;
@@ -24,10 +24,10 @@ pub async fn get_modal(State(state): State<Arc<ServerState>>, headers: HeaderMap
     };
     let can_update_exporter = state.server_policy.allows_exporter_updates();
     let allows_local_runtime_features = state.server_policy.allows_local_runtime_features();
-    let settings = if allows_local_runtime_features {
-        Settings::load().unwrap_or_default()
+    let selected_configured_output = if allows_local_runtime_features {
+        ApplicationConfig::load().ok().and_then(|config| config.output.default)
     } else {
-        Settings::default()
+        None
     };
     let exporter = state.exporter.read().await.clone();
     let (output_options, selected_output, _exporter_label) = if allows_local_runtime_features {
@@ -41,7 +41,7 @@ pub async fn get_modal(State(state): State<Arc<ServerState>>, headers: HeaderMap
             &hosts_by_name,
             &send_hosts,
             &exporter,
-            settings.active_target.as_deref(),
+            selected_configured_output.as_deref(),
         )
     } else {
         let selected_output = exporter.target_uri();
@@ -113,9 +113,11 @@ pub async fn update_settings(
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    let settings = Settings::load().unwrap_or_default();
-    let prior_active_target = settings.active_target.clone();
-    let mut next_settings = settings.clone();
+    let mut config = ApplicationConfig::load().unwrap_or_else(|err| {
+        tracing::warn!("Unable to load shared application configuration: {err}");
+        ApplicationConfig::new()
+    });
+    let prior_active_target = config.output.default.clone();
     let form = signals.settings;
     let target = form.target.as_deref().unwrap_or("").trim().to_string();
     let current_exporter = state.exporter.read().await.clone();
@@ -133,7 +135,19 @@ pub async fn update_settings(
     } else if target_changed {
         match KnownHost::get_known(&target) {
             Some(host) if host.has_role(HostRole::Send) => {
-                next_settings.active_target = Some(target.clone());
+                let Some(viewer_name) = host.viewer() else {
+                    let err_msg = format!("Output target '{target}' has no linked Kibana viewer.");
+                    return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
+                };
+                let Some(viewer) = KnownHost::get_known(&viewer_name.to_string()) else {
+                    let err_msg = format!("Output target '{target}' references an unknown Kibana viewer.");
+                    return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
+                };
+                if !viewer.has_role(HostRole::View) {
+                    let err_msg = format!("Output target '{target}' has an invalid Kibana viewer.");
+                    return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
+                }
+                config.output.default = Some(target.clone());
             }
             Some(_) => {
                 let err_msg = format!("Output target '{}' is not a send-capable host.", target);
@@ -141,15 +155,16 @@ pub async fn update_settings(
                 return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
             }
             None => {
-                next_settings.active_target = None;
+                let err_msg =
+                    "Output settings now require a saved linked Elasticsearch and Kibana deployment. Use /welcome or /settings."
+                        .to_string();
+                return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
             }
         }
     }
 
-    // 2. Process kibana URL
-    if let Some(kibana) = form.kibana_url {
-        next_settings.kibana_url = Some(kibana.clone());
-    }
+    // A user-mode output always takes its Kibana URL from the linked viewer.
+    // Ignore the legacy free-form field rather than persisting an unlinked URL.
 
     let mut validated_exporter = None;
 
@@ -214,14 +229,19 @@ pub async fn update_settings(
         }
     }
 
-    // 4. Save settings to disk after validation succeeds
-    if let Err(e) = next_settings.save() {
-        let err_msg = format!("Failed to save settings: {}", e);
+    // 4. Persist the shared application reference after validation succeeds.
+    if let Err(e) = config.save() {
+        let err_msg = format!("Failed to save shared application configuration: {}", e);
         tracing::error!("{}", err_msg);
         return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
     }
 
-    if let Some(kibana_url) = next_settings.kibana_url.clone() {
+    if target_changed
+        && let Some(kibana_url) = KnownHost::get_known(&target)
+            .and_then(|host| host.viewer().map(|name| name.to_string()))
+            .and_then(|viewer_name| KnownHost::get_known(&viewer_name))
+            .and_then(|viewer| viewer.concrete_url().map(|url| url.to_string()))
+    {
         *state.kibana_url.write().await = kibana_url;
     }
 
@@ -374,10 +394,20 @@ mod tests {
                 Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
-                None,
+                Some("secure-kb".to_string()),
                 false,
                 Some("secure-es".to_string()),
                 None,
+            ),
+        );
+        hosts.insert(
+            "secure-kb".to_string(),
+            KnownHost::new_no_auth(
+                Application::Kibana,
+                Url::parse("http://localhost:5601").expect("viewer url"),
+                vec![HostRole::View],
+                None,
+                false,
             ),
         );
         write_hosts(hosts);
@@ -633,7 +663,7 @@ mod tests {
         assert_eq!(state.exporter.read().await.target_uri(), original_target);
         let saved = Settings::load().expect("reload settings");
         assert_eq!(saved.active_target.as_deref(), Some("stdout"));
-        assert_eq!(saved.kibana_url.as_deref(), Some("https://new-kibana.example"));
+        assert_eq!(saved.kibana_url.as_deref(), Some("https://old-kibana.example"));
     }
 
     #[tokio::test]
@@ -674,7 +704,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let saved = Settings::load().expect("reload settings");
         assert_eq!(saved.active_target.as_deref(), Some("secure-es"));
-        assert_eq!(saved.kibana_url.as_deref(), Some("https://new-kibana.example"));
+        assert_eq!(saved.kibana_url.as_deref(), Some("https://old-kibana.example"));
 
         let mut saw_unlock_modal = false;
         while let Ok(event) = events.try_recv() {

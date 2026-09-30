@@ -4,7 +4,7 @@
 
 Defines the Elastic Upload Service uploader capability for raw diagnostic bundles, including CLI entry points and workflow integration for forward remote send.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Upload Command For Raw Diagnostic Bundles
 The system SHALL provide a CLI command `esdiag upload <file_name> <upload_id>` for sending an unprocessed diagnostic bundle to Elastic Upload Service.

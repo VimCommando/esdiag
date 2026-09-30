@@ -35,7 +35,7 @@ This project supports desktop packaging for:
 ## Linux Flatpak Notes
 
 - Flatpak builds run inside the Flatpak SDK and disable NOTICE generation in the manifest, so they do not require `cargo-about`.
-- Notice generation is enabled by default elsewhere and can be disabled with `ESDIAG_GENERATE_NOTICE=0` for read-only build contexts such as the Docker image build.
+- Builds use the committed NOTICES.md by default so registry package verification and installation do not rewrite source files or require cargo-about. Set `ESDIAG_GENERATE_NOTICE=1` to regenerate it during a source build, or run `cargo about generate --locked about.hbs -o NOTICES.md` during release preparation.
 - SBOM generation is opt-in via `ESDIAG_GENERATE_SBOM=1` and additionally requires `cargo-sbom`.
 - Local workflow requires runtime availability from Flathub:
   - `org.gnome.Platform//49`

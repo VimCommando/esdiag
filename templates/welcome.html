@@ -1,0 +1,428 @@
+<content
+    id="welcome"
+    data-signals:welcome.message="'{{ message }}'"
+    data-signals:welcome.output-location="'{{ output_location }}'"
+    data-signals:_welcome-provisioning="false"
+>
+    <onboarding-flow>
+        <section-title>Welcome to ESDiag</section-title>
+        <p class="error" role="alert" data-show="$welcome.message" data-text="$welcome.message"></p>
+
+        <steps aria-label="ESDiag setup steps">
+            <ol>
+                <li>
+                    <h2>Diagnostic Tasks</h2>
+                    <info-text class="margin-after">
+                        Choose the diagnostic work this installation should support.
+                    </info-text>
+                    <form data-on:submit__prevent="@post('/welcome/identity', {contentType: 'form'})">
+                        <input-group>
+                            <label for="welcome-user" class="form-label">Default diagnostic user</label>
+                            <input
+                                id="welcome-user"
+                                class="form-input"
+                                name="user"
+                                type="text"
+                                value="{{ user }}"
+                                autocomplete="username"
+                                required
+                            />
+                        </input-group>
+                        <radio-group aria-label="Choose diagnostic tasks">
+                            <label>
+                                <input name="workflow" type="radio" value="collect-only" required
+                                    {% if workflow_value == "collect-only" %}checked{% endif %} />
+                                Collect
+                            </label>
+                            <label>
+                                <input name="workflow" type="radio" value="process-existing"
+                                    {% if workflow_value == "process-existing" %}checked{% endif %} />
+                                Analyze
+                            </label>
+                            <label>
+                                <input name="workflow" type="radio" value="collect-and-process"
+                                    {% if workflow_value == "collect-and-process" %}checked{% endif %} />
+                                Both
+                            </label>
+                        </radio-group>
+                        <button class="button" type="submit">
+                            {% if stage == "identity" %}Continue{% else %}Update tasks{% endif %}
+                        </button>
+                    </form>
+                </li>
+
+                {% if show_cluster %}
+                <li>
+                    <h2>Diagnostic Cluster</h2>
+                    <info-text class="margin-after">
+                        {% if environment_output %}
+                        The diagnostics cluster was provided when ESDiag started.
+                        {% else %}
+                        Choose where processed diagnostic documents and Agent Builder assets will live.
+                        {% endif %}
+                    </info-text>
+                    <button-group
+                        role="group"
+                        aria-label="Choose a diagnostic cluster"
+                        {% if !processes_diagnostics || environment_output %}aria-disabled="true"{% endif %}
+                    >
+                        <button
+                            type="button"
+                            {% if !processes_diagnostics || environment_output %}disabled{% endif %}
+                            data-attr:aria-pressed="$welcome.outputLocation === 'local' ? 'true' : 'false'"
+                            data-on:click="$welcome.outputLocation = 'local'"
+                        >
+                            Local
+                        </button>
+                        <button
+                            type="button"
+                            {% if !processes_diagnostics || environment_output %}disabled{% endif %}
+                            data-attr:aria-pressed="$welcome.outputLocation === 'remote' ? 'true' : 'false'"
+                            data-on:click="$welcome.outputLocation = 'remote'"
+                        >
+                            Remote
+                        </button>
+                    </button-group>
+                </li>
+
+                <li data-show="$welcome.outputLocation !== ''" style="display: none">
+                    <h2>Cluster Configuration</h2>
+
+                    {% if environment_output %}
+                    <info-text>
+                        {% if managed_local_stack %}
+                        This local diagnostics cluster is managed by <code>esdiag-local</code>.
+                        {% else %}
+                        ESDiag is using the output deployment provided by its environment.
+                        {% endif %}
+                    </info-text>
+                    <status-list aria-label="Diagnostics cluster status">
+                        <p>
+                            <span>Elasticsearch</span>
+                            {% if elasticsearch_ready %}
+                            <badge class="success">Running and authenticated</badge>
+                            {% else %}
+                            <badge class="warning">Unavailable or unauthorized</badge>
+                            {% endif %}
+                        </p>
+                        <p>
+                            <span>Kibana</span>
+                            {% if kibana_ready %}
+                            <badge class="success">Running and authenticated</badge>
+                            {% else %}
+                            <badge class="warning">Unavailable or unauthorized</badge>
+                            {% endif %}
+                        </p>
+                        <p>
+                            <span>Elasticsearch Assets</span>
+                            {% if elasticsearch_assets == "installed" %}
+                            <badge class="success">Installed</badge>
+                            {% else if elasticsearch_assets == "missing" %}
+                            <badge class="warning">Missing</badge>
+                            {% else %}
+                            <badge class="neutral">Unknown</badge>
+                            {% endif %}
+                        </p>
+                        <p>
+                            <span>Kibana Assets</span>
+                            {% if kibana_assets == "installed" %}
+                            <badge class="success">Installed</badge>
+                            {% else if kibana_assets == "missing" %}
+                            <badge class="warning">Missing</badge>
+                            {% else %}
+                            <badge class="neutral">Unknown</badge>
+                            {% endif %}
+                        </p>
+                    </status-list>
+                    <cluster-endpoints>
+                        <p><strong>Elasticsearch:</strong> <code>{{ output_url }}</code></p>
+                        <p><strong>Kibana:</strong> <code>{{ viewer_url }}</code></p>
+                    </cluster-endpoints>
+                    {% if elasticsearch_ready && kibana_ready %}
+                    <form data-on:submit__prevent="@post('/welcome/output/setup', {contentType: 'form'})">
+                        <button class="button" type="submit">
+                            {% if assets_installed %}Re-install Assets{% else %}Install Assets{% endif %}
+                        </button>
+                    </form>
+                    {% endif %}
+                    {% else if processes_diagnostics %}
+                    {% if !keystore_ready %}
+                    <credential-gate>
+                        <p>Create an encrypted keystore before saving cluster credentials.</p>
+                        <form data-on:submit__prevent="@post('/welcome/keystore', {contentType: 'form'})">
+                            <input-group>
+                                <label for="welcome-cluster-keystore-password" class="form-label">Keystore password</label>
+                                <input id="welcome-cluster-keystore-password" class="form-input" name="password"
+                                    type="password" autocomplete="new-password" minlength="6" required />
+                            </input-group>
+                            <label>
+                                <input name="confirm" type="checkbox" required />
+                                Create the encrypted keystore
+                            </label>
+                            <button class="button" type="submit">Create keystore</button>
+                        </form>
+                    </credential-gate>
+                    {% else if !keystore_unlocked && (stage == "output" || workflow_value == "process-existing") %}
+                    <credential-gate>
+                        <p>Unlock the keystore before configuring the diagnostic cluster.</p>
+                        <form data-on:submit__prevent="@post('/welcome/keystore', {contentType: 'form'})">
+                            <input-group>
+                                <label for="welcome-cluster-keystore-password" class="form-label">Keystore password</label>
+                                <input id="welcome-cluster-keystore-password" class="form-input" name="password"
+                                    type="password" autocomplete="current-password" required />
+                            </input-group>
+                            <button class="button" type="submit">Unlock keystore</button>
+                        </form>
+                    </credential-gate>
+                    {% else if !keystore_unlocked %}
+                    <info-text>Unlock the keystore in the current step before editing cluster credentials.</info-text>
+                    {% else %}
+                    <section data-show="$welcome.outputLocation === 'local'" style="display: none">
+                        <info-text>ESDiag manages the local Elasticsearch and Kibana configuration automatically.</info-text>
+                        <status-list aria-label="Local stack status">
+                            <p>
+                                <span>Container runtime</span>
+                                {% if container_runtime.is_empty() %}
+                                <badge class="warning">Not detected</badge>
+                                {% else %}
+                                <badge class="success">{{ container_runtime }}</badge>
+                                {% endif %}
+                            </p>
+                            <p>
+                                <span>Elasticsearch</span>
+                                {% if elasticsearch_ready %}
+                                <badge class="success">Running</badge>
+                                {% else %}
+                                <badge class="warning">Not ready</badge>
+                                {% endif %}
+                            </p>
+                            <p>
+                                <span>Kibana</span>
+                                {% if kibana_ready %}
+                                <badge class="success">Running</badge>
+                                {% else %}
+                                <badge class="warning">Not ready</badge>
+                                {% endif %}
+                            </p>
+                            <p>
+                                <span>Elasticsearch Assets</span>
+                                {% if elasticsearch_assets == "installed" %}
+                                <badge class="success">Installed</badge>
+                                {% else if elasticsearch_assets == "missing" %}
+                                <badge class="warning">Missing</badge>
+                                {% else %}
+                                <badge class="neutral">Unknown</badge>
+                                {% endif %}
+                            </p>
+                            <p>
+                                <span>Kibana Assets</span>
+                                {% if kibana_assets == "installed" %}
+                                <badge class="success">Installed</badge>
+                                {% else if kibana_assets == "missing" %}
+                                <badge class="warning">Missing</badge>
+                                {% else %}
+                                <badge class="neutral">Unknown</badge>
+                                {% endif %}
+                            </p>
+                        </status-list>
+                        {% if output_name.is_empty() %}
+                        <form
+                            data-on:submit__prevent="$_welcomeProvisioning = true; @post('/welcome/output/local', {contentType: 'form'})"
+                        >
+                            <button class="button" type="submit" data-attr:disabled="$_welcomeProvisioning">
+                                Start local stack
+                            </button>
+                            <span data-show="$_welcomeProvisioning" aria-live="polite">
+                                <span class="spinner" aria-hidden="true"></span>
+                                Starting Elasticsearch and Kibana…
+                            </span>
+                        </form>
+                        {% else if elasticsearch_ready && kibana_ready %}
+                        <form data-on:submit__prevent="@post('/welcome/output/setup', {contentType: 'form'})">
+                            <button class="button" type="submit">
+                                {% if assets_installed %}Re-install Assets{% else %}Install Assets{% endif %}
+                            </button>
+                        </form>
+                        {% endif %}
+                    </section>
+
+                    <section data-show="$welcome.outputLocation === 'remote'" style="display: none">
+                        <form data-on:submit__prevent="@post('/welcome/output', {contentType: 'form'})">
+                            <input-group>
+                                <label for="welcome-output-name" class="form-label">Elasticsearch output name</label>
+                                <input id="welcome-output-name" class="form-input" name="output_name" type="text"
+                                    value="{{ output_name }}" required />
+                            </input-group>
+                            <input-group>
+                                <label for="welcome-output-url" class="form-label">Elasticsearch URL</label>
+                                <input id="welcome-output-url" class="form-input" name="output_url" type="url"
+                                    value="{{ output_url }}" placeholder="https://elasticsearch.example:9200" required />
+                            </input-group>
+                            <input-group>
+                                <label for="welcome-viewer-name" class="form-label">Kibana viewer name</label>
+                                <input id="welcome-viewer-name" class="form-input" name="viewer_name" type="text"
+                                    value="{{ viewer_name }}" required />
+                            </input-group>
+                            <input-group>
+                                <label for="welcome-viewer-url" class="form-label">Kibana URL</label>
+                                <input id="welcome-viewer-url" class="form-input" name="viewer_url" type="url"
+                                    value="{{ viewer_url }}" placeholder="https://kibana.example:5601" required />
+                            </input-group>
+                            <input-group>
+                                <label for="welcome-output-secret" class="form-label">API key</label>
+                                <input id="welcome-output-secret" class="form-input" name="api_key" type="password"
+                                    autocomplete="off" required />
+                            </input-group>
+                            {% if !output_name.is_empty() %}
+                            <label>
+                                <input name="replace" type="checkbox" required />
+                                Replace the current output configuration
+                            </label>
+                            {% endif %}
+                            <button class="button" type="submit">Validate and save cluster</button>
+                        </form>
+                        <status-list aria-label="Diagnostic asset status">
+                            <p>
+                                <span>Elasticsearch Assets</span>
+                                {% if output_location != "remote" || output_name.is_empty() %}
+                                <badge class="neutral">Unknown</badge>
+                                {% else if elasticsearch_assets == "installed" %}
+                                <badge class="success">Installed</badge>
+                                {% else if elasticsearch_assets == "missing" %}
+                                <badge class="warning">Missing</badge>
+                                {% else %}
+                                <badge class="neutral">Unknown</badge>
+                                {% endif %}
+                            </p>
+                            <p>
+                                <span>Kibana Assets</span>
+                                {% if output_location != "remote" || output_name.is_empty() %}
+                                <badge class="neutral">Unknown</badge>
+                                {% else if kibana_assets == "installed" %}
+                                <badge class="success">Installed</badge>
+                                {% else if kibana_assets == "missing" %}
+                                <badge class="warning">Missing</badge>
+                                {% else %}
+                                <badge class="neutral">Unknown</badge>
+                                {% endif %}
+                            </p>
+                        </status-list>
+                        {% if output_location == "remote" && !output_name.is_empty() && elasticsearch_ready && kibana_ready %}
+                        <form data-on:submit__prevent="@post('/welcome/output/setup', {contentType: 'form'})">
+                            <button class="button" type="submit">
+                                {% if assets_installed %}Re-install Assets{% else %}Install Assets{% endif %}
+                            </button>
+                        </form>
+                        {% endif %}
+                    </section>
+                    {% endif %}
+                    {% endif %}
+                </li>
+                {% endif %}
+
+                {% if show_collection %}
+                <li>
+                    <h2>Diagnostic Source</h2>
+                    <info-text class="margin-after">
+                        Add the Elasticsearch host from which ESDiag will collect diagnostics.
+                    </info-text>
+                    {% if !keystore_ready %}
+                    <credential-gate>
+                        <p>Create an encrypted keystore before saving source credentials.</p>
+                        <form data-on:submit__prevent="@post('/welcome/keystore', {contentType: 'form'})">
+                            <input-group>
+                                <label for="welcome-source-keystore-password" class="form-label">Keystore password</label>
+                                <input id="welcome-source-keystore-password" class="form-input" name="password"
+                                    type="password" autocomplete="new-password" minlength="6" required />
+                            </input-group>
+                            <label>
+                                <input name="confirm" type="checkbox" required />
+                                Create the encrypted keystore
+                            </label>
+                            <button class="button" type="submit">Create keystore</button>
+                        </form>
+                    </credential-gate>
+                    {% else if !keystore_unlocked %}
+                    <credential-gate>
+                        <p>Unlock the keystore before configuring the diagnostic source.</p>
+                        <form data-on:submit__prevent="@post('/welcome/keystore', {contentType: 'form'})">
+                            <input-group>
+                                <label for="welcome-source-keystore-password" class="form-label">Keystore password</label>
+                                <input id="welcome-source-keystore-password" class="form-input" name="password"
+                                    type="password" autocomplete="current-password" required />
+                            </input-group>
+                            <button class="button" type="submit">Unlock keystore</button>
+                        </form>
+                    </credential-gate>
+                    {% else %}
+                    <form data-on:submit__prevent="@post('/welcome/collection', {contentType: 'form'})">
+                        <input-group>
+                            <label for="welcome-collection-name" class="form-label">Source name</label>
+                            <input id="welcome-collection-name" class="form-input" name="name" type="text"
+                                value="{{ collect_name }}" required />
+                        </input-group>
+                        <input-group>
+                            <label for="welcome-collection-url" class="form-label">Elasticsearch URL</label>
+                            <input id="welcome-collection-url" class="form-input" name="url" type="url"
+                                value="{{ collect_url }}" placeholder="https://elasticsearch.example:9200" required />
+                        </input-group>
+                        <input-group>
+                            <label for="welcome-collection-key" class="form-label">API key</label>
+                            <input id="welcome-collection-key" class="form-input" name="api_key" type="password"
+                                autocomplete="off" required />
+                        </input-group>
+                        {% if !collect_name.is_empty() %}
+                        <label>
+                            <input name="replace" type="checkbox" required />
+                            Replace the current diagnostic source
+                        </label>
+                        {% endif %}
+                        <button class="button" type="submit">
+                            {% if collect_name.is_empty() %}Save source{% else %}Update source{% endif %}
+                        </button>
+                    </form>
+                    {% endif %}
+                </li>
+                {% endif %}
+
+                {% if show_default_job %}
+                <li>
+                    <h2>Default Diagnostic</h2>
+                    <info-text class="margin-after">
+                        Save a repeatable workflow for this diagnostic source.
+                    </info-text>
+                    <form data-on:submit__prevent="@post('/welcome/default-job', {contentType: 'form'})">
+                        <input-group>
+                            <label for="welcome-job-host" class="form-label">Diagnostic source</label>
+                            <input id="welcome-job-host" class="form-input" name="collect_host" type="text"
+                                value="{{ collect_name }}" required />
+                        </input-group>
+                        <input-group>
+                            <label for="welcome-job-name" class="form-label">Saved job name</label>
+                            <input id="welcome-job-name" class="form-input" name="name" type="text"
+                                value="{{ default_job_name }}" required />
+                        </input-group>
+                        {% if !default_job_name.is_empty() %}
+                        <label>
+                            <input name="replace" type="checkbox" required />
+                            Replace the current default job
+                        </label>
+                        {% endif %}
+                        <button class="button" type="submit">
+                            {% if default_job_name.is_empty() %}Save default diagnostic{% else %}Update default diagnostic{% endif %}
+                        </button>
+                    </form>
+                </li>
+                {% endif %}
+
+                {% if show_complete %}
+                <li>
+                    <h2>Ready</h2>
+                    <p>Your default diagnostic workflow is configured.</p>
+                    <a class="button" href="/">Open ESDiag</a>
+                </li>
+                {% endif %}
+            </ol>
+        </steps>
+    </onboarding-flow>
+</content>

@@ -1,5 +1,5 @@
 use super::{ServerState, append_body_event, execute_script_event, html_event, now_epoch_seconds, signal_event};
-use crate::data::{KnownHost, Settings, authenticate, keystore_exists};
+use crate::data::{ApplicationConfig, KnownHost, Settings, authenticate, keystore_exists};
 use crate::server::template::{KeystoreBootstrapModal, KeystoreProcessUnlockModal, KeystoreUnlockModal};
 use askama::Template;
 use axum::{
@@ -26,7 +26,6 @@ pub(crate) struct KeystorePageState {
     pub can_use_keystore: bool,
     pub locked: bool,
     pub lock_time: i64,
-    pub show_bootstrap: bool,
 }
 
 impl KeystoreRateLimit {
@@ -53,7 +52,6 @@ impl ServerState {
                 can_use_keystore: true,
                 locked,
                 lock_time,
-                show_bootstrap: !keystore_exists().unwrap_or(false),
             }
         }
         #[cfg(not(feature = "keystore"))]
@@ -273,7 +271,7 @@ pub async fn get_process_unlock_modal(State(state): State<Arc<ServerState>>, hea
     axum::http::StatusCode::NO_CONTENT.into_response()
 }
 
-fn migration_needed() -> bool {
+pub(crate) fn migration_needed() -> bool {
     if keystore_exists().unwrap_or(false) {
         return false;
     }
@@ -457,7 +455,11 @@ pub async fn ensure_unlocked_for_active_output(state: &Arc<ServerState>) -> Resu
         return Ok(());
     }
 
-    let Some(active_target) = Settings::load().ok().and_then(|settings| settings.active_target) else {
+    let active_target = ApplicationConfig::load()
+        .ok()
+        .and_then(|config| config.output.default)
+        .or_else(|| Settings::load().ok().and_then(|settings| settings.active_target));
+    let Some(active_target) = active_target else {
         return Ok(());
     };
     let Some(active_host) = KnownHost::get_known(&active_target) else {
@@ -519,6 +521,7 @@ mod tests {
             retained_bundles: Arc::new(RwLock::new(HashMap::new())),
             runtime_mode,
             server_policy: ServerPolicy::new(runtime_mode).expect("test server policy"),
+            onboarding: false,
             keystore_rate_limit: Arc::new(std::sync::Mutex::new(KeystoreRateLimit::default())),
             stats: Arc::new(RwLock::new(Stats::default())),
             active_jobs_by_owner: Arc::new(tokio::sync::Mutex::new(HashMap::new())),

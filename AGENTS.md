@@ -40,6 +40,13 @@ For deeper repository structure see `docs/repository/organization.md`
 
 Issues and PRDs live in GitHub Issues on `elastic/esdiag` (the `upstream` remote, not the `origin` fork). External PRs are also a triage surface. See `docs/agents/issue-tracker.md`.
 
+In this repository's changelog, documentation, and shipped assets, reference only
+verified public `elastic/esdiag` issues. Do not include private repository issue
+links, qualified references, or their bare issue numbers. Never reuse a private
+issue number in a public URL; issue numbering is repository-specific. If no
+corresponding public issue is verified, describe the change without an issue
+reference.
+
 ### Triage labels
 
 Five canonical roles; `wontfix` maps to the existing `Wontfix` label, the other four use their default strings. See `docs/agents/triage-labels.md`.

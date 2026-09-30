@@ -99,34 +99,19 @@ the release gate only covers supported workflows.
 
 ## Agent Skill Plugin Suite
 
-`tests/plugin.sh` is a non-networked suite for the portable Agent Skill and host manifests under
-`plugin/`. It needs no deployment, no credentials, and no container runtime, and
-covers:
-
-- packaging: the bundled skill, scripts, and references match
-  `.agents/skills/esdiag/`, drift is detected, and the Claude, Codex, and
-  marketplace manifests agree
-- client configuration resolution: agent and space defaults, overrides, space
-  scoping, the already-suffixed URL case, and omitted model routing
-- API key handling: file references resolve and key values never appear in
-  resolved output
-- `esdiag` output parsing for `diagnostic.id` and `Kibana Link`
-- streaming behavior against recorded event fixtures, including progress
-  reporting, dashboard link resolution, conversation persistence, and the
-  interrupted-stream path that must not re-run a paid analysis
-- structural guards that the load-bearing rules in the skill instructions, such as
-  intent classification and confirm-before-collecting, have not been dropped
+`tests/plugin.sh` checks the portable Agent Skill and host manifests without
+network access. It verifies generated-package parity, drift detection, script-free
+packaging, reachable native command guides, valid manifests, and matching versions.
 
 Run it from the repository root:
 
 ```sh
 ./tests/plugin.sh
-./tests/plugin.sh --only test_config_applies_default_agent
+./tests/plugin.sh --only test_skill_routes_to_native_commands
 ```
 
-The suite requires `jq` and `shellcheck` is recommended for local linting.
-Behavioral evaluation of the command prompts themselves is not covered here; the
-suite asserts the rules are present, not that a model follows them.
+The suite requires `rg` and `tq`. It checks package structure and documented command
+routing; native command behavior is covered by the Rust tests.
 
 ## Fixture Archive Regeneration
 
@@ -150,3 +135,20 @@ The script requires `cargo`, `curl`, and `docker` by default. Set
 `CONTAINER_RUNTIME=podman` to use Podman instead. It starts temporary Elastic
 Stack containers and uses a temporary directory for the Logstash pipeline
 configuration.
+
+## Mixed-version provenance writes
+
+`tests/provenance_writers_tests.rs` installs the checkout's Elasticsearch assets
+and tests legacy, current, and dual-name payloads against report, Elasticsearch
+node, and Logstash node streams. It checks direct and bulk writes, term queries,
+aggregations, and a subsequent rollover.
+
+Run only against a disposable Elasticsearch cluster with security disabled.
+The test replaces ESDiag templates and rolls over its test streams.
+
+```sh
+ESDIAG_TEST_ES_URL=http://localhost:19278 cargo test --test provenance_writers_tests -- --ignored --nocapture
+```
+
+The test is ignored by default. Elasticsearch 9.4.2 on
+Ironhide is the regression environment for mixed-version provenance writes.

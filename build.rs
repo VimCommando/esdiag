@@ -21,11 +21,11 @@ fn main() {
         build_kibana_assets_bundle();
     }
 
-    let notice_path = Path::new("NOTICE.txt");
+    let notice_path = Path::new("NOTICES.md");
     let sbom_path = Path::new("esdiag.spdx.json");
     let cargo_toml_path = Path::new("Cargo.toml");
     let about_hbs_path = Path::new("about.hbs");
-    let generate_notice = env_flag("ESDIAG_GENERATE_NOTICE", true);
+    let generate_notice = env_flag("ESDIAG_GENERATE_NOTICE", false);
     let generate_sbom = env_flag("ESDIAG_GENERATE_SBOM", false);
 
     let should_generate_notice = if !generate_notice {
@@ -67,7 +67,7 @@ fn main() {
                 .expect("failed to execute cargo about. Is cargo-about installed?");
 
             if output_about.status.success() {
-                std::fs::write(notice_path, output_about.stdout).expect("failed to write NOTICE.txt");
+                std::fs::write(notice_path, &output_about.stdout).expect("failed to write NOTICES.md");
             } else {
                 panic!("cargo about failed: {}", String::from_utf8_lossy(&output_about.stderr));
             }

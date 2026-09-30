@@ -2,7 +2,7 @@
 
 Define the web keystore unlock, relock, and availability behavior for keychain-backed operations. Unlock state is shared with the CLI via a file-based lease.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Secrets Password Unlock for Web Session
 The system SHALL require the user to provide the secrets password before any encrypted keychain read or write operation is performed from the web interface.

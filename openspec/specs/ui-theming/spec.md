@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define shared theme tokens, theme controls, and persisted light or dark preferences.
+
+## Requirements
 
 ### Requirement: Global Theme Model
 The Web UI MUST provide a global theme model that supports at least light and dark modes across all primary pages and shared components.

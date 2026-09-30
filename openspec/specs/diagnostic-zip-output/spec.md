@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Define archive destinations and ZIP creation for diagnostic collection.
+
+## Requirements
 
 ### Requirement: Collect supports zip output mode
 The system SHALL expose a `--zip` option on the `collect` command that enables writing the diagnostic as a single zip archive.
@@ -48,12 +52,12 @@ In zip mode, the system MUST write API output entries directly into the target z
 ### Requirement: Process supports zip output mode
 The system SHALL expose a `--zip` option on the `process` command that stores collected API outputs in a single archive using the standard diagnostic naming format (for example, `api-diagnostics-<timestamp>.zip`).
 
-### Requirement: Process zip destination semantics
-The `process --zip` option SHALL accept an optional path interpreted as an output directory, where the default destination is the current directory (`.`) when no explicit path is provided.
-
 #### Scenario: Process emits diagnostic zip artifact
 - **WHEN** a user runs `esdiag process --zip`
 - **THEN** all API output files for that diagnostic are written to one `api-diagnostics-*.zip` archive
+
+### Requirement: Process zip destination semantics
+The `process --zip` option SHALL accept an optional path interpreted as an output directory, where the default destination is the current directory (`.`) when no explicit path is provided.
 
 #### Scenario: Process zip with explicit destination directory
 - **WHEN** a user runs `esdiag process --zip /tmp/out`

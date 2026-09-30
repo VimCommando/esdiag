@@ -37,6 +37,22 @@ esdiag <command> --help
 finite commands. YAML is the default.
 
 Finite commands write one result to stdout. Progress and errors go to stderr.
+Processing results include `outcome`, `documents_failed`, and `indexing_failures`
+with destination data stream names and rejection counts, including documents
+redirected to a failure store. `output` identifies the resolved
+destination, including a saved default deployment. A `setup_completed` result
+has an `outcome` of `complete` or `partial`; partial mapping updates include
+`failed_indices` and recovery advice in `warnings`. Rejected setup assets also
+appear in `warnings`; they do not prevent the combined setup command from
+attempting Kibana installation.
+
+Process results use the output host's linked Kibana viewer. An output with no
+linked viewer omits `kibana_url` unless its URL matches `ESDIAG_OUTPUT_URL`,
+in which case it uses that environment deployment's `ESDIAG_KIBANA_URL`.
+An unrelated default viewer is never used. See
+[Serverless asset compatibility](reference/serverless-assets.md#indexing-failures-and-recovery)
+for rollover and failure-store recovery steps.
+
 When a command fails after it starts, stdout contains a `command_failed` result
 and the command exits non-zero.
 
@@ -85,6 +101,9 @@ keystore password for non-interactive use.
 | Saved host name | Send to that host. |
 | Other non-empty string | Write to a local file or directory. |
 | Omitted | Use a complete `ESDIAG_OUTPUT_*` deployment, then the default linked output in `esdiag.yml`. |
+
+The web workflow's `Default` output reuses the active `serve` target, including
+an explicit output supplied at startup.
 
 Save HTTP URLs as hosts before using them as outputs. A raw `http://` or
 `https://` argument is a file path, not an Elasticsearch destination.
@@ -148,6 +167,27 @@ legacy plaintext host credentials into the keystore.
 
 It stores credentials in `secrets.yml`, not `esdiag.yml`.
 
+Enter an email address or another diagnostic user identifier. `EMAIL`, when
+set to an email address, supplies the default; the shell username does not.
+Invalid yes/no answers, endpoint URLs, and default-job host selections prompt
+again. The default job requires a saved collection host name, not a URL.
+Resuming displays the saved workflow, and changing it displays both choices.
+
+Pasted keys are hidden and used to validate Elasticsearch and Kibana before
+saving the output. Validation identifies the failing application and reports
+authentication, TLS, DNS, connection, or response failures. You can retry the
+output step without restarting onboarding. The local API key source appears
+only when a usable local key is detected.
+
+To replace a referenced API key later, run `esdiag keystore update <name> --apikey`
+at a terminal. It prompts for the key without putting it in shell history.
+
+Before configuration begins, an incomplete workflow can continue in the web
+interface. `init` starts `esdiag serve --mode user`, opens `/welcome`, and
+keeps the terminal attached until you stop the server with Ctrl+C. The terminal
+and web flows persist the same user, workflow, host, job, output, and keystore
+state.
+
 When you select local processing and no stack exists, `init` can start a
 binary-owned core stack. Its approval includes that new stack's required
 assets; declining returns to remote output setup.
@@ -157,6 +197,20 @@ See [Configure ESDiag](setup/configuration.md) for the prompts and paths.
 ## `local`
 
 `esdiag local <command>` runs the binary's Rust-owned local-stack lifecycle:
+
+`esdiag local --help` lists the available commands. If startup fails, the
+generated `.env` and `compose.yml` remain in the state directory. Use `logs`
+to inspect the failure, retry `up`, or stop the stack with `down`. Include
+the same `--state-dir` when using a custom directory. `secrets password`
+continues to read the retained password.
+
+During startup, Elasticsearch authentication failures are retried while its
+security index initializes. If authentication still fails when readiness times
+out, check the retained credentials. `local auth` reports rejected credentials
+immediately. The managed native server uses the local deployment's output and
+Kibana settings, overriding ambient `ESDIAG_OUTPUT_*` and `ESDIAG_KIBANA_*`
+variables. If that child exits during startup, `up` reports its exit status and
+log path without waiting for the readiness timeout.
 
 ```sh
 esdiag local up
@@ -249,6 +303,12 @@ run `serve`, `init`, or `setup`.
 Service mode uses one startup-defined exporter. It does not persist user hosts,
 jobs, or keystore state. Use `--auth-provider google-iap|none` to select
 request authentication. Use `none` only for controlled local testing.
+
+In user mode, an incomplete local workflow opens the `/welcome` onboarding
+flow. It creates or unlocks the encrypted keystore with a masked form and
+configures the same persistent workflow as `esdiag init`. Service mode shows an
+administrator-owned configuration notice instead and never writes local
+onboarding state.
 
 `ESDIAG_SERVICE_JOB_CAP` sets the global job cap.
 `ESDIAG_SERVICE_OWNER_JOB_CAP` sets the per-user cap.
