@@ -40,7 +40,7 @@ use esdiag::{
     onboarding::{
         CollectHostInput, OutputDeploymentInput, clear_collection_deferral, inspect as inspect_onboarding,
         save_collect_host, save_default_job, save_default_processing_job, save_output_deployment, save_user,
-        save_workflow,
+        save_workflow, saved_job_fits_workflow,
     },
     processor::{CollectionResult, DiagnosticOutcome, Identifiers, default_collect_archive_name},
     receiver::{
@@ -2549,16 +2549,20 @@ async fn run_init_wizard() -> Result<CommandResult> {
         let collect_job = esdiag::data::Job::builder()
             .collect_from(collect_host.clone())?
             .collect_to(format!("diagnostics/{collect_host}"))?;
-        confirm_default_job_replacement(&collect_job_name, None)?;
-        save_default_job(collect_job_name.clone(), collect_job)?;
-        if workflow.processes_diagnostics() {
+        let collect_job_saved =
+            confirm_default_job_replacement(&collect_job_name, None, !workflow.processes_diagnostics())?;
+        if collect_job_saved {
+            save_default_job(collect_job_name.clone(), collect_job)?;
+        }
+        if workflow.processes_diagnostics() && needs_processing_default_job(collect_job_saved)? {
             let output = esdiag::data::ApplicationConfig::load()?
                 .output
                 .default
                 .ok_or_else(|| eyre!("A processing workflow requires an output deployment"))?;
             let process_job_name = format!("{collect_host}-process-{output}");
-            confirm_default_job_replacement(&process_job_name, Some(&collect_job_name))?;
-            save_default_processing_job(process_job_name, collect_host)?;
+            if confirm_default_job_replacement(&process_job_name, Some(&collect_job_name), true)? {
+                save_default_processing_job(process_job_name, collect_host)?;
+            }
         }
     }
 
@@ -2733,27 +2737,88 @@ fn default_collect_host_name() -> Option<String> {
         .find_map(|(name, host)| host.has_role(HostRole::Collect).then_some(name))
 }
 
-/// `set_this_run` is a default job this initialization already chose, which may
-/// be replaced without asking.
-fn confirm_default_job_replacement(name: &str, set_this_run: Option<&str>) -> Result<()> {
-    let jobs = esdiag::data::load_saved_jobs()?;
-    let config = esdiag::data::ApplicationConfig::load()?;
-    let replaces_job = jobs.contains_key(name);
-    let replaces_default = replaces_other_default(config.job.default.as_deref(), name, set_this_run);
-    if (replaces_job || replaces_default)
-        && !prompt_confirm(&format!(
-            "Replace {}? [y/N]: ",
-            match (replaces_job, replaces_default) {
-                (true, true) => format!("existing job '{name}' and configured default job"),
-                (true, false) => format!("existing job '{name}'"),
-                (false, true) => "the configured default job".to_string(),
-                (false, false) => unreachable!(),
-            }
-        ))?
-    {
-        return Err(eyre!("Default job replacement was declined."));
+#[derive(Debug, PartialEq, Eq)]
+struct ConfiguredDefaultJob {
+    name: String,
+    fits_workflow: bool,
+}
+
+/// The configured default job that initialization must ask before replacing.
+/// A default chosen earlier in this run (`set_this_run`) may be replaced
+/// without asking.
+fn configured_default_job(set_this_run: Option<&str>) -> Result<Option<ConfiguredDefaultJob>> {
+    let Some(name) = esdiag::data::ApplicationConfig::load()?.job.default else {
+        return Ok(None);
+    };
+    if Some(name.as_str()) == set_this_run {
+        return Ok(None);
     }
+    Ok(Some(ConfiguredDefaultJob {
+        name,
+        fits_workflow: inspect_onboarding()?.default_job_configured,
+    }))
+}
+
+/// Asks before overwriting the saved job `name` or the configured default job,
+/// and returns whether to save `name` as the default. `set_this_run` is a
+/// default job this initialization already chose, which may be replaced
+/// without asking. `last_step` is false when a later step creates another
+/// default job, so a kept saved job only has to fit the workflow at the end.
+fn confirm_default_job_replacement(name: &str, set_this_run: Option<&str>, last_step: bool) -> Result<bool> {
+    let replaces_job = esdiag::data::load_saved_jobs()?.contains_key(name);
+    let current = configured_default_job(set_this_run)?;
+    let replaces_default = current.as_ref().is_some_and(|current| current.name != name);
+    if !(replaces_job || replaces_default) {
+        return Ok(true);
+    }
+    let replaced = match (replaces_job, replaces_default) {
+        (true, true) => format!("existing job '{name}' and configured default job"),
+        (true, false) => format!("existing job '{name}'"),
+        (false, true) => "the configured default job".to_string(),
+        (false, false) => unreachable!(),
+    };
+    let misfit = match current.as_ref() {
+        Some(current) => (!current.fits_workflow).then(|| ("default", current.name.clone())),
+        None if last_step && !saved_job_fits_workflow(name)? => Some(("saved", name.to_string())),
+        None => None,
+    };
+    if let Some((kind, job)) = misfit {
+        if prompt_confirm_default_yes(&format!(
+            "The {kind} job '{job}' does not fit the selected workflow. Replace {replaced}? [Y/n]: "
+        ))? {
+            return Ok(true);
+        }
+        return Err(eyre!(
+            "Kept the {kind} job '{job}', which does not fit the selected workflow. Run `esdiag init` again to choose a compatible default job."
+        ));
+    }
+    if prompt_confirm(&format!("Replace {replaced}? [y/N]: "))? {
+        return Ok(true);
+    }
+    keep_default_job(name, current.map(|current| current.name).as_deref())?;
+    Ok(false)
+}
+
+/// Leaves saved jobs unchanged after a declined replacement. Without a
+/// configured `current` default to keep, the existing saved `name` becomes the
+/// default.
+fn keep_default_job(name: &str, current: Option<&str>) -> Result<()> {
+    if let Some(current) = current {
+        println!("Keeping existing default job '{current}'.");
+        return Ok(());
+    }
+    let mut config = esdiag::data::ApplicationConfig::load()?;
+    config.job.default = Some(name.to_string());
+    config.save()?;
+    println!("Keeping existing job '{name}' as the default job.");
     Ok(())
+}
+
+/// Whether collect-and-process initialization still needs to save a processing
+/// default job after the collection step. A kept default that already fits the
+/// workflow is left alone.
+fn needs_processing_default_job(collect_job_saved: bool) -> Result<bool> {
+    Ok(collect_job_saved || !inspect_onboarding()?.default_job_configured)
 }
 
 fn should_run_output_setup(started_local_stack: bool, approved: impl FnOnce() -> Result<bool>) -> Result<bool> {
@@ -3353,10 +3418,6 @@ const fn skill_reload_guidance() -> &'static str {
     "Restart or reload running coding agents before using the installed skill."
 }
 
-fn replaces_other_default(current: Option<&str>, name: &str, set_this_run: Option<&str>) -> bool {
-    current.is_some_and(|current| current != name && Some(current) != set_this_run)
-}
-
 fn default_diagnostic_user() -> String {
     default_diagnostic_user_from(
         std::env::var("EMAIL").ok(),
@@ -3683,13 +3744,14 @@ mod tests {
         install_skill_targets, process_ask_prompt, readable_agent_name,
     };
     use super::{
-        Cli, Commands, HostCommands, KeystoreCommands, classify_failure, colorize_keystore_lock_status,
-        command_owns_stdout, default_diagnostic_user_from, detected_esdiag_local_preset,
-        ensure_output_deployment_valid, format_keystore_lock_status, format_keystore_lock_status_at,
-        format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode, local_core_stack_start_args,
-        local_stack_outcome, replaces_other_default, resolve_host_secret_auth, resolve_log_file_filter,
-        resolve_secret_input_with_prompt, resolve_tracing_filter, should_error_for_missing_subcommand,
-        should_run_output_setup, should_start_local_core_stack, structured_failure,
+        Cli, Commands, ConfiguredDefaultJob, HostCommands, KeystoreCommands, classify_failure,
+        colorize_keystore_lock_status, command_owns_stdout, configured_default_job, default_diagnostic_user_from,
+        detected_esdiag_local_preset, ensure_output_deployment_valid, format_keystore_lock_status,
+        format_keystore_lock_status_at, format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode,
+        keep_default_job, local_core_stack_start_args, local_stack_outcome, needs_processing_default_job,
+        resolve_host_secret_auth, resolve_log_file_filter, resolve_secret_input_with_prompt, resolve_tracing_filter,
+        saved_job_fits_workflow, should_error_for_missing_subcommand, should_run_output_setup,
+        should_start_local_core_stack, structured_failure,
     };
     #[cfg(feature = "keystore")]
     use super::{derive_collect_job, derive_process_job};
@@ -4042,20 +4104,147 @@ mod tests {
         assert_eq!(default_diagnostic_user_from(None, || None, || None), "");
     }
 
+    fn saved_default_job() -> Option<String> {
+        esdiag::data::ApplicationConfig::load()
+            .expect("load config")
+            .job
+            .default
+    }
+
+    /// Saves a collect host `src`, a collection-only job `src-collect`, and a
+    /// processing job `src-process-out`, with `workflow` and `default` selected.
+    fn configure_jobs(tmp: &TempDir, workflow: esdiag::data::OnboardingWorkflow, default: Option<&str>) {
+        std::fs::write(
+            tmp.path().join("hosts.yml"),
+            "src:\n  app: elasticsearch\n  roles:\n    - collect\n  url: http://localhost:9200/\n",
+        )
+        .expect("write hosts");
+        std::fs::write(
+            tmp.path().join("jobs.yml"),
+            "src-collect:\n  collect:\n    host: src\n    diagnostic_type: support\n  action: collect\n  output_dir: /tmp/src-collect\n\
+             src-process-out:\n  collect:\n    host: src\n    save_dir: /tmp/src-bundle\n  action: process\n  output:\n    type: known-host\n    name: out\n",
+        )
+        .expect("write jobs");
+        let mut config = esdiag::data::ApplicationConfig::new();
+        config.user = Some("tester@example.com".to_string());
+        config.workflow = Some(workflow);
+        config.output.default = Some("out".to_string());
+        config.job.default = default.map(str::to_string);
+        config.save().expect("save config");
+    }
+
     #[test]
-    fn default_job_set_this_run_is_replaced_without_asking() {
-        assert!(!replaces_other_default(None, "local-process", None));
-        assert!(!replaces_other_default(Some("local-process"), "local-process", None));
-        assert!(!replaces_other_default(
-            Some("local-collect"),
-            "local-process",
-            Some("local-collect")
-        ));
-        assert!(replaces_other_default(
-            Some("older-job"),
-            "local-process",
-            Some("local-collect")
-        ));
+    fn a_default_job_set_this_run_is_replaced_without_asking() {
+        let _guard = env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        configure_jobs(
+            &tmp,
+            esdiag::data::OnboardingWorkflow::CollectAndProcess,
+            Some("src-collect"),
+        );
+
+        assert_eq!(
+            configured_default_job(Some("src-collect")).expect("configured default"),
+            None
+        );
+        assert_eq!(
+            configured_default_job(None).expect("configured default"),
+            Some(ConfiguredDefaultJob {
+                name: "src-collect".to_string(),
+                fits_workflow: false,
+            })
+        );
+    }
+
+    #[test]
+    fn a_configured_default_job_reports_whether_it_fits_the_workflow() {
+        let _guard = env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectOnly, Some("src-collect"));
+        assert!(
+            configured_default_job(None)
+                .expect("configured default")
+                .is_some_and(|current| current.fits_workflow)
+        );
+
+        configure_jobs(
+            &tmp,
+            esdiag::data::OnboardingWorkflow::CollectAndProcess,
+            Some("src-collect"),
+        );
+        assert!(
+            configured_default_job(None)
+                .expect("configured default")
+                .is_some_and(|current| !current.fits_workflow)
+        );
+    }
+
+    #[test]
+    fn declining_replacement_keeps_the_configured_default_job() {
+        let _guard = env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectOnly, Some("old-job"));
+
+        keep_default_job("src-collect", Some("old-job")).expect("keep default job");
+
+        assert_eq!(saved_default_job().as_deref(), Some("old-job"));
+    }
+
+    #[test]
+    fn declining_replacement_without_a_default_keeps_the_saved_job_as_default() {
+        let _guard = env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectOnly, None);
+
+        keep_default_job("src-collect", None).expect("keep default job");
+
+        assert_eq!(saved_default_job().as_deref(), Some("src-collect"));
+    }
+
+    #[test]
+    fn a_kept_default_that_fits_the_workflow_skips_the_processing_job() {
+        let _guard = env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        configure_jobs(
+            &tmp,
+            esdiag::data::OnboardingWorkflow::CollectAndProcess,
+            Some("src-process-out"),
+        );
+        assert!(!needs_processing_default_job(false).expect("processing default"));
+        assert!(needs_processing_default_job(true).expect("processing default"));
+    }
+
+    #[test]
+    fn a_promoted_processing_job_is_not_replaced() {
+        let _guard = env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectAndProcess, None);
+
+        keep_default_job("src-process-out", None).expect("keep default job");
+
+        assert!(!needs_processing_default_job(false).expect("processing default"));
+        assert_eq!(saved_default_job().as_deref(), Some("src-process-out"));
+    }
+
+    #[test]
+    fn a_promoted_collection_job_still_needs_the_processing_job() {
+        let _guard = env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectAndProcess, None);
+
+        keep_default_job("src-collect", None).expect("keep default job");
+
+        assert!(needs_processing_default_job(false).expect("processing default"));
+    }
+
+    #[test]
+    fn a_saved_job_fits_only_the_workflow_it_was_built_for() {
+        let _guard = env_lock().lock().expect("env lock");
+        let tmp = setup_env();
+        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectOnly, None);
+        assert!(saved_job_fits_workflow("src-collect").expect("fits workflow"));
+        assert!(!saved_job_fits_workflow("src-process-out").expect("fits workflow"));
+        assert!(!saved_job_fits_workflow("missing").expect("fits workflow"));
     }
 
     #[test]
