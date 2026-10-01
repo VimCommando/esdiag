@@ -57,7 +57,7 @@ async fn execute_synchronous_processing(
         None,
     )?;
     let outcome = execute_with_context(job, context).await;
-    if outcome.succeeded() {
+    if !outcome.failed() {
         Ok(outcome)
     } else {
         Err(eyre::eyre!(execution_failure(&outcome)))
@@ -73,6 +73,10 @@ fn execution_failure(outcome: &ExecutionOutcome) -> String {
                 Some(error.clone())
             }
             crate::job::outcome::StageStatus::Succeeded | crate::job::outcome::StageStatus::Skipped(_) => None,
+        })
+        .or_else(|| {
+            let failures = outcome.child_failures().collect::<Vec<_>>();
+            (!failures.is_empty()).then(|| failures.join("; "))
         })
         .unwrap_or_else(|| "Diagnostic execution failed".to_string())
 }
@@ -455,7 +459,7 @@ fn diagnostic_result_entries(outcome: &ExecutionOutcome) -> Value {
                 "reason": child.execution_error().unwrap_or_default()
             }),
             (_, Some(report)) => json!({
-                "status": if child.export_error().is_some() {
+                "status": if child.failure().is_some() {
                     "failed"
                 } else {
                     status_for_outcome(&child.diagnostic_outcome)
@@ -467,7 +471,7 @@ fn diagnostic_result_entries(outcome: &ExecutionOutcome) -> Value {
                 "product": report.diagnostic.display_label(),
                 "source": "included_diagnostic",
                 "path": child.path,
-                "error": child.export_error().unwrap_or_default()
+                "error": child.failure().unwrap_or_default()
             }),
             (_, None) => json!({
                 "status": status_for_outcome(&child.diagnostic_outcome),
@@ -563,6 +567,13 @@ mod tests {
         export_failed_execution.report = Some(export_failed_report);
         export_failed_execution.record(Stage::Process, StageStatus::Succeeded);
         export_failed_execution.record(Stage::Export, StageStatus::Failed("child export failed".to_string()));
+        let mut report_failed_execution = ExecutionOutcome::new(ExecutionIdentity::new(15, "test"));
+        report_failed_execution.report = Some(report(
+            Some(Application::Elasticsearch),
+            Platform::Unknown,
+            "elasticsearch_diagnostic",
+        ));
+        report_failed_execution.record(Stage::Process, StageStatus::Failed("report write rejected".to_string()));
         outcome.children = vec![
             ChildExecutionOutcome {
                 path: "child-es".to_string(),
@@ -596,11 +607,19 @@ mod tests {
                 platform: Platform::ECK,
                 runtime: Some(250),
             },
+            ChildExecutionOutcome {
+                path: "child-report-failed".to_string(),
+                diagnostic_outcome: DiagnosticOutcome::Failed,
+                execution: Box::new(report_failed_execution),
+                application: Some(Application::Elasticsearch),
+                platform: Platform::ECK,
+                runtime: Some(125),
+            },
         ];
         let entries = diagnostic_result_entries(&outcome);
         let entries = entries.as_array().expect("array response");
 
-        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.len(), 6);
         assert_eq!(entries[0]["status"], "success");
         assert_eq!(entries[0]["source"], "parent");
         assert_eq!(entries[0]["took"], 1_000);
@@ -620,6 +639,9 @@ mod tests {
         assert_eq!(entries[4]["status"], "failed");
         assert_eq!(entries[4]["outcome"], "complete");
         assert_eq!(entries[4]["error"], "child export failed");
+        assert_eq!(entries[5]["status"], "failed");
+        assert_eq!(entries[5]["outcome"], "failed");
+        assert_eq!(entries[5]["error"], "report write rejected");
     }
 
     #[test]

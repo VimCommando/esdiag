@@ -77,6 +77,11 @@ links. An empty value or Kibana's `default` ID also selects the default space. A
 prefix in the configured Kibana URL. Keep the same environment setting when
 running `process`, `serve`, or `agent ask` so their links use that destination.
 
+Install ESDiag assets into only one Kibana space. If they already exist in
+another space, setup stops before importing and names that space. Set
+`ESDIAG_KIBANA_SPACE` to that space to update it, or remove the assets from it
+before installing elsewhere.
+
 The output needs ESDiag templates and ingest pipelines:
 
 ```sh
@@ -86,8 +91,9 @@ esdiag setup diagnostics-output
 On Elasticsearch Serverless, `setup` detects the deployment, omits unsupported
 ILM settings, and keeps the 30-day data stream retention policy for ordinary
 diagnostic data. Diagnostic reports are retained indefinitely. It installs
-templates and ingest pipelines and skips bundled security-dependent role
-assets. Configure project roles separately. Serverless security is always
+templates, ingest pipelines, and the bundled `esdiag-user` role. If the setup
+credentials cannot manage roles, setup logs a warning and continues; ask a
+project administrator to create the role. Serverless security is always
 enabled; a `410 Gone` security usage response also reports security as enabled.
 
 Run `esdiag setup <saved-kibana-host>` to install the Kibana assets separately.

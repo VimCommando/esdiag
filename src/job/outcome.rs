@@ -79,6 +79,19 @@ impl ChildExecutionOutcome {
         }
     }
 
+    /// Export failures and failed diagnostics fail the parent job; typed skips
+    /// and other internal stage failures of a skipped child do not.
+    pub fn failure(&self) -> Option<&str> {
+        match self.diagnostic_outcome {
+            DiagnosticOutcome::Skipped(_) => None,
+            DiagnosticOutcome::Failed => Some(self.execution_error().unwrap_or("included diagnostic failed")),
+            _ => match self.execution.stage(Stage::Export) {
+                Some(StageStatus::Failed(error) | StageStatus::Blocked(error)) => Some(error.as_str()),
+                _ => None,
+            },
+        }
+    }
+
     pub fn application(&self) -> Option<Application> {
         self.report()
             .and_then(|report| report.diagnostic.application)
@@ -126,8 +139,29 @@ impl ExecutionOutcome {
         !self.stages.iter().any(|outcome| outcome.status.is_unsuccessful())
     }
 
+    /// `succeeded` only covers this execution's own stages, so one failed
+    /// included diagnostic does not discard its siblings. Callers reporting a
+    /// job verdict must also check these child failures.
+    pub fn child_failures(&self) -> impl Iterator<Item = String> + '_ {
+        self.children.iter().filter_map(|child| {
+            child
+                .failure()
+                .map(|error| format!("Included diagnostic {} failed: {error}", child.path))
+        })
+    }
+
+    pub fn has_child_failures(&self) -> bool {
+        self.child_failures().next().is_some()
+    }
+
     pub fn diagnostic_outcome(&self) -> Option<DiagnosticOutcome> {
         self.report.as_ref().map(DiagnosticReport::outcome)
+    }
+
+    /// Job verdict shared by every caller: a failed stage, a failed diagnostic
+    /// report whose stages all succeeded, or a failed included diagnostic.
+    pub fn failed(&self) -> bool {
+        !self.succeeded() || self.diagnostic_outcome() == Some(DiagnosticOutcome::Failed) || self.has_child_failures()
     }
 
     pub(crate) fn record(&mut self, stage: Stage, status: StageStatus) {
@@ -177,5 +211,138 @@ mod tests {
         outcome.record(Stage::Process, StageStatus::Blocked("input failed".to_string()));
 
         assert!(!outcome.succeeded());
+    }
+
+    fn child(
+        path: &str,
+        diagnostic_outcome: DiagnosticOutcome,
+        stages: &[(Stage, StageStatus)],
+    ) -> ChildExecutionOutcome {
+        let mut execution = ExecutionOutcome::new(ExecutionIdentity::new(2, "test"));
+        for (stage, status) in stages {
+            execution.record(*stage, status.clone());
+        }
+        ChildExecutionOutcome {
+            path: path.to_string(),
+            execution: Box::new(execution),
+            diagnostic_outcome,
+            application: None,
+            platform: Platform::default(),
+            runtime: None,
+        }
+    }
+
+    #[test]
+    fn child_failures_include_export_and_failed_children_but_not_skips() {
+        let mut outcome = ExecutionOutcome::new(ExecutionIdentity::new(1, "test"));
+        outcome.children.push(child(
+            "exported",
+            DiagnosticOutcome::Complete,
+            &[(
+                Stage::Export,
+                StageStatus::Failed("report retained in failure store".to_string()),
+            )],
+        ));
+        outcome.children.push(child(
+            "missing",
+            DiagnosticOutcome::Failed,
+            &[
+                (Stage::Process, StageStatus::Failed("archive not found".to_string())),
+                (
+                    Stage::Export,
+                    StageStatus::Blocked("Process did not complete".to_string()),
+                ),
+            ],
+        ));
+        outcome.children.push(child(
+            "kibana",
+            DiagnosticOutcome::Skipped(crate::processor::SkipKind::NotImplemented),
+            &[
+                (Stage::Process, StageStatus::Failed("not implemented".to_string())),
+                (
+                    Stage::Export,
+                    StageStatus::Blocked("Process did not complete".to_string()),
+                ),
+            ],
+        ));
+
+        assert!(
+            outcome.succeeded(),
+            "child failures do not fail the parent's own stages"
+        );
+        assert!(outcome.has_child_failures());
+        assert_eq!(
+            outcome.child_failures().collect::<Vec<_>>(),
+            vec![
+                "Included diagnostic exported failed: report retained in failure store".to_string(),
+                "Included diagnostic missing failed: archive not found".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn skipped_children_are_not_failures() {
+        let mut outcome = ExecutionOutcome::new(ExecutionIdentity::new(1, "test"));
+        outcome.children.push(child(
+            "kibana",
+            DiagnosticOutcome::Skipped(crate::processor::SkipKind::NotImplemented),
+            &[
+                (Stage::Process, StageStatus::Failed("not implemented".to_string())),
+                (
+                    Stage::Export,
+                    StageStatus::Blocked("Process did not complete".to_string()),
+                ),
+            ],
+        ));
+
+        assert!(!outcome.has_child_failures());
+    }
+
+    #[test]
+    fn failed_report_fails_execution_with_successful_stages() {
+        use crate::processor::diagnostic::{DiagnosticMetadata, DiagnosticReportBuilder, report::ProcessorSummary};
+
+        let metadata = DiagnosticMetadata {
+            id: "test".to_string(),
+            collection_date: 0,
+            runner: "test".to_string(),
+            uuid: "test".to_string(),
+        };
+        let mut report =
+            DiagnosticReport::try_from(DiagnosticReportBuilder::from(metadata).receiver("file path".to_string()))
+                .unwrap();
+        report.add_processor_summary(
+            ProcessorSummary::new("cluster_settings-esdiag".to_string()).with_error("corrupt payload"),
+        );
+        let mut outcome = ExecutionOutcome::new(ExecutionIdentity::new(1, "test"));
+        outcome.record(Stage::Process, StageStatus::Succeeded);
+        outcome.record(Stage::Export, StageStatus::Succeeded);
+        outcome.report = Some(report);
+
+        assert!(outcome.succeeded());
+        assert!(!outcome.has_child_failures());
+        assert!(outcome.failed());
+    }
+
+    #[test]
+    fn blocked_export_fails_retained_partial_child() {
+        let mut outcome = ExecutionOutcome::new(ExecutionIdentity::new(1, "test"));
+        outcome.children.push(child(
+            "partial",
+            DiagnosticOutcome::Partial,
+            &[
+                (Stage::Process, StageStatus::Failed("report write rejected".to_string())),
+                (
+                    Stage::Export,
+                    StageStatus::Blocked("report persistence failed".to_string()),
+                ),
+            ],
+        ));
+
+        assert!(outcome.failed());
+        assert_eq!(
+            outcome.child_failures().collect::<Vec<_>>(),
+            vec!["Included diagnostic partial failed: report persistence failed".to_string()]
+        );
     }
 }
