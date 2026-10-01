@@ -102,9 +102,17 @@ published release notes, maintenance branches, and tagged history.
 - Changed `esdiag-local` to retain `auto`, `core`, or `full` stack mode per
   deployment. Core mode uses the matching native binary and avoids an ESDiag
   container; full mode preserves the containerized runtime.
+- Changed the scalar `thread_pool.estimated_time_interval` and `xpack.searchable.snapshot.shared_cache.size` values to map to `.current` fields, so they no longer conflict with the nested `warn_threshold` and `max_headroom` settings, which keep their original paths.
+- Changed `esdiag setup` to roll over existing ESDiag data streams when a bundled index or component template has a higher `version` than the installed one, logging each rollover, so corrected mappings apply to new writes without a manual rollover. Every bundled template now has a `version`, bumped by hand only when a rollover is needed. Setup keeps an installed template whose version is newer than the bundled one, so an older ESDiag release cannot downgrade it.
 
 ### Fixed
 
+- Fixed setup duplicating Kibana assets across spaces. When ESDiag assets already exist in another Kibana space, setup now stops before importing anything and names that space.
+- Report write failures now fail the command, even when Elasticsearch returns HTTP 201 after failure-store capture. CLI errors keep completed document counts, and local reports include the error.
+- Kept thread-pool warning thresholds and searchable-snapshot cache headroom settings instead of dropping them.
+- Added a searchable mapping for the cluster flood-stage maximum headroom setting.
+- Added failure-store read access to the bundled diagnostic user role. The role still cannot change failure-store options or retention.
+- Fixed setup skipping the bundled diagnostic user role on Serverless. Setup now installs it and, when the credentials cannot manage roles, logs a warning instead of failing.
 - Fixed `esdiag init` asking to replace the default job it had just created when setting up both collection and processing.
 - Fixed `esdiag init` failing when you declined to replace an existing default or saved job. It now keeps a job that fits the selected workflow and completes; for a job that doesn't fit, it asks before replacing it and explains how to recover if you keep it.
 - Fixed repeated `esdiag setup` runs failing when a bundled Kibana workflow already exists.

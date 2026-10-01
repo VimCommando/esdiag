@@ -975,7 +975,7 @@ fn collection_outcome(result: CollectionResult, upload_destination: Option<Strin
 }
 
 fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) -> String {
-    let failures = outcome
+    let mut failures = outcome
         .stages
         .iter()
         .filter_map(|stage| match &stage.status {
@@ -984,6 +984,7 @@ fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) ->
             esdiag::job::outcome::StageStatus::Succeeded | esdiag::job::outcome::StageStatus::Skipped(_) => None,
         })
         .collect::<Vec<_>>();
+    failures.extend(outcome.child_failures());
     if failures.is_empty() {
         "Job did not complete successfully".to_string()
     } else {
@@ -996,46 +997,52 @@ fn execution_process_result(outcome: &esdiag::job::outcome::ExecutionOutcome) ->
     let included = outcome
         .children
         .iter()
-        .map(|child| match (child.diagnostic_outcome, child.report()) {
-            (DiagnosticOutcome::Skipped(_), _) => IncludedDiagnosticResult::Skipped {
-                source: child.path.clone(),
-                product: Some(esdiag::processor::display_label(child.application(), child.platform())),
-                reason: child
-                    .execution_error()
-                    .unwrap_or("diagnostic processing skipped")
-                    .to_string(),
-            },
-            (_, Some(report)) => IncludedDiagnosticResult::Completed {
-                source: child.path.clone(),
-                diagnostic: DiagnosticResult {
-                    id: report.diagnostic.metadata.id.clone(),
-                    product: report.diagnostic.display_label(),
-                    documents: report.diagnostic.docs.created,
-                    documents_failed: report.diagnostic.docs.errors,
-                    outcome: report.outcome(),
-                    indexing_failures: report
-                        .rejected_indices()
-                        .into_iter()
-                        .map(|(index, documents_failed)| esdiag::cli_output::IndexingFailure {
-                            index,
-                            documents_failed,
-                            category: "document_rejected",
-                        })
-                        .collect(),
-                    duration_ms: child.runtime.unwrap_or_default(),
+        .map(
+            |child| match (child.diagnostic_outcome, child.report(), child.failure()) {
+                (_, Some(_), Some(error)) => IncludedDiagnosticResult::Failed {
                     source: child.path.clone(),
-                    output: String::new(),
-                    kibana_url: report.diagnostic.kibana_link.clone(),
+                    error: error.to_string(),
+                },
+                (DiagnosticOutcome::Skipped(_), _, _) => IncludedDiagnosticResult::Skipped {
+                    source: child.path.clone(),
+                    product: Some(esdiag::processor::display_label(child.application(), child.platform())),
+                    reason: child
+                        .execution_error()
+                        .unwrap_or("diagnostic processing skipped")
+                        .to_string(),
+                },
+                (_, Some(report), None) => IncludedDiagnosticResult::Completed {
+                    source: child.path.clone(),
+                    diagnostic: DiagnosticResult {
+                        id: report.diagnostic.metadata.id.clone(),
+                        product: report.diagnostic.display_label(),
+                        documents: report.diagnostic.docs.created,
+                        documents_failed: report.diagnostic.docs.errors,
+                        outcome: report.outcome(),
+                        indexing_failures: report
+                            .rejected_indices()
+                            .into_iter()
+                            .map(|(index, documents_failed)| esdiag::cli_output::IndexingFailure {
+                                index,
+                                documents_failed,
+                                category: "document_rejected",
+                            })
+                            .collect(),
+                        duration_ms: child.runtime.unwrap_or_default(),
+                        source: child.path.clone(),
+                        output: String::new(),
+                        kibana_url: report.diagnostic.kibana_link.clone(),
+                    },
+                },
+                (_, None, _) => IncludedDiagnosticResult::Failed {
+                    source: child.path.clone(),
+                    error: child
+                        .execution_error()
+                        .unwrap_or("included diagnostic processing failed")
+                        .to_string(),
                 },
             },
-            (_, None) => IncludedDiagnosticResult::Failed {
-                source: child.path.clone(),
-                error: child
-                    .execution_error()
-                    .unwrap_or("included diagnostic processing failed")
-                    .to_string(),
-            },
-        })
+        )
         .collect();
 
     Some(ProcessResult {
@@ -1654,8 +1661,18 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 )?;
                 let outcome = esdiag::job::executor::execute_with_context(job, context).await;
                 let process = execution_process_result(&outcome);
-                if !outcome.succeeded() || outcome.diagnostic_outcome() == Some(DiagnosticOutcome::Failed) {
-                    return Err(eyre!("{}", format_execution_failure(&outcome)));
+                if outcome.failed() {
+                    let message = format_execution_failure(&outcome);
+                    return Err(JobExecutionFailure::new(
+                        FailedStage::Process,
+                        JobOutcome {
+                            processed: outcome.report.is_some(),
+                            execution: Some(outcome),
+                            ..JobOutcome::default()
+                        },
+                        eyre!(message),
+                    )
+                    .into());
                 }
                 if stdout_owned {
                     Ok(CommandResult::stream())
@@ -3946,6 +3963,38 @@ mod tests {
         assert_eq!(
             agent_builder_space(&Url::parse("https://kb.example/app/s/support").expect("url")),
             None
+        );
+    }
+
+    #[test]
+    fn included_report_failure_is_not_rendered_as_completed() {
+        let child_execution = esdiag::job::outcome::ExecutionOutcome {
+            identity: esdiag::job::context::ExecutionIdentity::new(2, "test"),
+            stages: vec![esdiag::job::outcome::StageOutcome {
+                stage: esdiag::job::outcome::Stage::Process,
+                status: esdiag::job::outcome::StageStatus::Failed("report write rejected".to_string()),
+            }],
+            collection: None,
+            report: None,
+            children: Vec::new(),
+            retained_bundle: None,
+            upload: None,
+        };
+        let child = esdiag::job::outcome::ChildExecutionOutcome {
+            path: "child-es".to_string(),
+            execution: Box::new(child_execution),
+            diagnostic_outcome: esdiag::processor::DiagnosticOutcome::Failed,
+            application: Some(Application::Elasticsearch),
+            platform: esdiag::data::Platform::ECK,
+            runtime: Some(1),
+        };
+        let mut outcome =
+            esdiag::job::outcome::ExecutionOutcome::new(esdiag::job::context::ExecutionIdentity::new(1, "test"));
+        outcome.children.push(child);
+        assert!(outcome.has_child_failures());
+        assert_eq!(
+            super::format_execution_failure(&outcome),
+            "Included diagnostic child-es failed: report write rejected"
         );
     }
 
