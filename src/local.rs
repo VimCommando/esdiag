@@ -206,6 +206,9 @@ struct LocalState {
     /// `None` asks at an interactive terminal and skips copying otherwise.
     copy_password: Option<bool>,
     has_existing_state: bool,
+    /// Resolved from the host on each start and never written to `.env`,
+    /// where Compose would interpolate `$` in the value.
+    user: Option<String>,
 }
 
 impl LocalState {
@@ -224,6 +227,7 @@ impl LocalState {
             open_browser: true,
             copy_password: None,
             has_existing_state,
+            user: None,
         })
     }
 
@@ -250,7 +254,8 @@ impl LocalState {
         if let Some(level) = options.log_level {
             self.values.insert("LOG_LEVEL".to_string(), level);
         }
-        self.set_user(host_user()?);
+        self.user = host_user()?;
+        self.values.remove("ESDIAG_USER");
         self.write()?;
         if let Ok(log) = esdiag::data::last_run_path(esdiag::data::RUN_LOG) {
             eprintln!(
@@ -411,14 +416,6 @@ impl LocalState {
         );
         self.value("LOG_LEVEL", "info");
         self.write_compose(mode)
-    }
-
-    /// Refreshed on every start so the container follows the host's current user.
-    fn set_user(&mut self, user: Option<String>) {
-        match user {
-            Some(user) => self.values.insert("ESDIAG_USER".to_string(), user),
-            None => self.values.remove("ESDIAG_USER"),
-        };
     }
 
     fn value(&mut self, key: &str, default: &str) {
@@ -680,6 +677,9 @@ impl LocalState {
 
     fn restart(&mut self, services: Vec<String>) -> Result<()> {
         self.runtime = Some(detect_runtime(None)?);
+        if services.iter().any(|service| service == "esdiag") {
+            self.user = host_user()?;
+        }
         for service in services {
             if service == "esdiag" && self.values.get("STACK_MODE").map(String::as_str) == Some("core") {
                 self.start_native_service()?;
@@ -810,11 +810,14 @@ impl LocalState {
             .ok_or_else(|| eyre!("Container runtime is not initialized"))?;
         let project = format!("esdiag-local-{}", stable_project_id(&self.dir));
         let mut command = Command::new(runtime);
-        // Compose prefers the parent environment over `--env-file`, so the
-        // state file stays authoritative only if the inherited value is removed.
+        // Compose takes process environment values literally and prefers them
+        // over `--env-file`, so the resolved user always replaces an inherited one.
+        match &self.user {
+            Some(user) => command.env("ESDIAG_USER", user),
+            None => command.env_remove("ESDIAG_USER"),
+        };
         command
             .env("PODMAN_COMPOSE_WARNING_LOGS", "false")
-            .env_remove("ESDIAG_USER")
             .args(["compose", "--project-name", &project, "--env-file"])
             .arg(self.dir.join(".env"))
             .args(["--file"])
@@ -1174,6 +1177,7 @@ mod tests {
             open_browser: false,
             copy_password: Some(false),
             has_existing_state: false,
+            user: None,
         };
         (directory, state)
     }
@@ -1234,29 +1238,27 @@ mod tests {
         state.initialize(StackMode::Full).expect("initialize full state");
         let full = fs::read_to_string(state.dir.join("compose.yml")).expect("read full compose");
         assert!(full.contains("      ESDIAG_USER: ${ESDIAG_USER:-}\n    command: [\"serve\"]"));
-
-        state.set_user(Some("host@example.com".to_string()));
-        assert_eq!(
-            state.values.get("ESDIAG_USER").map(String::as_str),
-            Some("host@example.com")
-        );
-
-        state.set_user(None);
-        assert!(!state.values.contains_key("ESDIAG_USER"));
     }
 
     #[test]
-    fn compose_ignores_an_inherited_user() {
+    fn compose_receives_the_resolved_user_through_its_environment() {
         let (_directory, mut state) = state();
         state.runtime = Some("docker".to_string());
-
-        let (_, command) = state.compose_command(&["config"]).expect("compose command");
-
-        assert!(
+        let user_env = |state: &LocalState| {
+            let (_, command) = state.compose_command(&["config"]).expect("compose command");
             command
                 .get_envs()
-                .any(|(key, value)| key == "ESDIAG_USER" && value.is_none())
-        );
+                .find(|(key, _)| *key == "ESDIAG_USER")
+                .map(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
+        };
+
+        assert_eq!(user_env(&state), Some(None));
+
+        state.user = Some("ops$team@example.com".to_string());
+        assert_eq!(user_env(&state), Some(Some("ops$team@example.com".to_string())));
+        state.write().expect("write state");
+        let env = fs::read_to_string(state.dir.join(".env")).expect("read state");
+        assert!(!env.contains("ESDIAG_USER"));
     }
 
     #[test]
