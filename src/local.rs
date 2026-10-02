@@ -254,7 +254,9 @@ impl LocalState {
         if let Some(level) = options.log_level {
             self.values.insert("LOG_LEVEL".to_string(), level);
         }
-        self.user = host_user()?;
+        // Only the full-mode container consumes the user; core mode's native
+        // server reads esdiag.yml itself.
+        self.user = if mode == StackMode::Full { host_user()? } else { None };
         self.values.remove("ESDIAG_USER");
         self.write()?;
         if let Ok(log) = esdiag::data::last_run_path(esdiag::data::RUN_LOG) {
@@ -677,7 +679,7 @@ impl LocalState {
 
     fn restart(&mut self, services: Vec<String>) -> Result<()> {
         self.runtime = Some(detect_runtime(None)?);
-        if services.iter().any(|service| service == "esdiag") {
+        if self.active_mode() == StackMode::Full && services.iter().any(|service| service == "esdiag") {
             self.user = host_user()?;
         }
         for service in services {

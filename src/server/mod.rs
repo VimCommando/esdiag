@@ -141,6 +141,28 @@ pub struct ResolvedIdentity {
     pub account: Option<String>,
 }
 
+/// `esdiag.yml` could not be read while resolving the local user. This is a
+/// server fault, so it must not be reported as a rejected identity.
+#[derive(Debug)]
+pub struct ConfigurationError(String);
+
+impl std::fmt::Display for ConfigurationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ConfigurationError {}
+
+/// The response status and label for a failed identity resolution.
+pub(crate) fn identity_failure(err: &eyre::Report) -> (StatusCode, &'static str) {
+    if err.downcast_ref::<ConfigurationError>().is_some() {
+        (StatusCode::INTERNAL_SERVER_ERROR, "Configuration error")
+    } else {
+        (StatusCode::UNAUTHORIZED, "Unauthorized request")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JobConcurrencyCaps {
     pub global: usize,
@@ -1410,7 +1432,11 @@ fn resolve_optional_identity(mode: RuntimeMode) -> Result<ResolvedIdentity> {
     let configured_user = match std::env::var("ESDIAG_USER").ok().and_then(non_empty) {
         Some(user) => Some(user),
         None if mode == RuntimeMode::User => ApplicationConfig::load()
-            .map_err(|err| eyre!("Could not read the configured user from esdiag.yml: {err}"))?
+            .map_err(|err| {
+                eyre::Report::new(ConfigurationError(format!(
+                    "Could not read the configured user from esdiag.yml: {err}"
+                )))
+            })?
             .user
             .and_then(non_empty),
         None => None,
@@ -1802,10 +1828,11 @@ pub fn receiver_stream(rx: mpsc::Receiver<ServerEvent>) -> impl futures::Stream<
     })
 }
 
+/// A `user` of `None` delivers every event.
 fn broadcast_receiver_stream(
     rx: broadcast::Receiver<ServerEvent>,
     initial: Option<ServerEvent>,
-    user: String,
+    user: Option<String>,
     shutdown: watch::Receiver<bool>,
 ) -> impl futures::Stream<Item = Result<Event, Infallible>> {
     stream::unfold(
@@ -1827,7 +1854,7 @@ fn broadcast_receiver_stream(
                     recv = rx.recv() => {
                         match recv {
                             Ok(event) => {
-                                if !event_visible_to_user(&event, &user) {
+                                if user.as_deref().is_some_and(|user| !event_visible_to_user(&event, user)) {
                                     continue;
                                 }
                                 return Some((server_event_to_sse(event), (rx, initial, user, shutdown)));
@@ -1842,21 +1869,28 @@ fn broadcast_receiver_stream(
     )
 }
 
-/// Subscribe to the shared event bus. The subscriber's resolved identity is
-/// what [`event_visible_to_user`] filters on, so an unresolved identity must
-/// not fall back to [`DEFAULT_OWNER`] while a provider requires one: that
+/// Subscribe to the shared event bus. With an identity provider, the
+/// subscriber's resolved identity is what [`event_visible_to_user`] filters
+/// on, so an unresolved identity must not fall back to [`DEFAULT_OWNER`]: that
 /// owner is also where any event published without an explicit owner lands
 /// (ADR-0008). The `require_authenticated_user` layer rejects these requests
 /// too; this check keeps the guarantee local to the delivery path.
+///
+/// Without a provider, every request resolves to the same process-wide
+/// identity, so the subscriber receives every event. Events published without
+/// an owner, or before the user was configured, still reach the browser.
 async fn events(axum::extract::State(state): axum::extract::State<Arc<ServerState>>, headers: HeaderMap) -> Response {
     tracing::debug!("Started events stream");
-    let request_user = match state.resolve_user_email(&headers) {
-        Ok((_, user)) => user,
-        Err(err) if state.server_policy.requires_authentication() => {
-            tracing::warn!("Event stream denied: {}", err);
-            return StatusCode::UNAUTHORIZED.into_response();
+    let request_user = if state.server_policy.requires_authentication() {
+        match state.resolve_user_email(&headers) {
+            Ok((_, user)) => Some(user),
+            Err(err) => {
+                tracing::warn!("Event stream denied: {}", err);
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
         }
-        Err(_) => DEFAULT_OWNER.to_string(),
+    } else {
+        None
     };
     let initial_stats = state.get_stats().await;
     let initial = stats_event(format!(r#"{{"stats":{}}}"#, initial_stats));
@@ -2325,7 +2359,7 @@ mod tests {
         drop(tx);
 
         let subscribed = |rx, user: &str| {
-            broadcast_receiver_stream(rx, None, user.to_string(), shutdown_rx.clone()).collect::<Vec<_>>()
+            broadcast_receiver_stream(rx, None, Some(user.to_string()), shutdown_rx.clone()).collect::<Vec<_>>()
         };
         let alice = subscribed(alice_rx, "alice@example.com").await;
         let bob = subscribed(bob_rx, "bob@example.com").await;
@@ -2334,6 +2368,23 @@ mod tests {
         assert_eq!(alice.len(), 3, "alice's two events plus the broadcast");
         assert_eq!(bob.len(), 2, "bob's one event plus the broadcast");
         assert_eq!(carol.len(), 1, "the broadcast alone");
+    }
+
+    #[tokio::test]
+    async fn subscriber_without_an_identity_provider_receives_every_event() {
+        let (tx, rx) = broadcast::channel(8);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        tx.send(signal_event(r#"{"keystore":{"locked":false}}"#))
+            .expect("send unowned event");
+        tx.send(signal_event(r#"{"loading":false}"#).for_owner("configured@example.com"))
+            .expect("send owned event");
+        drop(tx);
+
+        let events = broadcast_receiver_stream(rx, None, None, shutdown_rx)
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(events.len(), 2);
     }
 
     #[test]
@@ -2361,7 +2412,8 @@ mod tests {
         let state = test_state(RuntimeMode::Service);
         let mut headers = HeaderMap::new();
 
-        assert!(state.resolve_identity(&headers).is_err());
+        let err = state.resolve_identity(&headers).expect_err("missing header");
+        assert_eq!(super::identity_failure(&err).0, axum::http::StatusCode::UNAUTHORIZED);
         headers.insert(
             super::DEFAULT_IDENTITY_HEADER,
             "accounts.google.com:alice@example.com".parse().expect("valid header"),
@@ -2497,6 +2549,10 @@ mod tests {
             .expect_err("invalid esdiag.yml must not resolve to Anonymous");
 
         assert!(err.to_string().contains("esdiag.yml"), "{err}");
+        assert_eq!(
+            super::identity_failure(&err).0,
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     #[test]
