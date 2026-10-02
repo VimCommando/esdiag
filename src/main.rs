@@ -2285,7 +2285,10 @@ async fn run_init_wizard() -> Result<CommandResult> {
     }
 
     #[cfg(feature = "server")]
-    if !initial.is_complete() && prompt_confirm("Continue setup in the web interface? [y/N]: ")? {
+    if !initial.is_complete()
+        && !inspect_onboarding()?.is_complete()
+        && prompt_confirm("Continue setup in the web interface? [y/N]: ")?
+    {
         return run_gui_onboarding().await;
     }
     let mut output_name_for_defaults = esdiag::data::ApplicationConfig::load()?.output.default;
