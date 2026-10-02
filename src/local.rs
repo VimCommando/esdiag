@@ -250,7 +250,7 @@ impl LocalState {
         if let Some(level) = options.log_level {
             self.values.insert("LOG_LEVEL".to_string(), level);
         }
-        self.set_user(host_user());
+        self.set_user(host_user()?);
         self.write()?;
         if let Ok(log) = esdiag::data::last_run_path(esdiag::data::RUN_LOG) {
             eprintln!(
@@ -1071,18 +1071,26 @@ pub fn detected_runtime() -> Option<String> {
 }
 
 /// The container cannot read the host's `esdiag.yml`, so the host resolves the user.
-fn host_user() -> Option<String> {
+fn host_user() -> Result<Option<String>> {
     resolve_host_user(std::env::var("ESDIAG_USER").ok(), || {
-        ApplicationConfig::load().ok().and_then(|config| config.user)
+        ApplicationConfig::load()
+            .map(|config| config.user)
+            .wrap_err("Could not read the configured user from esdiag.yml")
     })
 }
 
-fn resolve_host_user(environment: Option<String>, configured: impl FnOnce() -> Option<String>) -> Option<String> {
+fn resolve_host_user(
+    environment: Option<String>,
+    configured: impl FnOnce() -> Result<Option<String>>,
+) -> Result<Option<String>> {
     let usable = |user: String| {
         let user = user.trim();
         (!user.is_empty() && !user.contains(['\n', '\r'])).then(|| user.to_string())
     };
-    environment.and_then(usable).or_else(|| configured().and_then(usable))
+    match environment.and_then(usable) {
+        Some(user) => Ok(Some(user)),
+        None => Ok(configured()?.and_then(usable)),
+    }
 }
 
 fn parse_env(contents: &str) -> Result<BTreeMap<String, String>> {
@@ -1236,17 +1244,36 @@ mod tests {
 
     #[test]
     fn empty_environment_user_falls_back_to_configured_user() {
-        let configured = || Some("configured@example.com".to_string());
+        fn resolve(
+            environment: Option<&str>,
+            configured: impl FnOnce() -> eyre::Result<Option<String>>,
+        ) -> Option<String> {
+            super::resolve_host_user(environment.map(str::to_string), configured).expect("resolve user")
+        }
+        let configured = || Ok(Some("configured@example.com".to_string()));
 
         assert_eq!(
-            super::resolve_host_user(Some("  ".to_string()), configured).as_deref(),
+            resolve(Some("  "), configured).as_deref(),
             Some("configured@example.com")
         );
         assert_eq!(
-            super::resolve_host_user(Some("env@example.com".to_string()), configured).as_deref(),
+            resolve(Some("env@example.com"), configured).as_deref(),
             Some("env@example.com")
         );
-        assert_eq!(super::resolve_host_user(None, || Some(" ".to_string())), None);
+        assert_eq!(resolve(None, || Ok(Some(" ".to_string()))), None);
+    }
+
+    #[test]
+    fn unreadable_configuration_fails_instead_of_clearing_the_user() {
+        let unreadable = || Err(eyre::eyre!("invalid esdiag.yml"));
+
+        assert!(super::resolve_host_user(None, unreadable).is_err());
+        assert_eq!(
+            super::resolve_host_user(Some("env@example.com".to_string()), unreadable)
+                .expect("environment user wins")
+                .as_deref(),
+            Some("env@example.com")
+        );
     }
 
     #[test]

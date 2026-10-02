@@ -886,7 +886,7 @@ impl ServerState {
                     account,
                 })
             }
-            AuthProvider::None => Ok(resolve_optional_identity(self.runtime_mode)),
+            AuthProvider::None => resolve_optional_identity(self.runtime_mode),
         }
     }
 
@@ -1401,21 +1401,22 @@ fn parse_iap_identity(raw: &str) -> (Option<String>, String) {
 }
 
 /// Service mode never reads user state, so `esdiag.yml` applies only in user mode.
-fn resolve_optional_identity(mode: RuntimeMode) -> ResolvedIdentity {
+fn resolve_optional_identity(mode: RuntimeMode) -> Result<ResolvedIdentity> {
     fn non_empty(value: String) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     }
 
-    let configured_user = std::env::var("ESDIAG_USER").ok().and_then(non_empty).or_else(|| {
-        (mode == RuntimeMode::User)
-            .then(ApplicationConfig::load)
-            .and_then(Result::ok)
-            .and_then(|config| config.user)
-            .and_then(non_empty)
-    });
+    let configured_user = match std::env::var("ESDIAG_USER").ok().and_then(non_empty) {
+        Some(user) => Some(user),
+        None if mode == RuntimeMode::User => ApplicationConfig::load()
+            .map_err(|err| eyre!("Could not read the configured user from esdiag.yml: {err}"))?
+            .user
+            .and_then(non_empty),
+        None => None,
+    };
 
-    match configured_user {
+    Ok(match configured_user {
         Some(user) => ResolvedIdentity {
             locked: true,
             user,
@@ -1426,7 +1427,7 @@ fn resolve_optional_identity(mode: RuntimeMode) -> ResolvedIdentity {
             user: DEFAULT_OWNER.to_string(),
             account: None,
         },
-    }
+    })
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -2481,6 +2482,21 @@ mod tests {
 
         assert!(identity.locked);
         assert_eq!(identity.user, "configured@example.com");
+    }
+
+    #[test]
+    fn user_mode_rejects_an_unreadable_configuration() {
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_USER");
+        let path = crate::data::ApplicationConfig::path().expect("config path");
+        std::fs::write(&path, "version: 1\nuser: [unterminated\n").expect("write invalid config");
+        let state = test_state(RuntimeMode::User);
+
+        let err = state
+            .resolve_identity(&HeaderMap::new())
+            .expect_err("invalid esdiag.yml must not resolve to Anonymous");
+
+        assert!(err.to_string().contains("esdiag.yml"), "{err}");
     }
 
     #[test]
