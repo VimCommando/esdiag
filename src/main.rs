@@ -2220,15 +2220,21 @@ fn prompt_new_keystore_password() -> Result<String> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(eyre!("A new keystore password requires an interactive terminal."));
     }
-    let password = rpassword::prompt_password("Enter new keystore password: ")?;
-    if password.is_empty() {
-        return Err(eyre!("Keystore password cannot be empty."));
+    prompt_new_password_with(|prompt| Ok(rpassword::prompt_password(prompt)?))
+}
+
+fn prompt_new_password_with(mut prompt: impl FnMut(&str) -> Result<String>) -> Result<String> {
+    loop {
+        let password = prompt("Enter new keystore password: ")?;
+        if password.is_empty() {
+            eprintln!("Keystore password cannot be empty. Try again.");
+            continue;
+        }
+        if prompt("Confirm new keystore password: ")? == password {
+            return Ok(password);
+        }
+        eprintln!("Passwords did not match. Try again.");
     }
-    let confirm = rpassword::prompt_password("Confirm new keystore password: ")?;
-    if password != confirm {
-        return Err(eyre!("Keystore password confirmation did not match."));
-    }
-    Ok(password)
 }
 
 fn unlock_keystore(ttl: Duration) -> Result<std::path::PathBuf> {
@@ -3692,6 +3698,22 @@ mod tests {
         assert_eq!(direct, "https://example.test:9200/path");
         assert_eq!(resolved, direct);
     }
+    #[test]
+    fn new_password_prompt_retries_until_confirmed() {
+        let mut answers = ["", "first", "typo", "second", "second"].into_iter();
+        let mut prompts = Vec::new();
+
+        let password = super::prompt_new_password_with(|prompt| {
+            prompts.push(prompt.to_string());
+            Ok(answers.next().expect("unexpected prompt").to_string())
+        })
+        .expect("password");
+
+        assert_eq!(password, "second");
+        assert_eq!(prompts.len(), 5);
+        assert!(answers.next().is_none());
+    }
+
     #[test]
     fn confirmations_require_yes_or_no() {
         assert_eq!(super::parse_confirmation("claude", false), None);

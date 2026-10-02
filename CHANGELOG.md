@@ -110,6 +110,7 @@ published release notes, maintenance branches, and tagged history.
 - Fixed `esdiag serve` in user mode ignoring the `user` saved in `~/.esdiag/esdiag.yml`. The web interface showed `Anonymous` and recorded jobs under that name. A configured user, from `ESDIAG_USER` or `esdiag.yml`, now sets the job owner and locks the User field.
 - Fixed the full-mode `esdiag local` web container defaulting to `Anonymous`. Each `esdiag local up` now passes the host's configured user to the container.
 - Changed `esdiag init` to ask for the diagnostic user before offering web setup, so the web interface starts with that user. After a terminal setup that started a local stack, init now asks before opening the web interface, defaulting to no.
+- Changed new keystore password prompts to ask again when the password is empty or the confirmation doesn't match, instead of exiting.
 - Fixed setup duplicating Kibana assets across spaces. When ESDiag assets already exist in another Kibana space, setup now stops before importing anything and names that space.
 - Report write failures now fail the command, even when Elasticsearch returns HTTP 201 after failure-store capture. CLI errors keep completed document counts, and local reports include the error.
 - Kept thread-pool warning thresholds and searchable-snapshot cache headroom settings instead of dropping them.
