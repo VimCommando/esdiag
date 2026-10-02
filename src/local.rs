@@ -1072,11 +1072,17 @@ pub fn detected_runtime() -> Option<String> {
 
 /// The container cannot read the host's `esdiag.yml`, so the host resolves the user.
 fn host_user() -> Option<String> {
-    std::env::var("ESDIAG_USER")
-        .ok()
-        .or_else(|| ApplicationConfig::load().ok().and_then(|config| config.user))
-        .map(|user| user.trim().to_string())
-        .filter(|user| !user.is_empty() && !user.contains(['\n', '\r']))
+    resolve_host_user(std::env::var("ESDIAG_USER").ok(), || {
+        ApplicationConfig::load().ok().and_then(|config| config.user)
+    })
+}
+
+fn resolve_host_user(environment: Option<String>, configured: impl FnOnce() -> Option<String>) -> Option<String> {
+    let usable = |user: String| {
+        let user = user.trim();
+        (!user.is_empty() && !user.contains(['\n', '\r'])).then(|| user.to_string())
+    };
+    environment.and_then(usable).or_else(|| configured().and_then(usable))
 }
 
 fn parse_env(contents: &str) -> Result<BTreeMap<String, String>> {
@@ -1226,6 +1232,21 @@ mod tests {
 
         state.set_user(None);
         assert!(!state.values.contains_key("ESDIAG_USER"));
+    }
+
+    #[test]
+    fn empty_environment_user_falls_back_to_configured_user() {
+        let configured = || Some("configured@example.com".to_string());
+
+        assert_eq!(
+            super::resolve_host_user(Some("  ".to_string()), configured).as_deref(),
+            Some("configured@example.com")
+        );
+        assert_eq!(
+            super::resolve_host_user(Some("env@example.com".to_string()), configured).as_deref(),
+            Some("env@example.com")
+        );
+        assert_eq!(super::resolve_host_user(None, || Some(" ".to_string())), None);
     }
 
     #[test]

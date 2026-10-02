@@ -2718,6 +2718,8 @@ mod tests {
 
     #[test]
     fn user_mode_allows_missing_header() {
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_USER");
         let state = test_state(RuntimeMode::User);
         let headers = HeaderMap::new();
         let (_, user) = state
