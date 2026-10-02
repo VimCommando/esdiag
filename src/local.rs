@@ -250,6 +250,7 @@ impl LocalState {
         if let Some(level) = options.log_level {
             self.values.insert("LOG_LEVEL".to_string(), level);
         }
+        self.set_user(host_user());
         self.write()?;
         if let Ok(log) = esdiag::data::last_run_path(esdiag::data::RUN_LOG) {
             eprintln!(
@@ -412,6 +413,14 @@ impl LocalState {
         self.write_compose(mode)
     }
 
+    /// Refreshed on every start so the container follows the host's current user.
+    fn set_user(&mut self, user: Option<String>) {
+        match user {
+            Some(user) => self.values.insert("ESDIAG_USER".to_string(), user),
+            None => self.values.remove("ESDIAG_USER"),
+        };
+    }
+
     fn value(&mut self, key: &str, default: &str) {
         self.values
             .entry(key.to_string())
@@ -433,7 +442,7 @@ impl LocalState {
         let compose = format!(
             "name: esdiag-local\nservices:\n  elasticsearch:\n    image: ${{ELASTICSEARCH_IMAGE}}\n    environment:\n      discovery.type: single-node\n      xpack.security.enabled: \"true\"\n      xpack.security.http.ssl.enabled: \"false\"\n      ELASTIC_PASSWORD: ${{ELASTIC_PASSWORD}}\n    ports: [\"127.0.0.1:${{ESDIAG_ELASTICSEARCH_PORT}}:9200\"]\n    volumes: [\"elasticsearch-data:/usr/share/elasticsearch/data\"]\n  kibana:\n    image: ${{KIBANA_IMAGE}}\n    environment:\n      ELASTICSEARCH_HOSTS: http://elasticsearch:9200\n      ELASTICSEARCH_USERNAME: kibana_system\n      ELASTICSEARCH_PASSWORD: ${{KIBANA_SYSTEM_PASSWORD}}\n      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${{KIBANA_ENCRYPTION_KEY}}\n    ports: [\"127.0.0.1:${{ESDIAG_KIBANA_PORT}}:5601\"]\n    volumes: [\"kibana-data:/usr/share/kibana/data\"]\n{full_services}volumes:\n  elasticsearch-data:\n  kibana-data:\n{full_volume}",
             full_services = if full {
-                "  setup:\n    image: ${ESDIAG_IMAGE}\n    profiles: [\"setup\"]\n    environment:\n      ESDIAG_OUTPUT_URL: http://elasticsearch:9200\n      ESDIAG_OUTPUT_APIKEY: ${ESDIAG_OUTPUT_APIKEY}\n      ESDIAG_KIBANA_SPACE: ${ESDIAG_KIBANA_SPACE}\n      ESDIAG_KIBANA_URL: http://kibana:5601\n    command: [\"setup\"]\n  esdiag:\n    image: ${ESDIAG_IMAGE}\n    environment:\n      ESDIAG_MODE: user\n      ESDIAG_CONTAINER_LOCAL_STACK: full\n      ESDIAG_OUTPUT_URL: http://elasticsearch:9200\n      ESDIAG_OUTPUT_APIKEY: ${ESDIAG_OUTPUT_APIKEY}\n      ESDIAG_KIBANA_SPACE: ${ESDIAG_KIBANA_SPACE}\n      ESDIAG_KIBANA_URL: http://kibana:5601\n      ESDIAG_KIBANA_INTERNAL_URL: http://kibana:5601\n      ESDIAG_KIBANA_PUBLIC_URL: ${ESDIAG_KIBANA_PUBLIC_URL}\n    command: [\"serve\"]\n    ports: [\"127.0.0.1:${ESDIAG_PORT}:2501\"]\n    volumes: [\"esdiag-data:/root/.esdiag\"]\n"
+                "  setup:\n    image: ${ESDIAG_IMAGE}\n    profiles: [\"setup\"]\n    environment:\n      ESDIAG_OUTPUT_URL: http://elasticsearch:9200\n      ESDIAG_OUTPUT_APIKEY: ${ESDIAG_OUTPUT_APIKEY}\n      ESDIAG_KIBANA_SPACE: ${ESDIAG_KIBANA_SPACE}\n      ESDIAG_KIBANA_URL: http://kibana:5601\n    command: [\"setup\"]\n  esdiag:\n    image: ${ESDIAG_IMAGE}\n    environment:\n      ESDIAG_MODE: user\n      ESDIAG_CONTAINER_LOCAL_STACK: full\n      ESDIAG_OUTPUT_URL: http://elasticsearch:9200\n      ESDIAG_OUTPUT_APIKEY: ${ESDIAG_OUTPUT_APIKEY}\n      ESDIAG_KIBANA_SPACE: ${ESDIAG_KIBANA_SPACE}\n      ESDIAG_KIBANA_URL: http://kibana:5601\n      ESDIAG_KIBANA_INTERNAL_URL: http://kibana:5601\n      ESDIAG_KIBANA_PUBLIC_URL: ${ESDIAG_KIBANA_PUBLIC_URL}\n      ESDIAG_USER: ${ESDIAG_USER:-}\n    command: [\"serve\"]\n    ports: [\"127.0.0.1:${ESDIAG_PORT}:2501\"]\n    volumes: [\"esdiag-data:/root/.esdiag\"]\n"
             } else {
                 ""
             },
@@ -1061,6 +1070,15 @@ pub fn detected_runtime() -> Option<String> {
     detect_runtime(None).ok()
 }
 
+/// The container cannot read the host's `esdiag.yml`, so the host resolves the user.
+fn host_user() -> Option<String> {
+    std::env::var("ESDIAG_USER")
+        .ok()
+        .or_else(|| ApplicationConfig::load().ok().and_then(|config| config.user))
+        .map(|user| user.trim().to_string())
+        .filter(|user| !user.is_empty() && !user.contains(['\n', '\r']))
+}
+
 fn parse_env(contents: &str) -> Result<BTreeMap<String, String>> {
     contents
         .lines()
@@ -1191,6 +1209,23 @@ mod tests {
         let full = fs::read_to_string(state.dir.join("compose.yml")).expect("read full compose");
         assert!(full.contains("\n  esdiag:\n"));
         assert!(full.contains("esdiag-data"));
+    }
+
+    #[test]
+    fn full_compose_passes_the_host_user_to_the_container() {
+        let (_directory, mut state) = state();
+        state.initialize(StackMode::Full).expect("initialize full state");
+        let full = fs::read_to_string(state.dir.join("compose.yml")).expect("read full compose");
+        assert!(full.contains("      ESDIAG_USER: ${ESDIAG_USER:-}\n    command: [\"serve\"]"));
+
+        state.set_user(Some("host@example.com".to_string()));
+        assert_eq!(
+            state.values.get("ESDIAG_USER").map(String::as_str),
+            Some("host@example.com")
+        );
+
+        state.set_user(None);
+        assert!(!state.values.contains_key("ESDIAG_USER"));
     }
 
     #[test]

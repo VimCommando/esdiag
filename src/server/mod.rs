@@ -27,7 +27,7 @@ mod web_onboarding;
 
 use super::processor::{DiagnosticOutcome, Identifiers};
 use crate::{
-    data::{KnownHost, Settings, Uri},
+    data::{ApplicationConfig, KnownHost, Settings, Uri},
     exporter::Exporter,
 };
 use askama::Template;
@@ -135,7 +135,8 @@ impl std::fmt::Display for AuthProvider {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedIdentity {
-    pub authenticated: bool,
+    /// The identity comes from the proxy or server configuration, not the browser.
+    pub locked: bool,
     pub user: Owner,
     pub account: Option<String>,
 }
@@ -880,18 +881,18 @@ impl ServerState {
                     return Err(eyre!("{identity_header} header is empty"));
                 }
                 Ok(ResolvedIdentity {
-                    authenticated: true,
+                    locked: true,
                     user,
                     account,
                 })
             }
-            AuthProvider::None => Ok(resolve_optional_identity(headers)),
+            AuthProvider::None => Ok(resolve_optional_identity(self.runtime_mode)),
         }
     }
 
     pub fn resolve_user_email(&self, headers: &HeaderMap) -> Result<(bool, String)> {
         let identity = self.resolve_identity(headers)?;
-        Ok((identity.authenticated, identity.user))
+        Ok((identity.locked, identity.user))
     }
 
     pub async fn record_success(&self, owner: &str, docs: u32, errors: u32) {
@@ -1399,25 +1400,32 @@ fn parse_iap_identity(raw: &str) -> (Option<String>, String) {
     (account, user)
 }
 
-fn resolve_optional_identity(_headers: &HeaderMap) -> ResolvedIdentity {
-    if let Ok(user) = std::env::var("ESDIAG_USER") {
-        let user = user.trim().to_string();
-        if !user.is_empty() {
-            return ResolvedIdentity {
-                authenticated: false,
-                user,
-                account: std::env::var("ESDIAG_ACCOUNT")
-                    .ok()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty()),
-            };
-        }
+/// Service mode never reads user state, so `esdiag.yml` applies only in user mode.
+fn resolve_optional_identity(mode: RuntimeMode) -> ResolvedIdentity {
+    fn non_empty(value: String) -> Option<String> {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
     }
 
-    ResolvedIdentity {
-        authenticated: false,
-        user: DEFAULT_OWNER.to_string(),
-        account: None,
+    let configured_user = std::env::var("ESDIAG_USER").ok().and_then(non_empty).or_else(|| {
+        (mode == RuntimeMode::User)
+            .then(ApplicationConfig::load)
+            .and_then(Result::ok)
+            .and_then(|config| config.user)
+            .and_then(non_empty)
+    });
+
+    match configured_user {
+        Some(user) => ResolvedIdentity {
+            locked: true,
+            user,
+            account: std::env::var("ESDIAG_ACCOUNT").ok().and_then(non_empty),
+        },
+        None => ResolvedIdentity {
+            locked: false,
+            user: DEFAULT_OWNER.to_string(),
+            account: None,
+        },
     }
 }
 
@@ -2359,7 +2367,7 @@ mod tests {
         );
 
         let identity = state.resolve_identity(&headers).expect("identity");
-        assert!(identity.authenticated);
+        assert!(identity.locked);
         assert_eq!(identity.user, "alice@example.com");
         assert_eq!(identity.account.as_deref(), Some("accounts.google.com"));
     }
@@ -2383,7 +2391,7 @@ mod tests {
 
         let identity = state.resolve_identity(&headers).expect("identity");
 
-        assert!(identity.authenticated);
+        assert!(identity.locked);
         assert_eq!(identity.user, "alice@example.com");
         assert!(identity.account.is_none());
     }
@@ -2444,10 +2452,51 @@ mod tests {
 
         let identity = state.resolve_identity(&headers).expect("identity");
 
-        assert!(!identity.authenticated);
+        assert!(!identity.locked);
         assert!(state.server_policy.identity_header().is_none());
         assert_eq!(identity.user, super::DEFAULT_OWNER);
         assert!(identity.account.is_none());
+    }
+
+    fn save_configured_user(user: &str) {
+        crate::data::ApplicationConfig {
+            user: Some(user.to_string()),
+            ..crate::data::ApplicationConfig::new()
+        }
+        .save()
+        .expect("save application config");
+    }
+
+    #[test]
+    fn user_mode_configured_user_locks_identity() {
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_USER");
+        let state = test_state(RuntimeMode::User);
+        let identity = state.resolve_identity(&HeaderMap::new()).expect("identity");
+        assert!(!identity.locked);
+        assert_eq!(identity.user, super::DEFAULT_OWNER);
+
+        save_configured_user("configured@example.com");
+        let identity = state.resolve_identity(&HeaderMap::new()).expect("identity");
+
+        assert!(identity.locked);
+        assert_eq!(identity.user, "configured@example.com");
+    }
+
+    #[test]
+    fn service_mode_without_auth_ignores_configured_user() {
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_USER");
+        save_configured_user("configured@example.com");
+        let mut state = test_state(RuntimeMode::Service);
+        state.server_policy =
+            ServerPolicy::new_with_options(RuntimeMode::Service, Some(super::AuthProvider::None), None, None)
+                .expect("policy");
+
+        let identity = state.resolve_identity(&HeaderMap::new()).expect("identity");
+
+        assert!(!identity.locked);
+        assert_eq!(identity.user, super::DEFAULT_OWNER);
     }
 
     #[tokio::test]
