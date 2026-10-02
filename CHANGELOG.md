@@ -35,6 +35,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Changed web onboarding to return each next step directly to the submitting browser, so setup advances when a diagnostic user is configured.
 - Changed `esdiag init` to ask for the diagnostic user before offering web setup, so the web interface starts with that user. After a terminal setup that started a local stack, init now asks before opening the web interface, defaulting to no.
 - Changed new keystore password prompts to ask again when the password is empty or the confirmation doesn't match, instead of exiting.
 - Changed CLI commands to write their full log to `~/.esdiag/last_run/esdiag.log` and show only warnings and errors in the terminal unless `--debug` or `LOG_LEVEL` is set. `esdiag serve` still logs to stderr.
