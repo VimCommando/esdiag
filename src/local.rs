@@ -810,8 +810,11 @@ impl LocalState {
             .ok_or_else(|| eyre!("Container runtime is not initialized"))?;
         let project = format!("esdiag-local-{}", stable_project_id(&self.dir));
         let mut command = Command::new(runtime);
+        // Compose prefers the parent environment over `--env-file`, so the
+        // state file stays authoritative only if the inherited value is removed.
         command
             .env("PODMAN_COMPOSE_WARNING_LOGS", "false")
+            .env_remove("ESDIAG_USER")
             .args(["compose", "--project-name", &project, "--env-file"])
             .arg(self.dir.join(".env"))
             .args(["--file"])
@@ -1240,6 +1243,20 @@ mod tests {
 
         state.set_user(None);
         assert!(!state.values.contains_key("ESDIAG_USER"));
+    }
+
+    #[test]
+    fn compose_ignores_an_inherited_user() {
+        let (_directory, mut state) = state();
+        state.runtime = Some("docker".to_string());
+
+        let (_, command) = state.compose_command(&["config"]).expect("compose command");
+
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "ESDIAG_USER" && value.is_none())
+        );
     }
 
     #[test]
