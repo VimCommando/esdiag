@@ -2257,17 +2257,6 @@ async fn run_init_wizard() -> Result<CommandResult> {
 
     let initial = inspect_onboarding()?;
     println!("ESDiag first-run initialization");
-    #[cfg(feature = "server")]
-    if !initial.is_complete() && prompt_confirm("Continue setup in the web interface? [y/N]: ")? {
-        return run_gui_onboarding().await;
-    }
-    let mut output_name_for_defaults = esdiag::data::ApplicationConfig::load()?.output.default;
-    let mut output_url_for_defaults = output_name_for_defaults
-        .as_ref()
-        .and_then(KnownHost::get_known)
-        .and_then(|host| host.concrete_url().map(Url::to_string));
-    let mut most_recent_collect_host = None;
-    let mut started_local_stack = false;
     if initial.is_complete() && !prompt_confirm("A complete configuration already exists. Replace values? [y/N]: ")? {
         return Ok(CommandResult::outcome(initialization_outcome(
             initialization_skill_installation()?,
@@ -2288,6 +2277,18 @@ async fn run_init_wizard() -> Result<CommandResult> {
             &default_diagnostic_user(),
         )?)?;
     }
+
+    #[cfg(feature = "server")]
+    if !initial.is_complete() && prompt_confirm("Continue setup in the web interface? [y/N]: ")? {
+        return run_gui_onboarding().await;
+    }
+    let mut output_name_for_defaults = esdiag::data::ApplicationConfig::load()?.output.default;
+    let mut output_url_for_defaults = output_name_for_defaults
+        .as_ref()
+        .and_then(KnownHost::get_known)
+        .and_then(|host| host.concrete_url().map(Url::to_string));
+    let mut most_recent_collect_host = None;
+    let mut started_local_stack = false;
 
     let workflow = match config.workflow {
         Some(workflow) if prompt_confirm_default_yes(&format!("Resume workflow: {} [Y/n]: ", workflow.as_str()))? => {
@@ -2588,7 +2589,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
         return Err(eyre!("Initialization did not produce a complete reusable workflow."));
     }
     let outcome = initialization_outcome(initialization_skill_installation()?)?;
-    if started_local_stack {
+    if started_local_stack && prompt_confirm("Open the ESDiag web interface? [y/N]: ")? {
         run_local_lifecycle(vec![OsString::from("open")]).await?;
     }
     Ok(CommandResult::outcome(outcome))
