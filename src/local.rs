@@ -760,20 +760,7 @@ impl LocalState {
             eprintln!("Sign in to Kibana as `elastic`; `esdiag local secrets password` prints the password.");
         }
         let url = format!("{}{path}", self.esdiag_url());
-        #[cfg(target_os = "macos")]
-        let opener = Command::new("open")
-            .arg(&url)
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .status();
-        #[cfg(target_os = "linux")]
-        let opener = Command::new("xdg-open")
-            .arg(&url)
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .status();
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        if let Err(error) = opener {
+        if let Err(error) = esdiag::system_integration::open_browser(&url) {
             eprintln!("Could not open the browser: {error}. Open {url} manually.");
         }
         Ok(())
@@ -787,18 +774,7 @@ impl LocalState {
                 return false;
             }
         };
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        return false;
-        #[cfg(target_os = "macos")]
-        let copied = write_clipboard("pbcopy", &[], password);
-        #[cfg(target_os = "linux")]
-        let copied = [
-            ("wl-copy", Vec::new()),
-            ("xclip", vec!["-selection", "clipboard"]),
-            ("xsel", vec!["--clipboard", "--input"]),
-        ]
-        .into_iter()
-        .any(|(command, args)| write_clipboard(command, &args, password));
+        let copied = esdiag::system_integration::copy_to_clipboard(password);
         if copied {
             eprintln!("Copied the elastic password to the clipboard");
         }
@@ -1007,25 +983,6 @@ fn should_copy_password(
         None if interactive => approved(),
         None => Ok(false),
     }
-}
-
-fn write_clipboard(command: &str, arguments: &[&str], value: &str) -> bool {
-    Command::new(command)
-        .args(arguments)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .and_then(|mut child| {
-            use std::io::Write;
-            child
-                .stdin
-                .as_mut()
-                .expect("piped clipboard stdin")
-                .write_all(value.as_bytes())?;
-            child.wait()
-        })
-        .is_ok_and(|status| status.success())
 }
 
 fn process_start_time(pid: i32) -> Result<Option<String>> {

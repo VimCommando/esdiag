@@ -35,6 +35,9 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Changed browser opening and clipboard copying under WSL to use the Windows desktop, including Unicode clipboard text.
+- Changed browser launch failures to try available alternatives and report unsuccessful exit statuses.
+
 - Changed web onboarding to return each next step directly to the submitting browser, so setup advances when a diagnostic user is configured.
 - Changed `esdiag init` to ask for the diagnostic user before offering web setup, so the web interface starts with that user. After a terminal setup that started a local stack, init now asks before opening the web interface, defaulting to no.
 - Changed new keystore password prompts to ask again when the password is empty or the confirmation doesn't match, instead of exiting.

@@ -2738,14 +2738,7 @@ async fn run_gui_onboarding() -> Result<CommandResult> {
 
 #[cfg(feature = "server")]
 fn open_gui_onboarding_browser(url: &str) {
-    let browser_result = if cfg!(target_os = "macos") {
-        Command::new("open").arg(url).spawn()
-    } else if cfg!(target_os = "windows") {
-        Command::new("cmd").args(["/C", "start", "", url]).spawn()
-    } else {
-        Command::new("xdg-open").arg(url).spawn()
-    };
-    if let Err(err) = browser_result {
+    if let Err(err) = esdiag::system_integration::open_browser(url) {
         tracing::warn!("ESDiag is running at {url}, but the browser could not be opened: {err}");
     }
 }
