@@ -48,7 +48,7 @@ export to your shell startup file if needed.
 On Windows, use WSL on WSL (Linux ESDiag and a container engine in the same
 WSL distribution), or Hyper-V on PowerShell (native Windows ESDiag and Windows
 Podman with a Hyper-V machine). See [Windows container paths](esdiag-local.md#windows-container-paths)
-for setup and current limitations. Native Windows configuration defaults to
+for setup. Native Windows configuration defaults to
 `%USERPROFILE%\.esdiag`; setting `HOME` is unnecessary. The standalone Bash
 launcher below is used from WSL on Windows.
 

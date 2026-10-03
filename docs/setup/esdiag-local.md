@@ -58,10 +58,10 @@ required. WSL uses its Linux user's `~/.esdiag` directory independently.
 directly, and a relative path is resolved beneath the native user directory.
 Use `ESDIAG_LOCAL_DIR` or `--state-dir` to override local-stack state.
 
-These paths describe the supported container topology. Native Windows core
-startup still has known native-service lifecycle
-limitations; successful container networking alone does not establish full
-startup support.
+Core mode tracks its native Windows web service by executable path and process
+creation time. `esdiag local restart esdiag` replaces that service, and
+`esdiag local down` stops it before tearing down the containers. Windows
+shutdown terminates the verified process and waits for it to exit.
 
 The binary owns the normal path:
 

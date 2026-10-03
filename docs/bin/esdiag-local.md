@@ -46,7 +46,7 @@ container volume. Existing state without a mode record is full mode.
 On native Windows, run `esdiag local` from PowerShell with Windows Podman and
 a Hyper-V machine. Under WSL, run the Linux binary with a container engine in
 the same WSL distribution. See [Windows container paths](../setup/esdiag-local.md#windows-container-paths)
-for the supported combinations and current limitations. The Bash launcher
+for the supported combinations. The Bash launcher
 `esdiag-local` belongs to the WSL path on Windows.
 
 The Windows local stack requires at least 8 GiB of Podman machine memory.

@@ -25,6 +25,9 @@ use url::Url;
 const STATE_SCHEMA_VERSION: &str = "3";
 const ELASTIC_VERSION: &str = "9.4.2";
 
+#[cfg(windows)]
+mod windows;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StackMode {
     Auto,
@@ -558,6 +561,11 @@ impl LocalState {
         let log = self.dir.join("logs/native-serve.log");
         let stdout = fs::File::create(&log)?;
         let mut command = Command::new(std::env::current_exe()?);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
         // The managed deployment owns its output and viewer configuration.
         // Other environment entries (PATH, HOME, proxy settings) remain available.
         for (key, _) in std::env::vars_os() {
@@ -583,16 +591,22 @@ impl LocalState {
             .stderr(Stdio::from(stdout))
             .spawn()?;
         self.check_native_child(&mut child)?;
+        let started = match process_start_time(child.id() as i32) {
+            Ok(Some(started)) => started,
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(result
+                    .err()
+                    .unwrap_or_else(|| eyre!("Could not identify managed native ESDiag service")));
+            }
+        };
         write_private(self.dir.join(".native-serve.pid"), &child.id().to_string())?;
         write_private(
             self.dir.join(".native-serve.binary"),
             &std::env::current_exe()?.to_string_lossy(),
         )?;
-        write_private(
-            self.dir.join(".native-serve.started"),
-            &process_start_time(child.id() as i32)?
-                .ok_or_else(|| eyre!("Could not identify managed native ESDiag service"))?,
-        )?;
+        write_private(self.dir.join(".native-serve.started"), &started)?;
         Ok(child)
     }
 
@@ -620,6 +634,12 @@ impl LocalState {
             .map_err(|_| eyre!("Invalid managed native service PID"))?;
         let binary = fs::read_to_string(&binary_path).unwrap_or_default();
         let started = fs::read_to_string(&started_path).unwrap_or_default();
+        #[cfg(windows)]
+        if let Some(process) = windows::Process::open(pid, true)? {
+            if process.matches(&binary, &started)? {
+                process.stop()?;
+            }
+        }
         #[cfg(unix)]
         {
             let command = Command::new("ps")
@@ -654,20 +674,36 @@ impl LocalState {
         let Some(pid) = pid else {
             return "stopped";
         };
-        let command = Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "command="])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).to_string());
-        if !binary.trim().is_empty()
-            && !started.trim().is_empty()
-            && command.is_some_and(|command| command.contains(binary.trim()) && command.contains("serve"))
-            && process_start_time(pid).ok().flatten().as_deref() == Some(started.trim())
+        #[cfg(windows)]
         {
-            "running"
-        } else {
-            "stale"
+            return if windows::Process::open(pid, false)
+                .and_then(|process| process.map(|process| process.matches(&binary, &started)).transpose())
+                .ok()
+                .flatten()
+                == Some(true)
+            {
+                "running"
+            } else {
+                "stale"
+            };
+        }
+        #[cfg(not(windows))]
+        {
+            let command = Command::new("ps")
+                .args(["-p", &pid.to_string(), "-o", "command="])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).to_string());
+            if !binary.trim().is_empty()
+                && !started.trim().is_empty()
+                && command.is_some_and(|command| command.contains(binary.trim()) && command.contains("serve"))
+                && process_start_time(pid).ok().flatten().as_deref() == Some(started.trim())
+            {
+                "running"
+            } else {
+                "stale"
+            }
         }
     }
 
@@ -997,7 +1033,13 @@ fn process_start_time(pid: i32) -> Result<Option<String>> {
             .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
             .filter(|started| !started.is_empty()))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::Process::open(pid, false)?
+            .map(|process| process.started())
+            .transpose()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         Ok(None)
