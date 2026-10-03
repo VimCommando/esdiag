@@ -3112,11 +3112,7 @@ fn detected_esdiag_local_preset() -> Option<EsdiagLocalPreset> {
 }
 
 fn default_esdiag_local_state_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    let home = std::env::var_os("USERPROFILE")?;
-    #[cfg(not(target_os = "windows"))]
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".esdiag/local"))
+    Some(esdiag::env::user_home_dir().ok()?.join(".esdiag/local"))
 }
 
 fn prompt_api_key(label: &str, local_preset: Option<&EsdiagLocalPreset>) -> Result<SecretAuth> {
@@ -3607,13 +3603,7 @@ fn should_error_for_missing_subcommand(arg_count: usize, has_no_command: bool) -
 }
 
 fn clear_last_run_files() -> Result<()> {
-    let home_dir = match std::env::consts::OS {
-        "windows" => std::env::var("USERPROFILE")?,
-        "linux" | "macos" => std::env::var("HOME")?,
-        os => return Err(eyre!("Unknown home directory for operating system: {os} ")),
-    };
-    tracing::debug!("Home directory is: {home_dir}");
-    let last_run = std::path::PathBuf::from(home_dir).join(".esdiag/last_run");
+    let last_run = esdiag::env::runtime_config_dir()?.join("last_run");
     if !last_run.exists() {
         std::fs::create_dir_all(&last_run)?;
     }

@@ -1007,7 +1007,7 @@ fn process_start_time(pid: i32) -> Result<Option<String>> {
 fn default_state_dir() -> Result<PathBuf> {
     let home = std::env::var_os("ESDIAG_LOCAL_DIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".esdiag/local")))
+        .or_else(|| esdiag::env::user_home_dir().ok().map(|home| home.join(".esdiag/local")))
         .ok_or_else(|| eyre!("Cannot determine the local stack state directory"))?;
     Ok(home)
 }

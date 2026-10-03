@@ -43,6 +43,19 @@ container volume. Existing state without a mode record is full mode.
 
 ## State
 
+On native Windows, run `esdiag local` from PowerShell with Windows Podman and
+a Hyper-V machine. Under WSL, run the Linux binary with a container engine in
+the same WSL distribution. See [Windows container paths](../setup/esdiag-local.md#windows-container-paths)
+for the supported combinations and current limitations. The Bash launcher
+`esdiag-local` belongs to the WSL path on Windows.
+
+The Windows local stack requires at least 8 GiB of Podman machine memory.
+For Hyper-V, use fixed memory so the running guest retains the allocation;
+see the Windows container guide above for configuration and verification.
+
+Native Windows defaults to `%USERPROFILE%\.esdiag\local`; it does not require
+`HOME`. Native run logs default to `%USERPROFILE%\.esdiag\last_run`.
+
 The launcher writes generated `.env`, `compose.yml`, and logs to
 `${ESDIAG_LOCAL_DIR:-~/.esdiag/local}`. Use `--state-dir` to change that path.
 The directory is private and `.env` has mode `0600`.

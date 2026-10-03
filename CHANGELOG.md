@@ -35,6 +35,11 @@ published release notes, maintenance branches, and tagged history.
 
 ### Changed
 
+- Increased the native Windows CLI main-thread stack reserve to 8 MiB so local asset installation can run without exhausting the default stack.
+
+- Changed native Windows local-stack state and run logs to resolve from `USERPROFILE` without requiring `HOME`; run-log cleanup now honors `ESDIAG_HOME`.
+- Documented the Windows container paths as WSL on WSL and Hyper-V on PowerShell, including the 8 GiB memory minimum, fixed Hyper-V memory configuration, and current native startup limitations.
+
 - Changed PowerShell Lite uploads to retain the upload ID in request URLs, and watch jobs to forward collection arguments, preserve the invoking directory, and report failed collections with a nonzero exit code.
 - Changed browser opening and clipboard copying under WSL to use the Windows desktop, including Unicode clipboard text.
 - Changed browser launch failures to try available alternatives and report unsuccessful exit statuses.

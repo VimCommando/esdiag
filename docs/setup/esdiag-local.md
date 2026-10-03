@@ -15,6 +15,54 @@ Install the binary first. See [Install ESDiag](installation.md#binary).
 
 ## Start the stack
 
+### Windows container paths
+
+Use one of these supported execution paths:
+
+| Path | ESDiag command environment | Container engine |
+|---|---|---|
+| WSL on WSL | Linux `esdiag` in the WSL shell | Podman or Docker installed in that same WSL distribution |
+| Hyper-V on PowerShell | Native Windows `esdiag.exe` in PowerShell | Windows `podman.exe` connected to a Hyper-V Podman machine |
+
+Keep the command and container runtime in the corresponding path. Mixing a
+Windows ESDiag process with a WSL-backed runtime, or a WSL ESDiag process with
+the Windows runtime, is not a supported local-stack path. Windows Podman's
+WSL-backed machine is distinct from Podman installed in your WSL distribution.
+
+For the PowerShell path, create and start a Hyper-V machine with Windows
+Podman, then select its connection before running `esdiag local up`. See the
+[Podman Windows guide](https://github.com/podman-container-tools/podman/blob/main/docs/tutorials/podman-for-windows.md)
+for Hyper-V prerequisites and machine creation. `podman info` must succeed,
+and published ports must be reachable from PowerShell.
+
+Allocate at least **8 GiB of memory to the Podman machine** for the Windows
+local stack. For Hyper-V, `podman machine init --memory 8192` specifies 8192
+MiB (8 GiB). Ensure the running guest actually receives that memory: Hyper-V
+dynamic memory can reduce the guest below the configured startup allocation
+and cause Elasticsearch or Kibana to run out of memory during startup.
+Use fixed memory for this stack. With the Podman machine stopped, run from
+an administrator PowerShell window, substituting your machine name:
+
+```powershell
+Set-VMMemory -VMName podmachine-hyperv -DynamicMemoryEnabled $false -StartupBytes 8GB
+```
+
+Restart it with `podman machine start podmachine-hyperv`. Verify available
+guest memory with `podman machine ssh podmachine-hyperv free -m`. For WSL on
+WSL, ensure the WSL environment hosting the engine has at least 8 GiB available.
+
+Native Windows user configuration lives in `%USERPROFILE%\.esdiag`, and local
+stack state defaults to `%USERPROFILE%\.esdiag\local`. No `HOME` variable is
+required. WSL uses its Linux user's `~/.esdiag` directory independently.
+`ESDIAG_HOME` overrides the run-log directory's base: an absolute path is used
+directly, and a relative path is resolved beneath the native user directory.
+Use `ESDIAG_LOCAL_DIR` or `--state-dir` to override local-stack state.
+
+These paths describe the supported container topology. Native Windows core
+startup still has known native-service lifecycle
+limitations; successful container networking alone does not establish full
+startup support.
+
 The binary owns the normal path:
 
 ```sh
