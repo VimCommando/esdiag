@@ -62,7 +62,18 @@ pub(crate) struct ReplaceForm {
 }
 
 pub(crate) async fn page(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> Response {
-    Html(render_page(&state, &headers, String::new()).await).into_response()
+    match render_page(&state, &headers, String::new()).await {
+        Ok(html) => Html(html).into_response(),
+        Err(err) => {
+            tracing::warn!("Unable to render web onboarding: {err}");
+            let (status, label) = super::identity_failure(&err);
+            (
+                status,
+                Html(format!("<html><body><h1>{label}</h1><p>{err}</p></body></html>")),
+            )
+                .into_response()
+        }
+    }
 }
 
 pub(crate) async fn service_mode_page() -> impl IntoResponse {
@@ -263,11 +274,9 @@ struct RuntimeOutputStatus {
     kibana_assets: crate::setup::AssetStatus,
 }
 
-async fn render_page(state: &Arc<ServerState>, headers: &HeaderMap, message: String) -> String {
-    let model = journey_model(state).await;
-    let (_, request_user) = state
-        .resolve_user_email(headers)
-        .unwrap_or((false, super::DEFAULT_OWNER.to_string()));
+async fn render_page(state: &Arc<ServerState>, headers: &HeaderMap, message: String) -> eyre::Result<String> {
+    let model = journey_model(state).await?;
+    let (_, request_user) = state.resolve_user_email(headers)?;
     let user = if model.user.is_empty() {
         request_user
     } else {
@@ -275,7 +284,7 @@ async fn render_page(state: &Arc<ServerState>, headers: &HeaderMap, message: Str
     };
     let user_initial = user.chars().next().unwrap_or('_').to_ascii_uppercase();
     let keystore_state = state.keystore_page_state().await;
-    WelcomePage {
+    Ok(WelcomePage {
         debug: tracing::enabled!(tracing::Level::DEBUG),
         desktop: cfg!(feature = "desktop"),
         kibana_url: state.kibana_url.read().await.clone(),
@@ -320,12 +329,12 @@ async fn render_page(state: &Arc<ServerState>, headers: &HeaderMap, message: Str
         message,
     }
     .render()
-    .unwrap_or_else(|err| format!("<h1>Unable to render onboarding</h1><p>{err}</p>"))
+    .unwrap_or_else(|err| format!("<h1>Unable to render onboarding</h1><p>{err}</p>")))
 }
 
-async fn render_panel(state: &Arc<ServerState>, message: String) -> Result<String, askama::Error> {
-    let model = journey_model(state).await;
-    Welcome {
+async fn render_panel(state: &Arc<ServerState>, message: String) -> eyre::Result<String> {
+    let model = journey_model(state).await?;
+    Ok(Welcome {
         stage: stage_name(model.stage).to_string(),
         user: model.user,
         workflow_value: model.workflow_value,
@@ -356,14 +365,12 @@ async fn render_panel(state: &Arc<ServerState>, message: String) -> Result<Strin
         default_job_name: model.default_job_name,
         message,
     }
-    .render()
+    .render()?)
 }
 
-async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
-    let config = ApplicationConfig::load().unwrap_or_else(|err| {
-        tracing::warn!("Unable to load application configuration for onboarding: {err}");
-        ApplicationConfig::new()
-    });
+async fn journey_model(state: &Arc<ServerState>) -> eyre::Result<JourneyModel> {
+    let config = ApplicationConfig::load()
+        .map_err(|err| super::ConfigurationError::report("Could not read esdiag.yml for onboarding", err))?;
     let (readiness, output_configured) = match onboarding::inspect() {
         Ok(readiness) => {
             let output_configured = readiness.output_configured;
@@ -449,7 +456,7 @@ async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
         && readiness.collect_host_configured
         && matches!(stage, WelcomeStage::DefaultJob | WelcomeStage::Complete);
 
-    JourneyModel {
+    Ok(JourneyModel {
         stage,
         user: config.user.unwrap_or_default(),
         workflow_value: workflow.map(workflow_value).unwrap_or_default().to_string(),
@@ -487,7 +494,7 @@ async fn journey_model(state: &Arc<ServerState>) -> JourneyModel {
         collect_name,
         collect_url,
         default_job_name: config.job.default.unwrap_or_default(),
-    }
+    })
 }
 
 fn detected_container_runtime() -> Option<String> {
@@ -871,7 +878,8 @@ async fn provision_local_output_stage(state: &Arc<ServerState>, keystore_passwor
 #[cfg(test)]
 mod tests {
     use super::{
-        is_local_output_url, journey_model, runtime_output_status, workflow_from_form, workflow_processes_diagnostics,
+        is_local_output_url, journey_model, page, runtime_output_status, workflow_from_form,
+        workflow_processes_diagnostics,
     };
     use crate::{
         data::{OnboardingWorkflow, authenticate},
@@ -913,14 +921,50 @@ mod tests {
     async fn processing_workflow_advances_to_cluster_configuration() {
         let _env = crate::TestEnv::new();
         let state = test_server_state();
-        assert_eq!(journey_model(&state).await.stage, WelcomeStage::Identity);
+        assert_eq!(
+            journey_model(&state).await.expect("journey model").stage,
+            WelcomeStage::Identity
+        );
 
         save_user("operator@example.com".to_string()).expect("save user");
         save_workflow(OnboardingWorkflow::ProcessExisting).expect("save workflow");
 
-        assert_eq!(journey_model(&state).await.stage, WelcomeStage::Output);
+        assert_eq!(
+            journey_model(&state).await.expect("journey model").stage,
+            WelcomeStage::Output
+        );
         authenticate("password").expect("create keystore");
-        assert_eq!(journey_model(&state).await.stage, WelcomeStage::Output);
+        assert_eq!(
+            journey_model(&state).await.expect("journey model").stage,
+            WelcomeStage::Output
+        );
+    }
+
+    #[tokio::test]
+    async fn welcome_page_reports_an_unreadable_configuration_as_a_server_error() {
+        let mut env = crate::TestEnv::new();
+        let path = crate::data::ApplicationConfig::path().expect("config path");
+        std::fs::write(&path, "version: 1\nuser: [unterminated\n").expect("write invalid config");
+
+        for environment_user in [None, Some("operator@example.com")] {
+            match environment_user {
+                Some(user) => env.set("ESDIAG_USER", user),
+                None => env.remove("ESDIAG_USER"),
+            }
+            let response = page(axum::extract::State(test_server_state()), axum::http::HeaderMap::new()).await;
+
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "ESDIAG_USER={environment_user:?}"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read welcome response");
+            let body = String::from_utf8(body.to_vec()).expect("UTF-8 response");
+            assert!(body.contains("esdiag.yml"), "{body}");
+            assert!(!body.contains("Anonymous"), "{body}");
+        }
     }
 
     #[tokio::test]
@@ -956,11 +1000,14 @@ mod tests {
         let state = test_server_state();
         save_user("operator@example.com".to_string()).expect("save user");
         save_workflow(OnboardingWorkflow::CollectOnly).expect("save workflow");
-        assert_eq!(journey_model(&state).await.stage, WelcomeStage::Collection);
+        assert_eq!(
+            journey_model(&state).await.expect("journey model").stage,
+            WelcomeStage::Collection
+        );
 
         defer_collection().expect("defer collection");
 
-        let model = journey_model(&state).await;
+        let model = journey_model(&state).await.expect("journey model");
         assert_eq!(model.stage, WelcomeStage::Complete);
         assert!(!model.show_default_job);
         assert!(model.show_complete);

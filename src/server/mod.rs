@@ -154,6 +154,12 @@ impl std::fmt::Display for ConfigurationError {
 
 impl std::error::Error for ConfigurationError {}
 
+impl ConfigurationError {
+    pub(crate) fn report(context: &str, err: impl std::fmt::Display) -> eyre::Report {
+        eyre::Report::new(Self(format!("{context}: {err}")))
+    }
+}
+
 /// The response status and label for a failed identity resolution.
 pub(crate) fn identity_failure(err: &eyre::Report) -> (StatusCode, &'static str) {
     if err.downcast_ref::<ConfigurationError>().is_some() {
@@ -1432,11 +1438,7 @@ fn resolve_optional_identity(mode: RuntimeMode) -> Result<ResolvedIdentity> {
     let configured_user = match std::env::var("ESDIAG_USER").ok().and_then(non_empty) {
         Some(user) => Some(user),
         None if mode == RuntimeMode::User => ApplicationConfig::load()
-            .map_err(|err| {
-                eyre::Report::new(ConfigurationError(format!(
-                    "Could not read the configured user from esdiag.yml: {err}"
-                )))
-            })?
+            .map_err(|err| ConfigurationError::report("Could not read the configured user from esdiag.yml", err))?
             .user
             .and_then(non_empty),
         None => None,
