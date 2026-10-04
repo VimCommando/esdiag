@@ -45,7 +45,7 @@ published release notes, maintenance branches, and tagged history.
 - Changed PowerShell Lite uploads to retain the upload ID in request URLs.
 - Changed PowerShell Lite watch jobs to forward collection arguments, preserve the invoking directory, and report failed collections with a nonzero exit code.
 - Changed browser opening and clipboard copying under WSL to use the Windows desktop, including Unicode clipboard text.
-- Changed browser launch failures to try available alternatives and report unsuccessful exit statuses.
+- Changed browser launch failures to try available alternatives and report unsuccessful exit statuses. A launcher that keeps running, such as `xdg-open`, counts as opened instead of blocking until the browser closes.
 - Changed web onboarding to return each next step directly to the submitting browser, so setup advances when a diagnostic user is configured.
 - Changed `esdiag init` to ask for the diagnostic user before offering web setup, so the web interface starts with that user. After a terminal setup that started a local stack, init now asks before opening the web interface, defaulting to no.
 - Changed new keystore password prompts to ask again when the password is empty or the confirmation doesn't match, instead of exiting.
@@ -123,7 +123,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Fixed
 
-- Fixed `esdiag serve` in user mode ignoring the `user` saved in `~/.esdiag/esdiag.yml`. The web interface showed `Anonymous` and recorded jobs under that name. A configured user, from `ESDIAG_USER` or `esdiag.yml`, now sets the job owner and locks the User field. If `esdiag.yml` can't be read, the server returns a configuration error (HTTP 500) instead of `Anonymous`.
+- Fixed `esdiag serve` in user mode ignoring the `user` saved in `~/.esdiag/esdiag.yml`. The web interface showed `Anonymous` and recorded jobs under that name. A configured user, from `ESDIAG_USER` or `esdiag.yml`, now sets the job owner and locks the User field. If `esdiag.yml` can't be read, the server returns a configuration error (HTTP 500) instead of `Anonymous`, including the settings modal and settings save when `ESDIAG_USER` is set.
 - Fixed saving output settings in the web interface replacing an unreadable `esdiag.yml` with defaults.
 - Fixed the full-mode `esdiag local` web container defaulting to `Anonymous`. `esdiag local up` and `esdiag local restart esdiag` now pass the host's configured user to the container.
 - Fixed setup duplicating Kibana assets across spaces. When ESDiag assets already exist in another Kibana space, setup now stops before importing anything and names that space.

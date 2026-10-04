@@ -114,7 +114,10 @@ root instead.
 
 ## Connect ESDiag to the stack
 
-Finish onboarding in the terminal or the browser. Both save the same state.
+Finish onboarding in the terminal or the browser. In core mode, both save the
+same state. In full mode, terminal `esdiag init` writes the host's `~/.esdiag`,
+while browser onboarding writes the container's `esdiag-data` volume, so finish
+full-mode onboarding in the browser.
 
 In the terminal, run:
 

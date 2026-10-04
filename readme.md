@@ -39,7 +39,7 @@ Script-first users can download the standalone `esdiag-local` release artifact
 and start a **full** stack, which also runs ESDiag in a container:
 
 ```sh
-./esdiag-local up
+./esdiag-local up --stack=full
 ```
 
 Both paths use secure loopback-only defaults and shared stack state. Core and

@@ -24,7 +24,17 @@ pub async fn get_modal(State(state): State<Arc<ServerState>>, headers: HeaderMap
     let can_update_exporter = state.server_policy.allows_exporter_updates();
     let allows_local_runtime_features = state.server_policy.allows_local_runtime_features();
     let selected_configured_output = if allows_local_runtime_features {
-        ApplicationConfig::load().ok().and_then(|config| config.output.default)
+        match ApplicationConfig::load() {
+            Ok(config) => config.output.default,
+            Err(err) => {
+                tracing::error!("Settings modal could not read esdiag.yml: {err}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Configuration error: could not read esdiag.yml: {err}"),
+                )
+                    .into_response();
+            }
+        }
     } else {
         None
     };
@@ -116,7 +126,8 @@ pub async fn update_settings(
         Err(err) => {
             let err_msg = format!("Unable to load esdiag.yml, so output settings were not saved: {err}");
             tracing::error!("{err_msg}");
-            return settings_error_response(&state, &owner, None, err_msg).await;
+            settings_error_response(&state, &owner, None, err_msg).await;
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
     let prior_active_target = config.output.default.clone();
@@ -393,9 +404,24 @@ mod tests {
         let mut signals = SettingsUpdateSignals::default();
         signals.settings.target = Some("stdout".to_string());
 
-        update_settings(State(test_server_state()), HeaderMap::new(), ReadSignals(signals)).await;
+        let response = update_settings(State(test_server_state()), HeaderMap::new(), ReadSignals(signals)).await;
 
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(std::fs::read_to_string(&path).expect("read config"), broken);
+    }
+
+    #[tokio::test]
+    async fn settings_modal_reports_an_unreadable_configuration_with_a_configured_user() {
+        let mut env = setup_env();
+        env.set("ESDIAG_USER", "configured@example.com");
+        let path = crate::data::ApplicationConfig::path().expect("config path");
+        std::fs::write(&path, "version: 1\nuser: [unterminated\n").expect("write invalid config");
+
+        let response = get_modal(State(test_server_state()), HeaderMap::new())
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]

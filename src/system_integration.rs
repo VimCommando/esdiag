@@ -2,6 +2,11 @@
 
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// How long a launcher may run before it counts as having opened the URL.
+/// Some launchers, such as `xdg-open`, stay attached to the browser.
+const LAUNCHER_EXIT_GRACE: Duration = Duration::from_secs(2);
 
 fn is_wsl() -> bool {
     cfg!(target_os = "linux")
@@ -26,18 +31,44 @@ pub fn open_browser(url: &str) -> io::Result<()> {
 }
 
 fn open_with_programs(url: &str, programs: &[(&str, &[&str])]) -> io::Result<()> {
+    open_with_programs_within(url, programs, LAUNCHER_EXIT_GRACE)
+}
+
+fn open_with_programs_within(url: &str, programs: &[(&str, &[&str])], grace: Duration) -> io::Result<()> {
     let mut error = io::Error::new(io::ErrorKind::NotFound, "No browser launcher available");
     for (program, arguments) in programs {
-        match Command::new(program)
+        let mut child = match Command::new(program)
             .args(*arguments)
             .arg(url)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
+            .spawn()
         {
-            Ok(status) if status.success() => return Ok(()),
-            Ok(status) => error = io::Error::other(format!("{program} exited with {status}")),
-            Err(err) => error = err,
+            Ok(child) => child,
+            Err(err) => {
+                error = err;
+                continue;
+            }
+        };
+        let deadline = Instant::now() + grace;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return Ok(()),
+                Ok(Some(status)) => {
+                    error = io::Error::other(format!("{program} exited with {status}"));
+                    break;
+                }
+                Ok(None) if Instant::now() >= deadline => {
+                    std::thread::spawn(move || child.wait());
+                    return Ok(());
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+                Err(err) => {
+                    error = err;
+                    break;
+                }
+            }
         }
     }
     Err(error)
@@ -94,7 +125,8 @@ fn write_clipboard(program: &str, arguments: &[&str], value: &str, windows_unico
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{open_with_programs, write_clipboard};
+    use super::{open_with_programs, open_with_programs_within, write_clipboard};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn browser_falls_back_after_nonzero_exit_and_preserves_url_argument() {
@@ -111,6 +143,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), url);
+    }
+
+    #[test]
+    fn browser_launcher_that_stays_running_counts_as_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fallback");
+        let output = path.to_str().unwrap();
+        let started = Instant::now();
+        open_with_programs_within(
+            "http://localhost:2501/",
+            &[
+                ("/bin/sh", &["-c", "sleep 30"]),
+                ("/bin/sh", &["-c", "touch \"$1\"", "fallback", output]),
+            ],
+            Duration::from_millis(200),
+        )
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(!path.exists(), "a running launcher must not trigger fallbacks");
     }
 
     #[test]
