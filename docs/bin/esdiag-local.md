@@ -21,11 +21,11 @@ Use the standalone `esdiag-local` script when a script is your entry point. It
 needs Bash 3.2 or later and Podman or Docker with Compose support.
 
 ```sh
-./esdiag-local up --stack=full
+./esdiag-local up
 ```
 
 For installation and first use, see
-[Run a local diagnostic cluster](../setup/esdiag-local.md).
+[Run a local stack](../setup/local-stack.md).
 
 ## Stack modes
 
@@ -45,7 +45,7 @@ container volume. Existing state without a mode record is full mode.
 
 On native Windows, run `esdiag local` from PowerShell with Windows Podman and
 a Hyper-V machine. Under WSL, run the Linux binary with a container engine in
-the same WSL distribution. See [Windows container paths](../setup/esdiag-local.md#windows-container-paths)
+the same WSL distribution. See [Windows container paths](../setup/local-stack.md#windows-container-paths)
 for the supported combinations. The Bash launcher
 `esdiag-local` belongs to the WSL path on Windows.
 

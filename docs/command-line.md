@@ -121,8 +121,7 @@ Save HTTP URLs as hosts before using them as outputs. A raw `http://` or
 Create a saved Elasticsearch host:
 
 ```sh
-esdiag host add prod-es https://es.example.com:9200 \
-  --app elasticsearch --roles send --secret prod-es
+esdiag host add prod-es https://es.example.com:9200 --roles send
 ```
 
 `host add` and `host update` test the full definition before saving it.
@@ -134,9 +133,12 @@ Roles:
 - `send` is valid for Elasticsearch.
 - `view` is valid for Kibana.
 
-If you omit roles, the host gets `collect`.
+If you omit roles, the host gets `collect`. ESDiag infers the app from ports
+9200, 5601, and 9600. On any other port, pass `--app`.
 
-Use `--secret <SECRET_ID>` to use a keystore entry. `--apikey` or
+`host add` uses the keystore entry with the same name as the host when one
+exists. Use `--secret <SECRET_ID>` to reference a differently named entry.
+`--apikey` or
 `--user` with `--password` can supply credentials while you create or update
 the host. Keep certificate validation enabled unless the endpoint owner has
 approved an exception.
@@ -201,7 +203,7 @@ assets; declining returns to remote output setup. After a terminal setup that
 started a stack, `init` asks whether to open the web interface. The default is
 no.
 
-See [Configure ESDiag](setup/configuration.md) for the prompts and paths.
+See [Set up ESDiag](setup/index.md) for the guided setup in each journey.
 
 ## `local`
 
@@ -243,7 +245,7 @@ full-mode container volume.
 `esdiag local update` cannot update binary-owned lifecycle code. Update the
 binary through Homebrew, Cargo, or its release archive.
 
-See [Run a local diagnostic cluster](setup/esdiag-local.md) for local setup and
+See [Run a local stack](setup/local-stack.md) for local setup and
 [local-stack launcher reference](bin/esdiag-local.md) for every launcher
 option.
 
@@ -304,8 +306,12 @@ output. `--sources <PATH>` needs a source definition for the detected product.
 esdiag serve [OUTPUT]
 ```
 
-`--bind` selects the IPv4 address. `--port` defaults to `2501`. `--kibana`
-sets the Kibana link shown in the web UI.
+`--bind` selects the IPv4 address. It defaults to `ESDIAG_BIND`, then
+`127.0.0.1`, so a native server only accepts local connections. Use
+`--bind 0.0.0.0` to accept connections from other machines. The container
+image sets `ESDIAG_BIND=0.0.0.0` so published ports reach the server.
+`--port` defaults to `2501`. `--kibana` sets the Kibana link shown in the web
+UI.
 
 `--mode user` is for a local, single-user web server. `--mode service` is for
 an administrator-run shared service. Service users open its URL. They do not

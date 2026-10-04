@@ -144,8 +144,11 @@ enum Commands {
     #[cfg(feature = "server")]
     Serve {
         /// IPv4 address to bind the server to
-        #[arg(long, default_value = "0.0.0.0")]
-        bind: Ipv4Addr,
+        #[arg(
+            long,
+            long_help = "IPv4 address to bind the server to. Defaults to ESDIAG_BIND, then 127.0.0.1."
+        )]
+        bind: Option<Ipv4Addr>,
         /// The port to bind the server to
         #[arg(help = "The port to bind the server to", long, short, default_value = "2501")]
         port: u16,
@@ -1171,6 +1174,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
             } => {
                 tracing::info!("Starting ESDiag server");
                 let runtime_mode = resolve_serve_runtime_mode(mode)?;
+                let bind = resolve_serve_bind(bind)?;
                 let explicit_output = output.is_some();
                 let onboarding_output_configured =
                     inspect_onboarding().is_ok_and(|readiness| readiness.output_configured);
@@ -1347,20 +1351,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                         return Err(eyre!("Host '{name}' already exists"));
                     }
                     let mut update = build_host_cli_update(args);
-                    let secret_auth = if update.secret.is_some() {
-                        resolve_host_secret_auth(update.secret.as_deref())?
-                    } else if url_template {
-                        match resolve_same_name_host_secret_auth(&name)? {
-                            Some(secret_auth) => {
-                                tracing::debug!("Using host name {} as secret_id", name);
-                                update.secret = Some(name.clone());
-                                Some(secret_auth)
-                            }
-                            None => None,
-                        }
-                    } else {
-                        None
-                    };
+                    let secret_auth = resolve_add_host_secret_auth(&name, &mut update)?;
                     let host = if url_template {
                         build_host_from_definition(app, &target, true, &update, secret_auth)?
                     } else if let Some(host) = maybe_materialize_template_target(&target)? {
@@ -3559,7 +3550,25 @@ fn resolve_host_secret_auth(secret_id: Option<&str>) -> Result<Option<SecretAuth
     Ok(Some(secret_auth))
 }
 
+fn resolve_add_host_secret_auth(host_name: &str, update: &mut KnownHostCliUpdate) -> Result<Option<SecretAuth>> {
+    if update.secret.is_some() {
+        return resolve_host_secret_auth(update.secret.as_deref());
+    }
+    if update.apikey.is_some() || update.username.is_some() || update.password.is_some() {
+        return Ok(None);
+    }
+    let secret_auth = resolve_same_name_host_secret_auth(host_name)?;
+    if secret_auth.is_some() {
+        tracing::debug!("Using host name {host_name} as secret_id");
+        update.secret = Some(host_name.to_string());
+    }
+    Ok(secret_auth)
+}
+
 fn resolve_same_name_host_secret_auth(host_name: &str) -> Result<Option<SecretAuth>> {
+    if !keystore_exists()? {
+        return Ok(None);
+    }
     let Ok(keystore_password) = get_password_for_secret_commands() else {
         return Ok(None);
     };
@@ -3631,6 +3640,21 @@ fn resolve_serve_runtime_mode(mode: Option<RuntimeMode>) -> Result<RuntimeMode> 
         Ok(value) => RuntimeMode::from_env(&value),
         Err(std::env::VarError::NotPresent) => Ok(RuntimeMode::User),
         Err(err) => Err(eyre!("Failed to read ESDIAG_MODE: {err}")),
+    }
+}
+
+#[cfg(feature = "server")]
+fn resolve_serve_bind(bind: Option<Ipv4Addr>) -> Result<Ipv4Addr> {
+    if let Some(bind) = bind {
+        return Ok(bind);
+    }
+    match std::env::var("ESDIAG_BIND") {
+        Ok(value) => value
+            .trim()
+            .parse()
+            .map_err(|err| eyre!("Invalid ESDIAG_BIND '{value}', expected an IPv4 address: {err}")),
+        Err(std::env::VarError::NotPresent) => Ok(Ipv4Addr::LOCALHOST),
+        Err(err) => Err(eyre!("Failed to read ESDIAG_BIND: {err}")),
     }
 }
 
@@ -3775,16 +3799,19 @@ mod tests {
         detected_esdiag_local_preset, ensure_output_deployment_valid, format_keystore_lock_status,
         format_keystore_lock_status_at, format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode,
         keep_default_job, local_core_stack_start_args, local_stack_outcome, needs_processing_default_job,
-        resolve_host_secret_auth, resolve_log_file_filter, resolve_secret_input_with_prompt, resolve_tracing_filter,
-        saved_job_fits_workflow, should_error_for_missing_subcommand, should_run_output_setup,
-        should_start_local_core_stack, structured_failure,
+        resolve_add_host_secret_auth, resolve_host_secret_auth, resolve_log_file_filter,
+        resolve_secret_input_with_prompt, resolve_tracing_filter, saved_job_fits_workflow,
+        should_error_for_missing_subcommand, should_run_output_setup, should_start_local_core_stack,
+        structured_failure,
     };
     #[cfg(feature = "keystore")]
     use super::{derive_collect_job, derive_process_job};
     #[cfg(feature = "server")]
-    use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
+    use super::{resolve_serve_bind, resolve_serve_exporter, resolve_serve_runtime_mode};
     use clap::Parser;
-    use esdiag::data::{Application, HostRole, KnownHost, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
+    use esdiag::data::{
+        Application, HostRole, KnownHost, KnownHostCliUpdate, SecretAuth, UnlockStatus, Uri, upsert_secret_auth,
+    };
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
     #[cfg(feature = "agent")]
@@ -3806,6 +3833,9 @@ mod tests {
         job::model::{ExportTarget, Input, Job, Process},
         processor::Identifiers,
     };
+    use redact::Secret;
+    #[cfg(feature = "server")]
+    use std::net::Ipv4Addr;
     use std::{ffi::OsString, sync::Mutex};
     use tempfile::TempDir;
     use url::Url;
@@ -5081,6 +5111,92 @@ mod tests {
 
         let resolved = resolve_host_secret_auth(Some("host-fallback")).expect("resolve auth");
         assert!(matches!(resolved, Some(SecretAuth::ApiKey { .. })));
+    }
+
+    #[test]
+    fn add_host_uses_same_name_secret_without_secret_flag() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        upsert_secret_auth("prod-es", SecretAuth::apikey("secret-key"), "pw").expect("save secret");
+
+        let mut update = KnownHostCliUpdate::default();
+        let resolved = resolve_add_host_secret_auth("prod-es", &mut update).expect("resolve auth");
+
+        assert!(matches!(resolved, Some(SecretAuth::ApiKey { .. })));
+        assert_eq!(update.secret.as_deref(), Some("prod-es"));
+    }
+
+    #[test]
+    fn add_host_skips_same_name_secret_with_explicit_credentials() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+        upsert_secret_auth("prod-es", SecretAuth::apikey("secret-key"), "pw").expect("save secret");
+
+        let mut update = KnownHostCliUpdate {
+            apikey: Some(Secret::new("inline-key".to_string())),
+            ..Default::default()
+        };
+        let resolved = resolve_add_host_secret_auth("prod-es", &mut update).expect("resolve auth");
+
+        assert!(resolved.is_none());
+        assert!(update.secret.is_none());
+    }
+
+    #[test]
+    fn add_host_without_keystore_has_no_secret() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _tmp = setup_env();
+
+        let mut update = KnownHostCliUpdate::default();
+        let resolved = resolve_add_host_secret_auth("prod-es", &mut update).expect("resolve auth");
+
+        assert!(resolved.is_none());
+        assert!(update.secret.is_none());
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_bind_defaults_to_loopback() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::remove_var("ESDIAG_BIND");
+        }
+
+        assert_eq!(resolve_serve_bind(None).expect("resolve bind"), Ipv4Addr::LOCALHOST);
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_bind_uses_env_when_flag_missing() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_BIND", "0.0.0.0");
+        }
+
+        let env_bind = resolve_serve_bind(None).expect("resolve bind");
+        let flag_bind = resolve_serve_bind(Some(Ipv4Addr::LOCALHOST)).expect("resolve bind");
+
+        unsafe {
+            std::env::remove_var("ESDIAG_BIND");
+        }
+        assert_eq!(env_bind, Ipv4Addr::UNSPECIFIED);
+        assert_eq!(flag_bind, Ipv4Addr::LOCALHOST);
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_bind_rejects_invalid_env() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("ESDIAG_BIND", "localhost");
+        }
+
+        let err = resolve_serve_bind(None).expect_err("invalid bind");
+
+        unsafe {
+            std::env::remove_var("ESDIAG_BIND");
+        }
+        assert!(err.to_string().contains("ESDIAG_BIND"));
     }
 
     #[cfg(feature = "server")]

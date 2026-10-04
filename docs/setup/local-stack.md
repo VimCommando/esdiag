@@ -1,19 +1,56 @@
 ---
 type: Guide
-title: Run a local diagnostic cluster
-description: Run Elasticsearch, Kibana, and the ESDiag web UI on one machine.
+title: Run a local stack
+description: Process and analyze diagnostics with Elasticsearch, Kibana, and ESDiag on one machine.
 tags: [setup, containers, local, agent-builder]
 ---
 
-# Run a local diagnostic cluster
+# Run a local stack
 
-Run a local stack when you need local dashboards, browser uploads, or Agent
-Builder. It needs Podman or Docker with Compose support, 4 GB of disk space,
-and preferably 8 GB of memory.
+Use this guide when you want dashboards, browser uploads, and Agent Builder on
+your own machine. ESDiag starts Elasticsearch and Kibana in containers and
+keeps every processed diagnostic on the machine.
 
-Install the binary first. See [Install ESDiag](installation.md#binary).
+You need Podman or Docker with Compose support, 4 GB of disk space, and
+preferably 8 GB of memory.
 
-## Start the stack
+## Install
+
+Choose how ESDiag itself runs. Elasticsearch and Kibana run in containers in
+both modes.
+
+| Mode | ESDiag runs | Install | Choose it when |
+|---|---|---|---|
+| Core | Natively on your machine | [Native binary](installation.md#native-binary) | You want the CLI, the web UI, and the coding-agent skill. This is the default. |
+| Full | In a container | [Native binary](installation.md#native-binary) or the [local-stack launcher](installation.md#local-stack-launcher) | You want everything containerized, or you cannot install the binary. |
+
+Core and full modes keep separate ESDiag state. Switching modes does not move
+hosts, jobs, settings, or secrets between the native user directory and the
+full-mode container volume.
+
+### Native (core mode)
+
+```sh
+esdiag local up
+esdiag local auth
+```
+
+On a new state directory, `esdiag local up` starts core mode. Core mode runs
+`esdiag serve --mode user` natively next to the Elasticsearch and Kibana
+containers.
+
+### Containerized (full mode)
+
+```sh
+esdiag-local up
+esdiag-local auth
+```
+
+The launcher starts full mode. If the matching `esdiag` binary is also on your
+`PATH`, the launcher uses core mode instead. For every other `esdiag local`
+command in this guide, substitute `esdiag-local` when you use the launcher.
+
+To run full mode from the binary, use `esdiag local up --stack=full`.
 
 ### Windows container paths
 
@@ -63,36 +100,7 @@ creation time. `esdiag local restart esdiag` replaces that service, and
 `esdiag local down` stops it before tearing down the containers. Windows
 shutdown terminates the verified process and waits for it to exit.
 
-The binary owns the normal path:
-
-```sh
-esdiag local up
-esdiag local auth
-```
-
-On a new state directory, `--stack=auto` starts core mode. Core mode runs
-Elasticsearch and Kibana in containers and starts native `esdiag serve --mode
-user`.
-
-Choose a mode only when you need to:
-
-```sh
-esdiag local up --stack=core
-esdiag local up --stack=full
-```
-
-Full mode runs the ESDiag web service in a container. A mode switch does not
-move hosts, jobs, settings, or secrets between native state and the full-mode
-container volume.
-
-The standalone script remains available:
-
-```sh
-esdiag-local up --stack=full
-esdiag-local auth
-```
-
-It can use core mode only when it finds an exactly matching native binary.
+### Endpoints
 
 The stack binds these default endpoints to loopback:
 
@@ -100,13 +108,15 @@ The stack binds these default endpoints to loopback:
 - Elasticsearch: `http://127.0.0.1:9200`
 - Kibana: `http://127.0.0.1:5601`
 
-When `esdiag local up` opens a browser, it starts at the ESDiag onboarding page:
+When `esdiag local up` opens a browser, it starts at the ESDiag onboarding page,
 `http://127.0.0.1:2501/welcome`. Use `esdiag local open` to open the web UI
 root instead.
 
-## Configure ESDiag
+## Connect ESDiag to the stack
 
-Run the initializer at an interactive terminal:
+Finish onboarding in the terminal or the browser. Both save the same state.
+
+In the terminal, run:
 
 ```sh
 esdiag init
@@ -114,14 +124,24 @@ esdiag init
 
 Choose local processing. If the stack already exists, the initializer reads its
 generated endpoints and asks before installing assets. If it does not, the
-initializer can start a core stack; that approval includes the new stack's
-required assets. When it starts one, it opens the local web UI only after every
-onboarding question has been completed.
+initializer can start a core stack. That approval includes the new stack's
+required assets. If you decline, it returns to remote setup without creating
+local state. After a terminal setup that started a stack, `init` asks whether
+to open the web UI. The default is no.
 
-The initializer creates native user configuration. The local stack keeps its
-generated credentials separately under `~/.esdiag/local`.
+In the browser, complete the `/welcome` page. Submitting each stage updates
+the current page directly, including when a diagnostic user was already
+configured by terminal setup. At the **Diagnostic Source** stage, choose
+**Add later** if you only process archives. You can return to `/welcome` to
+add a source.
 
-Get a generated secret only when ESDiag prompts for it:
+A full-mode stack identifies itself to the web UI, so onboarding uses the
+stack's own Elasticsearch and Kibana as the diagnostic cluster. It never tries
+to start containers from inside the ESDiag container. Without the binary, the
+browser is the only way to finish onboarding.
+
+The local stack keeps its generated credentials under `~/.esdiag/local`. Print
+one only when ESDiag prompts for it:
 
 ```sh
 esdiag local secrets password
@@ -129,13 +149,12 @@ esdiag local secrets apikey
 ```
 
 These commands print raw secrets. Do not capture their output in history,
-documents, tickets, or chat. For a standalone stack, substitute
-`esdiag-local`.
+documents, tickets, or chat.
 
 ## Set up Agent Builder
 
 You need an Enterprise license or trial and a configured inference model before
-using `esdiag process --ask` or `esdiag agent ask`.
+you can ask Agent Builder questions.
 
 For Elastic Inference Service:
 
@@ -148,17 +167,49 @@ For Elastic Inference Service:
 
 See Elastic's
 [self-managed EIS setup](https://www.elastic.co/docs/explore-analyze/elastic-inference/connect-self-managed-cluster-to-eis)
-for account and billing details. For a local OpenAI-compatible model, see the
-[local LLM guide](local-llm.md).
+for account and billing details. For a local OpenAI-compatible model, see
+[Connect Agent Builder to a local LLM](local-llm.md).
 
-## Process an archive
+## Process and analyze an archive
+
+In the web UI, open `http://127.0.0.1:2501`, upload the archive on the
+**Process** page, and follow the returned Kibana link.
+
+From the CLI:
 
 ```sh
-esdiag process /path/to/elasticsearch-api-diagnostics.zip \
+esdiag process /path/to/diagnostic.zip
+```
+
+If Agent Builder is ready, ask a question as part of processing:
+
+```sh
+esdiag process /path/to/diagnostic.zip \
   --ask "What is the highest-risk finding, and what evidence supports it?"
 ```
 
 The result includes the diagnostic ID and a Kibana conversation URL.
+
+## Collect, process, and analyze
+
+Save the cluster you want to diagnose as a `collect` host. Use the web UI's
+**Settings** page, or follow [Save a source](collect-and-share.md#save-a-source).
+In full mode, the source must be reachable from inside the ESDiag container.
+
+In the web UI, open **Advanced**. In **Collect**, choose **New**, then **Known
+Host**. Leave **Process** enabled, choose the default diagnostic cluster in
+**Send**, then select **Collect**. Add an **Elastic Upload Service ID** under
+**Raw bundle delivery** to share the raw archive too.
+
+From the CLI, run the job that `esdiag init` saved:
+
+```sh
+esdiag job list
+esdiag job run <NAME>
+```
+
+To keep the raw archive, collect first and pass the reported path to `process`.
+ESDiag only uploads when you run `upload` or use `collect --upload`.
 
 ## Operate the stack
 
@@ -177,8 +228,7 @@ credentials, and volumes:
 esdiag local reset --force
 ```
 
-For a standalone stack, use the matching `esdiag-local` commands. The script
-can check and install its own update:
+The launcher can check for and install its own update:
 
 ```sh
 esdiag-local update --check
