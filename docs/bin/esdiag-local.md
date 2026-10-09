@@ -110,13 +110,40 @@ The standalone script can update itself:
 ```sh
 esdiag-local update --check
 esdiag-local update
-esdiag-local up --upgrade
 ```
 
 The update verifies the release checksum, then replaces a writable regular
-script. It refuses symlinks. Updating the script does not upgrade a running
-stack.
+script. It refuses symlinks. Updating the script does not change the stack's
+image versions.
 
 ### Windows Subsystem for Linux
 
 esdiag uses Windows browser and clipboard tools under WSL when Windows interoperability is enabled. Passwords are passed to clip.exe through standard input. If Windows tools cannot be launched, esdiag tries available Linux desktop tools and reports browser failures. Clipboard copying still requires the existing confirmation or explicit --copy-password=true option.
+
+## Upgrades
+
+`up` starts the image versions recorded in the state directory. When the
+binary or script ships newer versions, `up` prints a warning and starts the
+recorded versions anyway. `upgrade` moves the stack to the new versions:
+
+```sh
+esdiag local upgrade
+esdiag-local upgrade
+```
+
+`upgrade` asks `[y/N]` before it changes anything, because Elasticsearch data
+cannot be downgraded. Use `--force` in scripts and other non-interactive use.
+
+- A running stack is restarted on the new images, and its ESDiag assets are
+  reinstalled.
+- A stopped stack records the new versions and stays stopped. The next `up`
+  starts it on them.
+- Core mode upgrades Elasticsearch and Kibana. Full mode also upgrades the
+  ESDiag image.
+- The stack keeps its mode. Change modes with `up --stack=<mode>`.
+- If the image pull fails, the previous versions stay recorded.
+- A stack that records a newer Elastic version than the tool ships is refused.
+
+`esdiag-local upgrade` accepts `--elastic-version` and `--esdiag-version` to
+choose target versions. On `up`, those options only apply to a new stack.
+`up --upgrade` was replaced by `upgrade`.

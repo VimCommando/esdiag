@@ -245,6 +245,11 @@ full-mode container volume.
 `esdiag local update` cannot update binary-owned lifecycle code. Update the
 binary through Homebrew, Cargo, or its release archive.
 
+`up` keeps the image versions recorded in the state directory and warns when
+the binary ships newer ones. `esdiag local upgrade` moves the stack to them
+after a `[y/N]` confirmation, or immediately with `--force`. It restarts a
+running stack and leaves a stopped stack stopped.
+
 See [Run a local stack](setup/local-stack.md) for local setup and
 [local-stack launcher reference](bin/esdiag-local.md) for every launcher
 option.

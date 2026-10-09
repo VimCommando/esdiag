@@ -231,16 +231,33 @@ credentials, and volumes:
 esdiag local reset --force
 ```
 
-The launcher can check for and install its own update:
+## Upgrade the stack
+
+A stack keeps the Elasticsearch, Kibana, and ESDiag image versions it was
+created with. When a newer binary or launcher ships newer versions, `up` warns
+and keeps starting the recorded versions. Upgrade when you are ready:
+
+```sh
+esdiag local upgrade
+```
+
+`upgrade` asks for confirmation because Elasticsearch data cannot be downgraded
+afterward. Pass `--force` for non-interactive use. It pulls the new images,
+restarts a running stack on them, and reinstalls the ESDiag assets. A stopped
+stack stays stopped and starts on the new versions at the next `up`. Core mode
+upgrades only Elasticsearch and Kibana, since the native binary is the ESDiag
+web service.
+
+Update the binary through Homebrew, Cargo, or its release archive, then run
+`esdiag local upgrade`. `esdiag local update` only prints that guidance.
+
+The launcher updates itself, then upgrades its stack the same way:
 
 ```sh
 esdiag-local update --check
 esdiag-local update
-esdiag-local up --upgrade
+esdiag-local upgrade
 ```
-
-Update the binary through Homebrew, Cargo, or its release archive.
-`esdiag local update` only prints that guidance.
 
 For ports, registries, state paths, and every lifecycle option, see the
 [local-stack launcher reference](../bin/esdiag-local.md).

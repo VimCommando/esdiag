@@ -49,6 +49,8 @@ published release notes, maintenance branches, and tagged history.
 - Changed web onboarding to return each next step directly to the submitting browser, so setup advances when a diagnostic user is configured.
 - Changed `esdiag init` to ask for the diagnostic user before offering web setup, so the web interface starts with that user. After a terminal setup that started a local stack, init now asks before opening the web interface, defaulting to no.
 - Changed new keystore password prompts to ask again when the password is empty or the confirmation doesn't match, instead of exiting.
+- Updated the local Elastic Stack default to version 9.5.5 for new `esdiag local` and `esdiag-local` stacks. Existing stacks upgrade with `esdiag local upgrade` or `esdiag-local upgrade`.
+- Replaced `esdiag-local up --upgrade` with an `upgrade` command for `esdiag local` and `esdiag-local`. It asks for `[y/N]` confirmation or accepts `--force`, restarts a running stack on the new images, and leaves a stopped stack stopped. `up` now warns about an older stack and starts its recorded versions instead of failing, and `esdiag-local up` rejects version overrides that differ from an existing stack.
 - Changed `esdiag serve` to bind to `127.0.0.1` by default. Set `--bind` or the new `ESDIAG_BIND` variable to listen elsewhere; the container image sets `ESDIAG_BIND=0.0.0.0`.
 - Changed `esdiag host add` to reference a keystore secret with the host's name when `--secret` and inline credentials are omitted, matching URL-template hosts.
 - Changed CLI commands to write their full log to `~/.esdiag/last_run/esdiag.log` and show only warnings and errors in the terminal unless `--debug` or `LOG_LEVEL` is set. `esdiag serve` still logs to stderr.

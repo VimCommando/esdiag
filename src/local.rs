@@ -23,7 +23,7 @@ use esdiag::{
 use url::Url;
 
 const STATE_SCHEMA_VERSION: &str = "3";
-const ELASTIC_VERSION: &str = "9.4.2";
+const ELASTIC_VERSION: &str = "9.5.5";
 
 #[cfg(windows)]
 mod windows;
@@ -63,6 +63,7 @@ pub async fn run(args: &[OsString]) -> Result<CliOutcome> {
 
     match command {
         "up" => state.up(options).await?,
+        "upgrade" => state.upgrade(options).await?,
         "down" => state.down()?,
         "restart" => {
             if let Some(level) = options.log_level {
@@ -92,7 +93,7 @@ pub async fn run(args: &[OsString]) -> Result<CliOutcome> {
             return Ok(empty_outcome(command));
         }
         "help" | "--help" | "-h" => {
-            println!("Use `esdiag local <up|down|restart|status|logs|setup|open|auth|secrets|reset>`.");
+            println!("Use `esdiag local <up|upgrade|down|restart|status|logs|setup|open|auth|secrets|reset>`.");
             return Ok(empty_outcome(command));
         }
         _ => return Err(eyre!("Unknown local command: {command}")),
@@ -235,6 +236,10 @@ impl LocalState {
     }
 
     async fn up(&mut self, options: LocalOptions) -> Result<()> {
+        if self.has_existing_state {
+            let mode = self.resolve_mode(options.stack)?;
+            self.warn_version_drift(mode);
+        }
         self.up_inner(options).await.map_err(|error| {
             let message = format!(
                 "Local startup did not complete: {error}. Generated state is retained at {}. Inspect `esdiag local logs --state-dir {}`, then retry `esdiag local up --state-dir {}` or stop with `esdiag local down --state-dir {}`.",
@@ -321,6 +326,129 @@ impl LocalState {
         Ok(())
     }
 
+    /// Upgrades the recorded image versions of an existing stack. A running
+    /// stack is restarted on the new images; a stopped stack stays stopped.
+    async fn upgrade(&mut self, mut options: LocalOptions) -> Result<()> {
+        if !self.has_existing_state {
+            return Err(eyre!(
+                "No local stack exists at {}; start one with `esdiag local up`",
+                self.dir.display()
+            ));
+        }
+        if options.stack != StackMode::Auto {
+            return Err(eyre!(
+                "`esdiag local upgrade` keeps the current stack mode; change modes with `esdiag local up --stack=<mode>`"
+            ));
+        }
+        let mode = self.active_mode();
+        if let Some(recorded) = self.newer_recorded_elastic() {
+            return Err(eyre!(
+                "This local stack runs Elastic {recorded}, which is newer than Elastic {ELASTIC_VERSION} in this ESDiag binary. Elasticsearch cannot be downgraded; install a newer ESDiag binary or run `esdiag local reset --force` to start over."
+            ));
+        }
+        let changes = self.pending_upgrades(mode);
+        if changes.is_empty() {
+            eprintln!("The local stack already runs Elastic {ELASTIC_VERSION}.");
+            return Ok(());
+        }
+        let changes = changes.join(" and ");
+        let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+        upgrade_confirmed(options.force, interactive, || {
+            confirm_on_stderr(
+                &format!(
+                    "Upgrade the local stack from {changes}? Elasticsearch data cannot be downgraded afterward. [y/N]: "
+                ),
+                false,
+            )
+        })?;
+
+        self.runtime = Some(detect_runtime(options.runtime.clone())?);
+        self.validate_state_coupling()?;
+        let running = self.service_running("elasticsearch")?;
+        let previous = self.values.clone();
+        self.record_current_versions();
+        self.write()?;
+        self.write_compose(mode)?;
+        let mut pull = vec!["pull", "elasticsearch", "kibana"];
+        if mode == StackMode::Full {
+            pull.push("esdiag");
+        }
+        if let Err(error) = self.compose_logged(&format!("Pulling images for {changes}"), &pull) {
+            self.values = previous;
+            self.write()?;
+            return Err(error.wrap_err("The upgrade did not start; the previous versions remain recorded"));
+        }
+
+        if running {
+            progress(&format!("Upgrading the running local stack from {changes}"));
+            options.stack = mode;
+            options.open_browser = false;
+            options.copy_password = Some(false);
+            options.persist_onboarding_output = false;
+            options.start_native_service = mode == StackMode::Core && self.native_service_state() == "running";
+            self.up(options).await
+        } else {
+            eprintln!(
+                "Upgraded the stopped local stack from {changes}. `esdiag local up` starts it on the new versions."
+            );
+            Ok(())
+        }
+    }
+
+    fn warn_version_drift(&self, mode: StackMode) {
+        if let Some(recorded) = self.newer_recorded_elastic() {
+            eprintln!(
+                "Warning: this local stack runs Elastic {recorded}, which is newer than Elastic {ELASTIC_VERSION} in this ESDiag binary. Install a newer ESDiag binary."
+            );
+            return;
+        }
+        let changes = self.pending_upgrades(mode);
+        if !changes.is_empty() {
+            eprintln!(
+                "Warning: this local stack can be upgraded from {}. Run `esdiag local upgrade` to upgrade it.",
+                changes.join(" and ")
+            );
+        }
+    }
+
+    fn newer_recorded_elastic(&self) -> Option<&str> {
+        self.values
+            .get("STACK_ELASTIC_VERSION")
+            .map(String::as_str)
+            .filter(|recorded| is_newer_version(recorded, ELASTIC_VERSION))
+    }
+
+    /// Core mode runs the native binary, so its recorded ESDiag image version
+    /// is not an upgrade the user needs to approve.
+    fn pending_upgrades(&self, mode: StackMode) -> Vec<String> {
+        let mut changes = Vec::new();
+        if let Some(recorded) = self.values.get("STACK_ELASTIC_VERSION")
+            && recorded != ELASTIC_VERSION
+        {
+            changes.push(format!("Elastic {recorded} to {ELASTIC_VERSION}"));
+        }
+        let esdiag_version = env!("CARGO_PKG_VERSION");
+        if mode == StackMode::Full
+            && let Some(recorded) = self.values.get("STACK_ESDIAG_VERSION")
+            && recorded != esdiag_version
+        {
+            changes.push(format!("ESDiag {recorded} to {esdiag_version}"));
+        }
+        changes
+    }
+
+    fn record_current_versions(&mut self) {
+        for (key, value) in [
+            ("STACK_ELASTIC_VERSION", ELASTIC_VERSION.to_string()),
+            ("STACK_ESDIAG_VERSION", env!("CARGO_PKG_VERSION").to_string()),
+            ("ELASTICSEARCH_IMAGE", elasticsearch_image()),
+            ("KIBANA_IMAGE", kibana_image()),
+            ("ESDIAG_IMAGE", esdiag_image()),
+        ] {
+            self.values.insert(key.to_string(), value);
+        }
+    }
+
     fn resolve_mode(&self, requested: StackMode) -> Result<StackMode> {
         match requested {
             StackMode::Auto => match self.values.get("STACK_MODE").map(String::as_str) {
@@ -400,15 +528,9 @@ impl LocalState {
         self.value("KIBANA_SYSTEM_PASSWORD", &random_secret());
         self.value("KIBANA_ENCRYPTION_KEY", &random_secret());
         self.value("ESDIAG_OUTPUT_APIKEY", "pending");
-        self.value(
-            "ELASTICSEARCH_IMAGE",
-            &format!("docker.elastic.co/elasticsearch/elasticsearch:{ELASTIC_VERSION}"),
-        );
-        self.value(
-            "KIBANA_IMAGE",
-            &format!("docker.elastic.co/kibana/kibana:{ELASTIC_VERSION}"),
-        );
-        self.value("ESDIAG_IMAGE", &format!("docker.elastic.co/esdiag/esdiag:{version}"));
+        self.value("ELASTICSEARCH_IMAGE", &elasticsearch_image());
+        self.value("KIBANA_IMAGE", &kibana_image());
+        self.value("ESDIAG_IMAGE", &esdiag_image());
         self.value("ESDIAG_ELASTICSEARCH_PORT", "9200");
         self.value("ESDIAG_KIBANA_PORT", "5601");
         self.value("ESDIAG_PORT", "2501");
@@ -873,6 +995,15 @@ impl LocalState {
             .ok_or_else(|| eyre!("{runtime} compose command failed"))
     }
 
+    fn service_running(&self, service: &str) -> Result<bool> {
+        let (runtime, mut command) = self.compose_command(&["ps", "-q", service])?;
+        let output = command.stdin(Stdio::null()).stderr(Stdio::null()).output()?;
+        if !output.status.success() {
+            return Err(eyre!("`{runtime} compose ps` failed while checking {service}"));
+        }
+        Ok(!output.stdout.trim_ascii().is_empty())
+    }
+
     async fn wait_elasticsearch(&self) -> Result<()> {
         self.wait_url(
             &self.elasticsearch_url(),
@@ -987,6 +1118,25 @@ impl LocalState {
     }
 }
 
+fn elasticsearch_image() -> String {
+    format!("docker.elastic.co/elasticsearch/elasticsearch:{ELASTIC_VERSION}")
+}
+
+fn kibana_image() -> String {
+    format!("docker.elastic.co/kibana/kibana:{ELASTIC_VERSION}")
+}
+
+fn esdiag_image() -> String {
+    format!("docker.elastic.co/esdiag/esdiag:{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn is_newer_version(recorded: &str, current: &str) -> bool {
+    match (semver::Version::parse(recorded), semver::Version::parse(current)) {
+        (Ok(recorded), Ok(current)) => recorded > current,
+        _ => false,
+    }
+}
+
 fn progress(message: &str) {
     eprintln!("{message}...");
 }
@@ -1018,6 +1168,20 @@ fn should_copy_password(
         Some(copy) => Ok(copy),
         None if interactive => approved(),
         None => Ok(false),
+    }
+}
+
+fn upgrade_confirmed(force: bool, interactive: bool, approved: impl FnOnce() -> Result<bool>) -> Result<()> {
+    if force {
+        return Ok(());
+    }
+    if !interactive {
+        return Err(eyre!("`esdiag local upgrade` requires --force in non-interactive use"));
+    }
+    if approved()? {
+        Ok(())
+    } else {
+        Err(eyre!("Upgrade cancelled"))
     }
 }
 
@@ -1164,7 +1328,9 @@ fn secure_dir(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalState, StackMode, kibana_is_available, should_copy_password, stable_project_id};
+    use super::{
+        LocalState, StackMode, kibana_is_available, should_copy_password, stable_project_id, upgrade_confirmed,
+    };
     use esdiag::cli_output::CliOutcome;
     use std::{collections::BTreeMap, fs, path::Path};
     use tempfile::TempDir;
@@ -1331,6 +1497,93 @@ mod tests {
         assert!(!should_copy_password(None, false, unasked).unwrap());
         assert!(should_copy_password(None, true, || Ok(true)).unwrap());
         assert!(!should_copy_password(None, true, || Ok(false)).unwrap());
+    }
+
+    #[test]
+    fn upgrade_requires_force_or_interactive_approval() {
+        let unasked = || -> eyre::Result<bool> { panic!("--force or a missing terminal does not ask") };
+
+        assert!(upgrade_confirmed(true, false, unasked).is_ok());
+        assert!(upgrade_confirmed(true, true, unasked).is_ok());
+        let error = upgrade_confirmed(false, false, unasked).unwrap_err().to_string();
+        assert!(error.contains("--force"), "{error}");
+        assert!(upgrade_confirmed(false, true, || Ok(true)).is_ok());
+        assert!(upgrade_confirmed(false, true, || Ok(false)).is_err());
+    }
+
+    #[test]
+    fn pending_upgrades_list_only_images_the_mode_runs() {
+        let (_directory, mut state) = state();
+        state.initialize(StackMode::Full).expect("initialize state");
+        assert!(state.pending_upgrades(StackMode::Full).is_empty());
+
+        state.values.insert("STACK_ELASTIC_VERSION".into(), "9.4.2".into());
+        state.values.insert("STACK_ESDIAG_VERSION".into(), "0.16.0".into());
+        let full = state.pending_upgrades(StackMode::Full);
+        assert_eq!(full.len(), 2);
+        assert_eq!(full[0], format!("Elastic 9.4.2 to {}", super::ELASTIC_VERSION));
+        assert!(full[1].starts_with("ESDiag 0.16.0 to "));
+        assert_eq!(
+            state.pending_upgrades(StackMode::Core),
+            vec![format!("Elastic 9.4.2 to {}", super::ELASTIC_VERSION)]
+        );
+    }
+
+    #[test]
+    fn upgrade_records_current_versions_and_images() {
+        let (_directory, mut state) = state();
+        state.values.insert("STACK_ELASTIC_VERSION".into(), "9.4.2".into());
+        state.values.insert(
+            "ELASTICSEARCH_IMAGE".into(),
+            "docker.elastic.co/elasticsearch/elasticsearch:9.4.2".into(),
+        );
+        state
+            .values
+            .insert("ESDIAG_IMAGE".into(), "docker.elastic.co/esdiag/esdiag:0.16.0".into());
+
+        state.record_current_versions();
+
+        let version = super::ELASTIC_VERSION;
+        assert_eq!(state.values["STACK_ELASTIC_VERSION"], version);
+        assert_eq!(
+            state.values["ELASTICSEARCH_IMAGE"],
+            format!("docker.elastic.co/elasticsearch/elasticsearch:{version}")
+        );
+        assert_eq!(
+            state.values["KIBANA_IMAGE"],
+            format!("docker.elastic.co/kibana/kibana:{version}")
+        );
+        assert_eq!(
+            state.values["ESDIAG_IMAGE"],
+            format!("docker.elastic.co/esdiag/esdiag:{}", env!("CARGO_PKG_VERSION"))
+        );
+        assert!(state.pending_upgrades(StackMode::Full).is_empty());
+    }
+
+    #[test]
+    fn newer_recorded_elastic_is_never_an_upgrade_target() {
+        let (_directory, mut state) = state();
+        state.values.insert("STACK_ELASTIC_VERSION".into(), "99.0.0".into());
+        assert_eq!(state.newer_recorded_elastic(), Some("99.0.0"));
+
+        state.values.insert("STACK_ELASTIC_VERSION".into(), "9.4.2".into());
+        assert_eq!(state.newer_recorded_elastic(), None);
+    }
+
+    #[test]
+    fn up_upgrade_option_is_rejected() {
+        let error = super::LocalOptions::parse(&["--upgrade".into()])
+            .err()
+            .expect("--upgrade is rejected");
+        assert!(error.to_string().contains("--upgrade"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn upgrade_requires_existing_state() {
+        let (_directory, mut state) = state();
+        let options = super::LocalOptions::parse(&["--force".into()]).expect("parse options");
+        let error = state.upgrade(options).await.unwrap_err().to_string();
+        assert!(error.contains("esdiag local up"), "{error}");
     }
 
     #[test]
