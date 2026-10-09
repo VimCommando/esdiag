@@ -120,6 +120,8 @@ struct LocalOptions {
     copy_password: Option<bool>,
     start_native_service: bool,
     persist_onboarding_output: bool,
+    /// Not a command-line option; `upgrade` clears it after its own pull.
+    pull_images: bool,
     log_level: Option<String>,
     force: bool,
     remaining: Vec<String>,
@@ -135,6 +137,7 @@ impl LocalOptions {
             copy_password: None,
             start_native_service: true,
             persist_onboarding_output: false,
+            pull_images: true,
             log_level: None,
             force: false,
             remaining: Vec::new(),
@@ -276,14 +279,16 @@ impl LocalState {
         if previous_mode == Some(StackMode::Full) && mode == StackMode::Core {
             self.compose_logged("Stopping the previous full-mode stack", &["down", "--remove-orphans"])?;
         }
-        let version = self
-            .required("STACK_ELASTIC_VERSION")
-            .unwrap_or(ELASTIC_VERSION)
-            .to_string();
-        self.compose_logged(
-            &format!("Pulling Elasticsearch and Kibana {version} images"),
-            &["pull", "elasticsearch", "kibana"],
-        )?;
+        if options.pull_images {
+            let version = self
+                .required("STACK_ELASTIC_VERSION")
+                .unwrap_or(ELASTIC_VERSION)
+                .to_string();
+            self.compose_logged(
+                &format!("Pulling Elasticsearch and Kibana {version} images"),
+                &["pull", "elasticsearch", "kibana"],
+            )?;
+        }
         self.compose_logged(
             "Starting Elasticsearch and Kibana",
             &["up", "-d", "elasticsearch", "kibana"],
@@ -385,6 +390,7 @@ impl LocalState {
             options.open_browser = false;
             options.copy_password = Some(false);
             options.persist_onboarding_output = false;
+            options.pull_images = false;
             options.start_native_service = mode == StackMode::Core && self.native_service_state() == "running";
             self.up(options).await
         } else {
@@ -1568,6 +1574,21 @@ mod tests {
 
         state.values.insert("STACK_ELASTIC_VERSION".into(), "9.4.2".into());
         assert_eq!(state.newer_recorded_elastic(), None);
+
+        let next_minor = semver::Version::parse(super::ELASTIC_VERSION).expect("release version");
+        let prerelease = format!("{}.{}.0-SNAPSHOT", next_minor.major, next_minor.minor + 1);
+        state.values.insert("STACK_ELASTIC_VERSION".into(), prerelease.clone());
+        assert_eq!(state.newer_recorded_elastic(), Some(prerelease.as_str()));
+        let own_prerelease = format!("{}-SNAPSHOT", super::ELASTIC_VERSION);
+        state.values.insert("STACK_ELASTIC_VERSION".into(), own_prerelease);
+        assert_eq!(state.newer_recorded_elastic(), None);
+    }
+
+    #[test]
+    fn startup_pulls_images_unless_upgrade_already_did() {
+        let options = super::LocalOptions::parse(&[]).expect("parse options");
+        assert!(options.pull_images);
+        assert!(super::LocalOptions::parse(&["--pull-images=false".into()]).is_err());
     }
 
     #[test]

@@ -283,6 +283,13 @@ assert_contains "$tmp/upgrade-current" 'already runs'
 sed -i.bak 's/^STACK_ELASTIC_VERSION=.*/STACK_ELASTIC_VERSION=99.0.0/' "$tmp/upgrade/.env"
 if run_local upgrade --runtime podman --state-dir "$tmp/upgrade" --pull never --force 2>"$tmp/downgrade-error"; then fail 'downgrade accepted'; fi
 assert_contains "$tmp/downgrade-error" 'cannot be downgraded'
+sed -i.bak 's/^STACK_ELASTIC_VERSION=.*/STACK_ELASTIC_VERSION=9.6.0/' "$tmp/upgrade/.env"
+if run_local upgrade --runtime podman --state-dir "$tmp/upgrade" --pull never --force --elastic-version 9.6.0-SNAPSHOT 2>"$tmp/prerelease-error"; then fail 'release-to-prerelease downgrade accepted'; fi
+assert_contains "$tmp/prerelease-error" 'cannot be downgraded'
+semver_cases=$(sed -n '/^semver_gt() {/,/^}/p' "$script")
+bash -c "$semver_cases"'
+semver_gt 0.17.0 0.17.0-rc1 && semver_gt 0.17.0-rc2 0.17.0-rc1 && semver_gt 10.0.0-beta1 9.5.5 &&
+! semver_gt 0.17.0-rc1 0.17.0 && ! semver_gt 9.5.5 9.5.5 && ! semver_gt 9.4.2 9.5.5' || fail 'semver_gt prerelease ordering'
 if run_local upgrade --runtime podman --state-dir "$tmp/no-stack" --force 2>"$tmp/no-stack-error"; then fail 'upgrade without state accepted'; fi
 assert_contains "$tmp/no-stack-error" "start one with 'esdiag-local up'"
 
