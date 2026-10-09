@@ -288,8 +288,24 @@ if run_local upgrade --runtime podman --state-dir "$tmp/upgrade" --pull never --
 assert_contains "$tmp/prerelease-error" 'cannot be downgraded'
 semver_cases=$(sed -n '/^semver_gt() {/,/^}/p' "$script")
 bash -c "$semver_cases"'
-semver_gt 0.17.0 0.17.0-rc1 && semver_gt 0.17.0-rc2 0.17.0-rc1 && semver_gt 10.0.0-beta1 9.5.5 &&
-! semver_gt 0.17.0-rc1 0.17.0 && ! semver_gt 9.5.5 9.5.5 && ! semver_gt 9.4.2 9.5.5' || fail 'semver_gt prerelease ordering'
+chain=(1.0.0-alpha 1.0.0-alpha.1 1.0.0-alpha.beta 1.0.0-beta 1.0.0-beta.2 1.0.0-beta.11 1.0.0-rc.1 1.0.0 1.0.1 1.10.0)
+for ((i = 1; i < ${#chain[@]}; i++)); do
+    semver_gt "${chain[i]}" "${chain[i-1]}" && ! semver_gt "${chain[i-1]}" "${chain[i]}" || exit 1
+done
+semver_gt 0.17.0 0.17.0-rc1 && semver_gt 10.0.0-beta1 9.5.5 && semver_gt 09.0.0 8.0.0 &&
+! semver_gt 9.5.5 9.5.5 && ! semver_gt 1.0.0+build.9 1.0.0+build.1 && ! semver_gt 9.6 9.5.5' || fail 'semver_gt precedence'
+
+PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" ESDIAG_TEST_MEMORY_MB=8192 ESDIAG_TEST_DISK_MB=8192 \
+    "$script" up --runtime podman --state-dir "$tmp/core-upgrade" --stack=core --pull never --open-browser=false
+sed -i.bak 's/^STACK_ELASTIC_VERSION=.*/STACK_ELASTIC_VERSION=9.4.2/' "$tmp/core-upgrade/.env"
+: >"$FAKE_LOG"
+if FAKE_ESDIAG_VERSION=0.0.0 PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" \
+    "$script" upgrade --runtime podman --state-dir "$tmp/core-upgrade" --pull never --force 2>"$tmp/core-upgrade-error"; then
+    fail 'core upgrade accepted a mismatched native binary'
+fi
+assert_contains "$tmp/core-upgrade-error" 'requires an ESDiag 0.17.0-rc1 binary'
+assert_contains "$tmp/core-upgrade/.env" 'STACK_ELASTIC_VERSION=9.4.2'
+assert_not_contains "$FAKE_LOG" 'up -d'
 if run_local upgrade --runtime podman --state-dir "$tmp/no-stack" --force 2>"$tmp/no-stack-error"; then fail 'upgrade without state accepted'; fi
 assert_contains "$tmp/no-stack-error" "start one with 'esdiag-local up'"
 
