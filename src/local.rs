@@ -1737,4 +1737,113 @@ mod onboarding_recovery_tests {
         assert!(parse_env(&env).unwrap().contains_key("ELASTIC_PASSWORD"));
         assert!(state_dir.join("compose.yml").exists());
     }
+
+    /// Records each invocation in `calls`. Elasticsearch reports running while
+    /// a `running` file exists, and pulls fail while a `fail-pull` file exists.
+    /// Starting containers always fails.
+    #[cfg(unix)]
+    fn fake_upgrade_runtime(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let runtime = dir.join("runtime");
+        fs::write(
+            &runtime,
+            format!(
+                "#!/bin/sh\ndir='{}'\nprintf '%s\\n' \"$*\" >> \"$dir/calls\"\ncase \"$*\" in\n  'compose version'|'volume inspect '*) exit 0 ;;\n  *' ps -q elasticsearch') [ -f \"$dir/running\" ] && echo container-id; exit 0 ;;\n  *' pull '*) [ -f \"$dir/fail-pull\" ] && exit 1; exit 0 ;;\n  *) exit 1 ;;\nesac\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        runtime
+    }
+
+    #[cfg(unix)]
+    fn old_stack(dir: &Path, mode: &str) -> LocalState {
+        let state_dir = dir.join("state");
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(
+            state_dir.join(".env"),
+            format!(
+                "STACK_MODE={mode}\nSTACK_ELASTIC_VERSION=9.4.2\nSTACK_ESDIAG_VERSION=0.16.0\nELASTICSEARCH_IMAGE=docker.elastic.co/elasticsearch/elasticsearch:9.4.2\nKIBANA_IMAGE=docker.elastic.co/kibana/kibana:9.4.2\nESDIAG_IMAGE=docker.elastic.co/esdiag/esdiag:0.16.0\nESDIAG_OUTPUT_APIKEY=pending\nELASTIC_PASSWORD=test-password\n"
+            ),
+        )
+        .unwrap();
+        LocalState::load(state_dir).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn forced_upgrade(runtime: &Path) -> LocalOptions {
+        let mut options = LocalOptions::parse(&["--force".into()]).unwrap();
+        options.runtime = Some(runtime.to_string_lossy().into_owned());
+        options
+    }
+
+    #[cfg(unix)]
+    fn recorded(state: &LocalState) -> BTreeMap<String, String> {
+        parse_env(&fs::read_to_string(state.dir.join(".env")).unwrap()).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upgrading_a_stopped_stack_records_new_versions_without_starting_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = fake_upgrade_runtime(dir.path());
+        let mut state = old_stack(dir.path(), "full");
+
+        state.upgrade(forced_upgrade(&runtime)).await.unwrap();
+
+        let env = recorded(&state);
+        assert_eq!(env["STACK_ELASTIC_VERSION"], ELASTIC_VERSION);
+        assert_eq!(env["ELASTICSEARCH_IMAGE"], elasticsearch_image());
+        assert_eq!(env["KIBANA_IMAGE"], kibana_image());
+        assert_eq!(env["STACK_ESDIAG_VERSION"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(env["ESDIAG_IMAGE"], esdiag_image());
+        assert_eq!(env["STACK_MODE"], "full");
+        let calls = fs::read_to_string(dir.path().join("calls")).unwrap();
+        assert!(calls.contains(" pull elasticsearch kibana esdiag"), "{calls}");
+        assert!(!calls.contains(" up "), "a stopped stack was started:\n{calls}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_upgrade_pull_restores_the_previous_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = fake_upgrade_runtime(dir.path());
+        fs::write(dir.path().join("running"), "").unwrap();
+        fs::write(dir.path().join("fail-pull"), "").unwrap();
+        let mut state = old_stack(dir.path(), "full");
+        let before = recorded(&state);
+
+        let error = state.upgrade(forced_upgrade(&runtime)).await.unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("previous versions remain recorded"),
+            "{error:#}"
+        );
+        assert_eq!(recorded(&state), before);
+        let calls = fs::read_to_string(dir.path().join("calls")).unwrap();
+        assert!(
+            !calls.contains(" up "),
+            "containers restarted after a failed pull:\n{calls}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upgrading_a_running_stack_pulls_once_and_keeps_new_versions_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = fake_upgrade_runtime(dir.path());
+        fs::write(dir.path().join("running"), "").unwrap();
+        let mut state = old_stack(dir.path(), "core");
+
+        assert!(state.upgrade(forced_upgrade(&runtime)).await.is_err());
+
+        let calls = fs::read_to_string(dir.path().join("calls")).unwrap();
+        assert_eq!(calls.matches(" pull ").count(), 1, "{calls}");
+        assert!(calls.contains(" pull elasticsearch kibana\n"), "{calls}");
+        assert!(calls.contains(" up -d elasticsearch kibana"), "{calls}");
+        let env = recorded(&state);
+        assert_eq!(env["STACK_ELASTIC_VERSION"], ELASTIC_VERSION);
+        assert_eq!(env["STACK_MODE"], "core");
+    }
 }
