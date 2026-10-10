@@ -371,6 +371,8 @@ async fn render_panel(state: &Arc<ServerState>, message: String) -> eyre::Result
 async fn journey_model(state: &Arc<ServerState>) -> eyre::Result<JourneyModel> {
     let config = ApplicationConfig::load()
         .map_err(|err| super::ConfigurationError::report("Could not read esdiag.yml for onboarding", err))?;
+    let identity = super::resolve_optional_identity(state.runtime_mode)?;
+    let resolved_user = if identity.locked { identity.user } else { String::new() };
     let (readiness, output_configured) = match onboarding::inspect() {
         Ok(readiness) => {
             let output_configured = readiness.output_configured;
@@ -458,7 +460,7 @@ async fn journey_model(state: &Arc<ServerState>) -> eyre::Result<JourneyModel> {
 
     Ok(JourneyModel {
         stage,
-        user: config.user.unwrap_or_default(),
+        user: resolved_user,
         workflow_value: workflow.map(workflow_value).unwrap_or_default().to_string(),
         processes_diagnostics,
         show_cluster,
@@ -965,6 +967,27 @@ mod tests {
             assert!(body.contains("esdiag.yml"), "{body}");
             assert!(!body.contains("Anonymous"), "{body}");
         }
+    }
+
+    #[tokio::test]
+    async fn welcome_shows_the_environment_user_over_the_configured_user() {
+        let mut env = crate::TestEnv::new();
+        save_user("config@example.com".to_string()).expect("save configured user");
+        env.set("ESDIAG_USER", "env@example.com");
+        let state = test_server_state();
+
+        let response = page(axum::extract::State(state.clone()), axum::http::HeaderMap::new()).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read welcome response");
+        let body = String::from_utf8(body.to_vec()).expect("UTF-8 response");
+        assert!(body.contains(r#"value="env@example.com""#), "{body}");
+        assert!(!body.contains("config@example.com"), "{body}");
+
+        let panel = super::render_panel(&state, String::new()).await.expect("render panel");
+        assert!(panel.contains(r#"value="env@example.com""#), "{panel}");
+        assert!(!panel.contains("config@example.com"), "{panel}");
     }
 
     #[tokio::test]
