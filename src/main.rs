@@ -2713,7 +2713,7 @@ async fn run_gui_onboarding() -> Result<CommandResult> {
     let executable =
         std::env::current_exe().map_err(|err| eyre!("Unable to locate the running ESDiag binary: {err}"))?;
     let mut server = Command::new(executable)
-        .args(["serve", "--mode", "user", "--onboarding"])
+        .args(["serve", "--mode", "user", "--onboarding", "--bind", "127.0.0.1"])
         .spawn()
         .map_err(|err| eyre!("Unable to start the ESDiag web server: {err}"))?;
 
