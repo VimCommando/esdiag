@@ -1,7 +1,7 @@
 ---
 type: Guide
 title: Use ESDiag from a coding agent
-description: Install the ESDiag Agent Skill, prepare saved hosts, and ask a coding agent to collect diagnostics.
+description: Install the ESDiag Agent Skill, prepare saved hosts, and ask a coding agent to collect and share diagnostics.
 tags: [setup, agent-skills, collection, upload]
 ---
 
@@ -80,28 +80,31 @@ Check the names the agent will see:
 esdiag host list
 ```
 
-## Collect a diagnostic
+## Collect and upload a diagnostic
 
 Ask the agent:
 
 ```text
-Collect a diagnostic from my prod cluster into ~/diagnostics.
+Collect a diagnostic from my prod cluster and upload it to <UPLOAD_ID>.
 ```
 
 The agent runs a command like this one:
 
 ```sh
-esdiag collect prod "$HOME/diagnostics"
+esdiag collect prod "$HOME/diagnostics" --upload '<UPLOAD_ID>'
 ```
 
-ESDiag reports the archive path. Ask for a `minimal`, `light`, or `support`
-diagnostic to change the collection level from the default `standard`.
+ESDiag keeps the archive on disk and reports its path and the upload result.
+Name an output directory in the prompt if you want the archive somewhere
+specific. Ask for a `minimal`, `light`, or `support` diagnostic to change the
+collection level from the default `standard`.
 
-Upload IDs and URLs are secrets, so don't give them to the agent. Upload the
-archive from your own terminal:
+Upload IDs work like short-lived tokens, so you can give one to the agent. If
+the upload fails because the ID has expired, ask for a new one and have the
+agent upload the saved archive:
 
-```sh
-esdiag upload /path/to/diagnostic.zip '<UPLOAD_ID_OR_URL>'
+```text
+Upload ~/diagnostics/prod-diagnostic.zip to <NEW_UPLOAD_ID>.
 ```
 
 ## Process and analyze
@@ -123,8 +126,7 @@ Set up the diagnostic cluster first with
 
 ## Keep credentials out of the conversation
 
-- Never paste API keys, passwords, upload IDs or URLs, or the keystore password
-  into the agent.
+- Never paste API keys, passwords, or the keystore password into the agent.
 - Run `esdiag init`, `esdiag keystore`, and `esdiag host add` in your own
   terminal.
 - If the agent asks for a credential, decline and save it in the keystore

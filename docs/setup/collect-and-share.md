@@ -23,8 +23,9 @@ keystore, and jobs, so you can switch between them.
 - An Elastic Upload Service ID or URL if you will upload the archive.
 
 Enter credentials only at ESDiag's masked prompts or password fields. Do not
-put them in shell history, tickets, documents, or chat. Treat upload IDs and
-URLs as secrets.
+put them in shell history, tickets, documents, or chat. Upload IDs and URLs are
+not credentials, but they work like short-lived tokens: they expire, so ask for
+a new one if yours has.
 
 ## Web UI
 
