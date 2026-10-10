@@ -736,7 +736,7 @@ command_upgrade() {
         return 0
     fi
     if [[ "$force" != true ]]; then
-        [[ -t 0 ]] || die "upgrade requires --force in non-interactive use"
+        [[ -t 0 && -t 2 ]] || die "upgrade requires --force in non-interactive use"
         printf 'Upgrade the local stack from %s? Elasticsearch data cannot be downgraded afterward. [y/N] ' "$changes" >&2
         read -r answer || answer=n
         case "$answer" in [yY] | [yY][eE][sS]) ;; *) die "Upgrade cancelled" ;; esac
