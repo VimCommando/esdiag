@@ -4256,14 +4256,15 @@ mod tests {
 
     /// Saves a collect host `src`, a collection-only job `src-collect`, and a
     /// processing job `src-process-out`, with `workflow` and `default` selected.
-    fn configure_jobs(tmp: &TempDir, workflow: esdiag::data::OnboardingWorkflow, default: Option<&str>) {
+    fn configure_jobs(env: &TestEnv, workflow: esdiag::data::OnboardingWorkflow, default: Option<&str>) {
+        let config_dir = env.tmp.path().join(".esdiag");
         std::fs::write(
-            tmp.path().join("hosts.yml"),
+            config_dir.join("hosts.yml"),
             "src:\n  app: elasticsearch\n  roles:\n    - collect\n  url: http://localhost:9200/\n",
         )
         .expect("write hosts");
         std::fs::write(
-            tmp.path().join("jobs.yml"),
+            config_dir.join("jobs.yml"),
             "src-collect:\n  collect:\n    host: src\n    diagnostic_type: support\n  action: collect\n  output_dir: /tmp/src-collect\n\
              src-process-out:\n  collect:\n    host: src\n    save_dir: /tmp/src-bundle\n  action: process\n  output:\n    type: known-host\n    name: out\n",
         )
@@ -4278,10 +4279,9 @@ mod tests {
 
     #[test]
     fn a_default_job_set_this_run_is_replaced_without_asking() {
-        let _guard = env_lock().lock().expect("env lock");
-        let tmp = setup_env();
+        let env = setup_env();
         configure_jobs(
-            &tmp,
+            &env,
             esdiag::data::OnboardingWorkflow::CollectAndProcess,
             Some("src-collect"),
         );
@@ -4301,9 +4301,8 @@ mod tests {
 
     #[test]
     fn a_configured_default_job_reports_whether_it_fits_the_workflow() {
-        let _guard = env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectOnly, Some("src-collect"));
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectOnly, Some("src-collect"));
         assert!(
             configured_default_job(None)
                 .expect("configured default")
@@ -4311,7 +4310,7 @@ mod tests {
         );
 
         configure_jobs(
-            &tmp,
+            &env,
             esdiag::data::OnboardingWorkflow::CollectAndProcess,
             Some("src-collect"),
         );
@@ -4324,9 +4323,8 @@ mod tests {
 
     #[test]
     fn declining_replacement_keeps_the_configured_default_job() {
-        let _guard = env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectOnly, Some("old-job"));
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectOnly, Some("old-job"));
 
         keep_default_job("src-collect", Some("old-job")).expect("keep default job");
 
@@ -4335,9 +4333,8 @@ mod tests {
 
     #[test]
     fn declining_replacement_without_a_default_keeps_the_saved_job_as_default() {
-        let _guard = env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectOnly, None);
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectOnly, None);
 
         keep_default_job("src-collect", None).expect("keep default job");
 
@@ -4346,10 +4343,9 @@ mod tests {
 
     #[test]
     fn a_kept_default_that_fits_the_workflow_skips_the_processing_job() {
-        let _guard = env_lock().lock().expect("env lock");
-        let tmp = setup_env();
+        let env = setup_env();
         configure_jobs(
-            &tmp,
+            &env,
             esdiag::data::OnboardingWorkflow::CollectAndProcess,
             Some("src-process-out"),
         );
@@ -4359,9 +4355,8 @@ mod tests {
 
     #[test]
     fn a_promoted_processing_job_is_not_replaced() {
-        let _guard = env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectAndProcess, None);
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectAndProcess, None);
 
         keep_default_job("src-process-out", None).expect("keep default job");
 
@@ -4371,9 +4366,8 @@ mod tests {
 
     #[test]
     fn a_promoted_collection_job_still_needs_the_processing_job() {
-        let _guard = env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectAndProcess, None);
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectAndProcess, None);
 
         keep_default_job("src-collect", None).expect("keep default job");
 
@@ -4382,9 +4376,8 @@ mod tests {
 
     #[test]
     fn a_saved_job_fits_only_the_workflow_it_was_built_for() {
-        let _guard = env_lock().lock().expect("env lock");
-        let tmp = setup_env();
-        configure_jobs(&tmp, esdiag::data::OnboardingWorkflow::CollectOnly, None);
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectOnly, None);
         assert!(saved_job_fits_workflow("src-collect").expect("fits workflow"));
         assert!(!saved_job_fits_workflow("src-process-out").expect("fits workflow"));
         assert!(!saved_job_fits_workflow("missing").expect("fits workflow"));
@@ -5138,7 +5131,6 @@ mod tests {
 
     #[test]
     fn add_host_uses_same_name_secret_without_secret_flag() {
-        let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
         upsert_secret_auth("prod-es", SecretAuth::apikey("secret-key"), "pw").expect("save secret");
 
@@ -5151,7 +5143,6 @@ mod tests {
 
     #[test]
     fn add_host_skips_same_name_secret_with_explicit_credentials() {
-        let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
         upsert_secret_auth("prod-es", SecretAuth::apikey("secret-key"), "pw").expect("save secret");
 
@@ -5167,7 +5158,6 @@ mod tests {
 
     #[test]
     fn add_host_without_keystore_has_no_secret() {
-        let _guard = env_lock().lock().expect("env lock");
         let _tmp = setup_env();
 
         let mut update = KnownHostCliUpdate::default();
@@ -5180,7 +5170,6 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_bind_defaults_to_loopback() {
-        let _guard = env_lock().lock().expect("env lock");
         unsafe {
             std::env::remove_var("ESDIAG_BIND");
         }
@@ -5191,7 +5180,6 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_bind_uses_env_when_flag_missing() {
-        let _guard = env_lock().lock().expect("env lock");
         unsafe {
             std::env::set_var("ESDIAG_BIND", "0.0.0.0");
         }
@@ -5209,7 +5197,6 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn serve_bind_rejects_invalid_env() {
-        let _guard = env_lock().lock().expect("env lock");
         unsafe {
             std::env::set_var("ESDIAG_BIND", "localhost");
         }
