@@ -10,6 +10,11 @@ published release notes, maintenance branches, and tagged history.
 
 ## [Unreleased]
 
+### Added
+
+- Added `esdiag-lite.sh` and `esdiag-lite.ps1`, each with a SHA-256 checksum, to every GitHub release.
+- Added pull-request checks for the ESDiag Lite scripts, including the Windows PowerShell tests.
+
 ### Changed
 
 - Updated workspace dependency requirements and the lockfile for the 0.18 development cycle, and regenerated third-party notices.
