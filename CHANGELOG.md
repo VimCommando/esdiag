@@ -21,7 +21,7 @@ published release notes, maintenance branches, and tagged history.
 
 ### Fixed
 
-- `esdiag setup` now warns per index only about provenance fields on indices that can still receive writes. Older data stream backing indices with unlinked provenance fields get one summary line per data stream, and it only asks for a rollover after adding an alias to a writable index.
+- Fixed `esdiag setup` repeating provenance field warnings for every older data stream backing index on each run. It now warns per index only for indices that can still receive writes, summarizes older backing indices with unlinked provenance fields in one line per data stream, and only asks for a rollover after adding an alias to a writable index.
 
 ## [0.17.0] - 2026-10-13
 
