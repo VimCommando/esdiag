@@ -43,6 +43,15 @@ esdiag --version
 esdiag --help
 ```
 
+Optional shell completions for bash, zsh, fish, and PowerShell:
+
+```sh
+esdiag completions install zsh
+# Follow the printed instruction; install does not edit shell startup files.
+```
+
+See [Command-line interface reference](../command-line.md#completions).
+
 For a user-scoped archive installation:
 
 ```sh
