@@ -137,7 +137,19 @@ The generator updates and checks both `esdiag-lite.sh` and `esdiag-lite.ps1`.
 
 ### Running a downloaded script
 
-From the directory containing `esdiag-lite.ps1`, check the effective policy:
+Create a local directory for the script and collected diagnostics, then open it
+in PowerShell:
+
+```powershell
+$diagnosticsDirectory = Join-Path $env:USERPROFILE 'diagnostics'
+New-Item -ItemType Directory -Path $diagnosticsDirectory -Force | Out-Null
+Set-Location -LiteralPath $diagnosticsDirectory
+```
+
+Save the downloaded `esdiag-lite.ps1` in this directory. The examples below run
+from this directory; a repository checkout is not required.
+
+Check the effective policy:
 
 ```powershell
 Get-ExecutionPolicy
@@ -190,13 +202,13 @@ See Microsoft's [execution policy documentation](https://learn.microsoft.com/en-
 
 ### Commands
 
-From the repository root:
+From your local directory containing the downloaded `esdiag-lite.ps1`:
 
 ```powershell
-powershell -File bin/esdiag-lite.ps1 collect
-powershell -File bin/esdiag-lite.ps1 collect --archive=none
-powershell -File bin/esdiag-lite.ps1 upload api-diagnostics-<timestamp>.zip
-powershell -File bin/esdiag-lite.ps1 collect --upload="<upload-id-or-url>"
+.\esdiag-lite.ps1 collect
+.\esdiag-lite.ps1 collect --archive=none
+.\esdiag-lite.ps1 upload api-diagnostics-<timestamp>.zip
+.\esdiag-lite.ps1 collect --upload="<upload-id-or-url>"
 ```
 
 PowerShell uses `Compress-Archive` for ZIP output. Use `--archive=none` when
@@ -209,7 +221,7 @@ pair) using `$env:VARIABLE = 'value'` before running the script. Uploads use
 ```powershell
 $env:WAIT_SECONDS = '60'
 $env:COLLECTION_COUNT = '5'
-powershell -File bin/esdiag-lite.ps1 watch --archive=none
+.\esdiag-lite.ps1 watch --archive=none
 ```
 
 Watch jobs save diagnostics in the directory from which you invoke the script.
