@@ -135,11 +135,80 @@ The generator updates and checks both `esdiag-lite.sh` and `esdiag-lite.ps1`.
 
 ## PowerShell
 
+### Running a downloaded script
+
+Create a local directory for the script and collected diagnostics, then open it
+in PowerShell:
+
 ```powershell
-powershell -File bin/esdiag-lite.ps1 collect
-powershell -File bin/esdiag-lite.ps1 collect --archive=none
-powershell -File bin/esdiag-lite.ps1 upload api-diagnostics-<timestamp>.zip
-powershell -File bin/esdiag-lite.ps1 collect --upload="<upload-id-or-url>"
+$diagnosticsDirectory = Join-Path $env:USERPROFILE 'diagnostics'
+New-Item -ItemType Directory -Path $diagnosticsDirectory -Force | Out-Null
+Set-Location -LiteralPath $diagnosticsDirectory
+```
+
+Save the downloaded `esdiag-lite.ps1` in this directory. The examples below run
+from this directory; a repository checkout is not required.
+
+Check the effective policy:
+
+```powershell
+Get-ExecutionPolicy
+Get-ExecutionPolicy -List
+```
+
+| Effective policy | Next step |
+| --- | --- |
+| `RemoteSigned` | Review the downloaded script and its source, then unblock that file as shown below. |
+| `AllSigned` | Requires a valid signature from a trusted publisher. Unblocking does not satisfy this requirement. |
+| `Restricted` | Blocks all scripts, even signed scripts. On a machine you manage, configure your account as shown below; otherwise use an approved native ESDiag executable or ask your administrator for an approved script policy. |
+
+If all scopes are `Undefined`, Windows PowerShell defaults to `Restricted` on
+Windows clients. On a machine you manage, enable scripts for your account once:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+This requires no administrator rights and persists for your account. It permits
+local unsigned scripts; Internet-downloaded scripts still require a trusted
+signature or explicit unblocking. It changes policy for your account, not just
+for ESDiag Lite, and cannot override an organization policy.
+
+Under `RemoteSigned`, review and trust the download, then unblock the file if
+Windows marked it as coming from the Internet:
+
+```powershell
+Unblock-File -LiteralPath .\esdiag-lite.ps1
+```
+
+Unblocking is needed only once per downloaded copy. If you already unblocked
+this copy before changing the execution policy, you do not need to repeat it.
+Run the script directly:
+
+```powershell
+.\esdiag-lite.ps1 help
+.\esdiag-lite.ps1 collect
+```
+
+Unblocking removes the file's Internet-origin marker; it does not verify the
+publisher or change the execution policy. It requires no administrator rights
+for a file you own. Repeat the review for each new download.
+
+The error "running scripts is disabled on this system" occurs before ESDiag
+Lite starts, so the script cannot display instructions or fix it itself.
+Do not use `Bypass` launchers or machine-wide policy changes as installation
+steps. Organization policies (`MachinePolicy` and `UserPolicy`) take precedence.
+See Microsoft's [execution policy documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-5.1).
+
+### Commands
+
+From your local directory containing the downloaded `esdiag-lite.ps1`:
+
+```powershell
+.\esdiag-lite.ps1 collect
+.\esdiag-lite.ps1 collect --archive=none
+.\esdiag-lite.ps1 upload api-diagnostics-<timestamp>.zip
+.\esdiag-lite.ps1 collect --upload="<upload-id-or-url>"
 ```
 
 PowerShell uses `Compress-Archive` for ZIP output. Use `--archive=none` when
@@ -152,7 +221,7 @@ pair) using `$env:VARIABLE = 'value'` before running the script. Uploads use
 ```powershell
 $env:WAIT_SECONDS = '60'
 $env:COLLECTION_COUNT = '5'
-powershell -File bin/esdiag-lite.ps1 watch --archive=none
+.\esdiag-lite.ps1 watch --archive=none
 ```
 
 Watch jobs save diagnostics in the directory from which you invoke the script.
