@@ -18,7 +18,7 @@ security status does not determine deployment compatibility.
 | Item | Finding | Setup behavior |
 | --- | --- | --- |
 | Security usage | `/_xpack/usage` returns HTTP 410; Serverless always has security enabled | Skip the probe on a known Serverless deployment and report security as enabled for HTTP 410. |
-| Bundled role | The stateful role asset is not provisioned on Serverless | Skip security-dependent assets and tell the administrator to configure project roles separately. Authentication remains enabled. |
+| Bundled role | Serverless accepts the bundled `esdiag-user` role through `_security/role` | Install the role. If the setup credentials lack `manage_security` and the project returns HTTP 403, log a warning asking an administrator to create the role and finish the remaining setup. |
 | `esdiag@settings` | `index.lifecycle.prefer_ilm` and `index.lifecycle.name` are unsupported ILM settings | Remove these settings from outgoing Serverless templates. Keep stateful assets unchanged. |
 | Retention | Data stream lifecycle is supported | Preserve `template.lifecycle.data_retention: 30d`. |
 | Kibana space | The project rejects `solution` and a nonempty `disabledFeatures` list | Omit both controls for Serverless. Preserve the space ID, name, description, and appearance. |
@@ -36,6 +36,12 @@ template and requires a compatibility review when that list grows.
 The agent update follows the
 [partial update API](https://www.elastic.co/docs/api/doc/kibana/operation/operation-put-agent-builder-agents-id).
 It does not modify the agent's access controls.
+
+ESDiag Kibana assets belong in one space per deployment. Kibana assigns new
+saved object IDs when an existing ID is imported into another space, which
+breaks dashboard links, and workflow IDs are global. Before importing, setup
+searches the other spaces for ESDiag dashboards by ID or `originId`. If it finds
+any, it stops without changing Kibana and names the space that holds them.
 
 ## Retention
 
@@ -57,6 +63,21 @@ PUT /_data_stream/metrics-diagnostic-esdiag/_lifecycle
 {"enabled": true, "data_retention": "3650d"}
 ```
 
+## Template updates and rollover
+
+Templates shape only backing indices created after installation. Every bundled
+template carries a `version`. When the bundled version is higher than the
+installed one, or the installed template has no version, setup rolls over the
+ESDiag data streams that use it. This includes streams whose index template
+composes a component template with a higher version. Each rollover is logged
+at info level. A failed rollover makes setup partial and names the stream to
+roll over manually with `POST /<stream>/_rollover`.
+
+Versions are bumped by hand, and only when existing data streams need a rollover
+to pick up the change. Template edits that keep the version are still installed
+but do not trigger a rollover. Deployments set up before templates were
+versioned see a one-time rollover of streams whose templates had no `version`.
+
 ## Indexing failures and recovery
 
 Setup enables the failure store through the shared `esdiag@settings` component.
@@ -65,14 +86,25 @@ These documents still count toward `documents_failed` and the diagnostic's
 partial or failed outcome, even when Elasticsearch returns HTTP 201 with
 `failure_store: used`.
 
+ESDiag writes the final report separately from the processed documents. If that
+write fails, the command fails and the web result shows an output failure. This
+includes HTTP 201 responses with `failure_store: used`.
+
+The CLI error keeps the completed document counts. A failed report write does
+not increase `documents_failed`. Data may already be indexed, so check before
+retrying the whole job. The CLI marks these failures as unsafe to retry.
+
+The local report records the write error. If Elasticsearch retained the report
+in the failure store, inspect `metrics-diagnostic-esdiag::failures`.
+
 The shared template sets `index.codec: best_compression` for regular backing
 indices. Elasticsearch currently filters this setting out when creating failure
 indices; its [failure-store settings allowlist](https://github.com/elastic/elasticsearch/blob/main/server/src/main/java/org/elasticsearch/cluster/metadata/DataStreamFailureStoreDefinition.java)
 does not include `index.codec`. Template configuration therefore cannot enforce
 failure-store compression.
 
-Existing streams need a separate options update. Template updates and rollover
-do not change their failure-store options:
+Existing streams need a separate options update. Template updates and the
+rollovers setup performs do not change their failure-store options:
 
 ```http
 PUT /_data_stream/*-esdiag/_options
@@ -83,10 +115,16 @@ GET /health-impact-esdiag::failures/_search
 
 Inspect `document.source` for the rejected document and `error` for its cause.
 Failure-store retention is separate from the diagnostic stream's retention.
-The [failure store documentation](https://www.elastic.co/docs/manage-data/data-store/data-streams/failure-store)
-describes retention and the required `read_failure_store` and
-`manage_failure_store` privileges. Configure these privileges in Serverless
-project roles where needed.
+Setup gives `esdiag-user` the `read_failure_store` privilege on `*-esdiag`
+streams. Users with this role can read rejected documents
+and their errors. They cannot change failure-store options or retention because
+the role does not include `manage_failure_store`.
+
+Run setup with administrator credentials to update an existing role. On
+Serverless, setup credentials without `manage_security` cannot install the role;
+setup logs a warning and an administrator must create `esdiag-user` from the
+bundled definition. See the [failure store documentation](https://www.elastic.co/docs/manage-data/data-store/data-streams/failure-store)
+for permissions and retention.
 
 Indexing failures name the destination returned for each bulk item, including
 destinations selected by the ingest pipeline. ESDiag reports the stream name
@@ -103,17 +141,26 @@ Cluster settings can contain both `rest.incremental_bulk` and
 dots literal beneath `rest` with `subobjects: false`, preserving both values
 without renaming settings. This follows the same mapping rule as the existing
 watermark and logger namespaces: disable subobject expansion at the namespace
-that permits value and sub-setting keys. Existing cluster-settings streams
-need a rollover after setup before replaying affected diagnostics:
+that permits value and sub-setting keys. Setup rolls over existing
+cluster-settings streams to apply the new mapping. Replay affected diagnostics
+after setup.
 
-```http
-POST /settings-cluster-esdiag/_rollover
-```
+ESDiag saves the scalar values of `thread_pool.estimated_time_interval` and
+`xpack.searchable.snapshot.shared_cache.size` in `.current` fields, as it already
+does for HTTP and transport types. It keeps `warn_threshold` and `max_headroom`
+at their original paths.
+
+The template maps these fields and
+`cluster.routing.allocation.disk.watermark.flood_stage.max_headroom` as searchable
+keywords. Flattening the entire namespace would conflict with the shared rules
+that suppress human-readable size fields.
+
+The rollover changes the mapping for new writes. It does not rewrite historical
+documents.
 
 Node settings use the same rule beneath `node.settings.http` and
 `node.settings.transport`, preserving both `type` and `type.default`.
-Existing node-settings streams also need `POST /settings-node-esdiag/_rollover`
-after setup.
+Setup rolls over existing node-settings streams in the same way.
 
 The node-settings template explicitly maps `http.max_warning_header_size` as a
 keyword. Dynamic templates apply only to unmapped fields, so this prevents the
@@ -148,7 +195,7 @@ fail the command.
 | Elasticsearch ingest pipelines | 1 | `set` processors and `reroute`; installation and simulation |
 | Elasticsearch component templates | 7 | Settings, mappings, metadata, and composition |
 | Elasticsearch index templates | 26 | Settings, mappings, data streams, and composition |
-| Elasticsearch roles | 1 | Skipped on Serverless |
+| Elasticsearch roles | 1 | Installation; HTTP 403 on Serverless is a warning |
 | Kibana spaces | 1 | Creation and update with project-managed controls omitted |
 | Kibana saved objects | 90 | Dashboards, data views, Lens, saved searches, Vega visualizations, links, and tags |
 | Kibana workflows | 1 | Installation and its Elasticsearch authentication and ES|QL request definitions |

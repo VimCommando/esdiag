@@ -36,7 +36,11 @@ esdiag <command> --help
 `--debug` writes debug logs. `--format yaml|json` selects the result format for
 finite commands. YAML is the default.
 
-Finite commands write one result to stdout. Progress and errors go to stderr.
+Finite commands write one result to stdout. Short progress messages, warnings,
+and errors go to stderr. Each command's full log, including container runtime
+output from `esdiag local`, goes to `~/.esdiag/last_run/esdiag.log`, which is
+replaced on the next run. `--debug` adds debug detail to the log and the
+terminal. `esdiag serve` logs to stderr instead.
 Processing results include `outcome`, `documents_failed`, and `indexing_failures`
 with destination data stream names and rejection counts, including documents
 redirected to a failure store. `output` identifies the resolved
@@ -71,7 +75,7 @@ By default, ESDiag stores user state in `~/.esdiag`:
 | `esdiag.yml` | Non-secret user defaults. |
 | `settings.yml` | Saved UI settings. |
 | `jobs.yml` | Saved jobs. |
-| `last_run/` | Debug files from recent commands. |
+| `last_run/` | The last command's `esdiag.log` and debug files. |
 
 `ESDIAG_HOSTS` and `ESDIAG_KEYSTORE` override the paths to `hosts.yml` and
 `secrets.yml`.
@@ -88,8 +92,9 @@ one:
 ESDiag uses one complete output definition. It does not combine endpoints or
 credentials from command arguments, environment variables, and `esdiag.yml`.
 
-`LOG_LEVEL` sets the default log level. `ESDIAG_KEYSTORE_PASSWORD` supplies a
-keystore password for non-interactive use.
+`LOG_LEVEL` sets the log level for the run log and the terminal. Without it, the
+run log records `info` and the terminal shows warnings and errors.
+`ESDIAG_KEYSTORE_PASSWORD` supplies a keystore password for non-interactive use.
 
 ## Output selection
 
@@ -116,8 +121,7 @@ Save HTTP URLs as hosts before using them as outputs. A raw `http://` or
 Create a saved Elasticsearch host:
 
 ```sh
-esdiag host add prod-es https://es.example.com:9200 \
-  --app elasticsearch --roles send --secret prod-es
+esdiag host add prod-es https://es.example.com:9200 --roles send
 ```
 
 `host add` and `host update` test the full definition before saving it.
@@ -129,9 +133,12 @@ Roles:
 - `send` is valid for Elasticsearch.
 - `view` is valid for Kibana.
 
-If you omit roles, the host gets `collect`.
+If you omit roles, the host gets `collect`. ESDiag infers the app from ports
+9200, 5601, and 9600. On any other port, pass `--app`.
 
-Use `--secret <SECRET_ID>` to use a keystore entry. `--apikey` or
+`host add` uses the keystore entry with the same name as the host when one
+exists. Use `--secret <SECRET_ID>` to reference a differently named entry.
+`--apikey` or
 `--user` with `--password` can supply credentials while you create or update
 the host. Keep certificate validation enabled unless the endpoint owner has
 approved an exception.
@@ -167,10 +174,11 @@ legacy plaintext host credentials into the keystore.
 
 It stores credentials in `secrets.yml`, not `esdiag.yml`.
 
-Enter an email address or another diagnostic user identifier. `EMAIL`, when
-set to an email address, supplies the default; the shell username does not.
-Invalid yes/no answers, endpoint URLs, and default-job host selections prompt
-again. The default job requires a saved collection host name, not a URL.
+Enter an email address or another diagnostic user identifier. The default is
+`EMAIL` when it holds an email address, then `git config user.email`, then the
+`whoami` login name.
+Invalid yes/no answers, endpoint URLs, default-job host selections, and empty
+or mismatched new keystore passwords prompt again. The default job requires a saved collection host name, not a URL.
 Resuming displays the saved workflow, and changing it displays both choices.
 
 Pasted keys are hidden and used to validate Elasticsearch and Kibana before
@@ -182,17 +190,20 @@ only when a usable local key is detected.
 To replace a referenced API key later, run `esdiag keystore update <name> --apikey`
 at a terminal. It prompts for the key without putting it in shell history.
 
-Before configuration begins, an incomplete workflow can continue in the web
-interface. `init` starts `esdiag serve --mode user`, opens `/welcome`, and
-keeps the terminal attached until you stop the server with Ctrl+C. The terminal
-and web flows persist the same user, workflow, host, job, output, and keystore
-state.
+The diagnostic user is the first question, and `init` saves it before
+anything else. An incomplete workflow can then continue in the web interface:
+`init` starts `esdiag serve --mode user`, opens `/welcome`, and keeps the
+terminal attached until you stop the server with Ctrl+C. The web flow starts
+with the saved user. The terminal and web flows persist the same user,
+workflow, host, job, output, and keystore state.
 
 When you select local processing and no stack exists, `init` can start a
 binary-owned core stack. Its approval includes that new stack's required
-assets; declining returns to remote output setup.
+assets; declining returns to remote output setup. After a terminal setup that
+started a stack, `init` asks whether to open the web interface. The default is
+no.
 
-See [Configure ESDiag](setup/configuration.md) for the prompts and paths.
+See [Set up ESDiag](setup/index.md) for the guided setup in each journey.
 
 ## `local`
 
@@ -234,7 +245,12 @@ full-mode container volume.
 `esdiag local update` cannot update binary-owned lifecycle code. Update the
 binary through Homebrew, Cargo, or its release archive.
 
-See [Run a local diagnostic cluster](setup/esdiag-local.md) for local setup and
+`up` keeps the image versions recorded in the state directory and warns when
+the binary ships newer ones. `esdiag local upgrade` moves the stack to them
+after a `[y/N]` confirmation, or immediately with `--force`. It restarts a
+running stack and leaves a stopped stack stopped.
+
+See [Run a local stack](setup/local-stack.md) for local setup and
 [local-stack launcher reference](bin/esdiag-local.md) for every launcher
 option.
 
@@ -249,6 +265,8 @@ esdiag setup diagnostics-output
 ```
 
 Run setup before the first ingest and after an upgrade that changes assets.
+You can rerun setup safely; existing Kibana workflows and other managed assets
+are updated to the bundled definitions.
 The credential needs permission to install them.
 
 ## `collect`
@@ -293,8 +311,12 @@ output. `--sources <PATH>` needs a source definition for the detected product.
 esdiag serve [OUTPUT]
 ```
 
-`--bind` selects the IPv4 address. `--port` defaults to `2501`. `--kibana`
-sets the Kibana link shown in the web UI.
+`--bind` selects the IPv4 address. It defaults to `ESDIAG_BIND`, then
+`127.0.0.1`, so a native server only accepts local connections. Use
+`--bind 0.0.0.0` to accept connections from other machines. The container
+image sets `ESDIAG_BIND=0.0.0.0` so published ports reach the server.
+`--port` defaults to `2501`. `--kibana` sets the Kibana link shown in the web
+UI.
 
 `--mode user` is for a local, single-user web server. `--mode service` is for
 an administrator-run shared service. Service users open its URL. They do not
@@ -303,6 +325,22 @@ run `serve`, `init`, or `setup`.
 Service mode uses one startup-defined exporter. It does not persist user hosts,
 jobs, or keystore state. Use `--auth-provider google-iap|none` to select
 request authentication. Use `none` only for controlled local testing.
+
+The `google-iap` provider reads the user identity from
+`X-Goog-Authenticated-User-Email` by default. Set `--identity-header <HEADER>`
+or `ESDIAG_IDENTITY_HEADER` when the identity-aware proxy uses another header.
+The command-line value takes precedence over the environment. Configure the
+proxy to remove client-supplied values and set the trusted identity header.
+
+For local service-mode development without an identity header, use:
+
+```sh
+esdiag serve --mode service --auth-provider none
+```
+
+Service mode does not show API key inputs or mount API key submission routes.
+Run `esdiag serve --mode user` locally for direct API-key collection. Prefer a
+saved host with its credential in the encrypted keystore.
 
 In user mode, an incomplete local workflow opens the `/welcome` onboarding
 flow. It creates or unlocks the encrypted keystore with a masked form and

@@ -7,8 +7,7 @@ Define resumable terminal initialization of diagnostic identity, credentials, ou
 
 ### Requirement: Interactive First-Run Workflow
 The CLI SHALL provide `esdiag init` as an interactive staged workflow. It SHALL
-first determine whether the user will process diagnostics or only collect them.
-Processing workflows SHALL then determine whether the user will collect new
+use one workflow selection to determine whether the user will only collect new
 diagnostics, process existing diagnostics, or do both. The workflow SHALL
 configure only the identity, keystore, output deployment, collect host, and
 default job stages required by that selection.
@@ -18,6 +17,13 @@ ESDiag executable, the standalone `esdiag-local` script, or arbitrary external
 helper executable. It MAY invoke the binary-owned Rust local-stack lifecycle
 and its managed native web-service child only to start a user-approved local
 core deployment for a local processing workflow.
+
+#### Scenario: User selects a terminal workflow
+- **GIVEN** no workflow is configured
+- **WHEN** terminal initialization reaches workflow selection
+- **THEN** it presents one question with collection-only, existing-processing,
+  and combined choices
+- **AND** it does not ask a preliminary processing-versus-collection question
 
 #### Scenario: User initializes collection-only workflow
 - **GIVEN** no ESDiag local state exists

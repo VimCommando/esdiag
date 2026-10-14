@@ -10,8 +10,15 @@ published release notes, maintenance branches, and tagged history.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated workspace dependency requirements and the lockfile for the 0.18 development cycle, and regenerated third-party notices.
+
+## [0.17.0] - 2026-10-13
+
 ### Added
 
+- Added configurable identity headers for shared service authentication.
 - Added role- and deployment-based onboarding guides for collection and sharing, processing and analysis, local and remote diagnostic clusters, Agent Skills, and shared services.
 - Added interactive `esdiag init` onboarding for securely configuring a local diagnostic user, output deployment, collect hosts, and default saved job (#377).
 - Added `esdiag agent ask` for finite Kibana Agent Builder questions with explicit conversation follow-ups and Kibana recovery links (#379).
@@ -21,13 +28,46 @@ published release notes, maintenance branches, and tagged history.
 - Added resumable user-mode web onboarding at `/welcome`, including masked keystore and API-key forms for configuring a diagnostic workflow.
 - Added optional Elastic Upload Service forwarding to `esdiag-lite.sh` for newly collected and existing ZIP archives.
 - Added `esdiag-lite.ps1` for version-aware Elasticsearch diagnostic collection on Windows PowerShell.
+- Added the Index Detail dashboard showing the full vertical slice of metrics (operations, documents, storage, settings, shard distribution, data stream/alias membership, and shard workload balance) for a single selected index.
+- Added the Node Detail dashboard, scoped by the incoming `diagnostic.id` and `node.name` drilldown filters, breaking a single node down by its own sub-dimensions: operation volume and cost, thread pool queueing and rejections, circuit breaker headroom, JVM memory pools, cache effectiveness, indexing pressure by stage, filesystem and allocation, and the indices holding shards on that node.
+- Added the Ingest Pipeline Detail dashboard, scoped by the incoming `diagnostic.id` and `ingest.pipeline.name` drilldown filters, breaking a single pipeline down by processor, processor type, and executing node, with per-processor execution order, cost, and failure rate. Surfaces processor failures separately from pipeline failures, so errors absorbed by `on_failure` or `ignore_failure` stay visible.
+- Added drilldowns to the Index Detail, Data Stream Detail, and Alias Detail dashboards from the bulk and indexing rate charts on Daily Indexing Overview, the per-node operation charts on Index Operations Overview and Datastream Operations Overview, the per-node shard CPU time charts on Ingest Nodes Overview and Search Nodes Overview, and the rollover alias and newest indices panels on Index Settings Overview.
+- Added drilldowns to the Node Detail dashboard from every per-node chart and thread pool table on Ingest Nodes Overview and Search Nodes Overview.
+- Added a native Windows x86_64 release archive, `esdiag-VERSION-x86_64-pc-windows-msvc.zip`, that runs without the Visual C++ Redistributable.
 
 ### Changed
 
+- Changed native Windows local-stack lifecycle commands to identify the managed web service by executable and creation time, report its running status, and stop it during restart and shutdown.
+
+- Increased the native Windows CLI main-thread stack reserve to 8 MiB so local asset installation can run without exhausting the default stack.
+
+- Changed native Windows local-stack state and run logs to resolve from `USERPROFILE` without requiring `HOME`; run-log cleanup now honors `ESDIAG_HOME`.
+- Documented the Windows container paths as WSL on WSL and Hyper-V on PowerShell, including the 8 GiB memory minimum and fixed Hyper-V memory configuration.
+
+- Changed PowerShell Lite uploads to retain the upload ID in request URLs.
+- Changed PowerShell Lite watch jobs to forward collection arguments, preserve the invoking directory, and report failed collections with a nonzero exit code.
+- Changed browser opening and clipboard copying under WSL to use the Windows desktop, including Unicode clipboard text.
+- Changed browser launch failures to try available alternatives and report unsuccessful exit statuses. A launcher that keeps running, such as `xdg-open`, counts as opened instead of blocking until the browser closes.
+- Changed web onboarding to return each next step directly to the submitting browser, so setup advances when a diagnostic user is configured.
+- Changed `esdiag init` to ask for the diagnostic user before offering web setup, so the web interface starts with that user. After a terminal setup that started a local stack, init now asks before opening the web interface, defaulting to no.
+- Changed new keystore password prompts to ask again when the password is empty or the confirmation doesn't match, instead of exiting.
+- Updated the local Elastic Stack default to version 9.5.5 for new `esdiag local` and `esdiag-local` stacks. Existing stacks upgrade with `esdiag local upgrade` or `esdiag-local upgrade`.
+- Replaced `esdiag-local up --upgrade` with an `upgrade` command for `esdiag local` and `esdiag-local`. It asks for `[y/N]` confirmation or accepts `--force`, restarts a running stack on the new images, and leaves a stopped stack stopped. `up` now warns about an older stack and starts its recorded versions instead of failing, and `esdiag-local up` rejects version overrides that differ from an existing stack.
+- Changed `esdiag serve` to bind to `127.0.0.1` by default. Set `--bind` or the new `ESDIAG_BIND` variable to listen elsewhere; the container image sets `ESDIAG_BIND=0.0.0.0`.
+- Changed `esdiag host add` to reference a keystore secret with the host's name when `--secret` and inline credentials are omitted, matching URL-template hosts.
+- Changed CLI commands to write their full log to `~/.esdiag/last_run/esdiag.log` and show only warnings and errors in the terminal unless `--debug` or `LOG_LEVEL` is set. `esdiag serve` still logs to stderr.
+- Changed `esdiag local` lifecycle commands and `esdiag init` to show short progress messages, with container runtime output sent to the run log. Podman's external compose provider banner is suppressed.
+- Changed `esdiag init` prompt defaults to follow earlier answers: local storage is the default when a container runtime is available, starting a local stack defaults to yes after choosing local storage, and adding the collect role to an existing host at the same URL defaults to yes.
+- Changed `esdiag init` to suggest the diagnostic user from `$EMAIL`, then `git config user.email`, then `whoami`.
+- Changed `esdiag local up`, `esdiag local open`, `esdiag init`, and `esdiag-local` to ask before copying the Kibana `elastic` password to the clipboard, and not to copy it without an interactive terminal unless `--copy-password=true` is passed.
+- Changed the diagnostic selector
+ and diagnostic counts in the Elasticsearch Indexing Hotspots - Nodes, Index Workload Balance, and Search Summary dashboards to use `diagnostic.id` instead of `diagnostic.uuid`, so captures are identified by cluster name and collection date rather than an opaque UUID.
 - Made source-tree notice generation opt-in so Cargo package verification and registry installation use committed notices.
 - Limited web onboarding to builds with both keystore and setup support, preserving host and keystore management in builds without setup.
 - Restored the published Elasticsearch client dependency with a response compatibility adapter so ESDiag can be packaged from registry dependencies.
-- Updated workspace dependency requirements and the lockfile for the 0.18 development cycle, and regenerated third-party notices.
+- Updated semver-compatible Rust crate dependencies and regenerated third-party notices for the release.
+- Changed the container image to build and run against OpenSSL 3, so Linux release binaries run on hosts without OpenSSL 4.
+- Changed repository text files to check out with LF line endings on every platform, so Windows builds embed the same assets as other platforms.
 
 - Changed `elasticrc` to parse schema-keyed `ServiceConfig<T>` values that resolve into typed runtime `Service<T>` values.
 
@@ -70,6 +110,13 @@ published release notes, maintenance branches, and tagged history.
 - Changed `esdiag local up` to open the web onboarding page instead of the web UI root.
 - Changed the Advanced page to open on the New collection tab, with Existing available as the second tab.
 - Changed local-stack onboarding to show a spinner while Elasticsearch and Kibana start, then clear the status when both are running.
+- Changed terminal onboarding to select collection-only, existing processing, or both in one three-option prompt.
+- Changed web onboarding to let users add a diagnostic source later without blocking access to ESDiag.
+- Changed web onboarding to validate new host credentials before saving their keystore references and safely display quoted errors.
+- Changed user-mode onboarding startup to report an unconfigured output accurately and suppress expected missing-output warnings.
+- Changed the web interface to use stable Datastar 1.0.3 instead of a release candidate.
+- Changed the global web event stream to close while a page is hidden, preventing stale connections from delaying navigation.
+- Moved repository maintenance utilities to an unpublished workspace crate so Cargo installation includes only the `esdiag` executable.
 - Changed web onboarding to report Elasticsearch and Kibana asset status separately and provide install or reinstall actions.
 - Changed the Remote cluster configuration step to show unknown asset status until a remote deployment is saved.
 - Changed local-stack onboarding to report the detected container runtime separately from its stack-management method.
@@ -78,9 +125,26 @@ published release notes, maintenance branches, and tagged history.
 - Changed `esdiag-local` to retain `auto`, `core`, or `full` stack mode per
   deployment. Core mode uses the matching native binary and avoids an ESDiag
   container; full mode preserves the containerized runtime.
+- Changed the scalar `thread_pool.estimated_time_interval` and `xpack.searchable.snapshot.shared_cache.size` values to map to `.current` fields, so they no longer conflict with the nested `warn_threshold` and `max_headroom` settings, which keep their original paths.
+- Changed `esdiag setup` to roll over existing ESDiag data streams when a bundled index or component template has a higher `version` than the installed one, logging each rollover, so corrected mappings apply to new writes without a manual rollover. Every bundled template now has a `version`, bumped by hand only when a rollover is needed. Setup keeps an installed template whose version is newer than the bundled one, so an older ESDiag release cannot downgrade it.
+
+- Changed `esdiag serve` in user mode to use the `user` saved in `~/.esdiag/esdiag.yml` instead of `Anonymous`. A configured user, from `ESDIAG_USER` or `esdiag.yml`, now sets the job owner and locks the User field, including on `/welcome`. If `esdiag.yml` can't be read, the server returns a configuration error (HTTP 500) instead of `Anonymous`, including the settings modal and settings save when `ESDIAG_USER` is set.
+- Changed web output settings to report an unreadable `esdiag.yml` instead of replacing it with defaults.
+- Changed the full-mode `esdiag local` web container to run as the host's configured user instead of `Anonymous`. `esdiag local up` and `esdiag local restart esdiag` pass that user to the container.
 
 ### Fixed
 
+- Fixed setup duplicating Kibana assets across spaces. When ESDiag assets already exist in another Kibana space, setup now stops before importing anything and names that space.
+- Report write failures now fail the command, even when Elasticsearch returns HTTP 201 after failure-store capture. CLI errors keep completed document counts, and local reports include the error.
+- Kept thread-pool warning thresholds and searchable-snapshot cache headroom settings instead of dropping them.
+- Added a searchable mapping for the cluster flood-stage maximum headroom setting.
+- Added failure-store read access to the bundled diagnostic user role. The role still cannot change failure-store options or retention.
+- Fixed setup skipping the bundled diagnostic user role on Serverless. Setup now installs it and, when the credentials cannot manage roles, logs a warning instead of failing.
+- Fixed `esdiag init` asking to replace the default job it had just created when setting up both collection and processing.
+- Fixed `esdiag init` failing when you declined to replace an existing default or saved job. It now keeps a job that fits the selected workflow and completes; for a job that doesn't fit, it asks before replacing it and explains how to recover if you keep it.
+- Fixed repeated `esdiag setup` runs failing when a bundled Kibana workflow already exists.
+- Fixed incomplete Kibana setup summaries omitting assets installed before a later failure.
+- Fixed HTTP 409 failures reporting the `invalid_input` category instead of `conflict`.
 - Fixed unresolved saved hosts displaying the wrong application while editing.
 - Avoided buffering an extra copy of each JSON source when processing diagnostic directories and archives.
 
@@ -129,6 +193,8 @@ published release notes, maintenance branches, and tagged history.
 
 ### Security
 
+- Disabled direct Elasticsearch API key inputs in shared service mode.
+- Removed server-owned authentication state from browser Datastar signals.
 - Clarified credential custody so saved credentials are mediated by the user-mode keystore, service-mode outputs use runtime-provided credentials, and ad-hoc input API keys remain transient (#352).
 - Wrapped every API key, password, and cached keystore password in a redacting type, so credential material renders as a marker in debug and log output and can only be serialized where a field opts in (#352).
 
@@ -354,7 +420,8 @@ published release notes, maintenance branches, and tagged history.
   fail on invalid zip paths (#177).
 - Fixed ECK diagnostic path handling for correctly structured archives (#179).
 
-[Unreleased]: https://github.com/elastic/esdiag/compare/0.16.5...main
+[Unreleased]: https://github.com/elastic/esdiag/compare/0.17.0...main
+[0.17.0]: https://github.com/elastic/esdiag/compare/0.16.5...0.17.0
 [0.16.5]: https://github.com/elastic/esdiag/compare/0.16.4...0.16.5
 [0.16.4]: https://github.com/elastic/esdiag/compare/0.16.2...0.16.4
 [0.16.2]: https://github.com/elastic/esdiag/compare/0.16.1...0.16.2

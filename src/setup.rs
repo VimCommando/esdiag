@@ -16,7 +16,7 @@ use kibana_sync::{
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use url::Url;
@@ -280,8 +280,38 @@ async fn install_provenance_aliases(client: &Client) -> Result<Vec<String>> {
     Ok(failures)
 }
 
-fn should_skip_asset(asset: &Asset, security_assets_supported: bool) -> bool {
-    asset.requires_security && !security_assets_supported
+fn should_skip_asset(asset: &Asset, security_enabled: bool) -> bool {
+    asset.requires_security && !security_enabled
+}
+
+#[derive(Debug)]
+struct AssetRejected {
+    status: StatusCode,
+    body: Value,
+}
+
+impl std::fmt::Display for AssetRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Asset: {}", self.body)
+    }
+}
+
+impl std::error::Error for AssetRejected {}
+
+/// Serverless setup credentials often lack `manage_security`; the rest of
+/// setup must still complete so onboarding can proceed.
+fn is_forbidden_security_asset(asset: &Asset, error: &eyre::Report) -> bool {
+    asset.requires_security
+        && error
+            .downcast_ref::<AssetRejected>()
+            .is_some_and(|rejected| rejected.status == StatusCode::FORBIDDEN)
+}
+
+fn warn_forbidden_security_asset(path: &Path) {
+    let name = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
+    tracing::warn!(
+        "Setup credentials cannot manage roles in this Serverless project. Ask an administrator to create the {name} role from the bundled definition so users can read failure stores."
+    );
 }
 
 async fn send_asset(client: &Client, asset: &Asset, path: &Path, contents: &[u8], named: bool) -> Result<()> {
@@ -304,6 +334,164 @@ fn serverless_asset_contents(asset: &Asset, contents: &[u8]) -> Result<Vec<u8>> 
         *lifecycle = serde_json::json!({"enabled": true, "data_retention": "3650d"});
     }
     Ok(serde_json::to_vec(&body)?)
+}
+
+/// The `version` of the installed template, if it exists and has one.
+async fn installed_template_version(client: &Client, asset: &Asset, name: &str) -> Option<u64> {
+    let path = format!("{}/{name}", asset.endpoint);
+    let response = client
+        .request(Method::GET, &default_headers(), &path, None)
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: Value = response.json().await.ok()?;
+    template_version(&body, asset.endpoint.trim_matches('/'), name)
+}
+
+fn template_version(body: &Value, endpoint: &str, name: &str) -> Option<u64> {
+    let (list, item) = match endpoint {
+        "_index_template" => ("index_templates", "index_template"),
+        _ => ("component_templates", "component_template"),
+    };
+    body.get(list)?
+        .as_array()?
+        .iter()
+        .find(|template| template["name"] == name)?
+        .pointer(&format!("/{item}/version"))?
+        .as_u64()
+}
+
+/// Bundled templates are versioned by hand, and the version is only bumped when
+/// existing data streams need a rollover to pick up the change.
+fn template_version_bumped(installed: Option<u64>, bundled: Option<u64>) -> bool {
+    match (installed, bundled) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(installed), Some(bundled)) => installed < bundled,
+    }
+}
+
+/// A newer ESDiag release installed this template; an older binary must not
+/// overwrite it, because its streams would not roll over back to the old mappings.
+fn template_version_downgrade(installed: Option<u64>, bundled: Option<u64>) -> bool {
+    match (installed, bundled) {
+        (Some(installed), Some(bundled)) => installed > bundled,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+/// Templates installed by this setup run with a higher version than was installed before.
+#[derive(Default)]
+struct TemplateChanges {
+    component_templates: HashSet<String>,
+    index_templates: HashSet<String>,
+    composed_of: HashMap<String, Vec<String>>,
+}
+
+impl TemplateChanges {
+    fn record(&mut self, asset: &Asset, name: &str, contents: &[u8], changed: bool) {
+        let index_template = asset.endpoint.trim_matches('/') == "_index_template";
+        if index_template && let Ok(body) = serde_json::from_slice::<Value>(contents) {
+            let components = body["composed_of"]
+                .as_array()
+                .map(|names| names.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default();
+            self.composed_of.insert(name.to_string(), components);
+        }
+        if !changed {
+            return;
+        }
+        match index_template {
+            true => self.index_templates.insert(name.to_string()),
+            false => self.component_templates.insert(name.to_string()),
+        };
+    }
+
+    /// Index templates that changed directly or through a component template.
+    fn updated_index_templates(&self) -> HashSet<String> {
+        let mut updated = self.index_templates.clone();
+        for (template, components) in &self.composed_of {
+            if components.iter().any(|name| self.component_templates.contains(name)) {
+                updated.insert(template.clone());
+            }
+        }
+        updated
+    }
+}
+
+/// `(data stream, index template)` pairs from a `GET _data_stream` response for
+/// streams that currently resolve to one of the updated templates.
+fn data_streams_to_roll_over(data_streams: &Value, updated_templates: &HashSet<String>) -> Vec<(String, String)> {
+    let mut streams: Vec<_> = data_streams["data_streams"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|stream| {
+            let name = stream["name"].as_str()?;
+            let template = stream["template"].as_str()?;
+            updated_templates
+                .contains(template)
+                .then(|| (name.to_string(), template.to_string()))
+        })
+        .collect();
+    streams.sort();
+    streams
+}
+
+/// Templates only shape backing indices created after they are installed, so
+/// existing data streams keep their old mappings and settings until rollover.
+/// Returns the streams that could not be rolled over.
+async fn rollover_updated_data_streams(client: &Client, updated_templates: &HashSet<String>) -> Result<Vec<String>> {
+    let headers = default_headers();
+    let path = format!("/_data_stream/{ESDIAG_INDEX_PATTERN}");
+    let response = client.request(Method::GET, &headers, &path, None).await?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(vec![]);
+    }
+    if !response.status().is_success() {
+        return Err(eyre!(
+            "Listing ESDiag data streams returned {}: {}",
+            response.status(),
+            response.text().await.unwrap_or_default()
+        ));
+    }
+    let data_streams: Value = response.json().await?;
+    let streams = data_streams_to_roll_over(&data_streams, updated_templates);
+
+    let mut failures = Vec::new();
+    for (stream, template) in &streams {
+        let result = client
+            .request(Method::POST, &headers, &format!("/{stream}/_rollover"), None)
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => {
+                tracing::info!("Rolled over data stream {stream} to apply the updated {template} index template");
+            }
+            Ok(response) => {
+                failures.push(stream.clone());
+                tracing::warn!(
+                    "Could not roll over data stream {stream}: {} {}",
+                    response.status(),
+                    response.text().await.unwrap_or_default()
+                );
+            }
+            Err(err) => {
+                failures.push(stream.clone());
+                tracing::warn!("Could not roll over data stream {stream}: {err}");
+            }
+        }
+    }
+    if !streams.is_empty() {
+        tracing::info!(
+            "Rolled over {} of {} data streams with updated templates",
+            streams.len() - failures.len(),
+            streams.len()
+        );
+    }
+    Ok(failures)
 }
 
 fn is_template_asset(asset: &Asset) -> bool {
@@ -364,8 +552,7 @@ async fn send_asset_with_allowed_statuses(
                 false => {
                     let bytes = response.bytes().await?;
                     let body = serde_json::from_slice::<Value>(&bytes)?;
-                    let message = format!("Asset: {body}");
-                    Err(eyre!(message))
+                    Err(AssetRejected { status, body }.into())
                 }
             }
         }
@@ -429,19 +616,15 @@ pub async fn assets_report(client: &Client) -> Result<SetupReport> {
             .has_security_enabled()
             .await
             .wrap_err("Failed to determine security status")?;
-    if serverless {
-        tracing::info!(
-            "Serverless security is always enabled. Skipping bundled security-dependent assets; configure project roles separately."
-        );
-    } else if !security_enabled {
+    if !security_enabled {
         tracing::info!("Security is disabled on the cluster. Security-dependent assets will be skipped.");
     }
-    let supports_security_assets = security_enabled && !serverless;
 
     let mut error_count = 0;
+    let mut template_changes = TemplateChanges::default();
 
     for asset in assets {
-        if should_skip_asset(&asset, supports_security_assets) {
+        if should_skip_asset(&asset, security_enabled) {
             tracing::debug!("Skipping security-dependent asset: {}", &asset.name);
             continue;
         }
@@ -460,8 +643,35 @@ pub async fn assets_report(client: &Client) -> Result<SetupReport> {
                     contents
                 };
                 tracing::debug!("file.path: {:?}", file_path);
+                let template = match is_template_asset(&asset) {
+                    true => {
+                        let stem = file_path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
+                        let name = format!("{stem}{}", asset.suffix.as_deref().unwrap_or(""));
+                        let installed = installed_template_version(client, &asset, &name).await;
+                        let bundled = serde_json::from_slice::<Value>(&contents)
+                            .ok()
+                            .and_then(|body| body["version"].as_u64());
+                        if template_version_downgrade(installed, bundled) {
+                            tracing::warn!(
+                                "Keeping installed template {name} (version {}), which is newer than this ESDiag release's bundled version. Upgrade ESDiag to update it.",
+                                installed.unwrap_or_default()
+                            );
+                            continue;
+                        }
+                        Some((name, template_version_bumped(installed, bundled)))
+                    }
+                    false => None,
+                };
                 match send_asset(client, &asset, &file_path, &contents, true).await {
-                    Ok(res) => tracing::debug!("Response: {:?}", res),
+                    Ok(res) => {
+                        tracing::debug!("Response: {:?}", res);
+                        if let Some((name, changed)) = &template {
+                            template_changes.record(&asset, name, &contents, *changed);
+                        }
+                    }
+                    Err(e) if serverless && is_forbidden_security_asset(&asset, &e) => {
+                        warn_forbidden_security_asset(&file_path);
+                    }
                     Err(e) => {
                         tracing::error!("Failed to send asset: {e:?}");
                         report.warnings.push(format!(
@@ -481,14 +691,18 @@ pub async fn assets_report(client: &Client) -> Result<SetupReport> {
             };
             // do something with the file
             tracing::debug!("file.path: {:?}", &path);
-            if let Err(e) = send_asset(client, &asset, &path, &contents, false).await {
-                tracing::error!("Failed to send asset: {e:?}");
-                report.warnings.push(format!(
-                    "Failed to install {} asset {}. Check setup logs and rerun setup.",
-                    client,
-                    path.display()
-                ));
-                error_count += 1;
+            match send_asset(client, &asset, &path, &contents, false).await {
+                Err(e) if serverless && is_forbidden_security_asset(&asset, &e) => warn_forbidden_security_asset(&path),
+                Err(e) => {
+                    tracing::error!("Failed to send asset: {e:?}");
+                    report.warnings.push(format!(
+                        "Failed to install {} asset {}. Check setup logs and rerun setup.",
+                        client,
+                        path.display()
+                    ));
+                    error_count += 1;
+                }
+                Ok(()) => {}
             }
         } else {
             tracing::error!("Asset not found: {}", &asset.name);
@@ -501,6 +715,20 @@ pub async fn assets_report(client: &Client) -> Result<SetupReport> {
     // meaningful there — asking any other product for its mappings would warn
     // about a call that never made sense.
     if matches!(client, Client::Elasticsearch(_)) {
+        let updated_templates = template_changes.updated_index_templates();
+        if !updated_templates.is_empty() {
+            match rollover_updated_data_streams(client, &updated_templates).await {
+                Ok(failed) if failed.is_empty() => {}
+                Ok(failed) => report.warnings.push(format!(
+                    "Could not roll over data streams {} to apply updated templates. Roll them over manually, then rerun failed diagnostics.",
+                    failed.join(", ")
+                )),
+                Err(err) => {
+                    tracing::warn!("Could not roll over data streams with updated templates: {err}");
+                    report.warnings.push("Could not list ESDiag data streams to apply updated templates. Check connectivity and data stream privileges, then rerun setup.".to_string());
+                }
+            }
+        }
         match install_provenance_aliases(client).await {
             Ok(indices) => report.failed_indices = indices,
             Err(err) => {
@@ -663,7 +891,9 @@ fn agent_builder_license_is_active(response: &Value) -> bool {
 
 async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Result<()> {
     let mut bundle = kibana_bundle(embedded_assets)?.read_all()?;
-    target_kibana_bundle(&mut bundle, crate::env::get_kibana_space().as_deref())?;
+    let space = crate::env::get_kibana_space();
+    ensure_single_kibana_space(client, &bundle, space.as_deref().unwrap_or("default")).await?;
+    target_kibana_bundle(&mut bundle, space.as_deref())?;
     if client.is_serverless().await? {
         adapt_serverless_kibana_bundle(&mut bundle);
     }
@@ -681,23 +911,9 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
         })
         .collect::<Vec<_>>();
     let sync_client = kibana.sync_client(spaces)?;
-
-    let saved_objects_bundle = saved_objects_bundle(&bundle);
-    let saved_objects_summary = push_sync(&sync_client, &saved_objects_bundle, &SyncOptions::default()).await?;
-    ensure_sync_completed(&saved_objects_bundle, &saved_objects_summary)?;
+    sync_kibana_bundle(&sync_client, &bundle).await?;
 
     let agent_builder_bundle = agent_builder_bundle(bundle);
-    for asset_kind in [
-        KibanaAssetKind::Workflows,
-        KibanaAssetKind::Tools,
-        KibanaAssetKind::Skills,
-        KibanaAssetKind::Agents,
-    ] {
-        let asset_bundle = kibana_asset_bundle(&agent_builder_bundle, asset_kind);
-        let summary = push_sync(&sync_client, &asset_bundle, &SyncOptions::default()).await?;
-        ensure_sync_completed(&asset_bundle, &summary)?;
-    }
-
     for (space_id, space_bundle) in &agent_builder_bundle.by_space {
         let skill_ids = space_bundle
             .skills
@@ -709,6 +925,121 @@ async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Res
 
     tracing::info!("completed setup for {client}");
     Ok(())
+}
+
+/// Saved object IDs are not space safe and workflow IDs are global, so ESDiag
+/// Kibana assets may only live in one space per deployment.
+async fn ensure_single_kibana_space(client: &Client, bundle: &SyncBundle, target: &str) -> Result<()> {
+    let dashboard_ids = bundled_dashboard_ids(bundle);
+    if dashboard_ids.is_empty() {
+        return Ok(());
+    }
+    let response = client
+        .request(Method::GET, &HashMap::new(), "api/spaces/space", None)
+        .await?;
+    let status = response.status();
+    if status == StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    if !status.is_success() {
+        return Err(eyre!(
+            "Failed to list Kibana spaces ({status}): {}",
+            response.text().await?
+        ));
+    }
+    let spaces: Vec<Value> = response.json().await?;
+    for space in spaces
+        .iter()
+        .filter_map(|space| space.get("id").and_then(Value::as_str))
+        .filter(|space| *space != target)
+    {
+        if space_has_esdiag_dashboards(client, space, &dashboard_ids).await? {
+            let setting = if space == "default" { "_default" } else { space };
+            return Err(eyre!(
+                "ESDiag Kibana assets are already installed in the '{space}' space. \
+                 ESDiag assets can only be installed in one Kibana space: set \
+                 ESDIAG_KIBANA_SPACE={setting} to update that install, or remove the \
+                 ESDiag assets from '{space}' before installing into '{target}'."
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn bundled_dashboard_ids(bundle: &SyncBundle) -> HashSet<String> {
+    bundle
+        .by_space
+        .values()
+        .flat_map(|assets| &assets.saved_objects)
+        .filter(|object| object.get("type").and_then(Value::as_str) == Some("dashboard"))
+        .filter_map(|object| object.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
+async fn space_has_esdiag_dashboards(client: &Client, space: &str, dashboard_ids: &HashSet<String>) -> Result<bool> {
+    const PER_PAGE: u64 = 1000;
+    for page in 1.. {
+        let path = kibana_space_path(
+            space,
+            &format!("api/saved_objects/_find?type=dashboard&fields=title&per_page={PER_PAGE}&page={page}"),
+        );
+        let response = client.request(Method::GET, &HashMap::new(), &path, None).await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(eyre!(
+                "Failed to search Kibana space '{space}' for ESDiag assets ({status}): {}",
+                response.text().await?
+            ));
+        }
+        let body: Value = response.json().await?;
+        if contains_esdiag_saved_object(&body, dashboard_ids) {
+            return Ok(true);
+        }
+        let total = body.get("total").and_then(Value::as_u64).unwrap_or(0);
+        if page * PER_PAGE >= total {
+            break;
+        }
+    }
+    Ok(false)
+}
+
+/// Kibana regenerates saved object IDs when an existing ID is imported into
+/// another space and keeps the original in `originId`.
+fn contains_esdiag_saved_object(find_response: &Value, ids: &HashSet<String>) -> bool {
+    find_response
+        .get("saved_objects")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|object| [object.get("id"), object.get("originId")])
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|id| ids.contains(id))
+}
+
+async fn sync_kibana_bundle(client: &kibana_sync::KibanaClient, bundle: &SyncBundle) -> Result<()> {
+    let mut summary = SyncSummary::default();
+    accumulate_sync_result(
+        bundle,
+        &mut summary,
+        push_sync(client, &saved_objects_bundle(bundle), &SyncOptions::default()).await,
+    )?;
+
+    let agent_builder_bundle = agent_builder_bundle(bundle.clone());
+    for asset_kind in [
+        KibanaAssetKind::Workflows,
+        KibanaAssetKind::Tools,
+        KibanaAssetKind::Skills,
+        KibanaAssetKind::Agents,
+    ] {
+        let asset_bundle = kibana_asset_bundle(&agent_builder_bundle, asset_kind);
+        accumulate_sync_result(
+            bundle,
+            &mut summary,
+            push_sync(client, &asset_bundle, &SyncOptions::default()).await,
+        )?;
+    }
+    ensure_sync_completed(bundle, &summary)
 }
 
 fn target_kibana_bundle(bundle: &mut SyncBundle, space: Option<&str>) -> Result<()> {
@@ -824,6 +1155,69 @@ fn kibana_asset_bundle(bundle: &SyncBundle, asset_kind: KibanaAssetKind) -> Sync
     asset_bundle
 }
 
+fn accumulate_sync_summary(total: &mut SyncSummary, summary: SyncSummary) {
+    total.spaces_attempted += summary.spaces_attempted;
+    total.spaces_applied += summary.spaces_applied;
+    total.saved_objects_attempted += summary.saved_objects_attempted;
+    total.saved_objects_applied += summary.saved_objects_applied;
+    total.workflows_attempted += summary.workflows_attempted;
+    total.workflows_applied += summary.workflows_applied;
+    total.agents_attempted += summary.agents_attempted;
+    total.agents_applied += summary.agents_applied;
+    total.tools_attempted += summary.tools_attempted;
+    total.tools_applied += summary.tools_applied;
+    total.skills_attempted += summary.skills_attempted;
+    total.skills_applied += summary.skills_applied;
+}
+
+fn accumulate_sync_result<E>(
+    bundle: &SyncBundle,
+    total: &mut SyncSummary,
+    result: std::result::Result<SyncSummary, E>,
+) -> Result<()>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    match result {
+        Ok(summary) => {
+            accumulate_sync_summary(total, summary);
+            Ok(())
+        }
+        Err(error) => Err(eyre::Report::new(error).wrap_err(sync_progress(bundle, total))),
+    }
+}
+
+fn sync_progress(bundle: &SyncBundle, summary: &SyncSummary) -> String {
+    let expected_saved_objects = bundle
+        .by_space
+        .values()
+        .map(|space| space.saved_objects.len())
+        .sum::<usize>();
+    let expected_workflows = bundle
+        .by_space
+        .values()
+        .map(|space| space.workflows.len())
+        .sum::<usize>();
+    let expected_agents = bundle.by_space.values().map(|space| space.agents.len()).sum::<usize>();
+    let expected_tools = bundle.by_space.values().map(|space| space.tools.len()).sum::<usize>();
+    let expected_skills = bundle.by_space.values().map(|space| space.skills.len()).sum::<usize>();
+    format!(
+        "Kibana sync failed after applying spaces {}/{}, saved objects {}/{}, workflows {}/{}, agents {}/{}, tools {}/{}, skills {}/{}",
+        summary.spaces_applied,
+        bundle.spaces.len(),
+        summary.saved_objects_applied,
+        expected_saved_objects,
+        summary.workflows_applied,
+        expected_workflows,
+        summary.agents_applied,
+        expected_agents,
+        summary.tools_applied,
+        expected_tools,
+        summary.skills_applied,
+        expected_skills,
+    )
+}
+
 fn ensure_sync_completed(bundle: &SyncBundle, summary: &SyncSummary) -> Result<()> {
     let expected_saved_objects = bundle
         .by_space
@@ -900,7 +1294,10 @@ async fn attach_skills_to_default_agent(client: &Client, space_id: &str, skill_i
 }
 
 fn default_agent_path(space_id: &str) -> String {
-    let endpoint = "api/agent_builder/agents/elastic-ai-agent";
+    kibana_space_path(space_id, "api/agent_builder/agents/elastic-ai-agent")
+}
+
+fn kibana_space_path(space_id: &str, endpoint: &str) -> String {
     if space_id == "default" {
         endpoint.to_string()
     } else {
@@ -969,6 +1366,105 @@ mod serverless_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_template_version_is_read_from_get_responses() {
+        let installed = serde_json::json!({
+            "index_templates": [
+                { "name": "a-esdiag", "index_template": { "version": 3 } },
+                { "name": "b-esdiag", "index_template": {} }
+            ]
+        });
+        assert_eq!(template_version(&installed, "_index_template", "a-esdiag"), Some(3));
+        assert_eq!(template_version(&installed, "_index_template", "b-esdiag"), None);
+        assert_eq!(template_version(&installed, "_index_template", "c-esdiag"), None);
+
+        let installed = serde_json::json!({
+            "component_templates": [{ "name": "esdiag@x", "component_template": { "version": 2 } }]
+        });
+        assert_eq!(template_version(&installed, "_component_template", "esdiag@x"), Some(2));
+    }
+
+    #[test]
+    fn only_higher_bundled_versions_trigger_rollover() {
+        assert!(template_version_bumped(None, Some(1)));
+        assert!(template_version_bumped(Some(1), Some(2)));
+        assert!(!template_version_bumped(Some(2), Some(2)));
+        assert!(!template_version_bumped(Some(3), Some(2)));
+        assert!(!template_version_bumped(None, None));
+        assert!(template_version_downgrade(Some(3), Some(2)));
+        assert!(template_version_downgrade(Some(1), None));
+        assert!(!template_version_downgrade(Some(2), Some(2)));
+        assert!(!template_version_downgrade(Some(1), Some(2)));
+        assert!(!template_version_downgrade(None, Some(1)));
+        assert!(!template_version_downgrade(None, None));
+    }
+
+    #[test]
+    fn every_bundled_template_has_a_version() {
+        let assets = EmbeddedAssets::new().unwrap();
+        for dir in ["index_templates", "component_templates"] {
+            let files = assets.get_dir_files(&PathBuf::from(format!("elasticsearch/{dir}")));
+            assert!(!files.is_empty(), "no bundled {dir}");
+            for (path, contents) in files {
+                let body: Value = serde_json::from_slice(&contents).unwrap();
+                assert!(body["version"].as_u64().is_some(), "{} has no version", path.display());
+            }
+        }
+    }
+
+    #[test]
+    fn only_streams_resolving_to_updated_templates_roll_over() {
+        let asset = |endpoint: &str| Asset {
+            endpoint: endpoint.to_string(),
+            method: "PUT".to_string(),
+            name: String::new(),
+            headers: default_headers(),
+            suffix: None,
+            query: None,
+            requires_security: false,
+        };
+        let mut changes = TemplateChanges::default();
+        changes.record(&asset("_component_template"), "esdiag@ls", b"{}", true);
+        changes.record(&asset("_component_template"), "esdiag@mappings", b"{}", false);
+        changes.record(
+            &asset("_index_template"),
+            "ls-esdiag",
+            br#"{"composed_of":["esdiag@ls"]}"#,
+            false,
+        );
+        changes.record(
+            &asset("_index_template"),
+            "a-esdiag",
+            br#"{"composed_of":["esdiag@mappings"]}"#,
+            true,
+        );
+        changes.record(
+            &asset("_index_template"),
+            "b-esdiag",
+            br#"{"composed_of":["esdiag@mappings"]}"#,
+            false,
+        );
+        let updated = changes.updated_index_templates();
+        assert_eq!(
+            updated,
+            HashSet::from(["ls-esdiag".to_string(), "a-esdiag".to_string()])
+        );
+
+        let data_streams = serde_json::json!({ "data_streams": [
+            { "name": "b-esdiag", "template": "b-esdiag" },
+            { "name": "a-esdiag", "template": "a-esdiag" },
+            { "name": "ls-esdiag", "template": "ls-esdiag" },
+            { "name": "no-template-esdiag" },
+        ]});
+        assert_eq!(
+            data_streams_to_roll_over(&data_streams, &updated),
+            vec![
+                ("a-esdiag".to_string(), "a-esdiag".to_string()),
+                ("ls-esdiag".to_string(), "ls-esdiag".to_string()),
+            ]
+        );
+    }
 
     /// The `diagnostic` properties an index created from the current templates
     /// carries, read from the template itself so the test moves with it.
@@ -1155,6 +1651,25 @@ mod tests {
     }
 
     #[test]
+    fn existing_esdiag_dashboards_are_found_by_id_or_origin_id() {
+        let ids = HashSet::from(["esdiag-readme".to_string()]);
+        let found = |objects: Value| contains_esdiag_saved_object(&serde_json::json!({"saved_objects": objects}), &ids);
+
+        assert!(found(serde_json::json!([{"id": "esdiag-readme"}])));
+        assert!(found(
+            serde_json::json!([{"id": "a1b2c3", "originId": "esdiag-readme"}])
+        ));
+        assert!(!found(serde_json::json!([{"id": "my-dashboard"}])));
+        assert!(!found(serde_json::json!([])));
+    }
+
+    #[test]
+    fn kibana_space_paths_omit_the_default_space() {
+        assert_eq!(kibana_space_path("default", "api/x"), "api/x");
+        assert_eq!(kibana_space_path("ops team", "api/x"), "s/ops%20team/api/x");
+    }
+
+    #[test]
     fn kibana_assets_follow_kibana_sync_bundle_layout() {
         let embedded_assets = EmbeddedAssets::new().unwrap();
         let bundle = kibana_bundle(&embedded_assets).unwrap().read_all().unwrap();
@@ -1163,7 +1678,7 @@ mod tests {
         assert_eq!(bundle.spaces[0]["id"], "esdiag");
 
         let esdiag = bundle.by_space.get("esdiag").unwrap();
-        assert_eq!(esdiag.saved_objects.len(), 90);
+        assert_eq!(esdiag.saved_objects.len(), 95);
         assert_eq!(esdiag.workflows.len(), 1);
         assert!(esdiag.agents.is_empty());
         assert_eq!(esdiag.tools.len(), 1);
@@ -1233,13 +1748,144 @@ mod tests {
         bundle.by_space.insert(
             "esdiag".to_string(),
             kibana_sync::sync::SpaceBundle {
+                saved_objects: vec![serde_json::json!({"id": "object-1"})],
+                workflows: vec![serde_json::json!({"id": "workflow-1"})],
                 skills: vec![serde_json::json!({"id": "skill-1"})],
                 ..kibana_sync::sync::SpaceBundle::default()
             },
         );
 
-        let error = ensure_sync_completed(&bundle, &SyncSummary::default()).unwrap_err();
+        let mut summary = SyncSummary::default();
+        accumulate_sync_summary(
+            &mut summary,
+            SyncSummary {
+                saved_objects_attempted: 1,
+                saved_objects_applied: 1,
+                ..SyncSummary::default()
+            },
+        );
+        accumulate_sync_summary(
+            &mut summary,
+            SyncSummary {
+                workflows_attempted: 1,
+                ..SyncSummary::default()
+            },
+        );
+
+        let error = ensure_sync_completed(&bundle, &summary).unwrap_err();
+        assert!(error.to_string().contains("saved objects 1/1"));
+        assert!(error.to_string().contains("workflows 0/1"));
         assert!(error.to_string().contains("skills 0/1"));
+    }
+
+    #[test]
+    fn sync_error_preserves_counts_from_completed_phases() {
+        let mut bundle = SyncBundle::default();
+        bundle.by_space.insert(
+            "default".to_string(),
+            kibana_sync::sync::SpaceBundle {
+                saved_objects: vec![serde_json::json!({"id": "object-1"})],
+                workflows: vec![serde_json::json!({"id": "workflow-1"})],
+                ..kibana_sync::sync::SpaceBundle::default()
+            },
+        );
+        let mut summary = SyncSummary {
+            saved_objects_attempted: 1,
+            saved_objects_applied: 1,
+            ..SyncSummary::default()
+        };
+
+        let error = accumulate_sync_result(
+            &bundle,
+            &mut summary,
+            Err::<SyncSummary, _>(std::io::Error::other("workflow request failed")),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("saved objects 1/1"));
+        assert!(error.to_string().contains("workflows 0/1"));
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().map(std::io::Error::kind),
+            Some(std::io::ErrorKind::Other)
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_kibana_sync_updates_existing_workflow() {
+        use kibana_sync::test_support::{MockResponse, TestServer};
+
+        let workflow = serde_json::json!({
+            "id": "workflow-1",
+            "name": "Diagnostic workflow",
+            "definition": {"name": "desired"}
+        });
+        let item_path = "/api/workflows/workflow/workflow-1";
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: serde_json::json!({"version": {"number": "9.4.2"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: item_path,
+                status: 404,
+                body: serde_json::json!({}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/api/workflows/workflow",
+                status: 200,
+                body: serde_json::json!({}),
+            },
+            MockResponse {
+                method: "GET",
+                path: item_path,
+                status: 200,
+                body: serde_json::json!({
+                    "id": "workflow-1",
+                    "readonly": false,
+                    "definition": {"name": "existing"}
+                }),
+            },
+            MockResponse {
+                method: "PUT",
+                path: item_path,
+                status: 200,
+                body: serde_json::json!({}),
+            },
+        ]);
+        let client = server.client().unwrap();
+        let mut bundle = SyncBundle::default();
+        bundle.by_space.insert(
+            "default".to_string(),
+            kibana_sync::sync::SpaceBundle {
+                workflows: vec![workflow.clone()],
+                ..kibana_sync::sync::SpaceBundle::default()
+            },
+        );
+
+        sync_kibana_bundle(&client, &bundle).await.unwrap();
+        sync_kibana_bundle(&client, &bundle).await.unwrap();
+
+        let requests = server.requests();
+        assert!(requests.iter().all(|request| request.method != "HEAD"));
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| (request.method.as_str(), request.path.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("GET", "/api/status"),
+                ("GET", item_path),
+                ("POST", "/api/workflows/workflow"),
+                ("GET", item_path),
+                ("PUT", item_path),
+            ]
+        );
+        let update = requests.iter().find(|request| request.method == "PUT").unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&update.body).unwrap(), workflow);
     }
 
     #[test]
@@ -1273,9 +1919,9 @@ mod tests {
         let bundle = kibana_bundle(&embedded_assets).unwrap().read_all().unwrap();
         let saved_objects = &bundle.by_space["esdiag"].saved_objects;
 
-        assert_eq!(saved_objects.len(), 90);
+        assert_eq!(saved_objects.len(), 95);
         assert_eq!(saved_objects[0]["type"], "dashboard");
-        assert_eq!(saved_objects[0]["id"], "allocation-overview");
+        assert_eq!(saved_objects[0]["id"], "alias-detail");
     }
 
     #[test]

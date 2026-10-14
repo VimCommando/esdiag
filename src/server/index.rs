@@ -3,6 +3,8 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::{ServerState, get_theme_dark, template};
+#[cfg(all(feature = "keystore", feature = "setup"))]
+use crate::data::OnboardingWorkflow;
 use crate::data::{Application, ApplicationConfig, HostRole, KnownHost, Settings, is_collectable_app};
 #[cfg(feature = "keystore")]
 use crate::data::{Job, load_saved_jobs_async};
@@ -15,7 +17,7 @@ use askama::Template;
 use axum::response::Response;
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::{Html, IntoResponse, Redirect},
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -70,13 +72,14 @@ pub async fn handler(
     Query(params): Query<Params>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let (auth_header, user_email) = match state.resolve_user_email(&headers) {
+    let (identity_locked, user_email) = match state.resolve_user_email(&headers) {
         Ok(result) => result,
         Err(err) => {
-            tracing::warn!("Authentication header validation failed: {err}");
+            tracing::warn!("Identity resolution failed: {err}");
+            let (status, label) = super::identity_failure(&err);
             return (
-                StatusCode::UNAUTHORIZED,
-                Html(format!("<html><body><h1>Unauthorized</h1><p>{}</p></body></html>", err)),
+                status,
+                Html(format!("<html><body><h1>{label}</h1><p>{err}</p></body></html>")),
             )
                 .into_response();
         }
@@ -84,12 +87,28 @@ pub async fn handler(
     let user_initial = user_email.chars().next().unwrap_or('_').to_ascii_uppercase();
     let allows_local_runtime_features = state.server_policy.allows_local_runtime_features();
     #[cfg(all(feature = "keystore", feature = "setup"))]
-    if state.onboarding
-        && allows_local_runtime_features
-        && onboarding::inspect()
-            .map(|readiness| !readiness.is_complete())
-            .unwrap_or(true)
-    {
+    let onboarding_blocked = if state.onboarding && allows_local_runtime_features {
+        match onboarding::inspect() {
+            Ok(readiness) => {
+                let deferred_secure_output = readiness.collection_deferred
+                    && readiness.workflow == Some(OnboardingWorkflow::CollectAndProcess)
+                    && readiness.output_configured
+                    && !readiness.output_from_environment
+                    && ApplicationConfig::load()
+                        .ok()
+                        .and_then(|config| config.output.default)
+                        .and_then(|name| KnownHost::get_known(&name))
+                        .is_some_and(|host| host.requires_keystore_secret())
+                    && !state.is_keystore_unlocked().await;
+                !readiness.can_enter_application() || deferred_secure_output
+            }
+            Err(_) => true,
+        }
+    } else {
+        false
+    };
+    #[cfg(all(feature = "keystore", feature = "setup"))]
+    if onboarding_blocked {
         return Redirect::to("/welcome").into_response();
     }
     let theme_dark = get_theme_dark(&headers);
@@ -105,12 +124,13 @@ pub async fn handler(
         false
     };
     let keystore_state = state.keystore_page_state().await;
+    let show_api_key = state.server_policy.allows_api_key_inputs();
     let page = template::Index {
-        auth_header,
+        identity_locked,
         debug: tracing::enabled!(tracing::Level::DEBUG),
         desktop: cfg!(feature = "desktop"),
         kibana_url,
-        key_id: params.key_id,
+        key_id: params.key_id.filter(|_| show_api_key),
         link_id: params.link_id,
         upload_id: params.upload_id,
         stats: state.get_stats_as_signals().await,
@@ -120,6 +140,7 @@ pub async fn handler(
         theme_dark,
         runtime_mode: state.runtime_mode.to_string(),
         show_advanced: state.server_policy.allows_advanced(),
+        show_api_key,
         show_job_builder: state.server_policy.allows_job_builder(),
         can_use_keystore: keystore_state.can_use_keystore,
         output_secure,
@@ -140,13 +161,14 @@ pub async fn advanced_page(
     Query(params): Query<Params>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let (auth_header, user_email) = match state.resolve_user_email(&headers) {
+    let (identity_locked, user_email) = match state.resolve_user_email(&headers) {
         Ok(result) => result,
         Err(err) => {
-            tracing::warn!("Authentication header validation failed: {err}");
+            tracing::warn!("Identity resolution failed: {err}");
+            let (status, label) = super::identity_failure(&err);
             return (
-                StatusCode::UNAUTHORIZED,
-                Html(format!("<html><body><h1>Unauthorized</h1><p>{}</p></body></html>", err)),
+                status,
+                Html(format!("<html><body><h1>{label}</h1><p>{err}</p></body></html>")),
             )
                 .into_response();
         }
@@ -163,7 +185,7 @@ pub async fn advanced_page(
     let kibana_url = { state.kibana_url.read().await.clone() };
     let keystore_state = state.keystore_page_state().await;
     let page = template::Advanced {
-        auth_header,
+        identity_locked,
         debug: tracing::enabled!(tracing::Level::DEBUG),
         desktop: cfg!(feature = "desktop"),
         collect_hosts: job_hosts.collect_hosts,
@@ -225,13 +247,14 @@ async fn build_jobs_page(
     params: Option<Params>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let (auth_header, user_email) = match state.resolve_user_email(&headers) {
+    let (identity_locked, user_email) = match state.resolve_user_email(&headers) {
         Ok(result) => result,
         Err(err) => {
-            tracing::warn!("Authentication header validation failed: {err}");
+            tracing::warn!("Identity resolution failed: {err}");
+            let (status, label) = super::identity_failure(&err);
             return (
-                StatusCode::UNAUTHORIZED,
-                Html(format!("<html><body><h1>Unauthorized</h1><p>{}</p></body></html>", err)),
+                status,
+                Html(format!("<html><body><h1>{label}</h1><p>{err}</p></body></html>")),
             )
                 .into_response();
         }
@@ -287,7 +310,7 @@ async fn build_jobs_page(
     };
 
     let page = template::Jobs {
-        auth_header,
+        identity_locked,
         debug: tracing::enabled!(tracing::Level::DEBUG),
         desktop: cfg!(feature = "desktop"),
         collect_hosts: job_hosts.collect_hosts,

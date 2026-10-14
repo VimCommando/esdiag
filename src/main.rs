@@ -38,8 +38,9 @@ use esdiag::{
     env::LOG_LEVEL,
     exporter::Exporter,
     onboarding::{
-        CollectHostInput, OutputDeploymentInput, inspect as inspect_onboarding, save_collect_host, save_default_job,
-        save_default_processing_job, save_output_deployment, save_user, save_workflow,
+        CollectHostInput, OutputDeploymentInput, clear_collection_deferral, inspect as inspect_onboarding,
+        save_collect_host, save_default_job, save_default_processing_job, save_output_deployment, save_user,
+        save_workflow, saved_job_fits_workflow,
     },
     processor::{CollectionResult, DiagnosticOutcome, Identifiers, default_collect_archive_name},
     receiver::{
@@ -58,7 +59,7 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt};
 use url::Url;
 
 // CLI Styling
@@ -143,8 +144,11 @@ enum Commands {
     #[cfg(feature = "server")]
     Serve {
         /// IPv4 address to bind the server to
-        #[arg(long, default_value = "0.0.0.0")]
-        bind: Ipv4Addr,
+        #[arg(
+            long,
+            long_help = "IPv4 address to bind the server to. Defaults to ESDIAG_BIND, then 127.0.0.1."
+        )]
+        bind: Option<Ipv4Addr>,
         /// The port to bind the server to
         #[arg(help = "The port to bind the server to", long, short, default_value = "2501")]
         port: u16,
@@ -159,6 +163,13 @@ enum Commands {
         /// Request authentication provider for the server
         #[arg(long, value_enum, help = "Request authentication provider: google-iap or none")]
         auth_provider: Option<AuthProvider>,
+        /// Header that supplies the authenticated user identity
+        #[arg(
+            long,
+            value_name = "HEADER",
+            help = "Identity header for authenticated service requests"
+        )]
+        identity_header: Option<String>,
         /// Optional comma-separated web feature allowlist (advanced, job-builder)
         #[arg(long, value_name = "FEATURES")]
         web_features: Option<String>,
@@ -567,8 +578,7 @@ fn main() -> ExitCode {
 async fn async_main() -> Result<ExitCode> {
     // Parse CLI early to configure execution mode and logging.
     let cli = Cli::parse();
-    let filter = resolve_tracing_filter(&cli);
-    init_tracing(filter);
+    init_tracing(resolve_tracing_filter(&cli), resolve_log_file_filter(&cli));
     let stdout_owned = command_owns_stdout(&cli);
     let no_command = cli.command.is_none();
 
@@ -600,14 +610,30 @@ async fn async_main() -> Result<ExitCode> {
     }
 }
 
-fn init_tracing(filter: EnvFilter) {
+fn init_tracing(terminal_filter: EnvFilter, file_filter: Option<EnvFilter>) {
     // Bridge `log` records from dependencies when available, but tolerate hosts that
     // already installed a global logger before invoking this binary.
     if let Err(err) = tracing_log::LogTracer::init() {
         eprintln!("tracing log bridge already initialized: {err}");
     }
 
-    let subscriber = fmt().with_env_filter(filter).with_writer(std::io::stderr).finish();
+    let terminal = fmt::layer()
+        .with_ansi(std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none())
+        .with_writer(std::io::stderr)
+        .with_filter(terminal_filter);
+    let file = file_filter.and_then(|filter| match esdiag::data::open_run_log(true) {
+        Ok(file) => Some(
+            fmt::layer()
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(file))
+                .with_filter(filter),
+        ),
+        Err(err) => {
+            eprintln!("Could not open the run log: {err}");
+            None
+        }
+    });
+    let subscriber = tracing_subscriber::registry().with(terminal).with(file);
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
         eprintln!("tracing subscriber already initialized: {err}");
     }
@@ -700,8 +726,35 @@ fn resolve_tracing_filter(cli: &Cli) -> EnvFilter {
         EnvFilter::new("debug")
     } else if is_agent_mode(cli) {
         EnvFilter::new("warn")
+    } else if let Ok(filter) = EnvFilter::try_from_env("LOG_LEVEL") {
+        filter
+    } else if logs_to_terminal(cli) {
+        EnvFilter::new(LOG_LEVEL)
     } else {
-        EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new(LOG_LEVEL))
+        EnvFilter::new("warn")
+    }
+}
+
+fn resolve_log_file_filter(cli: &Cli) -> Option<EnvFilter> {
+    if logs_to_terminal(cli) {
+        None
+    } else if cli.debug {
+        Some(EnvFilter::new("debug"))
+    } else {
+        Some(EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new(LOG_LEVEL)))
+    }
+}
+
+/// Long-running services log to stderr, which their supervisor captures.
+fn logs_to_terminal(cli: &Cli) -> bool {
+    #[cfg(feature = "server")]
+    {
+        matches!(cli.command, Some(Commands::Serve { .. }))
+    }
+    #[cfg(not(feature = "server"))]
+    {
+        let _ = cli;
+        false
     }
 }
 
@@ -726,6 +779,7 @@ fn classify_failure(error: &eyre::Report) -> CliFailureCategory {
     if let Some(response) = http_response_details(error) {
         return match response.status {
             401 | 403 => CliFailureCategory::AuthenticationFailed,
+            409 => CliFailureCategory::Conflict,
             404 => CliFailureCategory::NotFound,
             500..=599 => CliFailureCategory::Internal,
             _ => CliFailureCategory::InvalidInput,
@@ -806,6 +860,9 @@ fn parse_http_response_details(status: u16, body: &str) -> HttpResponseDetails {
 
 fn http_response_details(error: &eyre::Report) -> Option<HttpResponseDetails> {
     for cause in error.chain() {
+        if let Some(kibana_sync::Error::ApiResponse { status, body }) = cause.downcast_ref::<kibana_sync::Error>() {
+            return Some(parse_http_response_details(status.as_u16(), body));
+        }
         if let Some(error) = cause.downcast_ref::<ElasticsearchRequestError>() {
             return Some(parse_http_response_details(error.status.as_u16(), &error.body));
         }
@@ -835,6 +892,7 @@ fn structured_failure(error: &eyre::Report) -> CliFailure {
     if let Some(agent_failure) = error.downcast_ref::<AgentFailure>() {
         let category = match agent_failure {
             AgentFailure::Http { status: 401 | 403 } => CliFailureCategory::AuthenticationFailed,
+            AgentFailure::Http { status: 409 } => CliFailureCategory::Conflict,
             AgentFailure::Http { status: 404 } => CliFailureCategory::NotFound,
             AgentFailure::Http { status: 500..=599 } | AgentFailure::Remote | AgentFailure::Protocol { .. } => {
                 CliFailureCategory::Internal
@@ -920,7 +978,7 @@ fn collection_outcome(result: CollectionResult, upload_destination: Option<Strin
 }
 
 fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) -> String {
-    let failures = outcome
+    let mut failures = outcome
         .stages
         .iter()
         .filter_map(|stage| match &stage.status {
@@ -929,6 +987,7 @@ fn format_execution_failure(outcome: &esdiag::job::outcome::ExecutionOutcome) ->
             esdiag::job::outcome::StageStatus::Succeeded | esdiag::job::outcome::StageStatus::Skipped(_) => None,
         })
         .collect::<Vec<_>>();
+    failures.extend(outcome.child_failures());
     if failures.is_empty() {
         "Job did not complete successfully".to_string()
     } else {
@@ -941,46 +1000,52 @@ fn execution_process_result(outcome: &esdiag::job::outcome::ExecutionOutcome) ->
     let included = outcome
         .children
         .iter()
-        .map(|child| match (child.diagnostic_outcome, child.report()) {
-            (DiagnosticOutcome::Skipped(_), _) => IncludedDiagnosticResult::Skipped {
-                source: child.path.clone(),
-                product: Some(esdiag::processor::display_label(child.application(), child.platform())),
-                reason: child
-                    .execution_error()
-                    .unwrap_or("diagnostic processing skipped")
-                    .to_string(),
-            },
-            (_, Some(report)) => IncludedDiagnosticResult::Completed {
-                source: child.path.clone(),
-                diagnostic: DiagnosticResult {
-                    id: report.diagnostic.metadata.id.clone(),
-                    product: report.diagnostic.display_label(),
-                    documents: report.diagnostic.docs.created,
-                    documents_failed: report.diagnostic.docs.errors,
-                    outcome: report.outcome(),
-                    indexing_failures: report
-                        .rejected_indices()
-                        .into_iter()
-                        .map(|(index, documents_failed)| esdiag::cli_output::IndexingFailure {
-                            index,
-                            documents_failed,
-                            category: "document_rejected",
-                        })
-                        .collect(),
-                    duration_ms: child.runtime.unwrap_or_default(),
+        .map(
+            |child| match (child.diagnostic_outcome, child.report(), child.failure()) {
+                (_, Some(_), Some(error)) => IncludedDiagnosticResult::Failed {
                     source: child.path.clone(),
-                    output: String::new(),
-                    kibana_url: report.diagnostic.kibana_link.clone(),
+                    error: error.to_string(),
+                },
+                (DiagnosticOutcome::Skipped(_), _, _) => IncludedDiagnosticResult::Skipped {
+                    source: child.path.clone(),
+                    product: Some(esdiag::processor::display_label(child.application(), child.platform())),
+                    reason: child
+                        .execution_error()
+                        .unwrap_or("diagnostic processing skipped")
+                        .to_string(),
+                },
+                (_, Some(report), None) => IncludedDiagnosticResult::Completed {
+                    source: child.path.clone(),
+                    diagnostic: DiagnosticResult {
+                        id: report.diagnostic.metadata.id.clone(),
+                        product: report.diagnostic.display_label(),
+                        documents: report.diagnostic.docs.created,
+                        documents_failed: report.diagnostic.docs.errors,
+                        outcome: report.outcome(),
+                        indexing_failures: report
+                            .rejected_indices()
+                            .into_iter()
+                            .map(|(index, documents_failed)| esdiag::cli_output::IndexingFailure {
+                                index,
+                                documents_failed,
+                                category: "document_rejected",
+                            })
+                            .collect(),
+                        duration_ms: child.runtime.unwrap_or_default(),
+                        source: child.path.clone(),
+                        output: String::new(),
+                        kibana_url: report.diagnostic.kibana_link.clone(),
+                    },
+                },
+                (_, None, _) => IncludedDiagnosticResult::Failed {
+                    source: child.path.clone(),
+                    error: child
+                        .execution_error()
+                        .unwrap_or("included diagnostic processing failed")
+                        .to_string(),
                 },
             },
-            (_, None) => IncludedDiagnosticResult::Failed {
-                source: child.path.clone(),
-                error: child
-                    .execution_error()
-                    .unwrap_or("included diagnostic processing failed")
-                    .to_string(),
-            },
-        })
+        )
         .collect();
 
     Some(ProcessResult {
@@ -1102,20 +1167,41 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 output,
                 mode,
                 auth_provider,
+                identity_header,
                 web_features,
                 onboarding,
                 kibana,
             } => {
                 tracing::info!("Starting ESDiag server");
                 let runtime_mode = resolve_serve_runtime_mode(mode)?;
-                let exporter = match resolve_serve_exporter(output) {
-                    Ok(exporter) => exporter,
+                let bind = resolve_serve_bind(bind)?;
+                let explicit_output = output.is_some();
+                let onboarding_output_configured =
+                    inspect_onboarding().is_ok_and(|readiness| readiness.output_configured);
+                let (exporter, output_status) = match resolve_serve_exporter(output) {
+                    Ok(exporter) => (
+                        exporter,
+                        if explicit_output || onboarding_output_configured {
+                            "configured"
+                        } else {
+                            "unconfigured"
+                        },
+                    ),
                     Err(err)
                         if runtime_mode == RuntimeMode::User
-                            && inspect_onboarding().is_ok_and(|readiness| !readiness.is_complete()) =>
+                            && !explicit_output
+                            && inspect_onboarding()
+                                .is_ok_and(|readiness| !readiness.is_complete() || !readiness.output_configured) =>
                     {
-                        tracing::info!("Starting user-mode web onboarding without a configured output: {err}");
-                        onboarding_exporter()?
+                        tracing::info!("Starting user-mode web onboarding without a ready output: {err}");
+                        (
+                            onboarding_exporter()?,
+                            if onboarding_output_configured {
+                                "configured"
+                            } else {
+                                "unconfigured"
+                            },
+                        )
                     }
                     Err(err) => return Err(err),
                 };
@@ -1135,6 +1221,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                     runtime_mode,
                     ServerStartOptions {
                         auth_provider,
+                        identity_header: identity_header.as_deref(),
                         web_features: web_features.as_deref(),
                         onboarding,
                         ..ServerStartOptions::default()
@@ -1151,7 +1238,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                             address: bound_addr.ip().to_string(),
                             port: bound_addr.port(),
                             runtime_mode: runtime_mode.to_string(),
-                            output: "configured".to_string(),
+                            output: output_status.to_string(),
                         },
                     )?;
                 }
@@ -1264,20 +1351,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                         return Err(eyre!("Host '{name}' already exists"));
                     }
                     let mut update = build_host_cli_update(args);
-                    let secret_auth = if update.secret.is_some() {
-                        resolve_host_secret_auth(update.secret.as_deref())?
-                    } else if url_template {
-                        match resolve_same_name_host_secret_auth(&name)? {
-                            Some(secret_auth) => {
-                                tracing::debug!("Using host name {} as secret_id", name);
-                                update.secret = Some(name.clone());
-                                Some(secret_auth)
-                            }
-                            None => None,
-                        }
-                    } else {
-                        None
-                    };
+                    let secret_auth = resolve_add_host_secret_auth(&name, &mut update)?;
                     let host = if url_template {
                         build_host_from_definition(app, &target, true, &update, secret_auth)?
                     } else if let Some(host) = maybe_materialize_template_target(&target)? {
@@ -1578,8 +1652,18 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 )?;
                 let outcome = esdiag::job::executor::execute_with_context(job, context).await;
                 let process = execution_process_result(&outcome);
-                if !outcome.succeeded() || outcome.diagnostic_outcome() == Some(DiagnosticOutcome::Failed) {
-                    return Err(eyre!("{}", format_execution_failure(&outcome)));
+                if outcome.failed() {
+                    let message = format_execution_failure(&outcome);
+                    return Err(JobExecutionFailure::new(
+                        FailedStage::Process,
+                        JobOutcome {
+                            processed: outcome.report.is_some(),
+                            execution: Some(outcome),
+                            ..JobOutcome::default()
+                        },
+                        eyre!(message),
+                    )
+                    .into());
                 }
                 if stdout_owned {
                     Ok(CommandResult::stream())
@@ -1929,14 +2013,21 @@ fn maybe_materialize_template_target(target: &str) -> Result<Option<KnownHost>> 
 }
 
 async fn save_host(name: &str, host: KnownHost, action: &str, validate_connection: bool) -> Result<String> {
+    let is_collect_host = host.has_role(HostRole::Collect);
     if validate_connection {
         let uri = Uri::try_from(host.clone())?;
         let validation_summary = validate_host_connection(name, uri).await?;
         let hostfile = host.save(name)?;
+        if is_collect_host {
+            clear_collection_deferral()?;
+        }
         tracing::info!("Host {name} successfully saved to {hostfile}");
         return Ok(format!("{validation_summary}\nHost '{name}' {action} in {hostfile}"));
     }
     let hostfile = host.save(name)?;
+    if is_collect_host {
+        clear_collection_deferral()?;
+    }
     tracing::info!("Host {name} successfully saved to {hostfile}");
     Ok(format!("Host '{name}' {action} in {hostfile}"))
 }
@@ -1964,8 +2055,13 @@ fn cleanup_settings_after_host_delete(name: &str) -> Result<()> {
 }
 
 fn delete_host_from_cli(name: &str) -> Result<String> {
-    let path = KnownHost::remove_saved(name)?;
-    if let Err(err) = cleanup_settings_after_host_delete(name) {
+    let name = name.to_string();
+    let is_collect_host = KnownHost::get_known(&name).is_some_and(|host| host.has_role(HostRole::Collect));
+    let path = KnownHost::remove_saved(&name)?;
+    if is_collect_host {
+        clear_collection_deferral()?;
+    }
+    if let Err(err) = cleanup_settings_after_host_delete(&name) {
         eprintln!(
             "Warning: host '{}' was removed, but failed to update settings: {err}",
             name
@@ -2029,34 +2125,33 @@ enum OutputLocation {
 
 fn prompt_onboarding_workflow() -> Result<OnboardingWorkflow> {
     loop {
-        println!("Will you be processing diagnostics, or only collecting?");
-        println!("  1. Process diagnostics");
-        println!("  2. Only collect diagnostics");
-        match prompt_with_default("Selection", "1")?.to_ascii_lowercase().as_str() {
-            "1" | "process" | "processing" => {
-                println!("Will you collect new diagnostics, process existing diagnostics, or both?");
-                println!("  1. Collect and process new diagnostics");
-                println!("  2. Process existing diagnostics");
-                println!("  3. Both new and existing diagnostics");
-                match prompt_with_default("Selection", "3")?.to_ascii_lowercase().as_str() {
-                    "1" | "collect" => return Ok(OnboardingWorkflow::CollectAndProcess),
-                    "2" | "existing" => return Ok(OnboardingWorkflow::ProcessExisting),
-                    "3" | "both" => return Ok(OnboardingWorkflow::CollectAndProcess),
-                    _ => println!("Choose 1, 2, or 3."),
-                }
-            }
-            "2" | "collect" | "collect-only" => return Ok(OnboardingWorkflow::CollectOnly),
-            _ => println!("Choose 1 or 2."),
+        println!("Will you collect new diagnostics, process existing diagnostics, or both?");
+        println!("  1. Only collect new diagnostics");
+        println!("  2. Process existing diagnostics");
+        println!("  3. Both new and existing diagnostics");
+        if let Some(workflow) = parse_onboarding_workflow(&prompt_with_default("Selection", "3")?) {
+            return Ok(workflow);
         }
+        println!("Choose 1, 2, or 3.");
     }
 }
 
-fn prompt_output_location() -> Result<OutputLocation> {
+fn parse_onboarding_workflow(selection: &str) -> Option<OnboardingWorkflow> {
+    match selection.trim().to_ascii_lowercase().as_str() {
+        "1" | "collect" | "collecting" | "collect-only" => Some(OnboardingWorkflow::CollectOnly),
+        "2" | "process" | "processing" | "existing" | "process-existing" => Some(OnboardingWorkflow::ProcessExisting),
+        "3" | "both" | "collect-and-process" => Some(OnboardingWorkflow::CollectAndProcess),
+        _ => None,
+    }
+}
+
+fn prompt_output_location(local_available: bool) -> Result<OutputLocation> {
     loop {
         println!("Will processed diagnostics be stored locally or remotely?");
         println!("  1. Local ESDiag deployment");
         println!("  2. Remote Elasticsearch and Kibana deployment");
-        match prompt_with_default("Selection", "2")?.to_ascii_lowercase().as_str() {
+        let default = if local_available { "1" } else { "2" };
+        match prompt_with_default("Selection", default)?.to_ascii_lowercase().as_str() {
             "1" | "local" => return Ok(OutputLocation::Local),
             "2" | "remote" => return Ok(OutputLocation::Remote),
             _ => println!("Choose 1 or 2."),
@@ -2116,15 +2211,21 @@ fn prompt_new_keystore_password() -> Result<String> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(eyre!("A new keystore password requires an interactive terminal."));
     }
-    let password = rpassword::prompt_password("Enter new keystore password: ")?;
-    if password.is_empty() {
-        return Err(eyre!("Keystore password cannot be empty."));
+    prompt_new_password_with(|prompt| Ok(rpassword::prompt_password(prompt)?))
+}
+
+fn prompt_new_password_with(mut prompt: impl FnMut(&str) -> Result<String>) -> Result<String> {
+    loop {
+        let password = prompt("Enter new keystore password: ")?;
+        if password.is_empty() {
+            eprintln!("Keystore password cannot be empty. Try again.");
+            continue;
+        }
+        if prompt("Confirm new keystore password: ")? == password {
+            return Ok(password);
+        }
+        eprintln!("Passwords did not match. Try again.");
     }
-    let confirm = rpassword::prompt_password("Confirm new keystore password: ")?;
-    if password != confirm {
-        return Err(eyre!("Keystore password confirmation did not match."));
-    }
-    Ok(password)
 }
 
 fn unlock_keystore(ttl: Duration) -> Result<std::path::PathBuf> {
@@ -2153,17 +2254,6 @@ async fn run_init_wizard() -> Result<CommandResult> {
 
     let initial = inspect_onboarding()?;
     println!("ESDiag first-run initialization");
-    #[cfg(feature = "server")]
-    if !initial.is_complete() && prompt_confirm("Continue setup in the web interface? [y/N]: ")? {
-        return run_gui_onboarding().await;
-    }
-    let mut output_name_for_defaults = esdiag::data::ApplicationConfig::load()?.output.default;
-    let mut output_url_for_defaults = output_name_for_defaults
-        .as_ref()
-        .and_then(KnownHost::get_known)
-        .and_then(|host| host.concrete_url().map(Url::to_string));
-    let mut most_recent_collect_host = None;
-    let mut started_local_stack = false;
     if initial.is_complete() && !prompt_confirm("A complete configuration already exists. Replace values? [y/N]: ")? {
         return Ok(CommandResult::outcome(initialization_outcome(
             initialization_skill_installation()?,
@@ -2184,6 +2274,21 @@ async fn run_init_wizard() -> Result<CommandResult> {
             &default_diagnostic_user(),
         )?)?;
     }
+
+    #[cfg(feature = "server")]
+    if !initial.is_complete()
+        && !inspect_onboarding()?.is_complete()
+        && prompt_confirm("Continue setup in the web interface? [y/N]: ")?
+    {
+        return run_gui_onboarding().await;
+    }
+    let mut output_name_for_defaults = esdiag::data::ApplicationConfig::load()?.output.default;
+    let mut output_url_for_defaults = output_name_for_defaults
+        .as_ref()
+        .and_then(KnownHost::get_known)
+        .and_then(|host| host.concrete_url().map(Url::to_string));
+    let mut most_recent_collect_host = None;
+    let mut started_local_stack = false;
 
     let workflow = match config.workflow {
         Some(workflow) if prompt_confirm_default_yes(&format!("Resume workflow: {} [Y/n]: ", workflow.as_str()))? => {
@@ -2225,7 +2330,9 @@ async fn run_init_wizard() -> Result<CommandResult> {
             let keystore_password = get_password_for_secret_commands()?;
             let (output_name, output_url, viewer_url, viewer_name, secret_id, auth, output_client, viewer_client) = loop {
                 let (output_name, output_url, viewer_url, viewer_api_url, secret_id, auth) =
-                    match prompt_output_location()? {
+                    match prompt_output_location(
+                        detected_esdiag_local_preset().is_some() || local::detected_runtime().is_some(),
+                    )? {
                         OutputLocation::Local => {
                             let local_output = |preset: EsdiagLocalPreset| -> Result<_> {
                                 let apikey = preset.apikey.ok_or_else(|| {
@@ -2261,8 +2368,8 @@ async fn run_init_wizard() -> Result<CommandResult> {
                                 existing.is_none(),
                                 runtime_available,
                                 || {
-                                    prompt_confirm(
-                                        "No local ESDiag deployment was detected. Start a local core stack now? [y/N]: ",
+                                    prompt_confirm_default_yes(
+                                        "No local ESDiag deployment was detected. Start a local core stack now? [Y/n]: ",
                                     )
                                 },
                             )?;
@@ -2270,6 +2377,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
                                 Some(preset) => Some(preset),
                                 None if start_core => {
                                     run_local_lifecycle(local_core_stack_start_args()).await?;
+                                    println!("Local ESDiag stack is ready.");
                                     started_local_stack = true;
                                     detected_esdiag_local_preset()
                                 }
@@ -2373,6 +2481,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
             if started_local_stack {
                 output_config.output.assets_version = Some(env!("CARGO_PKG_VERSION").to_string());
             } else if run_output_setup {
+                eprintln!("Installing ESDiag assets...");
                 setup::assets(&output_client).await?;
                 setup::ensure_agent_builder_license(&output_client).await?;
                 setup::assets(&viewer_client).await?;
@@ -2422,10 +2531,19 @@ async fn run_init_wizard() -> Result<CommandResult> {
             } else {
                 None
             };
-            if KnownHost::get_known(&name).is_some()
-                && !prompt_confirm(&format!("Add the collect role to existing host '{name}'? [y/N]: "))?
-            {
-                return Err(eyre!("Collection host replacement was declined."));
+            if let Some(existing) = KnownHost::get_known(&name) {
+                let add_role = match existing.concrete_url() {
+                    Some(existing_url) if *existing_url == url => {
+                        prompt_confirm_default_yes(&format!("Add the collect role to existing host '{name}'? [Y/n]: "))?
+                    }
+                    Some(existing_url) => prompt_confirm(&format!(
+                        "Host '{name}' already exists at {existing_url}. Add the collect role and keep that URL? [y/N]: "
+                    ))?,
+                    None => prompt_confirm(&format!("Add the collect role to existing host '{name}'? [y/N]: "))?,
+                };
+                if !add_role {
+                    return Err(eyre!("Collection host replacement was declined."));
+                }
             }
             save_collect_host(
                 CollectHostInput {
@@ -2449,16 +2567,20 @@ async fn run_init_wizard() -> Result<CommandResult> {
         let collect_job = esdiag::data::Job::builder()
             .collect_from(collect_host.clone())?
             .collect_to(format!("diagnostics/{collect_host}"))?;
-        confirm_default_job_replacement(&collect_job_name)?;
-        save_default_job(collect_job_name, collect_job)?;
-        if workflow.processes_diagnostics() {
+        let collect_job_saved =
+            confirm_default_job_replacement(&collect_job_name, None, !workflow.processes_diagnostics())?;
+        if collect_job_saved {
+            save_default_job(collect_job_name.clone(), collect_job)?;
+        }
+        if workflow.processes_diagnostics() && needs_processing_default_job(collect_job_saved)? {
             let output = esdiag::data::ApplicationConfig::load()?
                 .output
                 .default
                 .ok_or_else(|| eyre!("A processing workflow requires an output deployment"))?;
             let process_job_name = format!("{collect_host}-process-{output}");
-            confirm_default_job_replacement(&process_job_name)?;
-            save_default_processing_job(process_job_name, collect_host)?;
+            if confirm_default_job_replacement(&process_job_name, Some(&collect_job_name), true)? {
+                save_default_processing_job(process_job_name, collect_host)?;
+            }
         }
     }
 
@@ -2467,7 +2589,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
         return Err(eyre!("Initialization did not produce a complete reusable workflow."));
     }
     let outcome = initialization_outcome(initialization_skill_installation()?)?;
-    if started_local_stack {
+    if started_local_stack && prompt_confirm("Open the ESDiag web interface? [y/N]: ")? {
         run_local_lifecycle(vec![OsString::from("open")]).await?;
     }
     Ok(CommandResult::outcome(outcome))
@@ -2591,7 +2713,7 @@ async fn run_gui_onboarding() -> Result<CommandResult> {
     let executable =
         std::env::current_exe().map_err(|err| eyre!("Unable to locate the running ESDiag binary: {err}"))?;
     let mut server = Command::new(executable)
-        .args(["serve", "--mode", "user", "--onboarding"])
+        .args(["serve", "--mode", "user", "--onboarding", "--bind", "127.0.0.1"])
         .spawn()
         .map_err(|err| eyre!("Unable to start the ESDiag web server: {err}"))?;
 
@@ -2607,14 +2729,7 @@ async fn run_gui_onboarding() -> Result<CommandResult> {
 
 #[cfg(feature = "server")]
 fn open_gui_onboarding_browser(url: &str) {
-    let browser_result = if cfg!(target_os = "macos") {
-        Command::new("open").arg(url).spawn()
-    } else if cfg!(target_os = "windows") {
-        Command::new("cmd").args(["/C", "start", "", url]).spawn()
-    } else {
-        Command::new("xdg-open").arg(url).spawn()
-    };
-    if let Err(err) = browser_result {
+    if let Err(err) = esdiag::system_integration::open_browser(url) {
         tracing::warn!("ESDiag is running at {url}, but the browser could not be opened: {err}");
     }
 }
@@ -2633,25 +2748,88 @@ fn default_collect_host_name() -> Option<String> {
         .find_map(|(name, host)| host.has_role(HostRole::Collect).then_some(name))
 }
 
-fn confirm_default_job_replacement(name: &str) -> Result<()> {
-    let jobs = esdiag::data::load_saved_jobs()?;
-    let config = esdiag::data::ApplicationConfig::load()?;
-    let replaces_job = jobs.contains_key(name);
-    let replaces_default = config.job.default.as_deref().is_some_and(|current| current != name);
-    if (replaces_job || replaces_default)
-        && !prompt_confirm(&format!(
-            "Replace {}? [y/N]: ",
-            match (replaces_job, replaces_default) {
-                (true, true) => format!("existing job '{name}' and configured default job"),
-                (true, false) => format!("existing job '{name}'"),
-                (false, true) => "the configured default job".to_string(),
-                (false, false) => unreachable!(),
-            }
-        ))?
-    {
-        return Err(eyre!("Default job replacement was declined."));
+#[derive(Debug, PartialEq, Eq)]
+struct ConfiguredDefaultJob {
+    name: String,
+    fits_workflow: bool,
+}
+
+/// The configured default job that initialization must ask before replacing.
+/// A default chosen earlier in this run (`set_this_run`) may be replaced
+/// without asking.
+fn configured_default_job(set_this_run: Option<&str>) -> Result<Option<ConfiguredDefaultJob>> {
+    let Some(name) = esdiag::data::ApplicationConfig::load()?.job.default else {
+        return Ok(None);
+    };
+    if Some(name.as_str()) == set_this_run {
+        return Ok(None);
     }
+    Ok(Some(ConfiguredDefaultJob {
+        name,
+        fits_workflow: inspect_onboarding()?.default_job_configured,
+    }))
+}
+
+/// Asks before overwriting the saved job `name` or the configured default job,
+/// and returns whether to save `name` as the default. `set_this_run` is a
+/// default job this initialization already chose, which may be replaced
+/// without asking. `last_step` is false when a later step creates another
+/// default job, so a kept saved job only has to fit the workflow at the end.
+fn confirm_default_job_replacement(name: &str, set_this_run: Option<&str>, last_step: bool) -> Result<bool> {
+    let replaces_job = esdiag::data::load_saved_jobs()?.contains_key(name);
+    let current = configured_default_job(set_this_run)?;
+    let replaces_default = current.as_ref().is_some_and(|current| current.name != name);
+    if !(replaces_job || replaces_default) {
+        return Ok(true);
+    }
+    let replaced = match (replaces_job, replaces_default) {
+        (true, true) => format!("existing job '{name}' and configured default job"),
+        (true, false) => format!("existing job '{name}'"),
+        (false, true) => "the configured default job".to_string(),
+        (false, false) => unreachable!(),
+    };
+    let misfit = match current.as_ref() {
+        Some(current) => (!current.fits_workflow).then(|| ("default", current.name.clone())),
+        None if last_step && !saved_job_fits_workflow(name)? => Some(("saved", name.to_string())),
+        None => None,
+    };
+    if let Some((kind, job)) = misfit {
+        if prompt_confirm_default_yes(&format!(
+            "The {kind} job '{job}' does not fit the selected workflow. Replace {replaced}? [Y/n]: "
+        ))? {
+            return Ok(true);
+        }
+        return Err(eyre!(
+            "Kept the {kind} job '{job}', which does not fit the selected workflow. Run `esdiag init` again to choose a compatible default job."
+        ));
+    }
+    if prompt_confirm(&format!("Replace {replaced}? [y/N]: "))? {
+        return Ok(true);
+    }
+    keep_default_job(name, current.map(|current| current.name).as_deref())?;
+    Ok(false)
+}
+
+/// Leaves saved jobs unchanged after a declined replacement. Without a
+/// configured `current` default to keep, the existing saved `name` becomes the
+/// default.
+fn keep_default_job(name: &str, current: Option<&str>) -> Result<()> {
+    if let Some(current) = current {
+        println!("Keeping existing default job '{current}'.");
+        return Ok(());
+    }
+    let mut config = esdiag::data::ApplicationConfig::load()?;
+    config.job.default = Some(name.to_string());
+    config.save()?;
+    println!("Keeping existing job '{name}' as the default job.");
     Ok(())
+}
+
+/// Whether collect-and-process initialization still needs to save a processing
+/// default job after the collection step. A kept default that already fits the
+/// workflow is left alone.
+fn needs_processing_default_job(collect_job_saved: bool) -> Result<bool> {
+    Ok(collect_job_saved || !inspect_onboarding()?.default_job_configured)
 }
 
 fn should_run_output_setup(started_local_stack: bool, approved: impl FnOnce() -> Result<bool>) -> Result<bool> {
@@ -2782,7 +2960,11 @@ fn prompt_required(message: &str) -> Result<String> {
 }
 
 fn prompt_with_default(message: &str, default: &str) -> Result<String> {
-    print!("{message} [{default}]: ");
+    if default.is_empty() {
+        print!("{message}: ");
+    } else {
+        print!("{message} [{default}]: ");
+    }
     std::io::stdout().flush()?;
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line)? == 0 {
@@ -2921,11 +3103,7 @@ fn detected_esdiag_local_preset() -> Option<EsdiagLocalPreset> {
 }
 
 fn default_esdiag_local_state_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    let home = std::env::var_os("USERPROFILE")?;
-    #[cfg(not(target_os = "windows"))]
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".esdiag/local"))
+    Some(esdiag::env::user_home_dir().ok()?.join(".esdiag/local"))
 }
 
 fn prompt_api_key(label: &str, local_preset: Option<&EsdiagLocalPreset>) -> Result<SecretAuth> {
@@ -3059,7 +3237,7 @@ async fn run_agent_ask_for_output(
     let completion = agent_client
         .ask(request, |progress| render_agent_progress(&agent_name, progress))
         .await
-        .map_err(|error| eyre!(error))?;
+        .map_err(agent_failure_report)?;
 
     Ok(CommandResult::outcome(CliOutcome::AgentResponse {
         conversation_id: completion.conversation_id,
@@ -3070,6 +3248,11 @@ async fn run_agent_ask_for_output(
             output_tokens: usage.output_tokens,
         }),
     }))
+}
+
+#[cfg(feature = "agent")]
+fn agent_failure_report(error: AgentFailure) -> eyre::Report {
+    eyre::Report::new(error)
 }
 
 #[cfg(feature = "agent")]
@@ -3243,16 +3426,36 @@ const fn skill_reload_guidance() -> &'static str {
 }
 
 fn default_diagnostic_user() -> String {
-    default_diagnostic_user_from(|name| std::env::var(name).ok())
+    default_diagnostic_user_from(
+        std::env::var("EMAIL").ok(),
+        || command_stdout("git", &["config", "--get", "user.email"]),
+        || command_stdout("whoami", &[]),
+    )
 }
 
-fn default_diagnostic_user_from<F>(get_environment: F) -> String
-where
-    F: Fn(&str) -> Option<String>,
-{
-    get_environment("EMAIL")
-        .filter(|email| email.contains('@'))
+fn default_diagnostic_user_from(
+    email: Option<String>,
+    git_email: impl FnOnce() -> Option<String>,
+    login: impl FnOnce() -> Option<String>,
+) -> String {
+    let is_email = |value: &String| value.contains('@');
+    email
+        .filter(is_email)
+        .or_else(|| git_email().filter(is_email))
+        .or_else(login)
+        .map(|value| value.trim().to_string())
         .unwrap_or_default()
+}
+
+fn command_stdout(program: &str, arguments: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(program)
+        .args(arguments)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| output.status.success() && !value.is_empty())
 }
 
 fn format_epoch(epoch_seconds: i64) -> String {
@@ -3347,7 +3550,25 @@ fn resolve_host_secret_auth(secret_id: Option<&str>) -> Result<Option<SecretAuth
     Ok(Some(secret_auth))
 }
 
+fn resolve_add_host_secret_auth(host_name: &str, update: &mut KnownHostCliUpdate) -> Result<Option<SecretAuth>> {
+    if update.secret.is_some() {
+        return resolve_host_secret_auth(update.secret.as_deref());
+    }
+    if update.apikey.is_some() || update.username.is_some() || update.password.is_some() {
+        return Ok(None);
+    }
+    let secret_auth = resolve_same_name_host_secret_auth(host_name)?;
+    if secret_auth.is_some() {
+        tracing::debug!("Using host name {host_name} as secret_id");
+        update.secret = Some(host_name.to_string());
+    }
+    Ok(secret_auth)
+}
+
 fn resolve_same_name_host_secret_auth(host_name: &str) -> Result<Option<SecretAuth>> {
+    if !keystore_exists()? {
+        return Ok(None);
+    }
     let Ok(keystore_password) = get_password_for_secret_commands() else {
         return Ok(None);
     };
@@ -3391,13 +3612,7 @@ fn should_error_for_missing_subcommand(arg_count: usize, has_no_command: bool) -
 }
 
 fn clear_last_run_files() -> Result<()> {
-    let home_dir = match std::env::consts::OS {
-        "windows" => std::env::var("USERPROFILE")?,
-        "linux" | "macos" => std::env::var("HOME")?,
-        os => return Err(eyre!("Unknown home directory for operating system: {os} ")),
-    };
-    tracing::debug!("Home directory is: {home_dir}");
-    let last_run = std::path::PathBuf::from(home_dir).join(".esdiag/last_run");
+    let last_run = esdiag::env::runtime_config_dir()?.join("last_run");
     if !last_run.exists() {
         std::fs::create_dir_all(&last_run)?;
     }
@@ -3425,6 +3640,21 @@ fn resolve_serve_runtime_mode(mode: Option<RuntimeMode>) -> Result<RuntimeMode> 
         Ok(value) => RuntimeMode::from_env(&value),
         Err(std::env::VarError::NotPresent) => Ok(RuntimeMode::User),
         Err(err) => Err(eyre!("Failed to read ESDIAG_MODE: {err}")),
+    }
+}
+
+#[cfg(feature = "server")]
+fn resolve_serve_bind(bind: Option<Ipv4Addr>) -> Result<Ipv4Addr> {
+    if let Some(bind) = bind {
+        return Ok(bind);
+    }
+    match std::env::var("ESDIAG_BIND") {
+        Ok(value) => value
+            .trim()
+            .parse()
+            .map_err(|err| eyre!("Invalid ESDIAG_BIND '{value}', expected an IPv4 address: {err}")),
+        Err(std::env::VarError::NotPresent) => Ok(Ipv4Addr::LOCALHOST),
+        Err(err) => Err(eyre!("Failed to read ESDIAG_BIND: {err}")),
     }
 }
 
@@ -3479,6 +3709,22 @@ mod tests {
         assert_eq!(resolved, direct);
     }
     #[test]
+    fn new_password_prompt_retries_until_confirmed() {
+        let mut answers = ["", "first", "typo", "second", "second"].into_iter();
+        let mut prompts = Vec::new();
+
+        let password = super::prompt_new_password_with(|prompt| {
+            prompts.push(prompt.to_string());
+            Ok(answers.next().expect("unexpected prompt").to_string())
+        })
+        .expect("password");
+
+        assert_eq!(password, "second");
+        assert_eq!(prompts.len(), 5);
+        assert!(answers.next().is_none());
+    }
+
+    #[test]
     fn confirmations_require_yes_or_no() {
         assert_eq!(super::parse_confirmation("claude", false), None);
         assert_eq!(super::parse_confirmation("typo", true), None);
@@ -3486,6 +3732,29 @@ mod tests {
         assert_eq!(super::parse_confirmation("", true), Some(true));
         assert_eq!(super::parse_confirmation(" YES ", false), Some(true));
         assert_eq!(super::parse_confirmation("No", true), Some(false));
+    }
+
+    #[test]
+    fn onboarding_workflow_uses_one_three_option_selection() {
+        use esdiag::data::OnboardingWorkflow;
+
+        assert_eq!(
+            super::parse_onboarding_workflow("1"),
+            Some(OnboardingWorkflow::CollectOnly)
+        );
+        assert_eq!(
+            super::parse_onboarding_workflow("2"),
+            Some(OnboardingWorkflow::ProcessExisting)
+        );
+        assert_eq!(
+            super::parse_onboarding_workflow("3"),
+            Some(OnboardingWorkflow::CollectAndProcess)
+        );
+        assert_eq!(
+            super::parse_onboarding_workflow("both"),
+            Some(OnboardingWorkflow::CollectAndProcess)
+        );
+        assert_eq!(super::parse_onboarding_workflow("invalid"), None);
     }
 
     #[test]
@@ -3521,24 +3790,28 @@ mod tests {
     }
     #[cfg(feature = "agent")]
     use super::{
-        AgentCommands, AgentSkillTarget, SkillInstallationFailure, agent_builder_space, install_skill_targets,
-        process_ask_prompt, readable_agent_name,
+        AgentCommands, AgentSkillTarget, SkillInstallationFailure, agent_builder_space, agent_failure_report,
+        install_skill_targets, process_ask_prompt, readable_agent_name,
     };
     use super::{
-        Cli, Commands, HostCommands, KeystoreCommands, classify_failure, colorize_keystore_lock_status,
-        command_owns_stdout, default_diagnostic_user_from, detected_esdiag_local_preset,
-        ensure_output_deployment_valid, format_keystore_lock_status, format_keystore_lock_status_at,
-        format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode, local_core_stack_start_args,
-        local_stack_outcome, resolve_host_secret_auth, resolve_secret_input_with_prompt, resolve_tracing_filter,
+        Cli, Commands, ConfiguredDefaultJob, HostCommands, KeystoreCommands, classify_failure,
+        colorize_keystore_lock_status, command_owns_stdout, configured_default_job, default_diagnostic_user_from,
+        detected_esdiag_local_preset, ensure_output_deployment_valid, format_keystore_lock_status,
+        format_keystore_lock_status_at, format_remaining_duration_from, host_connection_uses_receiver, is_agent_mode,
+        keep_default_job, local_core_stack_start_args, local_stack_outcome, needs_processing_default_job,
+        resolve_add_host_secret_auth, resolve_host_secret_auth, resolve_log_file_filter,
+        resolve_secret_input_with_prompt, resolve_tracing_filter, saved_job_fits_workflow,
         should_error_for_missing_subcommand, should_run_output_setup, should_start_local_core_stack,
         structured_failure,
     };
     #[cfg(feature = "keystore")]
     use super::{derive_collect_job, derive_process_job};
     #[cfg(feature = "server")]
-    use super::{resolve_serve_exporter, resolve_serve_runtime_mode};
+    use super::{resolve_serve_bind, resolve_serve_exporter, resolve_serve_runtime_mode};
     use clap::Parser;
-    use esdiag::data::{Application, HostRole, KnownHost, SecretAuth, UnlockStatus, Uri, upsert_secret_auth};
+    use esdiag::data::{
+        Application, HostRole, KnownHost, KnownHostCliUpdate, SecretAuth, UnlockStatus, Uri, upsert_secret_auth,
+    };
     #[cfg(feature = "server")]
     use esdiag::server::RuntimeMode;
     #[cfg(feature = "agent")]
@@ -3560,6 +3833,9 @@ mod tests {
         job::model::{ExportTarget, Input, Job, Process},
         processor::Identifiers,
     };
+    use redact::Secret;
+    #[cfg(feature = "server")]
+    use std::net::Ipv4Addr;
     use std::{ffi::OsString, sync::Mutex};
     use tempfile::TempDir;
     use url::Url;
@@ -3793,6 +4069,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn included_report_failure_is_not_rendered_as_completed() {
+        let child_execution = esdiag::job::outcome::ExecutionOutcome {
+            identity: esdiag::job::context::ExecutionIdentity::new(2, "test"),
+            stages: vec![esdiag::job::outcome::StageOutcome {
+                stage: esdiag::job::outcome::Stage::Process,
+                status: esdiag::job::outcome::StageStatus::Failed("report write rejected".to_string()),
+            }],
+            collection: None,
+            report: None,
+            children: Vec::new(),
+            retained_bundle: None,
+            upload: None,
+        };
+        let child = esdiag::job::outcome::ChildExecutionOutcome {
+            path: "child-es".to_string(),
+            execution: Box::new(child_execution),
+            diagnostic_outcome: esdiag::processor::DiagnosticOutcome::Failed,
+            application: Some(Application::Elasticsearch),
+            platform: esdiag::data::Platform::ECK,
+            runtime: Some(1),
+        };
+        let mut outcome =
+            esdiag::job::outcome::ExecutionOutcome::new(esdiag::job::context::ExecutionIdentity::new(1, "test"));
+        outcome.children.push(child);
+        assert!(outcome.has_child_failures());
+        assert_eq!(
+            super::format_execution_failure(&outcome),
+            "Included diagnostic child-es failed: report write rejected"
+        );
+    }
+
     #[cfg(feature = "agent")]
     #[test]
     fn agent_builder_space_explicit_default_overrides_url() {
@@ -3907,20 +4215,172 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "agent")]
     #[test]
-    fn default_diagnostic_user_uses_environment_without_spawning_processes() {
-        let email = default_diagnostic_user_from(|name| match name {
-            "EMAIL" => Some("operator@example.com".to_string()),
-            "USER" => Some("shell-user".to_string()),
-            _ => None,
-        });
-        let user = default_diagnostic_user_from(|name| match name {
-            "USER" => Some("shell-user".to_string()),
-            _ => None,
-        });
+    fn agent_builder_conflicts_are_conflict_failures() {
+        let error = agent_failure_report(AgentFailure::Http { status: 409 });
 
-        assert_eq!(email, "operator@example.com");
-        assert_eq!(user, "");
+        let failure = structured_failure(&error);
+        let value = serde_json::to_value(failure).expect("serialize failure");
+
+        assert_eq!(value["category"], CliFailureCategory::Conflict.as_str());
+        assert_eq!(value["status"], 409);
+    }
+
+    #[test]
+    fn default_diagnostic_user_prefers_email_then_git_then_login() {
+        let some = |value: &str| Some(value.to_string());
+        let unused = || -> Option<String> { panic!("later sources are not consulted") };
+
+        assert_eq!(
+            default_diagnostic_user_from(some("operator@example.com"), unused, unused),
+            "operator@example.com"
+        );
+        assert_eq!(
+            default_diagnostic_user_from(some("not-an-email"), || some("git@example.com"), unused),
+            "git@example.com"
+        );
+        assert_eq!(
+            default_diagnostic_user_from(None, || some("no-at-sign"), || some("shell-user\n")),
+            "shell-user"
+        );
+        assert_eq!(default_diagnostic_user_from(None, || None, || None), "");
+    }
+
+    fn saved_default_job() -> Option<String> {
+        esdiag::data::ApplicationConfig::load()
+            .expect("load config")
+            .job
+            .default
+    }
+
+    /// Saves a collect host `src`, a collection-only job `src-collect`, and a
+    /// processing job `src-process-out`, with `workflow` and `default` selected.
+    fn configure_jobs(env: &TestEnv, workflow: esdiag::data::OnboardingWorkflow, default: Option<&str>) {
+        let config_dir = env.tmp.path().join(".esdiag");
+        std::fs::write(
+            config_dir.join("hosts.yml"),
+            "src:\n  app: elasticsearch\n  roles:\n    - collect\n  url: http://localhost:9200/\n",
+        )
+        .expect("write hosts");
+        std::fs::write(
+            config_dir.join("jobs.yml"),
+            "src-collect:\n  collect:\n    host: src\n    diagnostic_type: support\n  action: collect\n  output_dir: /tmp/src-collect\n\
+             src-process-out:\n  collect:\n    host: src\n    save_dir: /tmp/src-bundle\n  action: process\n  output:\n    type: known-host\n    name: out\n",
+        )
+        .expect("write jobs");
+        let mut config = esdiag::data::ApplicationConfig::new();
+        config.user = Some("tester@example.com".to_string());
+        config.workflow = Some(workflow);
+        config.output.default = Some("out".to_string());
+        config.job.default = default.map(str::to_string);
+        config.save().expect("save config");
+    }
+
+    #[test]
+    fn a_default_job_set_this_run_is_replaced_without_asking() {
+        let env = setup_env();
+        configure_jobs(
+            &env,
+            esdiag::data::OnboardingWorkflow::CollectAndProcess,
+            Some("src-collect"),
+        );
+
+        assert_eq!(
+            configured_default_job(Some("src-collect")).expect("configured default"),
+            None
+        );
+        assert_eq!(
+            configured_default_job(None).expect("configured default"),
+            Some(ConfiguredDefaultJob {
+                name: "src-collect".to_string(),
+                fits_workflow: false,
+            })
+        );
+    }
+
+    #[test]
+    fn a_configured_default_job_reports_whether_it_fits_the_workflow() {
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectOnly, Some("src-collect"));
+        assert!(
+            configured_default_job(None)
+                .expect("configured default")
+                .is_some_and(|current| current.fits_workflow)
+        );
+
+        configure_jobs(
+            &env,
+            esdiag::data::OnboardingWorkflow::CollectAndProcess,
+            Some("src-collect"),
+        );
+        assert!(
+            configured_default_job(None)
+                .expect("configured default")
+                .is_some_and(|current| !current.fits_workflow)
+        );
+    }
+
+    #[test]
+    fn declining_replacement_keeps_the_configured_default_job() {
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectOnly, Some("old-job"));
+
+        keep_default_job("src-collect", Some("old-job")).expect("keep default job");
+
+        assert_eq!(saved_default_job().as_deref(), Some("old-job"));
+    }
+
+    #[test]
+    fn declining_replacement_without_a_default_keeps_the_saved_job_as_default() {
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectOnly, None);
+
+        keep_default_job("src-collect", None).expect("keep default job");
+
+        assert_eq!(saved_default_job().as_deref(), Some("src-collect"));
+    }
+
+    #[test]
+    fn a_kept_default_that_fits_the_workflow_skips_the_processing_job() {
+        let env = setup_env();
+        configure_jobs(
+            &env,
+            esdiag::data::OnboardingWorkflow::CollectAndProcess,
+            Some("src-process-out"),
+        );
+        assert!(!needs_processing_default_job(false).expect("processing default"));
+        assert!(needs_processing_default_job(true).expect("processing default"));
+    }
+
+    #[test]
+    fn a_promoted_processing_job_is_not_replaced() {
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectAndProcess, None);
+
+        keep_default_job("src-process-out", None).expect("keep default job");
+
+        assert!(!needs_processing_default_job(false).expect("processing default"));
+        assert_eq!(saved_default_job().as_deref(), Some("src-process-out"));
+    }
+
+    #[test]
+    fn a_promoted_collection_job_still_needs_the_processing_job() {
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectAndProcess, None);
+
+        keep_default_job("src-collect", None).expect("keep default job");
+
+        assert!(needs_processing_default_job(false).expect("processing default"));
+    }
+
+    #[test]
+    fn a_saved_job_fits_only_the_workflow_it_was_built_for() {
+        let env = setup_env();
+        configure_jobs(&env, esdiag::data::OnboardingWorkflow::CollectOnly, None);
+        assert!(saved_job_fits_workflow("src-collect").expect("fits workflow"));
+        assert!(!saved_job_fits_workflow("src-process-out").expect("fits workflow"));
+        assert!(!saved_job_fits_workflow("missing").expect("fits workflow"));
     }
 
     #[test]
@@ -3933,6 +4393,35 @@ mod tests {
         ));
 
         assert_eq!(classify_failure(&error), CliFailureCategory::AuthenticationFailed);
+    }
+
+    #[test]
+    fn conflict_responses_are_conflict_failures() {
+        let error = eyre::Report::new(KibanaRequestError::new(
+            reqwest::StatusCode::CONFLICT,
+            r#"{"statusCode":409,"error":"Conflict","message":"resource already exists"}"#.to_string(),
+            5,
+            80,
+        ));
+
+        assert_eq!(classify_failure(&error), CliFailureCategory::Conflict);
+    }
+
+    #[test]
+    fn kibana_sync_conflicts_are_conflict_failures() {
+        let error = eyre::Report::new(kibana_sync::Error::context(
+            "workflow sync failed",
+            kibana_sync::Error::api_response(
+                reqwest::StatusCode::CONFLICT,
+                r#"{"error":"Conflict","message":"workflow already exists","statusCode":409}"#,
+            ),
+        ));
+
+        let failure = structured_failure(&error);
+        let value = serde_json::to_value(failure).expect("serialize failure");
+
+        assert_eq!(value["category"], CliFailureCategory::Conflict.as_str());
+        assert_eq!(value["status"], 409);
     }
 
     #[test]
@@ -4532,6 +5021,46 @@ mod tests {
     }
 
     #[test]
+    fn cli_commands_log_to_the_run_log_and_keep_the_terminal_quiet() {
+        let cli = Cli {
+            debug: false,
+            agent: false,
+            format: OutputFormat::Yaml,
+            command: None,
+        };
+        let debug = Cli {
+            debug: true,
+            agent: false,
+            format: OutputFormat::Yaml,
+            command: None,
+        };
+
+        if std::env::var_os("LOG_LEVEL").is_none() {
+            assert_eq!(resolve_tracing_filter(&cli).to_string(), "warn");
+            assert_eq!(
+                resolve_log_file_filter(&cli)
+                    .map(|filter| filter.to_string())
+                    .as_deref(),
+                Some("info")
+            );
+        }
+        assert_eq!(
+            resolve_log_file_filter(&debug)
+                .map(|filter| filter.to_string())
+                .as_deref(),
+            Some("debug")
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_logs_to_stderr_without_a_run_log() {
+        let serve = Cli::parse_from(["esdiag", "serve"]);
+
+        assert!(resolve_log_file_filter(&serve).is_none());
+    }
+
+    #[test]
     fn agent_mode_uses_warn_filter_without_debug() {
         let cli = Cli {
             debug: false,
@@ -4600,6 +5129,86 @@ mod tests {
         assert!(matches!(resolved, Some(SecretAuth::ApiKey { .. })));
     }
 
+    #[test]
+    fn add_host_uses_same_name_secret_without_secret_flag() {
+        let _tmp = setup_env();
+        upsert_secret_auth("prod-es", SecretAuth::apikey("secret-key"), "pw").expect("save secret");
+
+        let mut update = KnownHostCliUpdate::default();
+        let resolved = resolve_add_host_secret_auth("prod-es", &mut update).expect("resolve auth");
+
+        assert!(matches!(resolved, Some(SecretAuth::ApiKey { .. })));
+        assert_eq!(update.secret.as_deref(), Some("prod-es"));
+    }
+
+    #[test]
+    fn add_host_skips_same_name_secret_with_explicit_credentials() {
+        let _tmp = setup_env();
+        upsert_secret_auth("prod-es", SecretAuth::apikey("secret-key"), "pw").expect("save secret");
+
+        let mut update = KnownHostCliUpdate {
+            apikey: Some(Secret::new("inline-key".to_string())),
+            ..Default::default()
+        };
+        let resolved = resolve_add_host_secret_auth("prod-es", &mut update).expect("resolve auth");
+
+        assert!(resolved.is_none());
+        assert!(update.secret.is_none());
+    }
+
+    #[test]
+    fn add_host_without_keystore_has_no_secret() {
+        let _tmp = setup_env();
+
+        let mut update = KnownHostCliUpdate::default();
+        let resolved = resolve_add_host_secret_auth("prod-es", &mut update).expect("resolve auth");
+
+        assert!(resolved.is_none());
+        assert!(update.secret.is_none());
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_bind_defaults_to_loopback() {
+        unsafe {
+            std::env::remove_var("ESDIAG_BIND");
+        }
+
+        assert_eq!(resolve_serve_bind(None).expect("resolve bind"), Ipv4Addr::LOCALHOST);
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_bind_uses_env_when_flag_missing() {
+        unsafe {
+            std::env::set_var("ESDIAG_BIND", "0.0.0.0");
+        }
+
+        let env_bind = resolve_serve_bind(None).expect("resolve bind");
+        let flag_bind = resolve_serve_bind(Some(Ipv4Addr::LOCALHOST)).expect("resolve bind");
+
+        unsafe {
+            std::env::remove_var("ESDIAG_BIND");
+        }
+        assert_eq!(env_bind, Ipv4Addr::UNSPECIFIED);
+        assert_eq!(flag_bind, Ipv4Addr::LOCALHOST);
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_bind_rejects_invalid_env() {
+        unsafe {
+            std::env::set_var("ESDIAG_BIND", "localhost");
+        }
+
+        let err = resolve_serve_bind(None).expect_err("invalid bind");
+
+        unsafe {
+            std::env::remove_var("ESDIAG_BIND");
+        }
+        assert!(err.to_string().contains("ESDIAG_BIND"));
+    }
+
     #[cfg(feature = "server")]
     #[test]
     fn serve_runtime_mode_prefers_explicit_flag_over_env() {
@@ -4641,6 +5250,19 @@ mod tests {
         match cli.command {
             Some(Commands::Serve { web_features, .. }) => {
                 assert_eq!(web_features.as_deref(), Some("advanced,job-builder"));
+            }
+            other => panic!("expected serve command, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn serve_parses_identity_header_flag() {
+        let cli = Cli::parse_from(["esdiag", "serve", "--identity-header", "X-Authenticated-User"]);
+
+        match cli.command {
+            Some(Commands::Serve { identity_header, .. }) => {
+                assert_eq!(identity_header.as_deref(), Some("X-Authenticated-User"));
             }
             other => panic!("expected serve command, got {other:?}"),
         }

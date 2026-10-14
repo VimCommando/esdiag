@@ -21,11 +21,11 @@ Use the standalone `esdiag-local` script when a script is your entry point. It
 needs Bash 3.2 or later and Podman or Docker with Compose support.
 
 ```sh
-./esdiag-local up --stack=full
+./esdiag-local up
 ```
 
 For installation and first use, see
-[Run a local diagnostic cluster](../setup/esdiag-local.md).
+[Run a local stack](../setup/local-stack.md).
 
 ## Stack modes
 
@@ -43,15 +43,29 @@ container volume. Existing state without a mode record is full mode.
 
 ## State
 
+On native Windows, run `esdiag local` from PowerShell with Windows Podman and
+a Hyper-V machine. Under WSL, run the Linux binary with a container engine in
+the same WSL distribution. See [Windows container paths](../setup/local-stack.md#windows-container-paths)
+for the supported combinations. The Bash launcher
+`esdiag-local` belongs to the WSL path on Windows.
+
+The Windows local stack requires at least 8 GiB of Podman machine memory.
+For Hyper-V, use fixed memory so the running guest retains the allocation;
+see the Windows container guide above for configuration and verification.
+
+Native Windows defaults to `%USERPROFILE%\.esdiag\local`; it does not require
+`HOME`. Native run logs default to `%USERPROFILE%\.esdiag\last_run`.
+
 The launcher writes generated `.env`, `compose.yml`, and logs to
 `${ESDIAG_LOCAL_DIR:-~/.esdiag/local}`. Use `--state-dir` to change that path.
 The directory is private and `.env` has mode `0600`.
 
 The stack binds Elasticsearch to `127.0.0.1:9200`, Kibana to
 `127.0.0.1:5601`, and the ESDiag web UI to `127.0.0.1:2501` by default.
-`esdiag local up` and `esdiag local open` copy the generated Elastic password
-to the clipboard when a platform clipboard helper is available; pass
-`--copy-password=false` to opt out.
+Before opening the browser, `esdiag local up` and `esdiag local open` ask
+whether to copy the generated Elastic password to the clipboard. Without an
+interactive terminal they don't copy it. Pass `--copy-password=true` or
+`--copy-password=false` to skip the question.
 
 The stack stores generated Elasticsearch credentials and API keys in `.env`.
 Do not copy them into `hosts.yml`, `settings.yml`, or `secrets.yml`.
@@ -96,9 +110,40 @@ The standalone script can update itself:
 ```sh
 esdiag-local update --check
 esdiag-local update
-esdiag-local up --upgrade
 ```
 
 The update verifies the release checksum, then replaces a writable regular
-script. It refuses symlinks. Updating the script does not upgrade a running
-stack.
+script. It refuses symlinks. Updating the script does not change the stack's
+image versions.
+
+### Windows Subsystem for Linux
+
+esdiag uses Windows browser and clipboard tools under WSL when Windows interoperability is enabled. Passwords are passed to clip.exe through standard input. If Windows tools cannot be launched, esdiag tries available Linux desktop tools and reports browser failures. Clipboard copying still requires the existing confirmation or explicit --copy-password=true option.
+
+## Upgrades
+
+`up` starts the image versions recorded in the state directory. When the
+binary or script ships newer versions, `up` prints a warning and starts the
+recorded versions anyway. `upgrade` moves the stack to the new versions:
+
+```sh
+esdiag local upgrade
+esdiag-local upgrade
+```
+
+`upgrade` asks `[y/N]` before it changes anything, because Elasticsearch data
+cannot be downgraded. Use `--force` in scripts and other non-interactive use.
+
+- A running stack is restarted on the new images, and its ESDiag assets are
+  reinstalled.
+- A stopped stack records the new versions and stays stopped. The next `up`
+  starts it on them.
+- Core mode upgrades Elasticsearch and Kibana. Full mode also upgrades the
+  ESDiag image.
+- The stack keeps its mode. Change modes with `up --stack=<mode>`.
+- If the image pull fails, the previous versions stay recorded.
+- A stack that records a newer Elastic version than the tool ships is refused.
+
+`esdiag-local upgrade` accepts `--elastic-version` and `--esdiag-version` to
+choose target versions. On `up`, those options only apply to a new stack.
+`up --upgrade` was replaced by `upgrade`.

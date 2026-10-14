@@ -21,7 +21,7 @@ pub struct Error<'e> {
 #[derive(Template)]
 #[template(path = "index.html")]
 pub struct Index {
-    pub auth_header: bool,
+    pub identity_locked: bool,
     pub debug: bool,
     pub desktop: bool,
     pub kibana_url: String,
@@ -35,6 +35,7 @@ pub struct Index {
     pub theme_dark: bool,
     pub runtime_mode: String,
     pub show_advanced: bool,
+    pub show_api_key: bool,
     pub show_job_builder: bool,
     pub can_use_keystore: bool,
     pub output_secure: bool,
@@ -45,7 +46,7 @@ pub struct Index {
 #[derive(Template)]
 #[template(path = "advanced.html")]
 pub struct Advanced {
-    pub auth_header: bool,
+    pub identity_locked: bool,
     pub debug: bool,
     pub desktop: bool,
     pub collect_hosts: Vec<String>,
@@ -79,7 +80,7 @@ pub struct Advanced {
 #[derive(Template)]
 #[template(path = "jobs.html")]
 pub struct Jobs {
-    pub auth_header: bool,
+    pub identity_locked: bool,
     pub debug: bool,
     pub desktop: bool,
     pub collect_hosts: Vec<String>,
@@ -161,12 +162,15 @@ pub struct KeystoreBootstrapModal {
 pub struct Welcome {
     pub stage: String,
     pub user: String,
+    pub user_locked: bool,
     pub workflow_value: String,
     pub processes_diagnostics: bool,
     pub show_cluster: bool,
     pub show_collection: bool,
     pub show_default_job: bool,
     pub show_complete: bool,
+    pub collection_deferred: bool,
+    pub output_requires_keystore: bool,
     pub keystore_ready: bool,
     pub keystore_unlocked: bool,
     pub output_name: String,
@@ -191,19 +195,21 @@ pub struct Welcome {
 #[derive(Template)]
 #[template(path = "welcome_page.html")]
 pub struct WelcomePage {
-    pub auth_header: bool,
     pub debug: bool,
     pub desktop: bool,
     pub kibana_url: String,
     pub stats: String,
     pub stage: String,
     pub user: String,
+    pub user_locked: bool,
     pub workflow_value: String,
     pub processes_diagnostics: bool,
     pub show_cluster: bool,
     pub show_collection: bool,
     pub show_default_job: bool,
     pub show_complete: bool,
+    pub collection_deferred: bool,
+    pub output_requires_keystore: bool,
     pub keystore_ready: bool,
     pub keystore_unlocked: bool,
     pub output_name: String,
@@ -338,7 +344,6 @@ pub struct DiagnosticClusterTableRow {
 #[derive(Template)]
 #[template(path = "hosts.html")]
 pub struct HostsPage {
-    pub auth_header: bool,
     pub debug: bool,
     pub desktop: bool,
     pub kibana_url: String,
@@ -581,7 +586,7 @@ mod tests {
     #[test]
     fn jobs_template_does_not_seed_conflicting_job_root_signal() {
         let page = Jobs {
-            auth_header: false,
+            identity_locked: false,
             debug: false,
             desktop: false,
             collect_hosts: vec![],
