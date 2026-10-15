@@ -273,7 +273,7 @@ async fn live_serverless_asset_audit() -> Result<()> {
     })?;
     assert!(es.is_serverless().await?);
     assert!(kb.is_serverless().await?);
-    ensure_agent_builder_license(&es).await?;
+    assert_eq!(agent_builder_license_status(&es).await?, AgentBuilderLicense::Managed);
     let store = EmbeddedAssets::new()?;
     let assets = parse_assets_yml(Application::Elasticsearch, &store)?;
     let mut installed = 0;
