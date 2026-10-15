@@ -58,37 +58,79 @@ pub fn write_completion_script(shell: CompletionShell, cmd: &mut Command, out: &
 }
 
 /// Conventional install path for a completion script under `home`.
+///
+/// Bash honors absolute `XDG_DATA_HOME`; fish honors absolute `XDG_CONFIG_HOME`.
 pub fn install_path(shell: CompletionShell, home: &Path) -> PathBuf {
+    install_path_with_xdg(
+        shell,
+        home,
+        absolute_env_path("XDG_DATA_HOME"),
+        absolute_env_path("XDG_CONFIG_HOME"),
+    )
+}
+
+fn install_path_with_xdg(
+    shell: CompletionShell,
+    home: &Path,
+    xdg_data_home: Option<PathBuf>,
+    xdg_config_home: Option<PathBuf>,
+) -> PathBuf {
     match shell {
-        CompletionShell::Bash => home.join(".local/share/bash-completion/completions").join("esdiag"),
+        CompletionShell::Bash => {
+            let data = xdg_data_home.unwrap_or_else(|| home.join(".local/share"));
+            data.join("bash-completion/completions").join("esdiag")
+        }
         CompletionShell::Zsh => home.join(".zfunc").join("_esdiag"),
-        CompletionShell::Fish => home.join(".config/fish/completions").join("esdiag.fish"),
+        CompletionShell::Fish => {
+            let config = xdg_config_home.unwrap_or_else(|| home.join(".config"));
+            config.join("fish/completions").join("esdiag.fish")
+        }
         CompletionShell::Powershell => home.join(".config/powershell/Completions").join("esdiag.ps1"),
     }
 }
 
+fn absolute_env_path(var: &str) -> Option<PathBuf> {
+    let value = std::env::var_os(var).filter(|value| !value.is_empty())?;
+    let path = PathBuf::from(value);
+    path.is_absolute().then_some(path)
+}
+
+/// Quote a path for safe inclusion in a zsh single-quoted word.
+fn shell_single_quote(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    format!("'{}'", raw.replace('\'', "'\\''"))
+}
+
+/// Quote a path for safe inclusion in a PowerShell single-quoted string.
+fn powershell_single_quote(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    format!("'{}'", raw.replace('\'', "''"))
+}
+
 /// One-line (or short) instruction the user must apply; never edits shell rc files.
 pub fn install_instruction(shell: CompletionShell, path: &Path) -> String {
-    let path_display = path.display();
     match shell {
         CompletionShell::Bash => {
+            let quoted = shell_single_quote(path);
             format!(
-                "Requires bash-completion. With it enabled, new shells load {path_display}; otherwise source that file from ~/.bashrc."
+                "Requires bash-completion. With it enabled, new shells load {quoted}; otherwise source that file from ~/.bashrc."
             )
         }
         CompletionShell::Zsh => {
-            format!(
-                "Add to ~/.zshrc if missing: fpath=({} $fpath); autoload -Uz compinit; compinit",
-                path.parent()
-                    .map(|parent| parent.display().to_string())
-                    .unwrap_or_else(|| "~/.zfunc".to_string())
-            )
+            let dir = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("~/.zfunc"));
+            let quoted_dir = shell_single_quote(&dir);
+            format!("Add to ~/.zshrc if missing: fpath=({quoted_dir} $fpath); autoload -Uz compinit; compinit")
         }
         CompletionShell::Fish => {
-            format!("Open a new fish shell; fish loads {path_display} from its completions directory.")
+            let quoted = shell_single_quote(path);
+            format!("Open a new fish shell; fish loads {quoted} from its completions directory.")
         }
         CompletionShell::Powershell => {
-            format!("PowerShell does not autoload this path. Add to your profile if missing: . '{path_display}'")
+            let quoted = powershell_single_quote(path);
+            format!("PowerShell does not autoload this path. Add to your profile if missing: . {quoted}")
         }
     }
 }
@@ -149,20 +191,43 @@ mod tests {
     fn install_paths_use_home_and_shell_conventions() {
         let home = Path::new("/tmp/esdiag-home");
         assert_eq!(
-            install_path(CompletionShell::Bash, home),
+            install_path_with_xdg(CompletionShell::Bash, home, None, None),
             PathBuf::from("/tmp/esdiag-home/.local/share/bash-completion/completions/esdiag")
         );
         assert_eq!(
-            install_path(CompletionShell::Zsh, home),
+            install_path_with_xdg(CompletionShell::Zsh, home, None, None),
             PathBuf::from("/tmp/esdiag-home/.zfunc/_esdiag")
         );
         assert_eq!(
-            install_path(CompletionShell::Fish, home),
+            install_path_with_xdg(CompletionShell::Fish, home, None, None),
             PathBuf::from("/tmp/esdiag-home/.config/fish/completions/esdiag.fish")
         );
         assert_eq!(
-            install_path(CompletionShell::Powershell, home),
+            install_path_with_xdg(CompletionShell::Powershell, home, None, None),
             PathBuf::from("/tmp/esdiag-home/.config/powershell/Completions/esdiag.ps1")
+        );
+    }
+
+    #[test]
+    fn install_paths_honor_xdg_data_and_config_home() {
+        let home = Path::new("/tmp/esdiag-home");
+        assert_eq!(
+            install_path_with_xdg(CompletionShell::Bash, home, Some(PathBuf::from("/custom/data")), None),
+            PathBuf::from("/custom/data/bash-completion/completions/esdiag")
+        );
+        assert_eq!(
+            install_path_with_xdg(CompletionShell::Fish, home, None, Some(PathBuf::from("/custom/config"))),
+            PathBuf::from("/custom/config/fish/completions/esdiag.fish")
+        );
+        // zsh and powershell remain under home even when XDG vars are set
+        assert_eq!(
+            install_path_with_xdg(
+                CompletionShell::Zsh,
+                home,
+                Some(PathBuf::from("/custom/data")),
+                Some(PathBuf::from("/custom/config"))
+            ),
+            PathBuf::from("/tmp/esdiag-home/.zfunc/_esdiag")
         );
     }
 
@@ -205,14 +270,30 @@ mod tests {
         assert!(!instruction.is_empty());
         assert!(instruction.contains("fpath"));
 
-        let bash_instruction =
-            install_instruction(CompletionShell::Bash, &install_path(CompletionShell::Bash, dir.path()));
+        let bash_instruction = install_instruction(
+            CompletionShell::Bash,
+            &install_path_with_xdg(CompletionShell::Bash, dir.path(), None, None),
+        );
         assert!(bash_instruction.contains("bash-completion"));
         let pwsh_instruction = install_instruction(
             CompletionShell::Powershell,
-            &install_path(CompletionShell::Powershell, dir.path()),
+            &install_path_with_xdg(CompletionShell::Powershell, dir.path(), None, None),
         );
         assert!(pwsh_instruction.contains("does not autoload"));
+    }
+
+    #[test]
+    fn zsh_instruction_quotes_paths_with_spaces_and_apostrophes() {
+        let path = Path::new("/tmp/user's dir/.zfunc/_esdiag");
+        let instruction = install_instruction(CompletionShell::Zsh, path);
+        assert!(instruction.contains("fpath=('/tmp/user'\\''s dir/.zfunc' $fpath)"));
+    }
+
+    #[test]
+    fn powershell_instruction_escapes_apostrophes_in_path() {
+        let path = Path::new("/tmp/user's Completions/esdiag.ps1");
+        let instruction = install_instruction(CompletionShell::Powershell, path);
+        assert!(instruction.contains(". '/tmp/user''s Completions/esdiag.ps1'"));
     }
 
     #[test]
@@ -224,7 +305,7 @@ mod tests {
             CompletionShell::Fish,
             CompletionShell::Powershell,
         ] {
-            let path = install_path(shell, home);
+            let path = install_path_with_xdg(shell, home, None, None);
             let instruction = install_instruction(shell, &path);
             assert!(!instruction.is_empty(), "empty instruction for {}", shell.as_str());
         }

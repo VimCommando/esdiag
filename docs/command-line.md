@@ -402,9 +402,9 @@ Install does not edit shell startup files.
 
 | Shell | Install path | Follow-up |
 |---|---|---|
-| bash | `~/.local/share/bash-completion/completions/esdiag` | Needs bash-completion enabled, or source the file from `~/.bashrc` |
+| bash | `$XDG_DATA_HOME/bash-completion/completions/esdiag` when `XDG_DATA_HOME` is an absolute path; otherwise `~/.local/share/bash-completion/completions/esdiag` | Needs bash-completion enabled, or source the file from `~/.bashrc` |
 | zsh | `~/.zfunc/_esdiag` | Add the printed `fpath` / `compinit` line to `~/.zshrc` if missing |
-| fish | `~/.config/fish/completions/esdiag.fish` | Open a new fish shell |
+| fish | `$XDG_CONFIG_HOME/fish/completions/esdiag.fish` when `XDG_CONFIG_HOME` is an absolute path; otherwise `~/.config/fish/completions/esdiag.fish` | Open a new fish shell |
 | powershell | `~/.config/powershell/Completions/esdiag.ps1` | Dot-source from your PowerShell profile; PowerShell does not autoload this path |
 
 Completions cover subcommands and flags only. Saved host and job names are not

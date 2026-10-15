@@ -50,7 +50,10 @@ esdiag completions install zsh
 # Follow the printed instruction; install does not edit shell startup files.
 ```
 
-See [Command-line interface reference](../command-line.md#completions).
+Bash and fish install under `$XDG_DATA_HOME` / `$XDG_CONFIG_HOME` when those
+variables are absolute paths; otherwise they use the usual `~/.local/share` and
+`~/.config` locations. See
+[Command-line interface reference](../command-line.md#completions).
 
 For a user-scoped archive installation:
 
