@@ -23,6 +23,7 @@ use esdiag::{
 use url::Url;
 
 const STATE_SCHEMA_VERSION: &str = "3";
+const AGENT_BUILDER_SKIPPED: &str = "Kibana Agent Builder assets were skipped because the local cluster has no Enterprise or trial license. Run `esdiag local setup --activate-trial=true` to start a trial.";
 const ELASTIC_VERSION: &str = "9.5.5";
 
 #[cfg(windows)]
@@ -657,29 +658,50 @@ impl LocalState {
             self.compose_logged(
                 "Installing ESDiag assets",
                 &["--profile", "setup", "run", "--rm", "--no-deps", "-e", &trial, "setup"],
-            )
+            )?;
+            if !activate_trial && !self.agent_builder_licensed().await {
+                eprintln!("{AGENT_BUILDER_SKIPPED}");
+            }
+            Ok(())
         } else {
             progress("Installing ESDiag assets");
             self.native_setup(activate_trial).await
         }
     }
 
+    async fn elasticsearch_get(&self, path: &str) -> Result<serde_json::Value> {
+        Ok(reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()?
+            .get(format!("{}/{path}", self.elasticsearch_url()))
+            .basic_auth("elastic", Some(self.required("ELASTIC_PASSWORD")?))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    /// Whether the local cluster has an active Enterprise or trial license; `true` when that cannot be read.
+    async fn agent_builder_licensed(&self) -> bool {
+        match self.elasticsearch_get("_license").await {
+            Ok(response) => {
+                response["license"]["status"] == "active"
+                    && matches!(response["license"]["type"].as_str(), Some("trial" | "enterprise"))
+            }
+            Err(error) => {
+                tracing::warn!("Could not read the Elasticsearch license: {error}");
+                true
+            }
+        }
+    }
+
     /// Whether the local cluster has never started a trial; `false` when that cannot be read.
     async fn trial_eligible(&self) -> bool {
-        let result: Result<bool> = async {
-            let response: serde_json::Value = reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()?
-                .get(format!("{}/_license/trial_status", self.elasticsearch_url()))
-                .basic_auth("elastic", Some(self.required("ELASTIC_PASSWORD")?))
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            Ok(response["eligible_to_start_trial"].as_bool() == Some(true))
-        }
-        .await;
+        let result = self
+            .elasticsearch_get("_license/trial_status")
+            .await
+            .map(|response| response["eligible_to_start_trial"].as_bool() == Some(true));
         result.unwrap_or_else(|error| {
             tracing::warn!("Could not read the Elasticsearch trial status: {error}");
             eprintln!(
@@ -720,9 +742,7 @@ impl LocalState {
         report.warnings.retain(|warning| {
             let skipped = warning == TRIAL_OPT_IN_WARNING;
             if skipped {
-                eprintln!(
-                    "Kibana Agent Builder assets were skipped because the local cluster has no Enterprise or trial license. Run `esdiag local setup --activate-trial=true` to start a trial."
-                );
+                eprintln!("{AGENT_BUILDER_SKIPPED}");
             }
             !skipped
         });

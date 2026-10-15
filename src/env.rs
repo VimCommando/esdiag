@@ -84,21 +84,6 @@ pub fn kibana_space_setting(value: Option<&str>) -> Option<String> {
     }
 }
 
-/// The Kibana space for setup: a `/s/<space>` URL path wins over `ESDIAG_KIBANA_SPACE`.
-pub fn kibana_setup_space(kibana_url: &url::Url, declared: Option<&str>) -> Option<String> {
-    let url_space = kibana_url.path_segments().and_then(|segments| {
-        let segments = segments.filter(|s| !s.is_empty()).collect::<Vec<_>>();
-        segments
-            .windows(2)
-            .rfind(|pair| pair[0] == "s")
-            .map(|pair| pair[1].to_string())
-    });
-    match url_space {
-        Some(space) => kibana_space_setting(Some(&space)),
-        None => kibana_space_setting(declared),
-    }
-}
-
 pub fn append_kibana_space(kibana_url: &str) -> String {
     kibana_url_with_space(kibana_url, get_kibana_space().as_deref())
 }

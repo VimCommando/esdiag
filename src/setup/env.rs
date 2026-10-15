@@ -169,18 +169,25 @@ mod tests {
     }
 
     #[test]
-    fn kibana_space_prefers_the_url_path() {
+    fn kibana_space_follows_the_declared_setting() {
         let setup = load(
             &[
                 ("ESDIAG_KIBANA_URL", "https://kb.example:5601/s/ops"),
-                ("ESDIAG_KIBANA_SPACE", "esdiag"),
+                ("ESDIAG_KIBANA_SPACE", "support"),
             ],
             &[],
         )
         .unwrap();
-        assert_eq!(setup.targets.kibana.unwrap().space.as_deref(), Some("ops"));
+        assert_eq!(setup.targets.kibana.unwrap().space.as_deref(), Some("support"));
 
-        let setup = load(&[("ESDIAG_KIBANA_URL", "https://kb.example:5601")], &[]).unwrap();
+        let setup = load(
+            &[("ESDIAG_KIBANA_URL", "https://kb.example:5601")],
+            &[("ESDIAG_KIBANA_SPACE", "_default")],
+        )
+        .unwrap();
+        assert_eq!(setup.targets.kibana.unwrap().space, None);
+
+        let setup = load(&[("ESDIAG_KIBANA_URL", "https://kb.example:5601/s/ops")], &[]).unwrap();
         assert_eq!(setup.targets.kibana.unwrap().space.as_deref(), Some("esdiag"));
     }
 

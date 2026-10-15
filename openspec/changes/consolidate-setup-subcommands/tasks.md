@@ -13,7 +13,7 @@
 
 ## 3. License, Shared Pipeline, And Saved Targets
 
-- [x] 3.1 Split `ensure_agent_builder_license` into `src/setup/license.rs` `agent_builder_license_status` (read-only; `Managed` on serverless), `trial_eligible` (read-only `GET _license/trial_status`), and `activate_trial_license`; update `src/setup/serverless_tests.rs`, `tests/serverless_setup_tests.rs`, and `tests/elasticsearch_feedback_tests.rs`.
+- [x] 3.1 Split `ensure_agent_builder_license` into `src/setup/license.rs` `agent_builder_license_status` (read-only; `Managed` on serverless) and `activate_trial_license`; update `src/setup/serverless_tests.rs`, `tests/serverless_setup_tests.rs`, and `tests/elasticsearch_feedback_tests.rs`.
 - [x] 3.2 Add the shared Elasticsearch → license → Kibana pipeline in `src/setup/mod.rs` taking `activate_trial: bool`; skip Kibana with a `partial` outcome and opt-in warning when the license is inactive and not opted in; emit skip warnings for undeclared services.
 - [x] 3.3 Add `--activate-trial` (`env = "ESDIAG_SETUP_ACTIVATE_TRIAL"`, boolish) to `output`, `env`, and `context` only.
 - [x] 3.4 Implement `setup output [NAME]` (explicit or persisted, `send` role, viewer optional) in `src/setup/output.rs`, and `setup elasticsearch [HOST]` / `setup kibana [HOST]` with `app` validation; none read `ESDIAG_OUTPUT_*`. Expose persisted/explicit-only resolvers from `src/data/output_deployment.rs`.
@@ -34,7 +34,7 @@
 ## 5. Context Setup
 
 - [x] 5.1 Add optional `elasticrc` path dependency behind the `setup` feature.
-- [x] 5.2 Implement `src/setup/context.rs`: load config (`--config`, `ELASTIC_CLI_CONFIG_FILE`, home), select named or current context, resolve whichever of `elasticsearch`/`kibana` are defined, derive the Kibana space.
+- [x] 5.2 Implement `src/setup/context.rs`: load config (`--config`, `ELASTIC_CLI_CONFIG_FILE`, home), select named or current context, resolve whichever of `elasticsearch`/`kibana` are defined, and select the Kibana space with `ESDIAG_KIBANA_SPACE`.
 - [x] 5.3 Implement `setup context [NAME] [--config <PATH>]` over the shared pipeline.
 - [x] 5.4 Add fixture `.elasticrc.yml` + mock-server tests: full, Elasticsearch-only, Kibana-only, cloud-only failure, unknown context, `env` resolver, and `hosts.yml`/keystore/outcome contain no secrets.
 
@@ -42,20 +42,20 @@
 
 - [x] 6.1 Add `setup_command_for_image` to `src/local.rs` and use it in the compose template; add unit tests for `0.17.0`, `0.17.9`, `0.18.0`, `0.18.0-SNAPSHOT`, `0.19.1`, and a custom `dev` tag.
 - [x] 6.2 Add `setup_command_args` to `bin/esdiag-local`, use it in `write_compose`, and change core mode `run_setup` to `"$binary" setup env`.
-- [x] 6.3 Add `--activate-trial=true|false` with `ESDIAG_SETUP_ACTIVATE_TRIAL` fallback to `LocalOptions` in `src/local.rs` and to `bin/esdiag-local` option parsing and usage. When both are absent, resolve auto before setup with `GET _license/trial_status` (`setup::trial_eligible` in Rust; `curl` with jq/sed fallback in Bash): `true` only when `eligible_to_start_trial` is `true`, `false` on failure. Pass the resolved value as `-e ESDIAG_SETUP_ACTIVATE_TRIAL=<v>` on `compose run` (full), in the native `setup env` environment (`bin/esdiag-local` core), and into the in-process pipeline (`src/local.rs` core). Never persist it.
+- [x] 6.3 Add `--activate-trial=true|false` with `ESDIAG_SETUP_ACTIVATE_TRIAL` fallback to `LocalOptions` in `src/local.rs` and to `bin/esdiag-local` option parsing and usage. When both are absent, resolve auto before setup with `GET _license/trial_status` (`reqwest` in `src/local.rs`, so full mode needs no `setup` feature; `curl` with jq/sed fallback in Bash): `true` only when `eligible_to_start_trial` is `true`, `false` on failure. Pass the resolved value as `-e ESDIAG_SETUP_ACTIVATE_TRIAL=<v>` on `compose run` (full), in the native `setup env` environment (`bin/esdiag-local` core), and into the in-process pipeline (`src/local.rs` core). Never persist it.
 - [x] 6.4 Update `tests/esdiag-local.sh`: the fake `esdiag` logs its full arguments and `ESDIAG_SETUP_ACTIVATE_TRIAL`. Core mode asserts `setup env`. Compose assertions cover the current image and a 0.17.x-pinned state using the same version table as 6.1. A fake `curl` serves `trial_status`. Trial cases cover auto when eligible (`true`), auto when not eligible (`false`), auto when the request fails (`false`), `--activate-trial=false` on a new stack, the env var overriding eligibility, and `--activate-trial=true`. Each asserts the value is absent from `.env` and `compose.yml`. Mirror the same table in `src/local.rs` unit tests. Add an `--activate-trial=true` forwarding case to `tests/bin/esdiag-control.sh`.
 - [x] 6.5 Run `bash tests/esdiag-local.sh`, `bash tests/bin/esdiag-control.sh`, `shellcheck bin/esdiag-local`, and `bash -n` on the rendered release script.
-- [ ] 6.6 Build the container image locally; verify `docker run … <image> setup env` against a local stack, and `esdiag local up --stack=full` / `--stack=core` end to end. Confirm a new stack activates the trial and installs Agent Builder assets, a second `up` sends no `start_trial`, `--activate-trial=false` on a fresh stack skips it, and a state directory created by 0.17.x works before and after `esdiag local upgrade`.
+- [x] 6.6 Build the container image locally; verify `docker run … <image> setup env` against a local stack, and `esdiag local up --stack=full` / `--stack=core` end to end. Confirm a new stack activates the trial and installs Agent Builder assets, a second `up` sends no `start_trial`, `--activate-trial=false` on a fresh stack skips it, and a state directory created by 0.17.x works before and after `esdiag local upgrade`.
 
 ## 7. Skill, Plugin, And Docs
 
-- [ ] 7.1 Update `.agents/skills/esdiag/references/esdiag-cli.md`, run `bin/sync-plugin-skill.sh`, then `bin/sync-plugin-skill.sh --check`.
-- [ ] 7.2 Update `tests/plugin.sh` to assert `esdiag setup skills`; run `bash tests/plugin.sh`.
-- [ ] 7.3 Update `plugin/README.md`, `docs/command-line.md`, `docs/setup/{installation,agent-skills,remote-cluster,serverless,shared-service,index,local-stack}.md`, `docs/bin/esdiag-local.md`, `docs/reference/serverless-assets.md`, `docs/repository/organization.md`, `assets/readme.md`, and `example.env` per the integration inventory.
-- [ ] 7.4 Replace the `[Unreleased]` CHANGELOG entry from #430 and add Breaking entries mapping every old spelling to its replacement, including the `setup kibana`/`setup elasticsearch` saved-host retarget, and the change to an opt-in trial license (`--activate-trial` / `ESDIAG_SETUP_ACTIVATE_TRIAL`) for manual setup, `esdiag init` on existing outputs, and web onboarding, while new local stacks still activate one by default.
+- [x] 7.1 Update `.agents/skills/esdiag/references/esdiag-cli.md`, run `bin/sync-plugin-skill.sh`, then `bin/sync-plugin-skill.sh --check`.
+- [x] 7.2 Update `tests/plugin.sh` to assert `esdiag setup skills`; run `bash tests/plugin.sh`.
+- [x] 7.3 Update `plugin/README.md`, `docs/command-line.md`, `docs/setup/{installation,agent-skills,remote-cluster,serverless,shared-service,index,local-stack}.md`, `docs/bin/esdiag-local.md`, `docs/reference/serverless-assets.md`, `docs/repository/organization.md`, `assets/readme.md`, and `example.env` per the integration inventory.
+- [x] 7.4 Replace the `[Unreleased]` CHANGELOG entry from #430 and add Breaking entries mapping every old spelling to its replacement, including the `setup kibana`/`setup elasticsearch` saved-host retarget, and the change to an opt-in trial license (`--activate-trial` / `ESDIAG_SETUP_ACTIVATE_TRIAL`) for manual setup, `esdiag init` on existing outputs, and web onboarding, while new local stacks still activate one by default.
 
 ## 8. Verification And Archive
 
-- [ ] 8.1 Run `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-features`, and record results in the PR.
-- [ ] 8.2 Run `openspec validate consolidate-setup-subcommands --strict`.
+- [x] 8.1 Run `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-features`, and record results in the PR.
+- [x] 8.2 Run `openspec validate consolidate-setup-subcommands --strict`.
 - [ ] 8.3 Run `openspec archive consolidate-setup-subcommands` before merge so `openspec-archived.yml` passes.

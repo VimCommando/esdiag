@@ -45,7 +45,7 @@ A saved host whose name matches a subcommand (for example `kibana`) is targeted 
 
 ### 2. Saved outputs: `setup output`, and defaults for `elasticsearch` and `kibana`
 
-`setup output [NAME]` resolves a saved output deployment through `OutputDeployment::from_explicit(NAME)` when `NAME` is given, or `from_persisted` when it is omitted. That deployment is an Elasticsearch host with role `send`, plus its linked Kibana viewer. It runs the combined pipeline (Decision 5). If the output has no linked viewer, it sets up Elasticsearch only and warns, matching `env` and `context` partial handling. `setup output` replaces bare `esdiag setup` with no environment, and it is the command to re-run after an upgrade.
+`setup output [NAME]` resolves a saved output deployment through `OutputDeployment::from_explicit(NAME)` when `NAME` is given, or `from_persisted` when it is omitted. That deployment is an Elasticsearch host with role `send`, plus its linked Kibana viewer. It runs the combined pipeline (Decision 5). If the output has no linked viewer, it sets up Elasticsearch only and notes the missing viewer in `warnings` without making the outcome `partial`, matching `env` and `context`. `setup output` replaces bare `esdiag setup` with no environment, and it is the command to re-run after an upgrade.
 
 When `HOST` is omitted, `setup elasticsearch` and `setup kibana` resolve the same persisted default output: its Elasticsearch, or its linked viewer. None of the saved-output commands read `ESDIAG_OUTPUT_*`. Environment-driven setup is requested explicitly with `setup env`, so an exported variable can no longer redirect a command aimed at a saved output.
 
@@ -72,16 +72,15 @@ These are the same variables and the same auth-combination validation as `Output
 - Select `config.context(name)` or `config.current()`.
 - **Partial contexts are supported.** Set up each of `elasticsearch` and `kibana` that the context defines, and ignore `cloud`. If the context defines neither, fail before mutation, naming the context.
 - Resolve each service with `ServiceConfig::resolve()`. Map `elasticrc::Auth::{ApiKey, Basic}` into in-memory `KnownHost`s (`Application::Elasticsearch` + `HostRole::Send`, `Application::Kibana` + `HostRole::View`). Nothing is persisted. Resolver failures (`cmd`, `pass`, keychain) report the resolver kind, never a secret.
-- The Kibana space comes from a `/s/<space>` path in the context's Kibana URL, then `ESDIAG_KIBANA_SPACE`, then the default space.
+- The Kibana space comes from `ESDIAG_KIBANA_SPACE` (default `esdiag`), as for every other command, so installed assets and generated links share one space. A `/s/<space>` path in the context's Kibana URL does not select the space.
 
 ### 5. Stage order and opt-in trial activation
 
-`output`, `env`, and `context` share one pipeline in `src/setup/mod.rs`: Elasticsearch assets, then the license stage, then Kibana assets. Starting an Elasticsearch trial is a one-time, irreversible license change on the target cluster. It must never happen as a side effect of re-running setup during an upgrade.
+`output`, `env`, and `context` share one pipeline in `src/setup/pipeline.rs`: Elasticsearch assets, then the license stage, then Kibana assets. Starting an Elasticsearch trial is a one-time, irreversible license change on the target cluster. It must never happen as a side effect of re-running setup during an upgrade.
 
 `ensure_agent_builder_license` is split:
 - `agent_builder_license_status(&Client) -> LicenseStatus { Active, Inactive, Managed }`. This is read-only: `GET _license`, or `Managed` on serverless without a request.
 - `activate_trial_license(&Client)`. This calls `POST _license/start_trial?acknowledge=true` and verifies the license afterward.
-- `trial_eligible(&Client) -> Result<bool>`. This is read-only (`GET _license/trial_status`), and only the local-stack launchers use it to resolve their auto default (Decision 6).
 
 The license stage runs only when both services are present:
 
@@ -142,7 +141,7 @@ Core mode in `bin/esdiag-local` runs `"$binary" setup env`. `native_esdiag` alre
 The launcher resolves auto to a concrete boolean and hands only that to setup. `esdiag setup env` itself stays strictly opt-in. The resolved value is passed per run and never written to the state `.env` or `compose.yml`, since the cluster's trial status is the record.
 - Full mode: `compose --profile setup run --rm --no-deps -e ESDIAG_SETUP_ACTIVATE_TRIAL=<resolved> setup`.
 - Core mode in `bin/esdiag-local`: `ESDIAG_SETUP_ACTIVATE_TRIAL=<resolved> "$binary" setup env`.
-- Core mode in `src/local.rs`: resolve auto through `setup::trial_eligible`, then call the in-process pipeline with the resulting `activate_trial` boolean.
+- `src/local.rs` resolves auto with its own `reqwest` request to `trial_status`, because full mode must work in builds without the `setup` feature. Core mode then calls the in-process pipeline with the resulting `activate_trial` boolean.
 - Both launchers share the eligibility check and its test cases (eligible, not eligible, request failure) to keep parity. If the `trial_status` request fails, auto resolves to `false`, and setup reports the usual Kibana-skipped warning with the opt-in command.
 - A pre-0.18 pinned image ignores the variable and keeps its old always-activate behavior. On a local stack that matches the new default, so it's harmless until `local upgrade`.
 
@@ -162,9 +161,11 @@ The launcher resolves auto to a concrete boolean and hands only that to setup. `
 
 ```text
 src/setup/
-  mod.rs            # SetupReport, shared stage pipeline, public re-exports
+  mod.rs            # public re-exports
+  install.rs        # SetupReport, asset installation entry points
+  pipeline.rs       # shared stage pipeline, KibanaTarget, StackTargets
   elasticsearch.rs  # templates, pipelines, rollover, serverless (from setup.rs)
-  license.rs        # agent_builder_license_status, trial_eligible, activate_trial_license
+  license.rs        # agent_builder_license_status, activate_trial_license
   kibana.rs         # Kibana asset bundle and Agent Builder assets (from setup.rs)
   output.rs         # saved output deployment resolution
   env.rs            # environment + .env resolution
@@ -203,7 +204,7 @@ Each row is a place that names a renamed command, embeds its behavior, or verifi
 | `src/completions.rs`, `src/agent/{skills,mod}.rs`, `src/embeds.rs` | move modules; update doc comments |
 | `src/data/output_deployment.rs` | expose `from_persisted` / `from_environment` (or an explicit-source resolver) for `setup` |
 | `src/local.rs` compose template (~L585), compose tests (~L1393-1433) | version-aware `setup` command (Decision 6) + tests |
-| `src/local.rs` `LocalOptions::parse` (~L130), `native_setup` (~L658), `setup_mode` (~L639) | `--activate-trial=true|false` + env fallback, auto default resolved by `trial_eligible`; pass the resolved value into the in-process pipeline (core) and `-e ESDIAG_SETUP_ACTIVATE_TRIAL` on `compose run` (full); help text (~L96) |
+| `src/local.rs` `LocalOptions::parse` (~L130), `native_setup` (~L658), `setup_mode` (~L639) | `--activate-trial=true|false` + env fallback, auto default resolved by a read-only `GET _license/trial_status`; pass the resolved value into the in-process pipeline (core) and `-e ESDIAG_SETUP_ACTIVATE_TRIAL` on `compose run` (full); help text (~L96) |
 | `src/server/{index,keystore,mod,web_onboarding}.rs`, `src/client/kibana.rs` | no behavior change; verify `cfg` after gating change |
 | `src/cli_output.rs` | no change |
 | `Cargo.toml` | add optional `elasticrc` (path) and `dotenvy`; `setup = ["dep:elasticrc", "dep:dotenvy"]` |
@@ -215,7 +216,7 @@ Each row is a place that names a renamed command, embeds its behavior, or verifi
 | `bin/esdiag-local` `write_compose` L323-331 (`command: ["setup"]`) | version-aware `setup_command_args` (Decision 6) |
 | `bin/esdiag-local` `run_setup` L562-577 | resolve auto with `curl … /_license/trial_status` (jq with sed fallback, as `configure_security` does); core: `ESDIAG_SETUP_ACTIVATE_TRIAL=<v> "$binary" setup env`; full: `-e ESDIAG_SETUP_ACTIVATE_TRIAL=<v>` on `compose run` |
 | `bin/esdiag-local` option parsing (~L1131-1145), usage (~L66-90) | `--activate-trial=true|false`, `ESDIAG_SETUP_ACTIVATE_TRIAL` fallback, auto default documented |
-| `bin/esdiag-control` | forwards arguments unchanged; verify `--activate-trial=true` reaches the launcher |
+| `bin/esdiag-control` | rejects unknown options, so parse and validate `--activate-trial=true|false` and forward it to the launcher |
 | `docker/Dockerfile` `ENTRYPOINT` | unchanged; callers pass `setup env` |
 | `docker/docker-compose{,-insecure}.yml` | unchanged (`esdiag-kibana-setup` is a password bootstrap) |
 | `bin/esdiag-lite.{sh,ps1}` | unchanged |
