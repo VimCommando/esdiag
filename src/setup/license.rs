@@ -38,23 +38,6 @@ pub async fn agent_builder_license_status(client: &Client) -> Result<AgentBuilde
     })
 }
 
-/// Read whether the cluster has never started a trial license.
-pub async fn trial_eligible(client: &Client) -> Result<bool> {
-    require_elasticsearch(client)?;
-    let response = client
-        .request(Method::GET, &HashMap::new(), "_license/trial_status", None)
-        .await?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(eyre!(
-            "Failed to read Elasticsearch trial status ({status}): {}",
-            response.text().await?
-        ));
-    }
-    let body: Value = response.json().await?;
-    Ok(body.get("eligible_to_start_trial").and_then(Value::as_bool) == Some(true))
-}
-
 /// Start a trial license and verify that Agent Builder became available.
 pub async fn activate_trial_license(client: &Client) -> Result<()> {
     require_elasticsearch(client)?;
@@ -102,7 +85,7 @@ pub(super) async fn current_license(client: &Client) -> Result<Value> {
             response.text().await?
         ));
     }
-    response.json().await.map_err(Into::into)
+    response.json().await
 }
 
 pub(super) fn agent_builder_license_is_active(response: &Value) -> bool {

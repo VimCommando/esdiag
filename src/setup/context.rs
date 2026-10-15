@@ -121,12 +121,14 @@ contexts:
     }
 
     #[test]
-    fn current_context_resolves_both_services_and_the_url_space() {
+    fn current_context_resolves_both_services_in_the_selected_space() {
         let (_directory, path) = config();
+        let mut env = crate::TestEnv::new();
+        env.remove("ESDIAG_KIBANA_SPACE");
         let setup = ContextSetup::load(None, Some(&path)).unwrap();
         assert_eq!(setup.name, "prod");
         assert!(setup.targets.elasticsearch.is_some());
-        assert_eq!(setup.targets.kibana.as_ref().unwrap().space.as_deref(), Some("ops"));
+        assert_eq!(setup.targets.kibana.as_ref().unwrap().space.as_deref(), Some("esdiag"));
         assert!(setup.notices.is_empty());
     }
 

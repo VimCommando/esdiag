@@ -2505,7 +2505,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
             output_name_for_defaults = Some(output_name.clone());
             output_url_for_defaults = Some(output_url.to_string());
             #[cfg(feature = "setup")]
-            let viewer_space = esdiag::env::kibana_setup_space(&viewer_url, process_kibana_space().as_deref());
+            let viewer_space = esdiag::env::kibana_space_setting(process_kibana_space().as_deref());
             save_output_deployment(
                 OutputDeploymentInput {
                     output_name,

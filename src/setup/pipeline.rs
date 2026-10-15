@@ -15,15 +15,11 @@ pub struct KibanaTarget {
 }
 
 impl KibanaTarget {
-    /// Use the host's `/s/<space>` path, otherwise the declared `ESDIAG_KIBANA_SPACE` value.
+    /// Install into the `ESDIAG_KIBANA_SPACE` selection, the same space `process` and `serve` link to.
     pub fn from_host(host: KnownHost, declared_space: Option<&str>) -> Result<Self> {
-        let space = match host.concrete_url() {
-            Some(url) => crate::env::kibana_setup_space(url, declared_space),
-            None => crate::env::kibana_space_setting(declared_space),
-        };
         Ok(Self {
             client: Client::try_from(Uri::try_from(host)?)?,
-            space,
+            space: crate::env::kibana_space_setting(declared_space),
         })
     }
 }
