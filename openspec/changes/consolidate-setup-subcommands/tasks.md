@@ -1,8 +1,8 @@
 ## 1. Module Reorganization (no behavior change)
 
-- [ ] 1.1 Make `pub mod setup` ungated in `src/lib.rs`; split `src/setup.rs` into `src/setup/{mod,elasticsearch,kibana}.rs`, gating asset submodules on `setup` and keeping `esdiag::setup::{assets, assets_report, asset_statuses, assets_installed, SetupReport}`.
-- [ ] 1.2 Move `src/completions.rs` to `src/setup/completions.rs` (ungated) and `src/agent/skills.rs` to `src/setup/skills.rs` (gated on `agent`); update `use` paths in `src/main.rs`, `src/local.rs`, `src/server/*`, `src/client/kibana.rs`, and doc comments in `src/embeds.rs`.
-- [ ] 1.3 Verify `cargo check` for `--no-default-features`, `--no-default-features --features agent`, `--no-default-features --features setup`, default, and `--features desktop`; run `cargo clippy --all-targets` and `cargo test`.
+- [x] 1.1 Make `pub mod setup` ungated in `src/lib.rs`; split `src/setup.rs` into `src/setup/{mod,elasticsearch,kibana}.rs`, gating asset submodules on `setup` and keeping `esdiag::setup::{assets, assets_report, asset_statuses, assets_installed, SetupReport}`.
+- [x] 1.2 Move `src/completions.rs` to `src/setup/completions.rs` (ungated) and `src/agent/skills.rs` to `src/setup/skills.rs` (gated on `agent`); update `use` paths in `src/main.rs`, `src/local.rs`, `src/server/*`, `src/client/kibana.rs`, and doc comments in `src/embeds.rs`.
+- [x] 1.3 Verify `cargo check` for `--no-default-features`, `--no-default-features --features agent`, `--no-default-features --features setup`, default, and `--features desktop`; run `cargo clippy --all-targets` and `cargo test`.
 
 ## 2. Command Tree
 

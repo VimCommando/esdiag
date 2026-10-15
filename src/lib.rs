@@ -9,8 +9,6 @@ pub mod agent;
 pub mod cli_output;
 /// Shared client libraries for remote connections
 pub mod client;
-/// Shell completion script generation and install helpers
-pub mod completions;
 /// Data structures and types for serializing and deserializing
 pub mod data;
 /// Embedded assets
@@ -31,7 +29,6 @@ pub mod receiver;
 #[cfg(feature = "server")]
 pub mod server;
 /// Send pre-built assets (index templates, etc) to Elasticsearch
-#[cfg(feature = "setup")]
 pub mod setup;
 /// Host desktop browser and clipboard integration, including WSL.
 pub mod system_integration;
