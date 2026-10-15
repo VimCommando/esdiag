@@ -20,11 +20,9 @@ use esdiag::server::{AuthProvider, RuntimeMode, Server, ServerStartOptions};
 use esdiag::setup;
 #[cfg(feature = "agent")]
 use esdiag::{
-    agent::{
-        builder::{AgentBuilderClient, AgentBuilderLocation, AgentFailure, AgentProgress, AgentRequest},
-        skills::{EmbeddedSkill, SkillEnvironment, SkillTarget, detected_targets, install},
-    },
+    agent::builder::{AgentBuilderClient, AgentBuilderLocation, AgentFailure, AgentProgress, AgentRequest},
     client::KibanaClient,
+    setup::skills::{EmbeddedSkill, SkillEnvironment, SkillTarget, detected_targets, install},
 };
 use esdiag::{
     client::Client,
@@ -304,7 +302,7 @@ enum CompletionsCommands {
     Install {
         /// Shell to install completions for
         #[arg(value_enum)]
-        shell: esdiag::completions::CompletionShell,
+        shell: esdiag::setup::completions::CompletionShell,
     },
 }
 
@@ -1793,7 +1791,9 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
             },
             Commands::Completions { command } => {
                 use clap::CommandFactory;
-                use esdiag::completions::{CompletionShell, install_completion, user_home, write_completion_script};
+                use esdiag::setup::completions::{
+                    CompletionShell, install_completion, user_home, write_completion_script,
+                };
 
                 match command {
                     CompletionsCommands::Install { shell } => {
@@ -3878,11 +3878,9 @@ mod tests {
     use esdiag::server::RuntimeMode;
     #[cfg(feature = "agent")]
     use esdiag::{
-        agent::{
-            builder::AgentFailure,
-            skills::{SkillEnvironment, SkillTarget},
-        },
+        agent::builder::AgentFailure,
         cli_output::{AgentSkillTargetResult, AgentSkillsFailureContext},
+        setup::skills::{SkillEnvironment, SkillTarget},
     };
     use esdiag::{
         cli_output::{CliFailureCategory, OutputFormat},
