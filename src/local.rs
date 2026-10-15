@@ -1864,6 +1864,72 @@ mod onboarding_recovery_tests {
         server.await.unwrap();
     }
 
+    #[tokio::test]
+    async fn trial_and_license_checks_read_the_local_cluster() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let responses = [
+            ("200 OK", r#"{"eligible_to_start_trial":true}"#),
+            ("200 OK", r#"{"eligible_to_start_trial":false}"#),
+            ("500 Internal Server Error", "{}"),
+            ("200 OK", r#"{"license":{"type":"basic","status":"active"}}"#),
+            ("200 OK", r#"{"license":{"type":"trial","status":"active"}}"#),
+            ("500 Internal Server Error", "{}"),
+        ];
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut paths = Vec::new();
+            for (status, body) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 4096];
+                let read = socket.read(&mut buffer).await.unwrap();
+                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                paths.push(request.split_whitespace().nth(1).unwrap_or_default().to_string());
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            paths
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = LocalState::load(dir.path().into()).unwrap();
+        state
+            .values
+            .insert("ESDIAG_ELASTICSEARCH_PORT".into(), port.to_string());
+        state.values.insert("ELASTIC_PASSWORD".into(), "test-password".into());
+
+        assert!(state.trial_eligible().await);
+        assert!(!state.trial_eligible().await);
+        assert!(
+            !state.trial_eligible().await,
+            "a failed trial_status request must not start a trial"
+        );
+        assert!(!state.agent_builder_licensed().await);
+        assert!(state.agent_builder_licensed().await);
+        assert!(
+            state.agent_builder_licensed().await,
+            "an unreadable license must not print the skip message"
+        );
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "/_license/trial_status",
+                "/_license/trial_status",
+                "/_license/trial_status",
+                "/_license",
+                "/_license",
+                "/_license",
+            ]
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn startup_reports_native_child_exit_without_waiting_for_http_timeout() {

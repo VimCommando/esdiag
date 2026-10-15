@@ -11,9 +11,10 @@ use axum::{
     response::IntoResponse,
 };
 use esdiag::client::{Client, ElasticsearchBuilder};
+use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 struct MockCluster {
     client: Client,
     url: url::Url,
@@ -56,7 +57,7 @@ async fn kibana_setup_refuses_a_second_space_before_importing() {
         async move {
             let method = request.method().as_str().to_string();
             let path = request.uri().path().to_string();
-            requests.lock().unwrap().push((method.clone(), path.clone()));
+            requests.lock().push((method.clone(), path.clone()));
             let response = |status: StatusCode, value: Value| {
                 (status, [("content-type", "application/json")], value.to_string()).into_response()
             };
@@ -104,7 +105,7 @@ async fn kibana_setup_refuses_a_second_space_before_importing() {
         format!("{stdout}{stderr}").contains("already installed in the 'support' space"),
         "{stdout}{stderr}"
     );
-    let requests = requests.lock().unwrap();
+    let requests = requests.lock();
     let (first_run, rerun_requests) = requests.split_at(
         requests
             .iter()
@@ -243,7 +244,7 @@ async fn cluster_with_role_status(
         async move {
             assert_eq!(request.headers()["authorization"], "ApiKey test-key");
             let path = request.uri().path().to_string();
-            requests.lock().unwrap().push(path.clone());
+            requests.lock().push(path.clone());
             let (status, body) = if path == "/" {
                 (
                     StatusCode::OK,
@@ -298,7 +299,7 @@ async fn cli_setup_attempts_kibana_after_elasticsearch_asset_rejection() {
     let app = Router::new().fallback(move |request: Request<Body>| {
         let requests = requests.clone();
         async move {
-            requests.lock().unwrap().push(request.uri().path().to_string());
+            requests.lock().push(request.uri().path().to_string());
             if request.uri().path() == "/api/status" {
                 (
                     StatusCode::OK,
@@ -334,7 +335,7 @@ async fn cli_setup_attempts_kibana_after_elasticsearch_asset_rejection() {
     task.abort();
     assert!(!output.status.success(), "Kibana's own failure must still fail setup");
     assert!(
-        paths.lock().unwrap().iter().any(|path| path.contains("/spaces/")),
+        paths.lock().iter().any(|path| path.contains("/spaces/")),
         "Kibana asset phase was skipped: {}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -373,7 +374,7 @@ async fn setup_installs_assets_and_skips_roles_only_when_needed() {
     ] {
         let mock = cluster(status, body, StatusCode::OK).await;
         esdiag::setup::assets(&mock.client).await.unwrap();
-        let paths = mock.paths.lock().unwrap();
+        let paths = mock.paths.lock();
         assert_eq!(
             paths.iter().filter(|p| *p == "/_xpack/usage").count(),
             usize::from(status != StatusCode::GONE)
@@ -389,7 +390,7 @@ async fn setup_installs_assets_and_skips_roles_only_when_needed() {
 async fn setup_still_reports_probe_and_asset_failures() {
     let mock = cluster(StatusCode::INTERNAL_SERVER_ERROR, "", StatusCode::OK).await;
     assert!(esdiag::setup::assets(&mock.client).await.is_err());
-    assert_eq!(*mock.paths.lock().unwrap(), vec!["/", "/_xpack/usage"]);
+    assert_eq!(*mock.paths.lock(), vec!["/", "/_xpack/usage"]);
 
     let mock = cluster(StatusCode::GONE, "", StatusCode::FORBIDDEN).await;
     assert!(esdiag::setup::assets(&mock.client).await.is_err());
@@ -413,7 +414,7 @@ async fn serverless_metadata_avoids_stateful_security_and_license_apis() {
         esdiag::setup::agent_builder_license_status(&mock.client).await.unwrap(),
         esdiag::setup::AgentBuilderLicense::Managed
     );
-    let paths = mock.paths.lock().unwrap();
+    let paths = mock.paths.lock();
     assert!(!paths.iter().any(|p| {
         (p.starts_with("/_security/") && !p.starts_with("/_security/role/"))
             || p == "/_xpack/usage"
@@ -431,7 +432,6 @@ async fn forbidden_role_install_warns_only_on_serverless() {
     assert!(
         mock.paths
             .lock()
-            .unwrap()
             .iter()
             .any(|p| p.starts_with("/_security/role/esdiag-user"))
     );
@@ -466,7 +466,7 @@ async fn template_cluster(state: Arc<Mutex<TemplateState>>) -> (Client, tokio::t
             let method = request.method().clone();
             let path = request.uri().path().to_string();
             let body = to_bytes(request.into_body(), usize::MAX).await.unwrap();
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock();
             let template_kind = ["_index_template", "_component_template"]
                 .into_iter()
                 .find(|kind| path.starts_with(&format!("/{kind}/")));
@@ -532,7 +532,7 @@ async fn template_cluster(state: Arc<Mutex<TemplateState>>) -> (Client, tokio::t
 async fn setup_rolls_over_only_data_streams_with_updated_templates() {
     let state = Arc::new(Mutex::new(TemplateState::default()));
     let (client, task) = template_cluster(state.clone()).await;
-    let take_rollovers = || std::mem::take(&mut state.lock().unwrap().rollovers);
+    let take_rollovers = || std::mem::take(&mut state.lock().rollovers);
 
     esdiag::setup::assets(&client).await.unwrap();
     assert_eq!(
@@ -549,7 +549,6 @@ async fn setup_rolls_over_only_data_streams_with_updated_templates() {
 
     state
         .lock()
-        .unwrap()
         .templates
         .get_mut("/_index_template/settings-cluster-esdiag")
         .unwrap()["_meta"]["description"] = Value::from("edited");
@@ -560,7 +559,7 @@ async fn setup_rolls_over_only_data_streams_with_updated_templates() {
     );
 
     {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock();
         let component = state
             .templates
             .get_mut("/_component_template/esdiag@ls-metadata")
@@ -575,7 +574,7 @@ async fn setup_rolls_over_only_data_streams_with_updated_templates() {
     );
 
     let newer = {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock();
         let template = state
             .templates
             .get_mut("/_index_template/settings-cluster-esdiag")
@@ -586,7 +585,7 @@ async fn setup_rolls_over_only_data_streams_with_updated_templates() {
     };
     esdiag::setup::assets(&client).await.unwrap();
     assert_eq!(
-        state.lock().unwrap().templates["/_index_template/settings-cluster-esdiag"]["version"],
+        state.lock().templates["/_index_template/settings-cluster-esdiag"]["version"],
         newer,
         "an older bundled template must not overwrite a newer installed one"
     );
@@ -604,21 +603,17 @@ async fn licensed_cluster(license_type: &'static str, serverless: bool) -> MockC
         let trial_started = trial_started.clone();
         async move {
             let path = request.uri().path().to_string();
-            requests.lock().unwrap().push(format!("{} {path}", request.method()));
+            requests.lock().push(format!("{} {path}", request.method()));
             let flavor = if serverless { "serverless" } else { "default" };
             let body = match path.as_str() {
                 "/" => format!(r#"{{"version":{{"build_flavor":"{flavor}"}}}}"#),
                 "/_xpack/usage" => r#"{"security":{"enabled":false}}"#.to_string(),
                 "/_license" => {
-                    let license = if *trial_started.lock().unwrap() {
-                        "trial"
-                    } else {
-                        license_type
-                    };
+                    let license = if *trial_started.lock() { "trial" } else { license_type };
                     format!(r#"{{"license":{{"status":"active","type":"{license}"}}}}"#)
                 }
                 "/_license/start_trial" => {
-                    *trial_started.lock().unwrap() = true;
+                    *trial_started.lock() = true;
                     r#"{"acknowledged":true,"trial_was_started":true}"#.to_string()
                 }
                 path if path.ends_with("/_mapping") => "{}".to_string(),
@@ -668,7 +663,7 @@ async fn recording_kibana() -> (esdiag::setup::pipeline::KibanaTarget, Arc<Mutex
     let app = Router::new().fallback(move |request: Request<Body>| {
         let requests = requests.clone();
         async move {
-            requests.lock().unwrap().push(request.uri().path().to_string());
+            requests.lock().push(request.uri().path().to_string());
             if request.uri().path() == "/api/status" {
                 (
                     StatusCode::OK,
@@ -710,8 +705,8 @@ async fn run_stack(
         kibana: Some(kibana),
     };
     let result = esdiag::setup::pipeline::stack(&targets, activate_trial).await;
-    let es_paths = es.paths.lock().unwrap().clone();
-    let kibana_paths = kibana_paths.lock().unwrap().clone();
+    let es_paths = es.paths.lock().clone();
+    let kibana_paths = kibana_paths.lock().clone();
     (result, es_paths, kibana_paths)
 }
 
@@ -770,7 +765,7 @@ async fn single_service_setup_never_reads_the_license() {
     };
     let setup = esdiag::setup::pipeline::stack(&targets, true).await.unwrap();
     assert!(setup.report.is_complete(), "{:?}", setup.report.warnings);
-    assert!(!es.paths.lock().unwrap().iter().any(|path| path.contains("/_license")));
+    assert!(!es.paths.lock().iter().any(|path| path.contains("/_license")));
 }
 
 #[tokio::test]

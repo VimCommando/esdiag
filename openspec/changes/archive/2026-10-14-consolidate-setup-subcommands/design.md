@@ -92,9 +92,12 @@ The license stage runs only when both services are present:
 
 Skipping the Kibana stage, instead of attempting it, is deliberate. The Kibana bundle syncs as one unit and contains Enterprise-only Agent Builder tools, skills, and workflows, so attempting it on a basic license fails partway with a Kibana error that doesn't say "license". The user re-runs once the license is in place, or opts in.
 
-Opt-in sources:
-- the `--activate-trial` flag, declared as `#[arg(long, env = "ESDIAG_SETUP_ACTIVATE_TRIAL")]` with Clap's boolish parsing, so `true`, `false`, `1`, and `0` are accepted from the environment;
-- for `setup env` only, the same key in `--env-file`, with process environment taking precedence as for the other keys.
+Opt-in sources, resolved by `TrialArgs::resolve` in `src/main.rs`, highest first:
+- the `--activate-trial` flag;
+- `ESDIAG_SETUP_ACTIVATE_TRIAL` in the process environment;
+- for `setup env` only, the same key in `--env-file`.
+
+The flag is a plain Clap `bool` rather than `#[arg(env = …)]`, because Clap cannot layer an env-file value under the process environment. The variable accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`, and any other value is a usage error.
 
 The flag exists only on `output`, `env`, and `context`. `setup elasticsearch` and `setup kibana` never read the license and never start a trial.
 
@@ -167,13 +170,14 @@ src/setup/
   elasticsearch.rs  # templates, pipelines, rollover, serverless (from setup.rs)
   license.rs        # agent_builder_license_status, activate_trial_license
   kibana.rs         # Kibana asset bundle and Agent Builder assets (from setup.rs)
-  output.rs         # saved output deployment resolution
   env.rs            # environment + .env resolution
   context.rs        # elasticrc resolution
   skills.rs         # from src/agent/skills.rs
   completions.rs    # from src/completions.rs
   serverless_tests.rs
 ```
+
+Saved-output resolution for `setup output`, `setup elasticsearch`, and `setup kibana` lives in `OutputDeployment::resolve_saved` (`src/data/output_deployment.rs`), next to the resolver `process` and `serve` use, rather than in a separate `src/setup/output.rs`.
 
 `src/agent/` keeps `builder.rs` for `agent ask`. Bundled asset content stays at `assets/elasticsearch/` and `assets/kibana/`, consumed by `EmbeddedAssets` and by `build.rs`'s `kibana-assets.zip`.
 

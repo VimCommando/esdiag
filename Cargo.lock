@@ -1571,6 +1571,7 @@ dependencies = [
  "json-patch 4.2.0",
  "kibana-sync",
  "mimalloc",
+ "parking_lot",
  "pbkdf2",
  "portpicker",
  "pulldown-cmark",
