@@ -66,8 +66,13 @@ pub fn get_string(name: &str) -> std::io::Result<String> {
 }
 
 pub fn get_kibana_space() -> Option<String> {
-    match std::env::var("ESDIAG_KIBANA_SPACE") {
-        Ok(space) => {
+    kibana_space_setting(std::env::var("ESDIAG_KIBANA_SPACE").ok().as_deref())
+}
+
+/// Normalize an `ESDIAG_KIBANA_SPACE` value; `None` means the variable is not declared.
+pub fn kibana_space_setting(value: Option<&str>) -> Option<String> {
+    match value {
+        Some(space) => {
             let trimmed = space.trim();
             if trimmed.is_empty() || trimmed == "_default" || trimmed == "default" {
                 None
@@ -75,7 +80,22 @@ pub fn get_kibana_space() -> Option<String> {
                 Some(trimmed.to_string())
             }
         }
-        Err(_) => Some(ESDIAG_KIBANA_DEFAULT_SPACE.to_string()),
+        None => Some(ESDIAG_KIBANA_DEFAULT_SPACE.to_string()),
+    }
+}
+
+/// The Kibana space for setup: a `/s/<space>` URL path wins over `ESDIAG_KIBANA_SPACE`.
+pub fn kibana_setup_space(kibana_url: &url::Url, declared: Option<&str>) -> Option<String> {
+    let url_space = kibana_url.path_segments().and_then(|segments| {
+        let segments = segments.filter(|s| !s.is_empty()).collect::<Vec<_>>();
+        segments
+            .windows(2)
+            .rfind(|pair| pair[0] == "s")
+            .map(|pair| pair[1].to_string())
+    });
+    match url_space {
+        Some(space) => kibana_space_setting(Some(&space)),
+        None => kibana_space_setting(declared),
     }
 }
 

@@ -101,6 +101,8 @@ pub(super) fn get_kibana_bundle_dir_files(prefix: &str) -> Vec<(PathBuf, std::bo
 pub struct SetupReport {
     pub failed_indices: Vec<String>,
     pub warnings: Vec<String>,
+    /// Informational messages, such as a service the source did not declare, that do not make setup partial.
+    pub notices: Vec<String>,
 }
 
 impl SetupReport {
@@ -134,10 +136,19 @@ pub async fn assets(client: &Client) -> Result<()> {
 pub async fn assets_report(client: &Client) -> Result<SetupReport> {
     let embedded_assets = EmbeddedAssets::new()?;
     if Application::from(client) == Application::Kibana {
-        kibana_assets(client, &embedded_assets).await?;
+        kibana_assets(client, &embedded_assets, crate::env::get_kibana_space()).await?;
         return Ok(SetupReport::default());
     }
     api_assets(client, &embedded_assets).await
+}
+
+/// Install Kibana assets into `space`, where `None` is the default space.
+pub async fn kibana_assets_report(client: &Client, space: Option<String>) -> Result<SetupReport> {
+    if Application::from(client) != Application::Kibana {
+        return Err(eyre!("expected a Kibana client, got {client}"));
+    }
+    kibana_assets(client, &EmbeddedAssets::new()?, space).await?;
+    Ok(SetupReport::default())
 }
 
 /// Checks the minimum ESDiag asset set required for processing and Agent Builder.

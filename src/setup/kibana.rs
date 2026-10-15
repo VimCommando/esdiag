@@ -15,9 +15,12 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-pub(super) async fn kibana_assets(client: &Client, embedded_assets: &EmbeddedAssets) -> Result<()> {
+pub(super) async fn kibana_assets(
+    client: &Client,
+    embedded_assets: &EmbeddedAssets,
+    space: Option<String>,
+) -> Result<()> {
     let mut bundle = kibana_bundle(embedded_assets)?.read_all()?;
-    let space = crate::env::get_kibana_space();
     ensure_single_kibana_space(client, &bundle, space.as_deref().unwrap_or("default")).await?;
     target_kibana_bundle(&mut bundle, space.as_deref())?;
     if client.is_serverless().await? {
