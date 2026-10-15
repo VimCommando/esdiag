@@ -51,6 +51,13 @@ Scrubbed 19-character lowercase hex node names are humanized during node lookup 
 
 Node-stat enrichment first matches the node ID. When that ID is absent from the lookup, a name fallback is used only if exactly one node has that name. Duplicate names remain unresolved rather than attaching another node's identity, address, tier, or CPU allocation.
 
+## Receiver normalization implementation
+
+Raw, typed and streamed reads share one private field-scope traversal. The raw adapter validates the complete JSON input, retains last-key-wins decoded keys and surviving-field counts, and preserves Serde numeric and nesting acceptance. Its returned String and key/fragment bookkeeping scale with output size.
+
+The typed/streamed adapter writes unchanged tokens incrementally to a buffered temporary file and rewrites only selected address strings. It flushes and rewinds before deserialization and keeps the file alive until consumption finishes. Normalizer memory scales with nesting, largest token and fixed buffers, not total payload size; downstream processing has its own memory costs. Typed consumers retain their existing numeric, duplicate-key and syntax interpretation.
+
+
 ## Customer diagnostics policy
 
 **Never commit customer scrubbed API bundles to this repository.**
@@ -98,15 +105,15 @@ Compare RSS for the same archive with scrub mode off vs on. Target: **≤ 20% RS
 Linux:
 
 ```bash
-/usr/bin/time -v ./target/release/esdiag process tests/archives/elasticsearch-api-diagnostics-9.3.3.zip --scrubbed false -o /tmp/esdiag-out-base
-/usr/bin/time -v ./target/release/esdiag process tests/archives/elasticsearch-api-diagnostics-9.3.3.zip --scrubbed true -o /tmp/esdiag-out-scrub
+/usr/bin/time -v ./target/release/esdiag process tests/archives/elasticsearch-api-diagnostics-9.3.3.zip /tmp/esdiag-out-base --scrubbed false
+/usr/bin/time -v ./target/release/esdiag process tests/archives/elasticsearch-api-diagnostics-9.3.3.zip /tmp/esdiag-out-scrub --scrubbed true
 ```
 
 macOS:
 
 ```bash
-/usr/bin/time -l ./target/release/esdiag process tests/archives/elasticsearch-api-diagnostics-9.3.3.zip --scrubbed false -o /tmp/esdiag-out-base
-/usr/bin/time -l ./target/release/esdiag process tests/archives/elasticsearch-api-diagnostics-9.3.3.zip --scrubbed true -o /tmp/esdiag-out-scrub
+/usr/bin/time -l ./target/release/esdiag process tests/archives/elasticsearch-api-diagnostics-9.3.3.zip /tmp/esdiag-out-base --scrubbed false
+/usr/bin/time -l ./target/release/esdiag process tests/archives/elasticsearch-api-diagnostics-9.3.3.zip /tmp/esdiag-out-scrub --scrubbed true
 ```
 
 Use the `Maximum resident set size` line from each run.
