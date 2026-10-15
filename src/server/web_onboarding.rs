@@ -1242,20 +1242,16 @@ mod tests {
     }
 
     /// Elasticsearch on a basic license, accepting every asset; records `METHOD path`.
-    async fn basic_license_cluster() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    async fn basic_license_cluster() -> (String, std::sync::Arc<parking_lot::Mutex<Vec<String>>>) {
         use axum::{Router, body::Body, http::Request, response::IntoResponse};
-        let paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let paths = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
         let requests = paths.clone();
         let app = Router::new().fallback(move |request: Request<Body>| {
             let requests = requests.clone();
             async move {
                 let path = request.uri().path().to_string();
-                requests.lock().unwrap().push(format!("{} {path}", request.method()));
-                let started = requests
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|p| p == "POST /_license/start_trial");
+                requests.lock().push(format!("{} {path}", request.method()));
+                let started = requests.lock().iter().any(|p| p == "POST /_license/start_trial");
                 let body = match path.as_str() {
                     "/" => r#"{"version":{"build_flavor":"default"}}"#.to_string(),
                     "/_xpack/usage" => r#"{"security":{"enabled":false}}"#.to_string(),
@@ -1302,19 +1298,13 @@ mod tests {
             unchecked.contains("Start an Elasticsearch trial license"),
             "{unchecked}"
         );
-        assert!(!es_paths.lock().unwrap().iter().any(|p| p.contains("start_trial")));
+        assert!(!es_paths.lock().iter().any(|p| p.contains("start_trial")));
 
         let checked = super::install_output_assets_stage(true)
             .await
             .expect_err("Kibana is unreachable");
         assert!(!checked.contains("Start an Elasticsearch trial license"), "{checked}");
-        assert!(
-            es_paths
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|p| p == "POST /_license/start_trial")
-        );
+        assert!(es_paths.lock().iter().any(|p| p == "POST /_license/start_trial"));
     }
 
     #[test]

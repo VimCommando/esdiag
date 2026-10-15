@@ -15,8 +15,8 @@
 
 - [x] 3.1 Split `ensure_agent_builder_license` into `src/setup/license.rs` `agent_builder_license_status` (read-only; `Managed` on serverless) and `activate_trial_license`; update `src/setup/serverless_tests.rs`, `tests/serverless_setup_tests.rs`, and `tests/elasticsearch_feedback_tests.rs`.
 - [x] 3.2 Add the shared Elasticsearch → license → Kibana pipeline in `src/setup/mod.rs` taking `activate_trial: bool`; skip Kibana with a `partial` outcome and opt-in warning when the license is inactive and not opted in; emit skip warnings for undeclared services.
-- [x] 3.3 Add `--activate-trial` (`env = "ESDIAG_SETUP_ACTIVATE_TRIAL"`, boolish) to `output`, `env`, and `context` only.
-- [x] 3.4 Implement `setup output [NAME]` (explicit or persisted, `send` role, viewer optional) in `src/setup/output.rs`, and `setup elasticsearch [HOST]` / `setup kibana [HOST]` with `app` validation; none read `ESDIAG_OUTPUT_*`. Expose persisted/explicit-only resolvers from `src/data/output_deployment.rs`.
+- [x] 3.3 Add `--activate-trial` to `output`, `env`, and `context` only, resolved flag → `ESDIAG_SETUP_ACTIVATE_TRIAL` → `--env-file` value (`TrialArgs::resolve`).
+- [x] 3.4 Implement `setup output [NAME]` (explicit or persisted, `send` role, viewer optional) through `OutputDeployment::resolve_saved`, and `setup elasticsearch [HOST]` / `setup kibana [HOST]` with `app` validation; none read `ESDIAG_OUTPUT_*`. Expose persisted/explicit-only resolvers from `src/data/output_deployment.rs`.
 - [x] 3.5 Update `tests/serverless_setup_tests.rs` (`setup kibana` → `setup kibana kibana`; bare `setup` → `setup env`) and add the license matrix (active / inactive × opted in / not × serverless, asserting no `start_trial` without opt-in) plus tests for `setup output` default, named, no viewer, env not redirecting, wrong-`app` rejection, and `--activate-trial` rejected on single-service commands.
 
 ## 3b. Onboarding
@@ -58,4 +58,4 @@
 
 - [x] 8.1 Run `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-features`, and record results in the PR.
 - [x] 8.2 Run `openspec validate consolidate-setup-subcommands --strict`.
-- [ ] 8.3 Run `openspec archive consolidate-setup-subcommands` before merge so `openspec-archived.yml` passes.
+- [x] 8.3 Run `openspec archive consolidate-setup-subcommands` before merge so `openspec-archived.yml` passes.

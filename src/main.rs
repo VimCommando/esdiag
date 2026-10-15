@@ -2550,6 +2550,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
                 if report.is_complete() {
                     output_config.output.assets_version = Some(env!("CARGO_PKG_VERSION").to_string());
                 } else {
+                    let rerun = output_setup_rerun_command(&output_name, &report);
                     for warning in report
                         .failed_indices
                         .iter()
@@ -2558,7 +2559,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     {
                         eprintln!("{warning}");
                     }
-                    eprintln!("Rerun `esdiag setup output {output_name}` to finish installing ESDiag assets.");
+                    eprintln!("Rerun `{rerun}` to finish installing ESDiag assets.");
                 }
             } else {
                 eprintln!(
@@ -3848,6 +3849,17 @@ impl TrialArgs {
     }
 }
 
+/// The command that finishes an incomplete `esdiag init` asset setup, opting into the trial when the license blocked Kibana.
+#[cfg(feature = "setup")]
+fn output_setup_rerun_command(output_name: &str, report: &setup::SetupReport) -> String {
+    let needs_trial = report
+        .warnings
+        .iter()
+        .any(|warning| warning == setup::pipeline::TRIAL_OPT_IN_WARNING);
+    let flag = if needs_trial { " --activate-trial" } else { "" };
+    format!("esdiag setup output {output_name}{flag}")
+}
+
 #[cfg(feature = "setup")]
 fn process_kibana_space() -> Option<String> {
     std::env::var("ESDIAG_KIBANA_SPACE").ok()
@@ -4500,6 +4512,63 @@ mod tests {
         assert!(error.contains("esdiag setup kibana diagnostics-kb"), "{error}");
         assert!(super::setup_service_host(Some("diagnostics-kb"), Application::Kibana).is_ok());
         assert!(super::setup_service_host(Some("missing"), Application::Kibana).is_err());
+    }
+
+    #[cfg(feature = "setup")]
+    #[test]
+    fn setup_kibana_fails_when_the_persisted_output_has_no_viewer() {
+        let _env = TestEnv::new();
+        let output = esdiag::data::KnownHostBuilder::new(Url::parse("https://es.example:9200").unwrap())
+            .application(Application::Elasticsearch)
+            .roles(vec![esdiag::data::HostRole::Send])
+            .build()
+            .unwrap();
+        KnownHost::write_hosts_yml(&std::collections::BTreeMap::from([("out".to_string(), output)])).unwrap();
+        let mut config = esdiag::data::ApplicationConfig::new();
+        config.output.default = Some("out".to_string());
+        config.save().unwrap();
+
+        let error = super::setup_service_host(None, Application::Kibana)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no linked Kibana viewer"), "{error}");
+        assert!(super::setup_service_host(None, Application::Elasticsearch).is_ok());
+    }
+
+    #[cfg(feature = "setup")]
+    #[test]
+    fn init_rerun_hint_opts_into_the_trial_only_when_the_license_blocked_kibana() {
+        let mut report = esdiag::setup::SetupReport::default();
+        report.failed_indices.push("logs-esdiag".to_string());
+        assert_eq!(
+            super::output_setup_rerun_command("diagnostics", &report),
+            "esdiag setup output diagnostics"
+        );
+        report
+            .warnings
+            .push(esdiag::setup::pipeline::TRIAL_OPT_IN_WARNING.to_string());
+        assert_eq!(
+            super::output_setup_rerun_command("diagnostics", &report),
+            "esdiag setup output diagnostics --activate-trial"
+        );
+    }
+
+    #[cfg(not(feature = "setup"))]
+    #[test]
+    fn stack_setup_subcommands_require_the_setup_feature() {
+        assert!(Cli::try_parse_from(["esdiag", "setup", "completions", "bash", "--print"]).is_ok());
+        for subcommand in ["elasticsearch", "kibana", "output", "env", "context"] {
+            assert!(
+                Cli::try_parse_from(["esdiag", "setup", subcommand]).is_err(),
+                "{subcommand}"
+            );
+        }
+    }
+
+    #[cfg(not(feature = "agent"))]
+    #[test]
+    fn setup_skills_requires_the_agent_feature() {
+        assert!(Cli::try_parse_from(["esdiag", "setup", "skills"]).is_err());
     }
 
     #[test]
