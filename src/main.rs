@@ -30,10 +30,10 @@ use esdiag::{
 use esdiag::{
     client::Client,
     data::{
-        Application, ElasticContextTarget, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate,
-        OnboardingWorkflow, OutputDeployment, SecretAuth, Settings, Uri, add_secret, clear_unlock_lease,
-        collect_application, create_keystore, default_unlock_ttl, get_keystore_path, get_password_for_secret_commands,
-        get_unlock_status, keystore_exists, list_secret_names, parse_unlock_ttl, remove_secret, resolve_secret_auth,
+        Application, HostReference, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, OnboardingWorkflow,
+        OutputDeployment, SecretAuth, Settings, Uri, add_secret, clear_unlock_lease, collect_application,
+        create_keystore, default_unlock_ttl, get_keystore_path, get_password_for_secret_commands, get_unlock_status,
+        keystore_exists, list_secret_names, parse_unlock_ttl, remove_secret, resolve_secret_auth,
         rotate_keystore_password, update_secret, validate_existing_keystore_password, write_unlock_lease,
     },
     elastic_upload_service,
@@ -1381,14 +1381,6 @@ fn saved_job_result(name: String, job: &esdiag::data::Job) -> SavedJobResult {
             host: host.clone(),
             diagnostic_type: diagnostic_type.clone(),
         },
-        esdiag::job::model::Input::CollectContext {
-            target,
-            diagnostic_type,
-            ..
-        } => JobInputResult::Collect {
-            host: target.to_string(),
-            diagnostic_type: diagnostic_type.clone(),
-        },
         esdiag::job::model::Input::CollectBinding {
             binding,
             diagnostic_type,
@@ -1411,7 +1403,6 @@ fn saved_job_result(name: String, job: &esdiag::data::Job) -> SavedJobResult {
         export: match &process.export {
             esdiag::job::model::ExportTarget::KnownHost { name } => format!("host:{name}"),
             esdiag::job::model::ExportTarget::Environment => "environment".to_string(),
-            esdiag::job::model::ExportTarget::ElasticContext { target } => target.to_string(),
             esdiag::job::model::ExportTarget::File { path } => path.display().to_string(),
             esdiag::job::model::ExportTarget::Directory { output_dir } => output_dir.display().to_string(),
             esdiag::job::model::ExportTarget::Stdout => "-".to_string(),
@@ -1552,7 +1543,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                     let job = derive_collect_job(&host, &output, &r#type, send_id.as_deref(), identifiers)?;
                     esdiag::job::save_job(name, job)?;
                 }
-                let (_, known_host) = resolve_collect_uri(&host)?;
+                let known_host = Uri::try_from(host.as_str())?;
                 let output = Uri::try_from(output)?;
                 match known_host {
                     Uri::KnownHost(host) | Uri::ElasticCloudAdmin(host) | Uri::ElasticGovCloudAdmin(host) => {
@@ -1869,23 +1860,25 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 if ask.is_some() && output.as_deref() == Some("-") {
                     return Err(eyre!(ProcessAskStdoutConflict));
                 }
-                let (input_context_target, input_uri) = resolve_collect_uri(&input)?;
+                let input_uri = Uri::try_from(input.as_str())?;
                 #[cfg(feature = "agent")]
-                let (output_context_target, output_uri, ask_deployment) = if ask.is_some() {
-                    let target = output
-                        .as_deref()
-                        .map(ElasticContextTarget::parse)
-                        .transpose()?
-                        .flatten();
+                let (output_uri, ask_deployment) = if ask.is_some() {
                     let deployment = OutputDeployment::resolve(output.as_deref(), true)?;
                     let uri = Uri::try_from(deployment.elasticsearch.clone())?;
-                    (target, uri, Some(deployment))
+                    (uri, Some(deployment))
                 } else {
-                    let (target, uri) = resolve_process_output_uri(output.as_deref())?;
-                    (target, uri, None)
+                    (Uri::try_from(output.clone())?, None)
                 };
                 #[cfg(not(feature = "agent"))]
-                let (output_context_target, output_uri) = resolve_process_output_uri(output.as_deref())?;
+                let output_uri = Uri::try_from(output.clone())?;
+                if let Uri::KnownHost(host) = &output_uri
+                    && host.app().is_some_and(|app| app != Application::Elasticsearch)
+                {
+                    return Err(eyre!(
+                        "Output host '{}' must be an Elasticsearch host",
+                        output.as_deref().unwrap_or_default()
+                    ));
+                }
                 #[cfg(feature = "keystore")]
                 if let Some(name) = save_job.as_deref() {
                     let identifiers =
@@ -1894,7 +1887,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                     esdiag::job::save_job(name, job)?;
                 }
                 let output_display = match output.as_deref() {
-                    Some(name) if KnownHost::get_known(&name.to_string()).is_some() => name.to_string(),
+                    Some(name) if matches!(HostReference::parse(name), Ok(Some(_))) => name.to_string(),
                     None if std::env::var_os("ESDIAG_OUTPUT_URL").is_none() => esdiag::data::ApplicationConfig::load()?
                         .output
                         .default
@@ -1918,57 +1911,27 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 }
                 let identifiers = Identifiers::new(account, case, receiver.filename(), opportunity, user);
                 let mut context = esdiag::job::context::ExecutionContext::default();
-                let job_input = if input_context_target.is_some() {
-                    let binding = esdiag::job::model::BindingKey::try_new("cli-process-input")?;
-                    let application = match &input_uri {
-                        Uri::KnownHost(host) | Uri::ElasticCloudAdmin(host) | Uri::ElasticGovCloudAdmin(host) => {
-                            host.app()
-                        }
-                        _ => None,
-                    };
-                    context.inputs.bind_receiver(binding.clone(), receiver, application);
-                    esdiag::job::model::Input::CollectBinding {
-                        binding,
-                        diagnostic_type: "standard".to_string(),
-                        include: None,
-                        exclude: None,
-                    }
-                } else {
-                    match &input_uri {
-                        Uri::File(_) | Uri::Directory(_) => esdiag::job::model::Input::Load { uri: input_uri.clone() },
-                        _ => {
-                            let binding = esdiag::job::model::BindingKey::try_new("cli-process-input")?;
-                            let application = match &input_uri {
-                                Uri::KnownHost(host)
-                                | Uri::ElasticCloudAdmin(host)
-                                | Uri::ElasticGovCloudAdmin(host) => host.app(),
-                                _ => None,
-                            };
-                            context.inputs.bind_receiver(binding.clone(), receiver, application);
-                            esdiag::job::model::Input::LoadBinding { binding }
-                        }
+                let job_input = match &input_uri {
+                    Uri::File(_) | Uri::Directory(_) => esdiag::job::model::Input::Load { uri: input_uri.clone() },
+                    _ => {
+                        let binding = esdiag::job::model::BindingKey::try_new("cli-process-input")?;
+                        let application = match &input_uri {
+                            Uri::KnownHost(host) | Uri::ElasticCloudAdmin(host) | Uri::ElasticGovCloudAdmin(host) => {
+                                host.app()
+                            }
+                            _ => None,
+                        };
+                        context.inputs.bind_receiver(binding.clone(), receiver, application);
+                        esdiag::job::model::Input::LoadBinding { binding }
                     }
                 };
-                let export_target = match (&output_context_target, &output, &output_uri) {
-                    (Some(_), _, Uri::KnownHost(_)) | (None, Some(_), Uri::KnownHost(_)) => {
-                        let binding = esdiag::job::model::BindingKey::try_new("cli-process-output")?;
-                        context.bind_document_exporter(
-                            binding.clone(),
-                            esdiag::exporter::DocumentExporter::try_from(output_uri.clone())?,
-                        );
-                        esdiag::job::model::ExportTarget::Binding { binding }
-                    }
-                    (Some(target), _, _) => {
-                        return Err(eyre!(
-                            "Elastic CLI output target '{target}' did not resolve to an Elasticsearch service"
-                        ));
-                    }
-                    (None, _, Uri::File(path)) => esdiag::job::model::ExportTarget::File { path: path.clone() },
-                    (None, _, Uri::Directory(output_dir)) => esdiag::job::model::ExportTarget::Directory {
+                let export_target = match &output_uri {
+                    Uri::File(path) => esdiag::job::model::ExportTarget::File { path: path.clone() },
+                    Uri::Directory(output_dir) => esdiag::job::model::ExportTarget::Directory {
                         output_dir: output_dir.clone(),
                     },
-                    (None, _, Uri::Stream) => esdiag::job::model::ExportTarget::Stdout,
-                    (None, _, _) => {
+                    Uri::Stream => esdiag::job::model::ExportTarget::Stdout,
+                    _ => {
                         let binding = esdiag::job::model::BindingKey::try_new("cli-process-output")?;
                         context.bind_document_exporter(
                             binding.clone(),
@@ -2204,24 +2167,6 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
     }
 }
 
-fn resolve_collect_uri(value: &str) -> Result<(Option<ElasticContextTarget>, Uri)> {
-    if let Some(target) = ElasticContextTarget::parse(value)? {
-        let uri = Uri::try_from(target.resolve_collect_host()?)?;
-        return Ok((Some(target), uri));
-    }
-    Ok((None, Uri::try_from(value)?))
-}
-
-fn resolve_process_output_uri(value: Option<&str>) -> Result<(Option<ElasticContextTarget>, Uri)> {
-    if let Some(value) = value
-        && let Some(target) = ElasticContextTarget::parse(value)?
-    {
-        let deployment = OutputDeployment::from_elastic_target(&target, false)?;
-        return Ok((Some(target), Uri::try_from(deployment.elasticsearch)?));
-    }
-    Ok((None, Uri::try_from(value.map(ToString::to_string))?))
-}
-
 #[cfg(feature = "keystore")]
 fn derive_collect_job(
     host: &str,
@@ -2248,13 +2193,9 @@ fn derive_process_job(input: &str, output: Option<&str>, identifiers: Identifier
         None => {
             let config = esdiag::data::ApplicationConfig::load()?;
             if let Some(context) = config.output.elastic_context {
-                let target = ElasticContextTarget {
-                    context: Some(context.context),
-                    application: Application::Elasticsearch,
-                    cloud_deployment: None,
-                    config_file: context.config_file,
-                };
-                esdiag::data::JobOutput::ElasticContext { target }
+                esdiag::data::JobOutput::KnownHost {
+                    name: context.host_reference(),
+                }
             } else if let Some(name) = config.output.default {
                 esdiag::data::JobOutput::KnownHost { name }
             } else {

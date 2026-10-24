@@ -95,26 +95,9 @@ impl OutputDeployment {
     }
 
     pub fn from_elastic_context(context: &ElasticOutputContext, require_kibana: bool) -> Result<Self> {
-        let target = ElasticContextTarget {
-            context: Some(context.context.clone()),
-            application: Application::Elasticsearch,
-            cloud_deployment: None,
-            config_file: context.config_file.clone(),
-        };
-        let (elasticsearch, elasticsearch_auth, kibana, kibana_auth) = target.resolve_output_hosts(require_kibana)?;
+        let (elasticsearch, elasticsearch_auth, kibana, kibana_auth) = context.resolve_output_hosts(require_kibana)?;
         Ok(Self {
             source: OutputDeploymentSource::ElasticContext,
-            elasticsearch,
-            elasticsearch_auth,
-            kibana,
-            kibana_auth,
-        })
-    }
-
-    pub fn from_elastic_target(target: &ElasticContextTarget, require_kibana: bool) -> Result<Self> {
-        let (elasticsearch, elasticsearch_auth, kibana, kibana_auth) = target.resolve_output_hosts(require_kibana)?;
-        Ok(Self {
-            source: OutputDeploymentSource::Explicit,
             elasticsearch,
             elasticsearch_auth,
             kibana,

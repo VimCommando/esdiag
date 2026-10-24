@@ -6,7 +6,7 @@
 
 use super::{Receiver, UploadServiceDownloader};
 use crate::{
-    data::{Application, HostRole, KnownHost, Uri},
+    data::{Application, HostReference, HostRole, Uri},
     job::model::{BindingKey, Input},
 };
 use eyre::{Result, eyre};
@@ -95,7 +95,6 @@ impl InputResolver {
     ) -> Result<ResolvedInput> {
         match input {
             Input::Collect { host, .. } => self.resolve_stable_collect(host),
-            Input::CollectContext { target, .. } => self.resolve_context_collect(target),
             Input::CollectBinding { binding, .. } | Input::LoadBinding { binding } => {
                 self.resolve_binding(binding, materialize_remote, require_local_bundle)
                     .await
@@ -105,37 +104,16 @@ impl InputResolver {
     }
 
     fn resolve_stable_collect(&self, host_name: &str) -> Result<ResolvedInput> {
-        let hosts = KnownHost::parse_hosts_yml()?;
         let host_key = host_name.trim();
-        let host = hosts
-            .get(host_key)
-            .cloned()
-            .ok_or_else(|| eyre!("Host '{host_key}' referenced by job not found in hosts.yml"))?;
-        let resolved = host.resolve()?;
+        let resolved = HostReference::parse(host_key)?
+            .ok_or_else(|| eyre!("Host '{host_key}' referenced by job is no longer configured"))?
+            .resolve()?;
         if !resolved.as_ref().has_role(HostRole::Collect) {
             return Err(eyre!("Collect host '{host_key}' is missing the collect role"));
         }
         let application = resolved.application();
         Ok(ResolvedInput::new(
             Receiver::try_from(resolved.into_known_host())?,
-            Some(application),
-            None,
-            None,
-        ))
-    }
-
-    fn resolve_context_collect(&self, target: &crate::data::ElasticContextTarget) -> Result<ResolvedInput> {
-        let host = target.resolve_collect_host()?;
-        if !host.has_role(HostRole::Collect) {
-            return Err(eyre!(
-                "Elastic CLI context target '{target}' is missing the collect role"
-            ));
-        }
-        let application = host
-            .app()
-            .ok_or_else(|| eyre!("Elastic CLI context target '{target}' has no application"))?;
-        Ok(ResolvedInput::new(
-            Receiver::try_from(host)?,
             Some(application),
             None,
             None,

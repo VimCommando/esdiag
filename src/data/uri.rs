@@ -4,7 +4,9 @@
 
 use crate::env;
 
-use super::{Application, ElasticCloud, KnownHost, KnownHostBuilder, OutputDeployment, ResolvedKnownHost};
+use super::{
+    Application, ElasticCloud, HostReference, KnownHost, KnownHostBuilder, OutputDeployment, ResolvedKnownHost,
+};
 use eyre::{OptionExt, Report, Result, eyre};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -221,15 +223,8 @@ impl TryFrom<&str> for Uri {
             return Ok(Uri::Stream);
         }
 
-        if let Some(host) = KnownHost::resolve_template_reference(uri)? {
-            return host.try_into();
-        }
-
-        if let Ok(host) = KnownHost::from_str(uri) {
-            if host.is_template() {
-                return Err(eyre!(KnownHost::template_guidance(uri)));
-            }
-            return host.try_into();
+        if let Some(reference) = HostReference::parse(uri)? {
+            return reference.resolve()?.try_into();
         }
         tracing::debug!("No known host for {uri}");
 

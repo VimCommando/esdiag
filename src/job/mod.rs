@@ -138,9 +138,6 @@ pub fn validate_saved_job_name(name: &str) -> Result<()> {
 pub async fn run_job(job: SavedJob) -> Result<JobOutcome> {
     match job.input() {
         Input::Collect { host, .. } => tracing::info!("Running saved collect job against {host}"),
-        Input::CollectContext { target, .. } => {
-            tracing::info!("Running saved collect job against Elastic CLI context target {target}")
-        }
         Input::Load { uri } => tracing::info!("Running saved load job from {uri}"),
         Input::CollectBinding { binding, .. } | Input::LoadBinding { binding } => {
             return Err(eyre!(

@@ -2,6 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use super::HostReference;
 use super::keystore::upsert_secret_auth_batch;
 use crate::data::{
     Application, Auth, Platform, SecretAuth, get_keystore_password, resolve_secret_auth as resolve_secret_by_id,
@@ -1097,6 +1098,10 @@ impl KnownHost {
         )
     }
 
+    pub(crate) fn is_template_reference(reference: &str) -> Result<bool> {
+        Ok(parse_template_reference(reference)?.is_some())
+    }
+
     pub fn resolve_template_reference(reference: &str) -> Result<Option<Self>> {
         let Some(parsed) = parse_template_reference(reference)? else {
             return Ok(None);
@@ -1156,6 +1161,11 @@ impl KnownHost {
                 return Err(eyre!("Error parsing hosts.yml"));
             }
         };
+        if HostReference::is_reserved_name(name) {
+            return Err(eyre!(
+                "Host name '{name}' is reserved for Elastic CLI context references. Choose a name that does not start with '.'."
+            ));
+        }
         self.normalize_and_validate_roles(name)?;
         self.validate_template_host_name(name)?;
         if self.secret.is_some() {
