@@ -11,7 +11,7 @@ pub struct NodeStats {
     pub process: Value,
     pub os: Value,
     pub kibana: Option<Value>,
-    pub concurrent_sessions: Option<Value>,
+    pub concurrent_connections: Option<Value>,
     pub elasticsearch_client: Option<Value>,
     pub response_times: Option<Value>,
     pub requests: Option<Value>,
