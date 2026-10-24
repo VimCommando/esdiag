@@ -7,15 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Deserialize, Serialize)]
-pub struct TaskManagerHealth(pub Value);
-
-impl DataSource for TaskManagerHealth {
-    fn name() -> String {
-        "kibana_task_manager_health".to_string()
-    }
-}
-
-#[derive(Deserialize, Serialize)]
 pub struct StackMonitoringHealth(pub Value);
 
 impl DataSource for StackMonitoringHealth {

@@ -11,12 +11,13 @@ ESDiag currently has placeholders for Kibana diagnostic processing but lacks imp
 - Ensure Kibana documents are sent to appropriate data streams (e.g., `metrics-kibana.node-esdiag`).
 
 **Non-Goals:**
-- Implementing dashboards or index templates (handled by `esdiag setup`).
+- Implementing Kibana dashboards (installed separately by `esdiag setup`).
 - Support for legacy (pre-7.x) Kibana diagnostic formats unless they follow current API patterns.
 
 ## Decisions
 
-- **Module Structure**: Create `src/processor/kibana/` with `mod.rs` defining `KibanaDiagnostic` and subdirectories for each capability, following the Logstash diagnostic processor pattern.
+- **Module Structure**: Create `src/processor/kibana/` with `mod.rs` defining `KibanaDiagnostic` and one subdirectory per spec capability, following the Logstash diagnostic processor pattern. A source belongs to the capability whose spec names it, so `kibana_fleet_settings` and `kibana_uptime_settings` live in `settings/` rather than `fleet/` or `synthetics_uptime/`.
+- **Document Shape**: Payload fields are placed at the top level of each document and shared metadata is applied last, so payload keys such as `@timestamp`, `node`, `diagnostic`, or `data_stream` cannot replace document identity. List responses produce one document per item, and non-object items are kept under `value`.
 - **Trait Implementation**: Use `DiagnosticProcessor` for the main `KibanaDiagnostic` and `DocumentExporter` for individual API processors.
 - **Single Node Workflow**: Treat Kibana diagnostics as a single-node workflow, similar to Logstash, as it is representative of Kibana deployments.
 - **Data Model**: Flatten and enrich Kibana JSON outputs with standard ESDiag metadata.

@@ -16,8 +16,6 @@ mod collector;
 mod detection_engine;
 /// Kibana fleet processor
 mod fleet;
-/// Kibana health processor
-mod health;
 /// Kibana diagnostic metadata
 mod metadata;
 /// Kibana node stats processor
@@ -28,10 +26,14 @@ mod security;
 mod settings;
 /// Kibana spaces processor
 mod spaces;
+/// Kibana stack monitoring processor
+mod stack_monitoring;
 /// Kibana status processor
 mod status;
 /// Kibana synthetics and uptime processor
 mod synthetics_uptime;
+/// Kibana task manager processor
+mod task_manager;
 /// Kibana version
 mod version;
 
@@ -55,16 +57,18 @@ use detection_engine::{DetectionEngineHealth, DetectionEngineRules};
 use eyre::{Result, eyre};
 use fleet::{AgentPolicies, AgentStatus, Agents, Packages};
 use futures::future::BoxFuture;
-use health::{StackMonitoringHealth, TaskManagerHealth};
 use metadata::KibanaMetadata;
 use node_stats::NodeStats;
 use security::{Actions, Roles, Users};
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::{Map, Value};
 use settings::{FleetSettings, UptimeSettings};
 use spaces::Spaces;
+use stack_monitoring::StackMonitoringHealth;
 use status::Status;
 use std::{collections::HashSet, sync::Arc};
 use synthetics_uptime::{SyntheticsFilters, UptimeLocations};
+use task_manager::TaskManagerHealth;
 use tokio::sync::mpsc;
 
 type KibanaProcessFn = for<'a> fn(&'a KibanaDiagnostic, mpsc::Sender<ProcessorSummary>) -> BoxFuture<'a, Result<()>>;
@@ -298,6 +302,41 @@ fn is_missing_source_error(error: &eyre::Report) -> bool {
     })
 }
 
+/// Combines a payload with the shared metadata document.
+///
+/// Metadata keys take precedence so payload fields cannot replace document identity,
+/// and non-object payloads are kept under `value`.
+fn document(metadata: &Value, payload: Value) -> Value {
+    let mut document = match payload {
+        Value::Object(fields) => fields,
+        other => Map::from_iter([("value".to_string(), other)]),
+    };
+    if let Value::Object(metadata) = metadata {
+        for (key, value) in metadata {
+            document.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(document)
+}
+
+/// Builds one document per item of a list response.
+///
+/// Items are read from the first `list_keys` entry holding an array, or from a bare
+/// array; any other response becomes a single document.
+fn documents(metadata: &Value, data: Value, list_keys: &[&str]) -> Vec<Value> {
+    let items = if let Some(items) = list_keys
+        .iter()
+        .find_map(|key| data.get(*key).and_then(Value::as_array))
+    {
+        items.clone()
+    } else if let Value::Array(items) = data {
+        items
+    } else {
+        vec![data]
+    };
+    items.into_iter().map(|item| document(metadata, item)).collect()
+}
+
 async fn send_documents<T>(exporter: &Exporter, data_stream: &str, documents: Vec<T>) -> ProcessorSummary
 where
     T: Serialize + Send + Sync,
@@ -498,6 +537,7 @@ mod tests {
         assert_eq!(node[0]["node"]["os"]["load"]["1m"], 0.5);
         assert_eq!(node[0]["node"]["response_times"]["average"], 12);
         assert_eq!(status[0]["status"]["overall"]["level"], "available");
+        assert_eq!(status[0]["status"]["plugins"]["taskManager"]["level"], "available");
         assert_shared_metadata(&node[0]);
         assert_shared_metadata(&status[0]);
         assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
@@ -559,6 +599,64 @@ mod tests {
 
         assert_eq!(read_stream(output.path(), "settings-kibana.fleet-esdiag").len(), 5);
         assert_eq!(read_stream(output.path(), "metrics-kibana.fleet-esdiag").len(), 1);
+        assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
+    }
+
+    #[tokio::test]
+    async fn fleet_packages_split_kibana_7_response_wrapper() {
+        let (output, report) = run_bundle(
+            vec![(
+                "kibana_fleet_packages.json",
+                json!({"response": [{"name": "system"}, {"name": "1password"}]}).to_string(),
+            )],
+            None,
+        )
+        .await;
+
+        let packages = read_stream(output.path(), "settings-kibana.fleet-esdiag");
+        assert_eq!(packages.len(), 2);
+        assert_eq!(packages[0]["name"], "system");
+        assert!(packages[0].get("response").is_none());
+        assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
+    }
+
+    #[tokio::test]
+    async fn payload_fields_cannot_replace_shared_metadata() {
+        let (output, report) = run_bundle(
+            vec![
+                (
+                    "kibana_spaces.json",
+                    json!([
+                        {
+                            "id": "default",
+                            "@timestamp": 1,
+                            "node": {"name": "payload-node"},
+                            "diagnostic": {"id": "payload-diagnostic"},
+                            "data_stream": {"dataset": "payload"}
+                        },
+                        "bare-value"
+                    ])
+                    .to_string(),
+                ),
+                (
+                    "kibana_task_manager_health.json",
+                    json!({"@timestamp": 1, "status": "ok"}).to_string(),
+                ),
+            ],
+            None,
+        )
+        .await;
+
+        let spaces = read_stream(output.path(), "settings-kibana.spaces-esdiag");
+        assert_eq!(spaces.len(), 2);
+        assert_eq!(spaces[0]["id"], "default");
+        assert_shared_metadata(&spaces[0]);
+        assert_eq!(spaces[0]["data_stream"]["dataset"], "kibana.spaces");
+        assert_eq!(spaces[1]["value"], "bare-value");
+        assert_shared_metadata(&spaces[1]);
+        let health = read_stream(output.path(), "metrics-kibana.task_manager-esdiag");
+        assert_eq!(health[0]["status"], "ok");
+        assert_shared_metadata(&health[0]);
         assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
     }
 
