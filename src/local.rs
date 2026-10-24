@@ -58,6 +58,12 @@ impl StackMode {
 pub async fn run(args: &[OsString]) -> Result<CliOutcome> {
     let command = args.first().and_then(|argument| argument.to_str()).unwrap_or("help");
     let options = LocalOptions::parse(args.get(1..).unwrap_or_default())?;
+    if matches!(command, "up" | "setup" | "upgrade") {
+        trial_preference(
+            options.activate_trial,
+            std::env::var("ESDIAG_SETUP_ACTIVATE_TRIAL").ok(),
+        )?;
+    }
     let mut state = LocalState::load(options.state_dir.clone())?;
     state.open_browser = options.open_browser;
     state.copy_password = options.copy_password;
@@ -79,6 +85,7 @@ pub async fn run(args: &[OsString]) -> Result<CliOutcome> {
         "setup" => {
             state.runtime = Some(detect_runtime(options.runtime)?);
             state.validate_state_coupling()?;
+            state.refresh_compose()?;
             state.setup().await?;
         }
         "open" => state.open_browser()?,
@@ -643,13 +650,21 @@ impl LocalState {
         Ok(())
     }
 
+    /// Rewrite an existing stack's `compose.yml` so its setup command follows the pinned image.
+    fn refresh_compose(&self) -> Result<()> {
+        if self.has_existing_state {
+            self.write_compose(self.active_mode())?;
+        }
+        Ok(())
+    }
+
     async fn setup(&mut self) -> Result<()> {
         self.setup_mode(self.active_mode()).await
     }
 
     async fn setup_mode(&mut self, mode: StackMode) -> Result<()> {
         let activate_trial =
-            match trial_preference(self.activate_trial, std::env::var("ESDIAG_SETUP_ACTIVATE_TRIAL").ok()) {
+            match trial_preference(self.activate_trial, std::env::var("ESDIAG_SETUP_ACTIVATE_TRIAL").ok())? {
                 Some(value) => value,
                 None => self.trial_eligible().await,
             };
@@ -1231,15 +1246,22 @@ fn kibana_image() -> String {
 }
 
 /// An explicit option wins; otherwise a boolish `ESDIAG_SETUP_ACTIVATE_TRIAL`; `None` means auto.
-fn trial_preference(option: Option<bool>, environment: Option<String>) -> Option<bool> {
-    option.or_else(|| match environment?.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "y" | "on" => Some(true),
-        "0" | "false" | "no" | "n" | "off" | "" => Some(false),
-        other => {
-            eprintln!("Ignoring ESDIAG_SETUP_ACTIVATE_TRIAL={other:?}; expected true or false.");
-            None
-        }
-    })
+///
+/// An unrecognized value is an error rather than auto, so a misspelled opt-out never starts a trial.
+fn trial_preference(option: Option<bool>, environment: Option<String>) -> Result<Option<bool>> {
+    if option.is_some() {
+        return Ok(option);
+    }
+    let Some(value) = environment else {
+        return Ok(None);
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "y" | "on" => Ok(Some(true)),
+        "0" | "false" | "no" | "n" | "off" | "" => Ok(Some(false)),
+        _ => Err(eyre!(
+            "ESDIAG_SETUP_ACTIVATE_TRIAL must be true or false, got {value:?}"
+        )),
+    }
 }
 
 /// ESDiag images before 0.18 only accept bare `setup`; later images need `setup env`.
@@ -1525,14 +1547,35 @@ mod tests {
     }
 
     #[test]
+    fn setup_refreshes_a_stale_compose_setup_command() {
+        let (_directory, mut state) = state();
+        let compose_path = state.dir.join("compose.yml");
+        state.values.insert("ESDIAG_IMAGE".into(), super::esdiag_image());
+        state.values.insert("STACK_MODE".into(), "full".into());
+        fs::write(&compose_path, "    command: [\"setup\"]\n").expect("stale compose");
+
+        state.refresh_compose().expect("no state to refresh");
+        assert_eq!(fs::read_to_string(&compose_path).unwrap(), "    command: [\"setup\"]\n");
+
+        state.has_existing_state = true;
+        state.refresh_compose().expect("refresh compose");
+        let compose = fs::read_to_string(&compose_path).expect("compose file");
+        assert!(compose.contains("    command: [\"setup\", \"env\"]\n"), "{compose}");
+    }
+
+    #[test]
     fn trial_preference_prefers_the_option_then_the_environment() {
         use super::trial_preference;
-        assert_eq!(trial_preference(None, None), None);
-        assert_eq!(trial_preference(Some(false), Some("true".into())), Some(false));
-        assert_eq!(trial_preference(Some(true), None), Some(true));
-        assert_eq!(trial_preference(None, Some("TRUE".into())), Some(true));
-        assert_eq!(trial_preference(None, Some("0".into())), Some(false));
-        assert_eq!(trial_preference(None, Some("maybe".into())), None);
+        assert_eq!(trial_preference(None, None).unwrap(), None);
+        assert_eq!(trial_preference(Some(false), Some("true".into())).unwrap(), Some(false));
+        assert_eq!(trial_preference(Some(true), None).unwrap(), Some(true));
+        assert_eq!(trial_preference(None, Some("TRUE".into())).unwrap(), Some(true));
+        assert_eq!(trial_preference(None, Some("0".into())).unwrap(), Some(false));
+        assert!(trial_preference(None, Some("flase".into())).is_err());
+        assert_eq!(
+            trial_preference(Some(false), Some("flase".into())).unwrap(),
+            Some(false)
+        );
     }
 
     #[test]

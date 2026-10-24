@@ -41,12 +41,16 @@ impl OutputDeployment {
 
     /// Resolve the named or persisted saved output without consulting `ESDIAG_OUTPUT_*`.
     ///
-    /// The linked Kibana viewer is included when the output has one.
-    pub fn resolve_saved(explicit_target: Option<&str>) -> Result<Self> {
+    /// With `include_viewer`, the linked Kibana viewer is resolved too when the output has one;
+    /// without it, a missing viewer host or viewer credential cannot block Elasticsearch-only work.
+    pub fn resolve_saved(explicit_target: Option<&str>, include_viewer: bool) -> Result<Self> {
         let mut deployment = match explicit_target {
             Some(target) => Self::from_explicit(target, false)?,
             None => Self::from_persisted(false)?,
         };
+        if !include_viewer {
+            return Ok(deployment);
+        }
         if let Some((viewer, auth)) = linked_viewer(&deployment.elasticsearch)? {
             deployment.kibana = Some(viewer);
             deployment.kibana_auth = Some(auth);
@@ -364,7 +368,7 @@ mod tests {
         env.set("ESDIAG_OUTPUT_APIKEY", "runtime-key");
         env.set("ESDIAG_KIBANA_URL", "https://runtime-kb.example:5601");
 
-        let deployment = OutputDeployment::resolve_saved(None).expect("persisted deployment");
+        let deployment = OutputDeployment::resolve_saved(None, true).expect("persisted deployment");
 
         assert_eq!(deployment.source, OutputDeploymentSource::Persisted);
         assert_eq!(
@@ -391,7 +395,7 @@ mod tests {
         hosts.insert("lab-output".to_string(), lab);
         crate::data::KnownHost::write_hosts_yml(&hosts).expect("write hosts");
 
-        let deployment = OutputDeployment::resolve_saved(Some("lab-output")).expect("named deployment");
+        let deployment = OutputDeployment::resolve_saved(Some("lab-output"), true).expect("named deployment");
 
         assert_eq!(deployment.source, OutputDeploymentSource::Explicit);
         assert_eq!(
@@ -407,7 +411,7 @@ mod tests {
         clear_output_environment(&mut env);
         save_linked_hosts();
 
-        let error = OutputDeployment::resolve_saved(Some("saved-kibana")).expect_err("viewer is not an output");
+        let error = OutputDeployment::resolve_saved(Some("saved-kibana"), true).expect_err("viewer is not an output");
 
         assert!(error.to_string().contains("role 'send'"), "{error}");
     }
