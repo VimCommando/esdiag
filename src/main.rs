@@ -665,6 +665,9 @@ async fn async_main() -> Result<ExitCode> {
     init_tracing(resolve_tracing_filter(&cli), resolve_log_file_filter(&cli));
     let stdout_owned = command_owns_stdout(&cli);
     let no_command = cli.command.is_none();
+    if !no_command && !logs_to_terminal(&cli) {
+        esdiag::data::enable_keystore_password_prompt();
+    }
 
     std::panic::set_hook(Box::new(|panic| {
         // Log any panics as errors
@@ -1710,7 +1713,13 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 } => {
                     let keystore_password = get_password_for_secret_commands()?;
                     let (username, password, apikey) = resolve_secret_input(username, password, apikey)?;
-                    let path = add_secret(&secret_id, username, password, apikey, &keystore_password)?;
+                    let path = add_secret(
+                        &secret_id,
+                        username,
+                        password,
+                        apikey,
+                        keystore_password.expose_secret(),
+                    )?;
                     tracing::info!("Secret '{secret_id}' saved to {path}");
                     Ok(CommandResult::outcome(CliOutcome::KeystoreChanged {
                         operation: KeystoreOperation::Added,
@@ -1726,7 +1735,13 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 } => {
                     let keystore_password = get_password_for_secret_commands()?;
                     let (username, password, apikey) = resolve_secret_input(username, password, apikey)?;
-                    let path = update_secret(&secret_id, username, password, apikey, &keystore_password)?;
+                    let path = update_secret(
+                        &secret_id,
+                        username,
+                        password,
+                        apikey,
+                        keystore_password.expose_secret(),
+                    )?;
                     tracing::info!("Secret '{secret_id}' updated in {path}");
                     Ok(CommandResult::outcome(CliOutcome::KeystoreChanged {
                         operation: KeystoreOperation::Updated,
@@ -1742,7 +1757,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 } => {
                     let keystore_password = get_password_for_secret_commands()?;
                     let expected = expected_secret_auth(username, password, apikey)?;
-                    let path = remove_secret(&secret_id, expected, &keystore_password)?;
+                    let path = remove_secret(&secret_id, expected, keystore_password.expose_secret())?;
                     tracing::info!("Secret '{secret_id}' deleted from {path}");
                     Ok(CommandResult::outcome(CliOutcome::KeystoreChanged {
                         operation: KeystoreOperation::Removed,
@@ -1811,9 +1826,10 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                         return Err(eyre!("No keystore exists to update the password."));
                     }
                     let current_password = get_password_for_secret_commands()?;
-                    validate_existing_keystore_password(&current_password)?;
+                    validate_existing_keystore_password(current_password.expose_secret())?;
                     let new_password = prompt_new_keystore_password()?;
-                    let path = rotate_keystore_password(&current_password, &new_password)?;
+                    let path =
+                        rotate_keystore_password(current_password.expose_secret(), new_password.expose_secret())?;
                     tracing::info!("Keystore password updated for {path}");
                     Ok(CommandResult::outcome(CliOutcome::KeystoreChanged {
                         operation: KeystoreOperation::PasswordChanged,
@@ -1823,7 +1839,8 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 }
                 KeystoreCommands::Migrate => {
                     let keystore_password = get_password_for_secret_commands()?;
-                    let (migrated, unchanged) = KnownHost::migrate_hosts_to_keystore(&keystore_password)?;
+                    let (migrated, unchanged) =
+                        KnownHost::migrate_hosts_to_keystore(keystore_password.expose_secret())?;
                     tracing::info!(
                         "Keystore migration complete: migrated {migrated} host(s), unchanged {unchanged} host(s)."
                     );
@@ -2573,17 +2590,17 @@ fn prompt_confirm_default_yes(message: &str) -> Result<bool> {
     prompt_confirmation(message, true)
 }
 
-fn prompt_new_keystore_password() -> Result<String> {
+fn prompt_new_keystore_password() -> Result<Secret<String>> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(eyre!("A new keystore password requires an interactive terminal."));
     }
-    prompt_new_password_with(|prompt| Ok(rpassword::prompt_password(prompt)?))
+    prompt_new_password_with(|prompt| Ok(Secret::new(rpassword::prompt_password(prompt)?)))
 }
 
-fn prompt_new_password_with(mut prompt: impl FnMut(&str) -> Result<String>) -> Result<String> {
+fn prompt_new_password_with(mut prompt: impl FnMut(&str) -> Result<Secret<String>>) -> Result<Secret<String>> {
     loop {
         let password = prompt("Enter new keystore password: ")?;
-        if password.is_empty() {
+        if password.expose_secret().is_empty() {
             eprintln!("Keystore password cannot be empty. Try again.");
             continue;
         }
@@ -2597,8 +2614,8 @@ fn prompt_new_password_with(mut prompt: impl FnMut(&str) -> Result<String>) -> R
 fn unlock_keystore(ttl: Duration) -> Result<std::path::PathBuf> {
     if keystore_exists()? {
         let keystore_password = get_password_for_secret_commands()?;
-        validate_existing_keystore_password(&keystore_password)?;
-        return write_unlock_lease(&keystore_password, ttl);
+        validate_existing_keystore_password(keystore_password.expose_secret())?;
+        return write_unlock_lease(keystore_password.expose_secret(), ttl);
     }
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(eyre!(
@@ -2609,8 +2626,8 @@ fn unlock_keystore(ttl: Duration) -> Result<std::path::PathBuf> {
         return Err(eyre!("Keystore unlock cancelled."));
     }
     let keystore_password = prompt_new_keystore_password()?;
-    create_keystore(&keystore_password)?;
-    write_unlock_lease(&keystore_password, ttl)
+    create_keystore(keystore_password.expose_secret())?;
+    write_unlock_lease(keystore_password.expose_secret(), ttl)
 }
 
 async fn run_init_wizard() -> Result<CommandResult> {
@@ -2808,7 +2825,12 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     }
                     return Err(eyre!("Output validation failed. Run `esdiag init` again to resume."));
                 }
-                if !confirm_output_replacement(&output_name, &viewer_name, &secret_id, &keystore_password)? {
+                if !confirm_output_replacement(
+                    &output_name,
+                    &viewer_name,
+                    &secret_id,
+                    keystore_password.expose_secret(),
+                )? {
                     println!("Existing output configuration was not changed. Choose an output deployment.");
                     continue;
                 }
@@ -2836,7 +2858,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     secret_id,
                     auth,
                 },
-                &keystore_password,
+                keystore_password.expose_secret(),
             )?;
 
             let mut output_config = esdiag::data::ApplicationConfig::load()?;
@@ -2949,7 +2971,9 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     secret_id,
                     auth,
                 },
-                keystore_password.as_deref(),
+                keystore_password
+                    .as_ref()
+                    .map(|password| password.expose_secret().as_str()),
             )?;
             most_recent_collect_host = Some(name);
         }
@@ -3951,7 +3975,7 @@ fn resolve_host_secret_auth(secret_id: Option<&str>) -> Result<Option<SecretAuth
     };
 
     let keystore_password = get_password_for_secret_commands()?;
-    let secret_auth = resolve_secret_auth(secret_id, &keystore_password)?
+    let secret_auth = resolve_secret_auth(secret_id, keystore_password.expose_secret())?
         .ok_or_else(|| eyre!("Secret '{secret_id}' was not found in keystore"))?;
     Ok(Some(secret_auth))
 }
@@ -3978,7 +4002,7 @@ fn resolve_same_name_host_secret_auth(host_name: &str) -> Result<Option<SecretAu
     let Ok(keystore_password) = get_password_for_secret_commands() else {
         return Ok(None);
     };
-    resolve_secret_auth(host_name, &keystore_password)
+    resolve_secret_auth(host_name, keystore_password.expose_secret())
 }
 
 fn host_connection_uses_receiver(uri: &Uri) -> bool {
@@ -4281,11 +4305,11 @@ mod tests {
 
         let password = super::prompt_new_password_with(|prompt| {
             prompts.push(prompt.to_string());
-            Ok(answers.next().expect("unexpected prompt").to_string())
+            Ok(Secret::new(answers.next().expect("unexpected prompt").to_string()))
         })
         .expect("password");
 
-        assert_eq!(password, "second");
+        assert_eq!(password.expose_secret(), "second");
         assert_eq!(prompts.len(), 5);
         assert!(answers.next().is_none());
     }

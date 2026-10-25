@@ -2662,7 +2662,7 @@ mod tests {
     async fn service_mode_keystore_session_remains_disabled() {
         let state = test_state(RuntimeMode::Service);
 
-        state.set_keystore_unlocked("pw".to_string()).await;
+        state.set_keystore_unlocked(redact::Secret::new("pw".to_string())).await;
 
         assert_eq!(state.keystore_status().await, (true, 0));
         assert_eq!(state.keystore_status().await, (true, 0));
@@ -2678,11 +2678,14 @@ mod tests {
 
         let state = Arc::new(test_state(RuntimeMode::User));
 
-        state.set_keystore_unlocked("pw".to_string()).await;
+        state.set_keystore_unlocked(redact::Secret::new("pw".to_string())).await;
 
         assert!(state.is_keystore_unlocked().await);
         assert!(state.is_keystore_unlocked().await);
-        assert_eq!(state.keystore_password().await, Some("pw".to_string()));
+        assert_eq!(
+            state.keystore_password().await,
+            Some(redact::Secret::new("pw".to_string()))
+        );
 
         state.set_keystore_locked("test").await;
 
@@ -2701,7 +2704,10 @@ mod tests {
         let state = Arc::new(test_state(RuntimeMode::User));
 
         assert!(state.is_keystore_unlocked().await);
-        assert_eq!(state.keystore_password().await, Some("pw".to_string()));
+        assert_eq!(
+            state.keystore_password().await,
+            Some(redact::Secret::new("pw".to_string()))
+        );
     }
 
     #[cfg(feature = "keystore")]

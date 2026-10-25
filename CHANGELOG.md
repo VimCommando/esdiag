@@ -29,6 +29,7 @@ published release notes, maintenance branches, and tagged history.
   - `esdiag agent skills --target <agent>` becomes `esdiag setup skills [agent]...`.
 - **Breaking:** Setup no longer starts a trial license on its own. `esdiag setup`, `esdiag init` for an existing output, and web onboarding leave an unlicensed cluster's license alone unless you opt in; without the opt-in they install the Elasticsearch assets, skip the Kibana Agent Builder assets, and report a `partial` outcome. `esdiag init` asks before starting a trial. A new `esdiag local` stack still starts a trial on its first setup (#431).
 - Setup failures without an HTTP response now report the `setup_failed` outcome category.
+- CLI commands that need a saved secret from a locked keystore, such as `esdiag collect`, now prompt for the keystore password on an interactive terminal and continue instead of failing. Non-interactive runs still fail.
 - Updated workspace dependency requirements and the lockfile for the 0.18 development cycle, and regenerated third-party notices.
 - Standardized raw-bundle transfer terminology on `send`, including `esdiag send` and `collect --send`; `upload` now refers only to the Elastic Upload Service.
 

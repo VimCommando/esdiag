@@ -1796,7 +1796,7 @@ fn resolve_auth_with_precedence(
 fn resolve_explicit_secret(secret_id: &str) -> Result<Auth> {
     let keystore_password =
         get_keystore_password().map_err(|err| eyre!("Host references secret '{secret_id}' but {err}"))?;
-    let secret = resolve_secret_by_id(secret_id, &keystore_password)?
+    let secret = resolve_secret_by_id(secret_id, keystore_password.expose_secret())?
         .ok_or_else(|| eyre!("Secret '{secret_id}' was not found in keystore"))?;
     secret_auth_to_auth(secret)
 }

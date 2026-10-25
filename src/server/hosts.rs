@@ -186,7 +186,7 @@ pub async fn page(State(state): State<Arc<ServerState>>, headers: HeaderMap) -> 
     } else {
         match current_keystore_password(&state)
             .await
-            .and_then(|password| read_secret_rows(&password))
+            .and_then(|password| read_secret_rows(password.expose_secret()))
         {
             Ok((rows, ids)) => {
                 state.touch_keystore_session().await;
@@ -485,7 +485,7 @@ pub async fn secret_action(
 
         let secrets = current_keystore_password(&state)
             .await
-            .and_then(|password| read_secret_rows(&password))
+            .and_then(|password| read_secret_rows(password.expose_secret()))
             .map(|(rows, _)| rows)
             .unwrap_or_default();
         let row_id = next_row_id(signal_state.map(|s| &s.secrets), secrets.len());
@@ -513,7 +513,7 @@ pub async fn secret_action(
         "read" => {
             let (secrets, _) = match current_keystore_password(&state)
                 .await
-                .and_then(|password| read_secret_rows(&password))
+                .and_then(|password| read_secret_rows(password.expose_secret()))
             {
                 Ok(result) => result,
                 Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
@@ -553,7 +553,7 @@ pub async fn secret_action(
 
             let (secrets, _) = match current_keystore_password(&state)
                 .await
-                .and_then(|password| read_secret_rows(&password))
+                .and_then(|password| read_secret_rows(password.expose_secret()))
             {
                 Ok(result) => result,
                 Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
@@ -590,7 +590,7 @@ pub async fn secret_action(
         "delete" => {
             let (secrets, _) = match current_keystore_password(&state)
                 .await
-                .and_then(|password| read_secret_rows(&password))
+                .and_then(|password| read_secret_rows(password.expose_secret()))
             {
                 Ok(result) => result,
                 Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
@@ -703,7 +703,7 @@ async fn delete_secret_id_response(state: &Arc<ServerState>, secret_id: String) 
         Err(err) => return secret_delete_error_response(secret_id.trim(), &err),
     };
 
-    match remove_secret(secret_id.trim(), None, &password) {
+    match remove_secret(secret_id.trim(), None, password.expose_secret()) {
         Ok(_) => {
             state.touch_keystore_session().await;
             patch_hosts_and_secrets_response(state).await
@@ -976,7 +976,7 @@ async fn load_table_panel_data(
     } else {
         match current_keystore_password(state)
             .await
-            .and_then(|password| read_secret_rows(&password))
+            .and_then(|password| read_secret_rows(password.expose_secret()))
         {
             Ok((rows, ids)) => {
                 state.touch_keystore_session().await;
@@ -1341,11 +1341,11 @@ async fn apply_upsert_secret(state: &Arc<ServerState>, form: SecretUpsertForm) -
     if let Some(original_secret_id) = form.original_secret_id {
         let original_secret_id = original_secret_id.trim();
         if !original_secret_id.is_empty() && original_secret_id != secret_id {
-            remove_secret(original_secret_id, None, &password).map_err(to_message)?;
+            remove_secret(original_secret_id, None, password.expose_secret()).map_err(to_message)?;
         }
     }
 
-    upsert_secret_auth(secret_id, auth, &password).map_err(to_message)?;
+    upsert_secret_auth(secret_id, auth, password.expose_secret()).map_err(to_message)?;
     state.touch_keystore_session().await;
     Ok(())
 }
@@ -1560,7 +1560,7 @@ async fn load_secret_ids(state: &Arc<ServerState>) -> Vec<String> {
     }
     match current_keystore_password(state)
         .await
-        .and_then(|password| read_secret_rows(&password))
+        .and_then(|password| read_secret_rows(password.expose_secret()))
     {
         Ok((_, ids)) => {
             state.touch_keystore_session().await;
@@ -1723,7 +1723,7 @@ async fn infer_auth_from_secret_selection(
             return Err("Unlock keystore before selecting a secret.".to_string());
         }
         let password = current_keystore_password(state).await?;
-        let resolved = resolve_secret_auth(secret_id, &password).map_err(to_message)?;
+        let resolved = resolve_secret_auth(secret_id, password.expose_secret()).map_err(to_message)?;
         state.touch_keystore_session().await;
         return match resolved {
             Some(SecretAuth::ApiKey { .. }) => Ok("apikey".to_string()),
@@ -1751,7 +1751,7 @@ fn to_message(err: impl std::fmt::Display) -> String {
     err.to_string()
 }
 
-async fn current_keystore_password(state: &Arc<ServerState>) -> Result<String, String> {
+async fn current_keystore_password(state: &Arc<ServerState>) -> Result<redact::Secret<String>, String> {
     state
         .keystore_password()
         .await
@@ -1841,7 +1841,7 @@ mod tests {
             .expect("save api key secret");
 
         let state = test_server_state();
-        state.set_keystore_unlocked("pw".to_string()).await;
+        state.set_keystore_unlocked(redact::Secret::new("pw".to_string())).await;
         apply_upsert_host(
             &state,
             HostUpsertForm {
@@ -2022,7 +2022,7 @@ mod tests {
         .expect("store secret");
 
         let state = test_server_state();
-        state.set_keystore_unlocked("pw".to_string()).await;
+        state.set_keystore_unlocked(redact::Secret::new("pw".to_string())).await;
         state.set_keystore_locked("test timeout").await;
 
         let signals = SecretsUiSignals {
@@ -2070,7 +2070,7 @@ mod tests {
         upsert_secret_auth("existing-secret", SecretAuth::apikey("super-secret-api-key"), "pw").expect("store secret");
 
         let state = test_server_state();
-        state.set_keystore_unlocked("pw".to_string()).await;
+        state.set_keystore_unlocked(redact::Secret::new("pw".to_string())).await;
 
         let response = secret_action(
             axum::extract::State(state),
@@ -2092,7 +2092,7 @@ mod tests {
         upsert_secret_auth("existing-secret", SecretAuth::apikey("super-secret-api-key"), "pw").expect("store secret");
 
         let state = test_server_state();
-        state.set_keystore_unlocked("pw".to_string()).await;
+        state.set_keystore_unlocked(redact::Secret::new("pw".to_string())).await;
 
         let response = delete_secret_by_id(axum::extract::State(state), Path("existing-secret".to_string())).await;
 
@@ -2120,7 +2120,7 @@ mod tests {
         KnownHost::write_hosts_yml(&hosts).expect("write hosts");
 
         let state = test_server_state();
-        state.set_keystore_unlocked("pw".to_string()).await;
+        state.set_keystore_unlocked(redact::Secret::new("pw".to_string())).await;
 
         let response = delete_secret_by_id(axum::extract::State(state), Path("servermore".to_string())).await;
 

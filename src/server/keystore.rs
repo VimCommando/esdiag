@@ -7,6 +7,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, header::RETRY_AFTER},
     response::{IntoResponse, Response},
 };
+use redact::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -105,12 +106,12 @@ impl ServerState {
         // No-op: file-based unlock leases are not refreshed on access.
     }
 
-    pub async fn set_keystore_unlocked(&self, password: String) {
+    pub async fn set_keystore_unlocked(&self, password: Secret<String>) {
         if !self.can_use_keystore_session() {
             tracing::warn!("Ignoring keystore unlock because keystore is unavailable in this runtime mode");
             return;
         }
-        if let Err(err) = crate::data::write_unlock_lease(&password, crate::data::default_unlock_ttl()) {
+        if let Err(err) = crate::data::write_unlock_lease(password.expose_secret(), crate::data::default_unlock_ttl()) {
             tracing::error!("Failed to write keystore unlock lease: {}", err);
             return;
         }
@@ -182,7 +183,7 @@ impl ServerState {
         blocked_until
     }
 
-    pub async fn keystore_password(&self) -> Option<String> {
+    pub async fn keystore_password(&self) -> Option<Secret<String>> {
         if !self.can_use_keystore_session() {
             return None;
         }
@@ -226,7 +227,7 @@ pub async fn status(State(state): State<Arc<ServerState>>) -> impl IntoResponse 
 #[derive(Deserialize, Default)]
 pub(crate) struct KeystoreForm {
     #[serde(default)]
-    password: String,
+    password: Secret<String>,
     #[serde(default)]
     confirm: Option<String>,
 }
@@ -354,8 +355,8 @@ pub async fn bootstrap(State(state): State<Arc<ServerState>>, Form(form): Form<K
         return axum::http::StatusCode::BAD_REQUEST.into_response();
     }
 
-    let password = form.password.trim().to_string();
-    if password.len() < 6 {
+    let password = Secret::new(form.password.expose_secret().trim().to_string());
+    if password.expose_secret().len() < 6 {
         state.publish_event(signal_event(
             r#"{"message":"Keystore password must be at least 6 characters."}"#,
         ));
@@ -365,7 +366,7 @@ pub async fn bootstrap(State(state): State<Arc<ServerState>>, Form(form): Form<K
 
     let should_migrate = migration_needed();
 
-    if let Err(err) = authenticate(&password) {
+    if let Err(err) = authenticate(password.expose_secret()) {
         state.publish_event(signal_event(
             json!({ "message": format!("Failed to initialize keystore: {err}") }).to_string(),
         ));
@@ -373,7 +374,7 @@ pub async fn bootstrap(State(state): State<Arc<ServerState>>, Form(form): Form<K
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    if should_migrate && let Err(err) = KnownHost::migrate_hosts_to_keystore(&password) {
+    if should_migrate && let Err(err) = KnownHost::migrate_hosts_to_keystore(password.expose_secret()) {
         state.publish_event(signal_event(
             json!({ "message": format!("Failed to migrate hosts to keystore: {err}") }).to_string(),
         ));
@@ -386,7 +387,7 @@ pub async fn bootstrap(State(state): State<Arc<ServerState>>, Form(form): Form<K
     #[cfg(feature = "setup")]
     {
         let password = state.keystore_password().await;
-        if let Err(err) = super::web_onboarding::reload_configured_output(&state, password.as_deref()).await {
+        if let Err(err) = super::web_onboarding::reload_configured_output(&state, password.as_ref()).await {
             state.publish_event(signal_event(
                 json!({ "message": format!("Failed to reload configured output: {err}") }).to_string(),
             ));
@@ -420,21 +421,21 @@ pub async fn unlock(
         return response;
     }
 
-    let password = form.password.trim().to_string();
-    if password.is_empty() {
+    let password = Secret::new(form.password.expose_secret().trim().to_string());
+    if password.expose_secret().is_empty() {
         state.publish_event(signal_event(r#"{"message":"Keystore password is required."}"#));
         state.publish_event(signal_event(r#"{"keystore":{"password":"","invalid":true}}"#));
         return axum::http::StatusCode::BAD_REQUEST.into_response();
     }
 
-    match authenticate(&password) {
+    match authenticate(password.expose_secret()) {
         Ok(_) => {
             state.set_keystore_unlocked(password).await;
 
             #[cfg(feature = "setup")]
             {
                 let password = state.keystore_password().await;
-                if let Err(err) = super::web_onboarding::reload_configured_output(&state, password.as_deref()).await {
+                if let Err(err) = super::web_onboarding::reload_configured_output(&state, password.as_ref()).await {
                     state.publish_event(signal_event(
                         json!({ "message": format!("Failed to reload configured output: {err}") }).to_string(),
                     ));
@@ -522,6 +523,7 @@ mod tests {
         http::{HeaderMap, StatusCode},
         response::IntoResponse,
     };
+    use redact::Secret;
     use std::{
         collections::{BTreeMap, HashMap},
         sync::Arc,
@@ -572,7 +574,7 @@ mod tests {
             State(state.clone()),
             HeaderMap::new(),
             Form(KeystoreForm {
-                password: "pw".to_string(),
+                password: Secret::new("pw".to_string()),
                 confirm: None,
             }),
         )
@@ -595,7 +597,7 @@ mod tests {
             State(state.clone()),
             HeaderMap::new(),
             Form(KeystoreForm {
-                password: "pw".to_string(),
+                password: Secret::new("pw".to_string()),
                 confirm: None,
             }),
         )
@@ -614,7 +616,7 @@ mod tests {
             State(state.clone()),
             HeaderMap::new(),
             Form(KeystoreForm {
-                password: "wrong".to_string(),
+                password: Secret::new("wrong".to_string()),
                 confirm: None,
             }),
         )
@@ -635,7 +637,7 @@ mod tests {
             State(state),
             HeaderMap::new(),
             Form(KeystoreForm {
-                password: "pw".to_string(),
+                password: Secret::new("pw".to_string()),
                 confirm: None,
             }),
         )
@@ -671,7 +673,7 @@ mod tests {
             State(state),
             HeaderMap::new(),
             Form(KeystoreForm {
-                password: "pw".to_string(),
+                password: Secret::new("pw".to_string()),
                 confirm: None,
             }),
         )
@@ -825,7 +827,7 @@ mod tests {
         let response = bootstrap(
             State(state),
             Form(KeystoreForm {
-                password: "secretpw".to_string(),
+                password: Secret::new("secretpw".to_string()),
                 confirm: Some("on".to_string()),
             }),
         )
@@ -846,7 +848,7 @@ mod tests {
     async fn lock_is_idempotent_and_preserves_locked_state() {
         let _tmp = setup_env();
         let state = test_server_state();
-        state.set_keystore_unlocked("pw".to_string()).await;
+        state.set_keystore_unlocked(redact::Secret::new("pw".to_string())).await;
 
         let response = lock(State(state.clone())).await.into_response();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
@@ -884,7 +886,7 @@ mod tests {
             State(state.clone()),
             HeaderMap::new(),
             Form(KeystoreForm {
-                password: "pw".to_string(),
+                password: Secret::new("pw".to_string()),
                 confirm: None,
             }),
         )
@@ -910,7 +912,7 @@ mod tests {
             State(state.clone()),
             HeaderMap::new(),
             Form(KeystoreForm {
-                password: "pw".to_string(),
+                password: Secret::new("pw".to_string()),
                 confirm: None,
             }),
         )
@@ -979,7 +981,7 @@ mod tests {
             "secure output should require unlock"
         );
 
-        state.set_keystore_unlocked("pw".to_string()).await;
+        state.set_keystore_unlocked(redact::Secret::new("pw".to_string())).await;
         ensure_unlocked_for_active_output(&state)
             .await
             .expect("secure output should pass once unlocked");
@@ -1116,7 +1118,7 @@ mod tests {
             State(state),
             HeaderMap::new(),
             Form(KeystoreForm {
-                password: "   ".to_string(),
+                password: Secret::new("   ".to_string()),
                 confirm: None,
             }),
         )

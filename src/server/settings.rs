@@ -186,7 +186,7 @@ pub async fn update_settings(
         #[cfg(feature = "keystore")]
         let keystore_password = state.keystore_password().await;
         #[cfg(not(feature = "keystore"))]
-        let keystore_password: Option<String> = None;
+        let keystore_password: Option<redact::Secret<String>> = None;
 
         let next_exporter = if !target_changed {
             Ok(current_exporter)
