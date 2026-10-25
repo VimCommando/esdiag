@@ -15,6 +15,10 @@ The system SHALL process every available file for a selected Kibana source acros
 - **WHEN** a supported subtree such as `spaces/<space>` cannot be read
 - **THEN** the system processes the source files discovered elsewhere and records a processing event naming the unreadable subtree
 
+#### Scenario: Archive entry order
+- **WHEN** a bundle archive's first entry is a space-scoped or paginated file, at the archive root or under one top-level directory
+- **THEN** the system locates the bundle root from its manifest and processes the bundle as if the root files came first
+
 #### Scenario: Legacy numbered source processing
 - **WHEN** a diagnostic contains a legacy source file such as `kibana_alerts_1.json`
 - **THEN** the system processes the numbered file as an instance of its canonical source

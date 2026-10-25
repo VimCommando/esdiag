@@ -44,3 +44,4 @@
 - [x] 6.3 Record the Kibana space of space-scoped documents in `space.id`
 - [x] 6.4 Treat sources the target Kibana version does not offer as unavailable
 - [x] 6.5 Stage Kibana `Collect` + `Process` jobs without `Save` through a temporary bundle
+- [x] 6.6 Locate archive bundle roots from the manifest instead of the first entry

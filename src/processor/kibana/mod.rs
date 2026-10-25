@@ -1027,46 +1027,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn archive_processes_every_space_scoped_page() {
-        let directory = tempfile::tempdir().expect("archive directory");
-        let archive = directory.path().join("kibana-pages.zip");
-        let mut writer = ZipWriter::new(File::create(&archive).expect("archive file"));
-        let options = SimpleFileOptions::default();
-        for (path, contents) in [
-            (
-                "bundle/diagnostic_manifest.json",
-                json!({
-                    "mode": "support",
-                    "product": "kibana",
-                    "diagnostic": "kibana-test",
-                    "type": "kibana-diagnostics",
-                    "runner": "esdiag",
-                    "version": "8.19.3",
-                    "timestamp": "2026-08-30T12:00:00Z",
-                    "collection_date_millis": 1788091200000_u64
-                })
-                .to_string(),
-            ),
-            ("bundle/kibana_status.json", STATUS.to_string()),
-            (
-                "bundle/spaces/default/pages/page-0001/kibana_alerts.json",
-                json!({"data": [{"alert": 1}]}).to_string(),
-            ),
-            (
-                "bundle/spaces/default/pages/page-0002/kibana_alerts.json",
-                json!({"data": [{"alert": 2}]}).to_string(),
-            ),
-        ] {
-            writer.start_file(path, options).expect("archive entry");
-            writer.write_all(contents.as_bytes()).expect("archive contents");
+    async fn archive_processes_every_space_scoped_page_written_first() {
+        for prefix in ["", "bundle/"] {
+            let directory = tempfile::tempdir().expect("archive directory");
+            let archive = directory.path().join("kibana-pages.zip");
+            let mut writer = ZipWriter::new(File::create(&archive).expect("archive file"));
+            let options = SimpleFileOptions::default();
+            for (path, contents) in [
+                (
+                    "spaces/default/pages/page-0001/kibana_alerts.json",
+                    json!({"data": [{"alert": 1}]}).to_string(),
+                ),
+                (
+                    "spaces/default/pages/page-0002/kibana_alerts.json",
+                    json!({"data": [{"alert": 2}]}).to_string(),
+                ),
+                (
+                    "diagnostic_manifest.json",
+                    json!({
+                        "mode": "support",
+                        "product": "kibana",
+                        "diagnostic": "kibana-test",
+                        "type": "kibana-diagnostics",
+                        "runner": "esdiag",
+                        "version": "8.19.3",
+                        "timestamp": "2026-08-30T12:00:00Z",
+                        "collection_date_millis": 1788091200000_u64
+                    })
+                    .to_string(),
+                ),
+                ("kibana_status.json", STATUS.to_string()),
+            ] {
+                writer
+                    .start_file(format!("{prefix}{path}"), options)
+                    .expect("archive entry");
+                writer.write_all(contents.as_bytes()).expect("archive contents");
+            }
+            writer.finish().expect("finish archive");
+
+            let receiver = Arc::new(Receiver::try_from(Uri::File(archive)).expect("archive receiver"));
+            let (output, report) = run_receiver(receiver, Some(vec!["kibana_status", "kibana_alerts"])).await;
+
+            assert_eq!(
+                read_stream(output.path(), "settings-kibana.alerts-esdiag").len(),
+                2,
+                "prefix {prefix:?}"
+            );
+            assert_eq!(report.outcome(), DiagnosticOutcome::Complete, "prefix {prefix:?}");
         }
-        writer.finish().expect("finish archive");
-
-        let receiver = Arc::new(Receiver::try_from(Uri::File(archive)).expect("archive receiver"));
-        let (output, report) = run_receiver(receiver, Some(vec!["kibana_status", "kibana_alerts"])).await;
-
-        assert_eq!(read_stream(output.path(), "settings-kibana.alerts-esdiag").len(), 2);
-        assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
     }
 
     #[test]
