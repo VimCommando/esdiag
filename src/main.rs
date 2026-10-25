@@ -3870,14 +3870,13 @@ fn process_kibana_space() -> Option<String> {
 fn setup_service_host(name: Option<&str>, app: Application) -> Result<KnownHost> {
     let subcommand = app.to_string().to_ascii_lowercase();
     let Some(name) = name else {
-        let deployment = OutputDeployment::resolve_saved(None, app == Application::Kibana)?;
         return match app {
-            Application::Kibana => deployment.kibana.ok_or_else(|| {
+            Application::Kibana => OutputDeployment::persisted_viewer()?.ok_or_else(|| {
                 eyre!(
                     "The persisted output has no linked Kibana viewer. Run `esdiag setup kibana <HOST>` with a saved Kibana host."
                 )
             }),
-            _ => Ok(deployment.elasticsearch),
+            _ => Ok(OutputDeployment::resolve_saved(None, false)?.elasticsearch),
         };
     };
     let host = KnownHost::get_known(&name.to_string()).ok_or_else(|| {
@@ -4562,6 +4561,39 @@ mod tests {
 
         assert!(super::setup_service_host(None, Application::Elasticsearch).is_ok());
         let error = super::setup_service_host(None, Application::Kibana)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing-secret"), "{error}");
+    }
+
+    #[cfg(feature = "setup")]
+    #[test]
+    fn setup_kibana_ignores_an_unavailable_output_credential() {
+        let _env = TestEnv::new();
+        let output = esdiag::data::KnownHostBuilder::new(Url::parse("https://es.example:9200").unwrap())
+            .application(Application::Elasticsearch)
+            .roles(vec![esdiag::data::HostRole::Send])
+            .secret(Some("missing-secret".to_string()))
+            .viewer(Some("kb".to_string()))
+            .build()
+            .unwrap();
+        let viewer = esdiag::data::KnownHostBuilder::new(Url::parse("https://kb.example:5601").unwrap())
+            .application(Application::Kibana)
+            .roles(vec![esdiag::data::HostRole::View])
+            .build()
+            .unwrap();
+        KnownHost::write_hosts_yml(&std::collections::BTreeMap::from([
+            ("out".to_string(), output),
+            ("kb".to_string(), viewer),
+        ]))
+        .unwrap();
+        let mut config = esdiag::data::ApplicationConfig::new();
+        config.output.default = Some("out".to_string());
+        config.save().unwrap();
+
+        let viewer = super::setup_service_host(None, Application::Kibana).expect("viewer without the output secret");
+        assert_eq!(viewer.app(), Some(Application::Kibana));
+        let error = super::setup_service_host(None, Application::Elasticsearch)
             .unwrap_err()
             .to_string();
         assert!(error.contains("missing-secret"), "{error}");

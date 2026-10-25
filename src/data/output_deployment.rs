@@ -64,14 +64,15 @@ impl OutputDeployment {
         Self::from_saved(OutputDeploymentSource::Explicit, output, require_kibana)
     }
 
+    /// The persisted output's linked Kibana viewer, resolved without the output's own Elasticsearch credential.
+    pub fn persisted_viewer() -> Result<Option<KnownHost>> {
+        let output = persisted_output()?;
+        validate_send_host(&output, "output deployment")?;
+        Ok(linked_viewer(&output)?.map(|(viewer, _)| viewer))
+    }
+
     fn from_persisted(require_kibana: bool) -> Result<Self> {
-        let config = ApplicationConfig::load()?;
-        let output_name = config.output.default.ok_or_else(|| {
-            eyre!("No output deployment is configured. Run `esdiag init` or provide an explicit output target.")
-        })?;
-        let output = KnownHost::get_known(&output_name)
-            .ok_or_else(|| eyre!("Configured output host '{output_name}' was not found"))?;
-        Self::from_saved(OutputDeploymentSource::Persisted, output, require_kibana)
+        Self::from_saved(OutputDeploymentSource::Persisted, persisted_output()?, require_kibana)
     }
 
     fn from_saved(source: OutputDeploymentSource, elasticsearch: KnownHost, require_kibana: bool) -> Result<Self> {
@@ -175,6 +176,14 @@ fn validate_send_host(host: &KnownHost, context: &str) -> Result<()> {
         return Err(eyre!("{context} must be an Elasticsearch host with role 'send'"));
     }
     Ok(())
+}
+
+fn persisted_output() -> Result<KnownHost> {
+    let config = ApplicationConfig::load()?;
+    let output_name = config.output.default.ok_or_else(|| {
+        eyre!("No output deployment is configured. Run `esdiag init` or provide an explicit output target.")
+    })?;
+    KnownHost::get_known(&output_name).ok_or_else(|| eyre!("Configured output host '{output_name}' was not found"))
 }
 
 fn linked_viewer(elasticsearch: &KnownHost) -> Result<Option<(KnownHost, Auth)>> {
