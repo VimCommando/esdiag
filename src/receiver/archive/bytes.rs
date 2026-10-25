@@ -5,7 +5,7 @@
 use super::resolve_archive_path;
 use crate::{
     processor::{DataSource, SourceContext, StreamingDataSource},
-    receiver::{MissingSource, Receive, ReceiveMultiple},
+    receiver::{MissingSource, Receive, ReceiveMultiple, SourceInstance},
 };
 use bytes::Bytes;
 use eyre::{Result, WrapErr, eyre};
@@ -130,7 +130,7 @@ impl std::fmt::Display for ArchiveBytesReceiver {
 }
 
 impl ArchiveBytesReceiver {
-    pub async fn get_all<T>(&self) -> Result<Vec<Result<T>>>
+    pub async fn get_all<T>(&self) -> Result<Vec<SourceInstance<T>>>
     where
         T: DataSource + DeserializeOwned,
     {

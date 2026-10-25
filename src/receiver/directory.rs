@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use super::super::processor::{DataSource, SourceContext, StreamingDataSource};
-use super::{MissingSource, RawResponse, Receive, ReceiveMultiple, ReceiveRaw};
+use super::{MissingSource, RawResponse, Receive, ReceiveMultiple, ReceiveRaw, SourceInstance};
 use eyre::{Result, WrapErr, eyre};
 use futures::stream::{self, BoxStream};
 use serde::de::DeserializeOwned;
@@ -205,7 +205,7 @@ impl std::fmt::Display for DirectoryReceiver {
 }
 
 impl DirectoryReceiver {
-    pub async fn get_all<T>(&self) -> Result<Vec<Result<T>>>
+    pub async fn get_all<T>(&self) -> Result<Vec<SourceInstance<T>>>
     where
         T: DataSource + DeserializeOwned,
     {
@@ -222,21 +222,9 @@ impl DirectoryReceiver {
 
         Ok(filenames
             .into_iter()
-            .map(|filename| {
-                let file = File::open(&filename)
-                    .wrap_err_with(|| format!("Failed to read {} for {}", filename.display(), T::name()))?;
-                let mut contents = String::new();
-                BufReader::new(file)
-                    .read_to_string(&mut contents)
-                    .wrap_err_with(|| format!("Failed to read {} for {}", filename.display(), T::name()))?;
-                if contents.trim().is_empty() {
-                    return Err(MissingSource::Empty {
-                        path: filename.display().to_string(),
-                    }
-                    .into());
-                }
-                serde_json::from_str(&contents)
-                    .wrap_err_with(|| format!("Failed to parse {} for {}", filename.display(), T::name()))
+            .map(|(filename, path)| SourceInstance {
+                data: read_directory_source(&filename),
+                path,
             })
             .collect())
     }
@@ -295,25 +283,46 @@ impl DirectoryReceiver {
     }
 }
 
+fn read_directory_source<T>(filename: &Path) -> Result<T>
+where
+    T: DataSource + DeserializeOwned,
+{
+    let file =
+        File::open(filename).wrap_err_with(|| format!("Failed to read {} for {}", filename.display(), T::name()))?;
+    let mut contents = String::new();
+    BufReader::new(file)
+        .read_to_string(&mut contents)
+        .wrap_err_with(|| format!("Failed to read {} for {}", filename.display(), T::name()))?;
+    if contents.trim().is_empty() {
+        return Err(MissingSource::Empty {
+            path: filename.display().to_string(),
+        }
+        .into());
+    }
+    serde_json::from_str(&contents)
+        .wrap_err_with(|| format!("Failed to parse {} for {}", filename.display(), T::name()))
+}
+
+/// Collects matching source files as `(absolute path, path relative to root)` pairs.
 fn collect_source_files(
     root: &Path,
     directory: &Path,
     candidates: &[String],
-    filenames: &mut Vec<PathBuf>,
+    filenames: &mut Vec<(PathBuf, String)>,
 ) -> Result<()> {
     for entry in std::fs::read_dir(directory)? {
         let entry = entry?;
         let file_type = entry.file_type()?;
         let path = entry.path();
-        if file_type.is_dir() {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| eyre!("Source path escaped diagnostic root: {}", path.display()))?
+            .to_string_lossy()
+            .into_owned();
+        if file_type.is_dir() && super::may_contain_source_instance(&relative, candidates) {
             collect_source_files(root, &path, candidates, filenames)?;
-        } else if file_type.is_file() {
-            let relative = path
-                .strip_prefix(root)
-                .map_err(|_| eyre!("Source path escaped diagnostic root: {}", path.display()))?;
-            if super::is_source_instance_path(relative.to_string_lossy().as_ref(), candidates) {
-                filenames.push(path);
-            }
+        } else if file_type.is_file() && super::is_source_instance_path(&relative, candidates) {
+            filenames.push((path, relative));
         }
     }
     Ok(())

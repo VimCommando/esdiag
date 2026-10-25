@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the Elastic License 2.0.
 
 use crate::processor::{DataSource, SourceContext, StreamingDataSource};
-use crate::receiver::{MissingSource, is_source_instance_path};
+use crate::receiver::{MissingSource, SourceInstance, is_source_instance_path};
 use eyre::{Result, WrapErr};
 use futures::stream::{self, BoxStream};
 use serde::de::DeserializeOwned;
@@ -25,7 +25,7 @@ pub fn get_all_from_archive<R, T>(
     archive: &mut ZipArchive<R>,
     subdir: Option<&PathBuf>,
     ctx: &SourceContext,
-) -> Result<Vec<Result<T>>>
+) -> Result<Vec<SourceInstance<T>>>
 where
     R: Read + Seek,
     T: DataSource + DeserializeOwned,
@@ -39,12 +39,12 @@ where
     let root = root.to_string_lossy().replace('\\', "/");
     let root = root.trim_matches('/');
 
-    let mut filenames: Vec<String> = archive
+    let mut filenames: Vec<(String, String)> = archive
         .file_names()
         .filter_map(|filename| {
             let normalized = filename.replace('\\', "/");
-            let relative = strip_archive_root(&normalized, root)?;
-            is_source_instance_path(relative, &candidates).then_some(normalized)
+            let relative = strip_archive_root(&normalized, root)?.to_string();
+            is_source_instance_path(&relative, &candidates).then_some((normalized, relative))
         })
         .collect();
     filenames.sort();
@@ -56,20 +56,29 @@ where
 
     Ok(filenames
         .into_iter()
-        .map(|filename| {
-            let file = archive
-                .by_name(&filename)
-                .wrap_err_with(|| format!("Failed to read {filename} from archive"))?;
-            let mut contents = String::new();
-            BufReader::new(file)
-                .read_to_string(&mut contents)
-                .wrap_err_with(|| format!("Failed to read {filename} for {}", T::name()))?;
-            if contents.trim().is_empty() {
-                return Err(MissingSource::Empty { path: filename }.into());
-            }
-            serde_json::from_str(&contents).wrap_err_with(|| format!("Failed to parse {filename} for {}", T::name()))
+        .map(|(filename, path)| SourceInstance {
+            data: read_archive_source(archive, filename),
+            path,
         })
         .collect())
+}
+
+fn read_archive_source<R, T>(archive: &mut ZipArchive<R>, filename: String) -> Result<T>
+where
+    R: Read + Seek,
+    T: DataSource + DeserializeOwned,
+{
+    let file = archive
+        .by_name(&filename)
+        .wrap_err_with(|| format!("Failed to read {filename} from archive"))?;
+    let mut contents = String::new();
+    BufReader::new(file)
+        .read_to_string(&mut contents)
+        .wrap_err_with(|| format!("Failed to read {filename} for {}", T::name()))?;
+    if contents.trim().is_empty() {
+        return Err(MissingSource::Empty { path: filename }.into());
+    }
+    serde_json::from_str(&contents).wrap_err_with(|| format!("Failed to parse {filename} for {}", T::name()))
 }
 
 fn strip_archive_root<'a>(filename: &'a str, root: &str) -> Option<&'a str> {

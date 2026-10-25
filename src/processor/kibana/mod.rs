@@ -50,7 +50,7 @@ use super::{
 use crate::{
     data::{self, Application},
     exporter::Exporter,
-    receiver::{MissingSource, Receiver},
+    receiver::{MissingSource, Receiver, SourceInstance},
 };
 use alerts::{AlertHealth, Alerts};
 use detection_engine::{DetectionEngineHealth, DetectionEngineRules};
@@ -254,17 +254,20 @@ impl KibanaDiagnostic {
                     .map_err(|error| eyre!(error))?;
                 return Ok(());
             }
-            Err(error) => vec![Err(error)],
+            Err(error) => vec![SourceInstance {
+                path: T::name(),
+                data: Err(error),
+            }],
         };
 
         let mut summary: Option<ProcessorSummary> = None;
         let mut pending_errors = Vec::new();
         for instance in instances {
-            match instance {
+            let space = instance.space().map(str::to_string);
+            match instance.data {
                 Ok(data) => {
-                    let mut next = data
-                        .documents_export(&self.exporter, &self.lookups, &self.metadata)
-                        .await;
+                    let metadata = self.metadata.for_space(space.as_deref());
+                    let mut next = data.documents_export(&self.exporter, &self.lookups, &metadata).await;
                     // Sources can share a data stream, and the report keys summaries by processor.
                     next.processor = T::name();
                     match &mut summary {
@@ -646,6 +649,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn space_scoped_documents_keep_their_space() {
+        let (output, report) = run_bundle(
+            vec![
+                (
+                    "spaces/default/kibana_actions.json",
+                    json!([{"id": "email"}]).to_string(),
+                ),
+                (
+                    "spaces/marketing/pages/page-0001/kibana_actions.json",
+                    json!([{"id": "slack"}]).to_string(),
+                ),
+                ("kibana_roles.json", json!([{"role": "admin"}]).to_string()),
+            ],
+            Some(vec!["kibana_status", "kibana_actions", "kibana_roles"]),
+        )
+        .await;
+
+        let documents = read_stream(output.path(), "settings-kibana.security-esdiag");
+        let space_of = |id: &str| {
+            documents
+                .iter()
+                .find(|document| document["id"] == id || document["role"] == id)
+                .map(|document| document["space"]["id"].clone())
+                .unwrap_or_else(|| panic!("{id} was not exported"))
+        };
+        assert_eq!(space_of("email"), "default");
+        assert_eq!(space_of("slack"), "marketing");
+        assert_eq!(space_of("admin"), Value::Null);
+        assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unreadable_unrelated_directories_do_not_block_sources() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let input = tempfile::tempdir().expect("input directory");
+        fs::write(
+            input.path().join(DiagnosticManifest::FILENAME),
+            json!({
+                "product": "kibana",
+                "diagnostic": "kibana-test",
+                "type": "kibana-diagnostics",
+                "runner": "esdiag",
+                "version": "8.19.3",
+                "timestamp": "2026-08-30T12:00:00Z"
+            })
+            .to_string(),
+        )
+        .expect("write manifest");
+        fs::write(input.path().join("kibana_status.json"), STATUS).expect("write status");
+        let logs = input.path().join("logs");
+        fs::create_dir(&logs).expect("create logs");
+        fs::set_permissions(&logs, fs::Permissions::from_mode(0o000)).expect("lock logs");
+
+        let receiver = Arc::new(Receiver::try_from(Uri::Directory(input.path().to_path_buf())).expect("receiver"));
+        let (output, report) = run_receiver(receiver, Some(vec!["kibana_status"])).await;
+        fs::set_permissions(&logs, fs::Permissions::from_mode(0o755)).expect("unlock logs");
+
+        assert_eq!(read_stream(output.path(), "metrics-kibana.status-esdiag").len(), 1);
+        assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
+    }
+
+    #[tokio::test]
     async fn fleet_packages_split_kibana_7_response_wrapper() {
         let (output, report) = run_bundle(
             vec![(
@@ -850,7 +917,8 @@ mod tests {
         receiver.try_get_manifest().await.expect("archive manifest");
         let alerts = receiver.get_all::<Alerts>().await.expect("scoped alerts");
         assert_eq!(alerts.len(), 1);
-        assert!(alerts.into_iter().all(|alert| alert.is_ok()));
+        assert!(alerts.iter().all(|alert| alert.data.is_ok()));
+        assert!(alerts.iter().all(|alert| alert.space() == Some("default")));
         let (output, report) = run_receiver(receiver, None).await;
 
         assert!(

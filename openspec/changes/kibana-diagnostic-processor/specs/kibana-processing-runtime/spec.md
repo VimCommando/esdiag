@@ -7,6 +7,10 @@ The system SHALL process every available file for a selected Kibana source acros
 - **WHEN** a selected source has files under `spaces/<space>`, `pages/page-*`, or both
 - **THEN** the system processes every matching file exactly once in deterministic path order
 
+#### Scenario: Unrelated subtrees are not searched
+- **WHEN** a directory bundle contains subdirectories outside the root, `spaces/<space>`, and `pages/page-*` layouts, including unreadable ones
+- **THEN** source discovery skips them and processes the selected sources that exist in the supported layouts
+
 #### Scenario: Legacy numbered source processing
 - **WHEN** a diagnostic contains a legacy source file such as `kibana_alerts_1.json`
 - **THEN** the system processes the numbered file as an instance of its canonical source

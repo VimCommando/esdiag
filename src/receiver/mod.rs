@@ -211,7 +211,7 @@ impl Receiver {
     ///
     /// Bundle receivers include root, space-scoped, paginated, and legacy
     /// numbered files. Live receivers return the single API response.
-    pub async fn get_all<T>(&self) -> Result<Vec<Result<T>>>
+    pub async fn get_all<T>(&self) -> Result<Vec<SourceInstance<T>>>
     where
         T: DataSource + DeserializeOwned,
     {
@@ -219,7 +219,10 @@ impl Receiver {
             Receiver::ArchiveBytes(receiver) => receiver.get_all::<T>().await,
             Receiver::ArchiveFile(receiver) => receiver.get_all::<T>().await,
             Receiver::Directory(receiver) => receiver.get_all::<T>().await,
-            _ => Ok(vec![self.get::<T>().await]),
+            _ => Ok(vec![SourceInstance {
+                path: T::name(),
+                data: self.get::<T>().await,
+            }]),
         }
     }
 
@@ -438,21 +441,31 @@ impl Receiver {
     }
 }
 
+/// One decoded file of a source, with its path relative to the bundle root.
+pub struct SourceInstance<T> {
+    pub path: String,
+    pub data: Result<T>,
+}
+
+impl<T> SourceInstance<T> {
+    /// The Kibana space a `spaces/<space>/` scoped file was collected from.
+    pub fn space(&self) -> Option<&str> {
+        match path_components(&self.path).as_slice() {
+            ["spaces", space, _, ..] => Some(space),
+            _ => None,
+        }
+    }
+}
+
 /// Match a source file relative to a bundle root.
 ///
 /// Collector-owned scope prefixes are deliberately explicit so a parent
 /// receiver cannot consume a similarly named file from an included diagnostic.
 pub(crate) fn is_source_instance_path(path: &str, candidates: &[String]) -> bool {
-    let path_components: Vec<&str> = path
-        .split(['/', '\\'])
-        .filter(|component| !component.is_empty() && *component != ".")
-        .collect();
+    let path_components = path_components(path);
 
     candidates.iter().any(|candidate| {
-        let candidate_components: Vec<&str> = candidate
-            .split(['/', '\\'])
-            .filter(|component| !component.is_empty() && *component != ".")
-            .collect();
+        let candidate_components = self::path_components(candidate);
         if path_components.len() < candidate_components.len() || candidate_components.is_empty() {
             return false;
         }
@@ -470,6 +483,34 @@ pub(crate) fn is_source_instance_path(path: &str, candidates: &[String]) -> bool
             && source_filename_matches(source_file, candidate_file)
             && valid_source_scope(scope)
     })
+}
+
+/// Whether a directory relative to a bundle root can contain a source instance.
+///
+/// Discovery uses this to skip subtrees, such as included diagnostics or logs,
+/// that `is_source_instance_path` would never match.
+pub(crate) fn may_contain_source_instance(directory: &str, candidates: &[String]) -> bool {
+    let directory_components = path_components(directory);
+    candidates.iter().any(|candidate| {
+        let candidate_components = path_components(candidate);
+        let Some((_, candidate_dirs)) = candidate_components.split_last() else {
+            return false;
+        };
+        (0..=directory_components.len()).any(|split| {
+            let (scope, source_dirs) = directory_components.split_at(split);
+            if source_dirs.is_empty() {
+                valid_source_scope_prefix(scope)
+            } else {
+                valid_source_scope(scope) && candidate_dirs.starts_with(source_dirs)
+            }
+        })
+    })
+}
+
+fn path_components(path: &str) -> Vec<&str> {
+    path.split(['/', '\\'])
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect()
 }
 
 fn source_filename_matches(actual: &str, candidate: &str) -> bool {
@@ -505,6 +546,14 @@ fn valid_source_scope(scope: &[&str]) -> bool {
         ["pages", page] => valid_page_directory(page),
         ["spaces", space, "pages", page] => !space.is_empty() && valid_page_directory(page),
         _ => false,
+    }
+}
+
+fn valid_source_scope_prefix(scope: &[&str]) -> bool {
+    match scope {
+        [] | ["spaces"] | ["pages"] => true,
+        ["spaces", space] | ["spaces", space, "pages"] => !space.is_empty(),
+        _ => valid_source_scope(scope),
     }
 }
 
@@ -598,7 +647,7 @@ impl std::fmt::Display for Receiver {
 
 #[cfg(test)]
 mod tests {
-    use super::{DirectoryReceiver, Receiver, is_source_instance_path};
+    use super::{DirectoryReceiver, Receiver, is_source_instance_path, may_contain_source_instance};
     use crate::data::{Application, KnownHostBuilder};
     use url::Url;
 
@@ -701,5 +750,35 @@ mod tests {
         ] {
             assert!(!is_source_instance_path(path, &candidates), "{path}");
         }
+    }
+
+    #[test]
+    fn source_discovery_only_descends_into_collector_scopes() {
+        let candidates = vec!["kibana_alerts.json".to_string()];
+
+        for directory in [
+            "",
+            "spaces",
+            "spaces/default",
+            "spaces/default/pages",
+            "spaces/default/pages/page-0001",
+            "pages",
+            "pages/page-0002",
+        ] {
+            assert!(may_contain_source_instance(directory, &candidates), "{directory}");
+        }
+        for directory in [
+            "logs",
+            "included/elasticsearch",
+            "spaces/default/included",
+            "pages/not-a-page",
+            "spaces/default/pages/page-0001/extra",
+        ] {
+            assert!(!may_contain_source_instance(directory, &candidates), "{directory}");
+        }
+        assert!(may_contain_source_instance(
+            "spaces/default/nested",
+            &["nested/kibana_alerts.json".to_string()]
+        ));
     }
 }

@@ -5,7 +5,7 @@
 use super::resolve_archive_path;
 use crate::{
     processor::{DataSource, SourceContext, StreamingDataSource},
-    receiver::{MissingSource, RawResponse, Receive, ReceiveMultiple, ReceiveRaw},
+    receiver::{MissingSource, RawResponse, Receive, ReceiveMultiple, ReceiveRaw, SourceInstance},
 };
 use eyre::{Result, WrapErr, eyre};
 use futures::stream::BoxStream;
@@ -191,7 +191,7 @@ impl std::fmt::Display for ArchiveFileReceiver {
 }
 
 impl ArchiveFileReceiver {
-    pub async fn get_all<T>(&self) -> Result<Vec<Result<T>>>
+    pub async fn get_all<T>(&self) -> Result<Vec<SourceInstance<T>>>
     where
         T: DataSource + DeserializeOwned,
     {

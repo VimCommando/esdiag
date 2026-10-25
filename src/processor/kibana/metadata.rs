@@ -25,6 +25,14 @@ pub struct MetadataDoc {
     pub node: Version,
     pub diagnostic: DiagnosticDocMetadata,
     pub data_stream: DataStreamName,
+    /// The Kibana space of a space-scoped source file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space: Option<SpaceMetadata>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct SpaceMetadata {
+    pub id: String,
 }
 
 /// The per-document `diagnostic.*` envelope: the diagnostic metadata plus the
@@ -61,6 +69,7 @@ impl KibanaMetadata {
                 application,
             },
             data_stream: DataStreamName::from("metrics-default-esdiag"),
+            space: None,
         };
 
         Ok(Self {
@@ -69,6 +78,12 @@ impl KibanaMetadata {
             diagnostic,
             timestamp,
         })
+    }
+
+    pub fn for_space(&self, space: Option<&str>) -> Self {
+        let mut metadata = self.clone();
+        metadata.as_doc.space = space.map(|id| SpaceMetadata { id: id.to_string() });
+        metadata
     }
 
     pub fn for_data_stream(&self, data_stream: &str) -> MetadataDoc {
