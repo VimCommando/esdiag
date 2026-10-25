@@ -264,6 +264,40 @@ mod tests {
 
     #[cfg(feature = "elasticrc")]
     #[test]
+    fn context_elasticsearch_reference_carries_its_kibana_viewer() {
+        let mut env = crate::TestEnv::new();
+        env.remove("MISSING_KIBANA_KEY");
+        write_config(
+            &mut env,
+            "current_context: prod\ncontexts:\n  prod:\n    elasticsearch:\n      url: https://prod.example:9200\n    kibana:\n      url: https://prod.example:5601\n  bare:\n    elasticsearch:\n      url: https://bare.example:9200\n  broken:\n    elasticsearch:\n      url: https://broken.example:9200\n    kibana:\n      url: https://broken.example:5601\n      auth:\n        api_key: $(env:MISSING_KIBANA_KEY)\n",
+        );
+        let resolve = |reference: &str| {
+            HostReference::parse(reference)
+                .expect("parse")
+                .expect("reference")
+                .resolve()
+                .expect("resolve")
+                .into_known_host()
+        };
+
+        let prod = resolve(".prod.es");
+        let viewer = prod.attached_viewer().expect("prod viewer");
+        assert_eq!(viewer.app(), Some(Application::Kibana));
+        assert_eq!(
+            viewer.concrete_url().map(Url::as_str),
+            Some("https://prod.example:5601/")
+        );
+
+        assert!(resolve(".bare.es").attached_viewer().is_none());
+        assert!(
+            resolve(".broken.es").attached_viewer().is_none(),
+            "an unresolvable Kibana service omits the link instead of failing the export"
+        );
+        assert!(resolve(".prod.kb").attached_viewer().is_none());
+    }
+
+    #[cfg(feature = "elasticrc")]
+    #[test]
     fn context_reference_follows_configuration_changes() {
         let mut env = crate::TestEnv::new();
         let config = |url: &str, key: &str| {

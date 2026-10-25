@@ -1482,7 +1482,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                 let exporter_owns_stdout = exporter.target_uri() == "stdio://stdout";
 
                 let kibana_url = kibana.unwrap_or_else(|| {
-                    esdiag::env::get_string_with_fallback("ESDIAG_KIBANA_URL", "ELASTIC_KIBANA_URL")
+                    esdiag::env::get_string("ESDIAG_KIBANA_URL")
                         .map(|url| esdiag::env::append_kibana_space(&url))
                         .unwrap_or_else(|_| "http://localhost:5601".to_string())
                 });
@@ -2111,7 +2111,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                         };
 
                         let kibana_url = settings.kibana_url.unwrap_or_else(|| {
-                            let url = esdiag::env::get_string_with_fallback("ESDIAG_KIBANA_URL", "ELASTIC_KIBANA_URL")
+                            let url = esdiag::env::get_string("ESDIAG_KIBANA_URL")
                                 .unwrap_or_else(|_| "http://localhost:5601".to_string());
                             esdiag::env::append_kibana_space(&url)
                         });

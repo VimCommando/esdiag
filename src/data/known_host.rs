@@ -413,6 +413,10 @@ pub struct KnownHost {
     pub url: Option<Url>,
     pub url_template: Option<String>,
     credential: Credential,
+    /// The Kibana host that views this output's data, attached when resolution
+    /// already knows it (an Elastic CLI context or `ESDIAG_KIBANA_URL`). Runtime
+    /// only: `hosts.yml` links a saved viewer by name through `viewer`.
+    attached_viewer: Option<Box<KnownHost>>,
 }
 
 /// The route used by a concrete known host to reach its application API.
@@ -706,6 +710,7 @@ impl KnownHost {
             viewer,
             url,
             url_template,
+            attached_viewer: None,
         })
     }
 
@@ -890,6 +895,15 @@ impl KnownHost {
 
     pub fn viewer(&self) -> Option<&str> {
         self.viewer.as_deref()
+    }
+
+    pub fn with_attached_viewer(mut self, viewer: KnownHost) -> Self {
+        self.attached_viewer = Some(Box::new(viewer));
+        self
+    }
+
+    pub fn attached_viewer(&self) -> Option<&KnownHost> {
+        self.attached_viewer.as_deref()
     }
 
     pub fn accept_invalid_certs(&self) -> bool {
@@ -1180,6 +1194,7 @@ impl KnownHost {
             url: Some(url.clone()),
             url_template: None,
             credential: Credential::None,
+            attached_viewer: None,
         }
     }
 
