@@ -15,6 +15,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response, Sse},
 };
+use redact::Secret;
 use serde::Deserialize;
 use std::{process::Command, sync::Arc, time::Duration};
 use url::Url;
@@ -27,7 +28,7 @@ pub(crate) struct IdentityForm {
 
 #[derive(Deserialize, Default)]
 pub(crate) struct KeystoreForm {
-    password: String,
+    password: Secret<String>,
     confirm: Option<String>,
 }
 
@@ -122,24 +123,25 @@ pub(crate) async fn save_keystore(State(state): State<Arc<ServerState>>, Form(fo
     let migrate_legacy_hosts = !exists && super::keystore::migration_needed();
     let result = if !exists && form.confirm.is_none() {
         Err("Confirm keystore creation to continue.".to_string())
-    } else if !exists && form.password.trim().len() < 6 {
+    } else if !exists && form.password.expose_secret().trim().len() < 6 {
         Err("Keystore password must be at least 6 characters.".to_string())
-    } else if form.password.trim().is_empty() {
+    } else if form.password.expose_secret().trim().is_empty() {
         Err("Keystore password is required.".to_string())
     } else {
-        authenticate(form.password.trim())
+        let password = form.password.expose_secret().trim();
+        authenticate(password)
             .map_err(|err| format!("Failed to unlock the keystore: {err}"))
-            .map(|_| form.password.trim().to_string())
+            .map(|_| Secret::new(password.to_string()))
     };
 
     match result {
         Ok(password) => {
-            if migrate_legacy_hosts && let Err(err) = KnownHost::migrate_hosts_to_keystore(&password) {
+            if migrate_legacy_hosts && let Err(err) = KnownHost::migrate_hosts_to_keystore(password.expose_secret()) {
                 return refresh(&state, format!("Failed to migrate existing host credentials: {err}")).await;
             }
             state.set_keystore_unlocked(password).await;
             let password = state.keystore_password().await;
-            if let Err(err) = reload_configured_output(&state, password.as_deref()).await {
+            if let Err(err) = reload_configured_output(&state, password.as_ref()).await {
                 return refresh(&state, format!("Failed to reload the configured output: {err}")).await;
             }
             refresh(&state, String::new()).await
@@ -224,7 +226,7 @@ pub(crate) async fn save_collection(
 
 pub(crate) async fn defer_collection(State(state): State<Arc<ServerState>>) -> Response {
     let password = state.keystore_password().await;
-    let result = reload_configured_output(&state, password.as_deref())
+    let result = reload_configured_output(&state, password.as_ref())
         .await
         .and_then(|_| onboarding::defer_collection().map_err(|err| err.to_string()));
     refresh(&state, result.err().unwrap_or_default()).await
@@ -676,7 +678,10 @@ fn workflow_from_form(value: &str) -> Result<OnboardingWorkflow, eyre::Report> {
     }
 }
 
-pub(crate) async fn reload_configured_output(state: &Arc<ServerState>, password: Option<&str>) -> Result<(), String> {
+pub(crate) async fn reload_configured_output(
+    state: &Arc<ServerState>,
+    password: Option<&Secret<String>>,
+) -> Result<(), String> {
     if !state.onboarding || crate::data::runtime_output_is_declared() {
         return Ok(());
     }
@@ -696,7 +701,7 @@ pub(crate) async fn reload_configured_output(state: &Arc<ServerState>, password:
     let requires_keystore_secret = output.requires_keystore_secret();
     let exporter = if requires_keystore_secret {
         let password = password.ok_or_else(|| "Unlock the keystore before using the configured output.".to_string())?;
-        crate::data::with_scoped_keystore_password(password.to_string(), async move {
+        crate::data::with_scoped_keystore_password(password.clone(), async move {
             Exporter::try_from(output).map_err(|err| err.to_string())
         })
         .await?
@@ -720,7 +725,11 @@ fn stage_name(stage: WelcomeStage) -> &'static str {
     }
 }
 
-async fn save_output_stage(state: &Arc<ServerState>, form: OutputForm, keystore_password: &str) -> Result<(), String> {
+async fn save_output_stage(
+    state: &Arc<ServerState>,
+    form: OutputForm,
+    keystore_password: &Secret<String>,
+) -> Result<(), String> {
     let output_url = url::Url::parse(&form.output_url).map_err(|err| format!("Invalid Elasticsearch URL: {err}"))?;
     let viewer_url = url::Url::parse(&form.viewer_url).map_err(|err| format!("Invalid Kibana URL: {err}"))?;
     let api_key = form.api_key.trim();
@@ -729,7 +738,8 @@ async fn save_output_stage(state: &Arc<ServerState>, form: OutputForm, keystore_
     }
     if (KnownHost::get_known(&form.output_name).is_some()
         || KnownHost::get_known(&form.viewer_name).is_some()
-        || list_secret_names(keystore_password).is_ok_and(|names| names.iter().any(|name| name == &form.output_name)))
+        || list_secret_names(keystore_password.expose_secret())
+            .is_ok_and(|names| names.iter().any(|name| name == &form.output_name)))
         && form.replace.is_none()
     {
         return Err("A matching output name already exists. Confirm replacement to continue.".to_string());
@@ -762,7 +772,7 @@ async fn save_output_stage(state: &Arc<ServerState>, form: OutputForm, keystore_
             secret_id: form.output_name.clone(),
             auth,
         },
-        keystore_password,
+        keystore_password.expose_secret(),
     )
     .map_err(|err| err.to_string())?;
 
@@ -772,7 +782,7 @@ async fn save_output_stage(state: &Arc<ServerState>, form: OutputForm, keystore_
 
     let output = KnownHost::get_known(&form.output_name)
         .ok_or_else(|| "The saved Elasticsearch output host could not be reloaded.".to_string())?;
-    let exporter = crate::data::with_scoped_keystore_password(keystore_password.to_string(), async move {
+    let exporter = crate::data::with_scoped_keystore_password(keystore_password.clone(), async move {
         Exporter::try_from(output).map_err(|err| err.to_string())
     })
     .await?;
@@ -821,7 +831,7 @@ async fn install_output_assets_stage(activate_trial: bool) -> Result<(), String>
     }
 }
 
-async fn save_collection_stage(form: CollectionForm, keystore_password: &str) -> Result<(), String> {
+async fn save_collection_stage(form: CollectionForm, keystore_password: &Secret<String>) -> Result<(), String> {
     let collection_configured = onboarding::inspect()
         .map_err(|err| err.to_string())?
         .collect_host_configured;
@@ -851,9 +861,9 @@ async fn save_collection_stage(form: CollectionForm, keystore_password: &str) ->
         auth: Some(auth),
     };
     if replacing {
-        onboarding::replace_collect_host(input, Some(keystore_password))
+        onboarding::replace_collect_host(input, Some(keystore_password.expose_secret()))
     } else {
-        onboarding::save_collect_host(input, Some(keystore_password))
+        onboarding::save_collect_host(input, Some(keystore_password.expose_secret()))
     }
     .map_err(|err| err.to_string())
 }
@@ -885,7 +895,10 @@ fn save_default_job_stage(form: DefaultJobForm) -> Result<(), String> {
     Ok(())
 }
 
-async fn provision_local_output_stage(state: &Arc<ServerState>, keystore_password: &str) -> Result<(), String> {
+async fn provision_local_output_stage(
+    state: &Arc<ServerState>,
+    keystore_password: &Secret<String>,
+) -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|err| err.to_string())?;
     let status = Command::new(executable)
         .args([
@@ -897,7 +910,7 @@ async fn provision_local_output_stage(state: &Arc<ServerState>, keystore_passwor
             "--copy-password=false",
             "--persist-onboarding-output",
         ])
-        .env("ESDIAG_KEYSTORE_PASSWORD", keystore_password)
+        .env("ESDIAG_KEYSTORE_PASSWORD", keystore_password.expose_secret())
         .status()
         .map_err(|err| format!("Could not start the local core stack: {err}"))?;
     if !status.success() {
@@ -921,7 +934,7 @@ async fn provision_local_output_stage(state: &Arc<ServerState>, keystore_passwor
         .concrete_url()
         .ok_or_else(|| "Local stack setup saved an invalid Kibana URL.".to_string())?
         .to_string();
-    let exporter = crate::data::with_scoped_keystore_password(keystore_password.to_string(), async move {
+    let exporter = crate::data::with_scoped_keystore_password(keystore_password.clone(), async move {
         Exporter::try_from(output).map_err(|err| err.to_string())
     })
     .await?;

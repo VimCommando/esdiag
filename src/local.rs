@@ -793,7 +793,7 @@ impl LocalState {
                 secret_id: "local".to_string(),
                 auth: SecretAuth::apikey(api_key),
             },
-            &password,
+            password.expose_secret(),
         )?;
         let mut config = ApplicationConfig::load()?;
         config.output.authenticated_on = Some(chrono::Utc::now().to_rfc3339());

@@ -106,7 +106,7 @@ pub(super) async fn run_known_host_form(
     #[cfg(feature = "keystore")]
     let keystore_password = state.keystore_password().await;
     #[cfg(not(feature = "keystore"))]
-    let keystore_password: Option<String> = None;
+    let keystore_password: Option<redact::Secret<String>> = None;
     if host.requires_keystore_secret() && keystore_password.is_none() {
         let error_message = saved_host_secret_error_message();
         state
