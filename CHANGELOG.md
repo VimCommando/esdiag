@@ -33,6 +33,7 @@ published release notes, maintenance branches, and tagged history.
 ### Fixed
 
 - Fixed `esdiag setup` repeating provenance field warnings for every older data stream backing index on each run. It now warns per index only for indices that can still receive writes, summarizes older backing indices with unlinked provenance fields in one line per data stream, and only asks for a rollover after adding an alias to a writable index.
+- Fixed `.elasticrc.yml` errors exposing secrets. A malformed `$(...)` expression no longer echoes the field's value, and invalid service URL errors show the configured URL with its userinfo redacted instead of the resolved URL.
 
 ## [0.17.0] - 2026-10-13
 
