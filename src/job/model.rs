@@ -17,7 +17,7 @@
 //! barrier): see [`Job::execution_mode`].
 
 use crate::{
-    data::{ElasticContextTarget, Uri},
+    data::Uri,
     processor::{Identifiers, api::ProcessSelection},
 };
 use serde::{Deserialize, Serialize};
@@ -57,16 +57,8 @@ impl BindingKey {
 pub enum Input {
     /// Call live product APIs to acquire a new diagnostic.
     Collect {
+        /// A [`crate::data::HostReference`], resolved when the job runs.
         host: String,
-        diagnostic_type: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        include: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exclude: Option<Vec<String>>,
-    },
-    /// Call live product APIs through a symbolic Elastic CLI context reference.
-    CollectContext {
-        target: ElasticContextTarget,
         diagnostic_type: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         include: Option<Vec<String>>,
@@ -90,10 +82,7 @@ pub enum Input {
 
 impl Input {
     pub fn is_collect(&self) -> bool {
-        matches!(
-            self,
-            Input::Collect { .. } | Input::CollectContext { .. } | Input::CollectBinding { .. }
-        )
+        matches!(self, Input::Collect { .. } | Input::CollectBinding { .. })
     }
 
     pub fn is_sendable_bundle(&self) -> bool {
@@ -148,12 +137,11 @@ pub struct Process {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ExportTarget {
-    /// A saved known host (an Elasticsearch output cluster).
+    /// An Elasticsearch output cluster selected by a
+    /// [`crate::data::HostReference`], resolved when the job runs.
     KnownHost { name: String },
     /// The output deployment supplied through `ESDIAG_OUTPUT_*` at execution time.
     Environment,
-    /// An Elasticsearch service resolved from Elastic CLI configuration at execution time.
-    ElasticContext { target: ElasticContextTarget },
     /// A local newline-delimited JSON file.
     File { path: PathBuf },
     /// A local directory of per-stream files.
@@ -303,7 +291,7 @@ impl Job {
         }
         if match &input {
             Input::CollectBinding { binding, .. } | Input::LoadBinding { binding } => binding.is_empty(),
-            Input::Collect { .. } | Input::CollectContext { .. } | Input::Load { .. } => false,
+            Input::Collect { .. } | Input::Load { .. } => false,
         } {
             return Err(JobValidationError::EmptyRuntimeBinding);
         }
@@ -361,9 +349,7 @@ impl Job {
     /// staged over a materialised (or loaded) bundle.
     pub fn execution_mode(&self) -> ExecutionMode {
         match (&self.input, &self.save) {
-            (Input::Collect { .. } | Input::CollectContext { .. } | Input::CollectBinding { .. }, None)
-                if self.process.is_some() =>
-            {
+            (Input::Collect { .. } | Input::CollectBinding { .. }, None) if self.process.is_some() => {
                 ExecutionMode::Streaming
             }
             _ => ExecutionMode::Staged,
@@ -379,7 +365,7 @@ impl Job {
     }
 
     pub fn validate_for_persistence(&self) -> Result<(), JobValidationError> {
-        if self.uses_runtime_bindings() || !matches!(self.input, Input::Collect { .. } | Input::CollectContext { .. }) {
+        if self.uses_runtime_bindings() || !matches!(self.input, Input::Collect { .. }) {
             Err(JobValidationError::RuntimeBindingNotPersistable)
         } else {
             Ok(())
@@ -390,7 +376,6 @@ impl Job {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::Application;
 
     fn collect_input() -> Input {
         Input::Collect {
@@ -662,23 +647,11 @@ process:
     }
 
     #[test]
-    fn elastic_context_references_round_trip_symbolically() {
-        let input_target = ElasticContextTarget {
-            context: Some("prod".to_string()),
-            application: Application::Elasticsearch,
-            cloud_deployment: None,
-            config_file: None,
-        };
-        let output_target = ElasticContextTarget {
-            context: Some("monitoring".to_string()),
-            application: Application::Elasticsearch,
-            cloud_deployment: None,
-            config_file: None,
-        };
+    fn elastic_context_references_persist_as_host_references() {
         let job = Job::try_new(
             Identifiers::default(),
-            Input::CollectContext {
-                target: input_target,
+            Input::Collect {
+                host: ".prod.es".to_string(),
                 diagnostic_type: "standard".to_string(),
                 include: None,
                 exclude: None,
@@ -686,7 +659,9 @@ process:
             None,
             Some(Process {
                 selection: None,
-                export: ExportTarget::ElasticContext { target: output_target },
+                export: ExportTarget::KnownHost {
+                    name: ".monitoring.es".to_string(),
+                },
             }),
             None,
         )
@@ -695,19 +670,12 @@ process:
         let yaml = yaml_serde::to_string(&job).expect("serialize");
         let loaded: Job = yaml_serde::from_str(&yaml).expect("deserialize");
 
-        assert!(yaml.contains("type: collect-context"));
-        assert!(yaml.contains("context: prod"));
-        assert!(yaml.contains("type: elastic-context"));
-        assert!(yaml.contains("context: monitoring"));
-        assert!(!yaml.contains("api_key"));
-        assert!(matches!(
-            loaded.input(),
-            Input::CollectContext { target, .. } if target.context.as_deref() == Some("prod")
-        ));
+        assert!(yaml.contains("host: .prod.es"), "{yaml}");
+        assert!(yaml.contains("name: .monitoring.es"), "{yaml}");
+        assert!(matches!(loaded.input(), Input::Collect { host, .. } if host == ".prod.es"));
         assert!(matches!(
             loaded.process().map(|process| &process.export),
-            Some(ExportTarget::ElasticContext { target })
-                if target.context.as_deref() == Some("monitoring")
+            Some(ExportTarget::KnownHost { name }) if name == ".monitoring.es"
         ));
     }
 }

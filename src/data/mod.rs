@@ -10,6 +10,8 @@ mod application_config;
 mod auth;
 /// Symbolic Elastic CLI context targets and resolution
 mod elastic_context;
+/// Names that select a saved host, template host, or Elastic CLI context
+mod host_reference;
 /// Encrypted secret storage
 mod keystore;
 /// Manage saving and loading hosts from a YAML file
@@ -28,7 +30,9 @@ mod uri;
 pub use application::Application;
 pub use application_config::{ApplicationConfig, JobConfig, OnboardingWorkflow, OutputConfig};
 pub use auth::{Auth, AuthType};
-pub use elastic_context::{ElasticContextTarget, ElasticOutputContext};
+pub(crate) use elastic_context::ElasticContextTarget;
+pub use elastic_context::ElasticOutputContext;
+pub use host_reference::HostReference;
 #[cfg(all(feature = "server", feature = "keystore"))]
 pub(crate) use keystore::get_active_unlock_keystore_password;
 #[cfg(all(feature = "server", feature = "keystore"))]

@@ -266,7 +266,7 @@ pub fn save_output_deployment(input: OutputDeploymentInput, keystore_password: &
     KnownHost::write_hosts_yml(&hosts)?;
 
     let mut config = ApplicationConfig::load()?;
-    config.output.default = Some(input.output_name);
+    config.output.select_saved_host(input.output_name);
     config.save()?;
     Ok(config)
 }

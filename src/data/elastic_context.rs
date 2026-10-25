@@ -8,11 +8,12 @@ use super::{CredentialDirection, HostRole, KnownHostBuilder};
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "elasticrc")]
-use std::path::Path;
 use std::{
     env,
+    path::{Path, PathBuf},
+};
+use std::{
     fmt::{Display, Formatter},
-    path::PathBuf,
     str::FromStr,
 };
 #[cfg(feature = "elasticrc")]
@@ -26,26 +27,26 @@ use std::{
     sync::{Mutex, MutexGuard, OnceLock},
 };
 
-/// A stable symbolic reference to one application in an Elastic CLI context.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ElasticContextTarget {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<String>,
-    pub application: Application,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cloud_deployment: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_file: Option<PathBuf>,
+/// One application in an Elastic CLI context, parsed from a host reference.
+///
+/// The configuration file is located when the target resolves, so a persisted
+/// reference follows `ELASTIC_CLI_CONFIG_FILE` and home discovery at run time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ElasticContextTarget {
+    pub(crate) context: Option<String>,
+    pub(crate) application: Application,
+    pub(crate) cloud_deployment: Option<String>,
 }
 
 /// A stable symbolic reference to a named Elastic CLI output deployment.
+///
+/// Like [`ElasticContextTarget`], the configuration file is located when the
+/// output resolves, so the reference follows `ELASTIC_CLI_CONFIG_FILE` and home
+/// discovery at run time.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ElasticOutputContext {
     pub context: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_file: Option<PathBuf>,
 }
 
 impl ElasticOutputContext {
@@ -54,10 +55,49 @@ impl ElasticOutputContext {
         if context.trim().is_empty() {
             return Err(eyre!("Elastic CLI output context name must not be empty"));
         }
-        Ok(Self {
-            context,
-            config_file: env::var_os("ELASTIC_CLI_CONFIG_FILE").map(PathBuf::from),
-        })
+        let output = Self { context };
+        output.host_reference()?;
+        Ok(output)
+    }
+
+    /// The host reference that selects this context's Elasticsearch service.
+    ///
+    /// Fails for context names the reference syntax cannot express, such as
+    /// names containing `/`, so a saved reference never selects another target.
+    pub fn host_reference(&self) -> Result<String> {
+        let reference = format!(".{}.es", self.context);
+        let selects_this_context = ElasticContextTarget::parse(&reference).is_ok_and(|target| {
+            target.is_some_and(|target| {
+                target.context.as_deref() == Some(self.context.as_str())
+                    && target.application == Application::Elasticsearch
+                    && target.cloud_deployment.is_none()
+            })
+        });
+        if !selects_this_context {
+            return Err(eyre!(
+                "Elastic CLI context '{}' cannot be used as an ESDiag output because '{reference}' is not a valid host reference. Context names must not start with '.' or contain '/' or '\\'.",
+                self.context
+            ));
+        }
+        Ok(reference)
+    }
+
+    pub(crate) fn resolve_output_hosts(
+        &self,
+        require_kibana: bool,
+    ) -> Result<(KnownHost, Auth, Option<KnownHost>, Option<Auth>)> {
+        #[cfg(feature = "elasticrc")]
+        {
+            resolve_output_hosts(Some(&self.context), None, require_kibana)
+        }
+        #[cfg(not(feature = "elasticrc"))]
+        {
+            let _ = require_kibana;
+            Err(eyre!(
+                "Elastic CLI output context '{}' requires the 'elasticrc' feature",
+                self
+            ))
+        }
     }
 }
 
@@ -77,7 +117,7 @@ impl ElasticContextTarget {
         let Some(reference) = value.strip_prefix('.') else {
             return Ok(None);
         };
-        if reference.is_empty() || reference.contains('\\') {
+        if reference.is_empty() || reference.starts_with(['.', '/']) || reference.contains('\\') {
             return Ok(None);
         }
 
@@ -102,7 +142,6 @@ impl ElasticContextTarget {
             context,
             application,
             cloud_deployment: None,
-            config_file: env::var_os("ELASTIC_CLI_CONFIG_FILE").map(PathBuf::from),
         }))
     }
 
@@ -132,15 +171,15 @@ impl ElasticContextTarget {
             context,
             application,
             cloud_deployment: Some(segments[1].to_string()),
-            config_file: env::var_os("ELASTIC_CLI_CONFIG_FILE").map(PathBuf::from),
         }))
     }
 
-    pub fn is_cloud_admin(&self) -> bool {
-        self.cloud_deployment.is_some()
-    }
-
-    pub fn resolve_collect_host(&self) -> Result<KnownHost> {
+    /// Resolve the service into a host with every role its route supports.
+    ///
+    /// A context service has no saved roles, so an Elasticsearch service can be
+    /// collected from and sent to, a Kibana service can be collected from and
+    /// viewed, and a Cloud admin proxy can only be collected from.
+    pub(crate) fn resolve_host(&self) -> Result<KnownHost> {
         #[cfg(feature = "elasticrc")]
         {
             if let Some(deployment_id) = &self.cloud_deployment {
@@ -148,8 +187,12 @@ impl ElasticContextTarget {
                 service.url.set_path(&format!("/deployments/{deployment_id}"));
                 return known_host_from_service(service, self.application, vec![HostRole::Collect]);
             }
+            let roles = match self.application {
+                Application::Kibana => vec![HostRole::Collect, HostRole::View],
+                _ => vec![HostRole::Collect, HostRole::Send],
+            };
             let service = resolve_service(self, service_kind(self.application)?)?;
-            known_host_from_service(service, self.application, vec![HostRole::Collect])
+            known_host_from_service(service, self.application, roles)
         }
         #[cfg(not(feature = "elasticrc"))]
         {
@@ -177,7 +220,7 @@ impl ElasticContextTarget {
 
         #[cfg(feature = "elasticrc")]
         {
-            resolve_output_hosts(self.context.as_deref(), self.config_file.as_deref(), require_kibana)
+            resolve_output_hosts(self.context.as_deref(), None, require_kibana)
         }
         #[cfg(not(feature = "elasticrc"))]
         {
@@ -262,7 +305,7 @@ fn resolve_service(target: &ElasticContextTarget, kind: ServiceKind) -> Result<C
         return Ok(service);
     }
 
-    let config = load_config_cached(target.config_file.as_deref())?
+    let config = load_config_cached(None)?
         .ok_or_else(|| eyre!("Elastic CLI config was not found for context target '{target}'"))?;
     resolve_config_service(&config, target.context.as_deref(), kind).map_err(Into::into)
 }
@@ -524,7 +567,6 @@ fn config_fingerprint(path: &Path) -> Option<ConfigFingerprint> {
 #[cfg(test)]
 mod tests {
     use super::{Application, ElasticContextTarget};
-    use crate::data::Auth;
 
     #[test]
     fn parses_direct_active_and_named_targets() {
@@ -579,135 +621,28 @@ mod tests {
     fn unknown_leading_dot_value_falls_through() {
         assert_eq!(ElasticContextTarget::parse(".prod.ls").expect("parse"), None);
         assert_eq!(ElasticContextTarget::parse("./.es").expect("parse"), None);
+        for path in ["..", "../out", "../.prod.es", "..hidden"] {
+            assert_eq!(ElasticContextTarget::parse(path).expect("parse"), None, "{path}");
+        }
     }
 
-    #[cfg(feature = "elasticrc")]
     #[test]
-    fn active_elasticsearch_target_uses_input_credentials_only() {
-        let mut env = crate::TestEnv::new();
-        env.set("ESDIAG_ELASTIC_CLI", "1");
-        env.set("ELASTIC_ES_URL", "https://active.example:9200");
-        env.set("ELASTIC_ES_API_KEY", "input-key");
-        env.set("ESDIAG_OUTPUT_URL", "https://output.example:9200");
-        env.set("ESDIAG_OUTPUT_APIKEY", "output-key");
-        let target = ElasticContextTarget::parse(".es").expect("parse").expect("target");
+    fn output_context_reference_round_trips_or_is_rejected() {
+        use super::ElasticOutputContext;
 
-        let host = target.resolve_collect_host().expect("resolve");
+        let dotted = ElasticOutputContext::new("team.prod").expect("dotted context");
+        assert_eq!(dotted.host_reference().expect("reference"), ".team.prod.es");
 
-        assert_eq!(
-            host.concrete_url().map(url::Url::as_str),
-            Some("https://active.example:9200/")
-        );
-        assert!(matches!(
-            host.get_auth().expect("auth"),
-            Auth::Apikey(key) if key.expose_secret() == "input-key"
-        ));
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_target_reports_missing_context() {
-        let env = crate::TestEnv::new();
-        let config_file = env.tmp.path().join("missing.yml");
-        std::fs::write(
-            &config_file,
-            "current_context: prod\ncontexts:\n  prod:\n    elasticsearch:\n      url: https://prod.example:9200\n",
-        )
-        .expect("write config");
-        let mut target = ElasticContextTarget::parse(".diag.es").expect("parse").expect("target");
-        target.config_file = Some(config_file);
-
-        let error = target.resolve_collect_host().expect_err("missing context must fail");
-
-        assert!(error.to_string().contains("Elastic CLI context 'diag' was not found"));
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn cached_config_reloads_when_file_contents_change() {
-        let mut env = crate::TestEnv::new();
-        let config_file = env.tmp.path().join("rotating.yml");
-        let write_config = |url: &str, key: &str| {
-            std::fs::write(
-                &config_file,
-                format!(
-                    "current_context: prod\ncontexts:\n  prod:\n    elasticsearch:\n      url: {url}\n      auth:\n        api_key: {key}\n"
-                ),
-            )
-            .expect("write config");
-        };
-        write_config("https://one.example:9200", "first-key");
-        env.set_path("ELASTIC_CLI_CONFIG_FILE", config_file.clone());
-        let target = ElasticContextTarget::parse(".prod.es").expect("parse").expect("target");
-        let first = target.resolve_collect_host().expect("first resolution");
-        assert_eq!(
-            first.concrete_url().map(url::Url::as_str),
-            Some("https://one.example:9200/")
-        );
-
-        write_config("https://two.example:9200", "other-key");
-        let second = target.resolve_collect_host().expect("reloaded resolution");
-
-        assert_eq!(
-            second.concrete_url().map(url::Url::as_str),
-            Some("https://two.example:9200/")
-        );
-        assert!(matches!(
-            second.get_auth().expect("auth"),
-            Auth::Apikey(key) if key.expose_secret() == "other-key"
-        ));
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn named_cloud_target_materializes_admin_proxy_route() {
-        let env = crate::TestEnv::new();
-        let config_file = env.tmp.path().join("cloud.yml");
-        std::fs::write(
-            &config_file,
-            "current_context: prod\ncontexts:\n  prod:\n    cloud:\n      url: https://api.elastic-cloud.com\n      auth:\n        api_key: cloud-key\n",
-        )
-        .expect("write config");
-        let mut target = ElasticContextTarget::parse(".prod.cloud/deployment-123/es")
-            .expect("parse")
-            .expect("target");
-        target.config_file = Some(config_file);
-
-        let host = target.resolve_collect_host().expect("resolve cloud target");
-        let resolved = host.resolve().expect("resolve host");
-
-        assert_eq!(resolved.application(), Application::Elasticsearch);
-        assert_eq!(resolved.route(), crate::data::HostRoute::ElasticCloudAdmin);
-        assert_eq!(
-            resolved.as_ref().concrete_url().map(url::Url::as_str),
-            Some("https://api.elastic-cloud.com/api/v1/deployments/deployment-123/elasticsearch/_main/proxy/")
-        );
-        assert!(resolved.as_ref().has_role(crate::data::HostRole::Collect));
-    }
-
-    #[cfg(feature = "elasticrc")]
-    #[test]
-    fn active_cloud_target_materializes_admin_proxy_route() {
-        let mut env = crate::TestEnv::new();
-        env.set("ESDIAG_ELASTIC_CLI", "1");
-        env.set("ELASTIC_CLOUD_URL", "https://api.elastic-cloud.com");
-        env.set("ELASTIC_CLOUD_API_KEY", "active-cloud-key");
-        let target = ElasticContextTarget::parse(".cloud/deployment-456/es")
-            .expect("parse")
-            .expect("target");
-
-        let host = target.resolve_collect_host().expect("resolve cloud target");
-        let resolved = host.resolve().expect("resolve host");
-
-        assert_eq!(resolved.application(), Application::Elasticsearch);
-        assert_eq!(resolved.route(), crate::data::HostRoute::ElasticCloudAdmin);
-        assert_eq!(
-            resolved.as_ref().concrete_url().map(url::Url::as_str),
-            Some("https://api.elastic-cloud.com/api/v1/deployments/deployment-456/elasticsearch/_main/proxy/")
-        );
-        assert!(matches!(
-            resolved.as_ref().get_auth().expect("auth"),
-            Auth::Apikey(key) if key.expose_secret() == "active-cloud-key"
-        ));
+        for name in ["team/prod", ".hidden", "team\\prod"] {
+            let error = ElasticOutputContext::new(name).expect_err(name);
+            assert!(
+                error.to_string().contains("cannot be used as an ESDiag output"),
+                "{error}"
+            );
+            let configured = ElasticOutputContext {
+                context: name.to_string(),
+            };
+            assert!(configured.host_reference().is_err(), "{name}");
+        }
     }
 }

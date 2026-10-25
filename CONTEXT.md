@@ -215,6 +215,19 @@ route, and roles. It is the only saved-host form permitted to enter runtime disp
 _Avoid_: materialized template (a template is one source of a resolved host, not the
 concept itself)
 
+**Elastic CLI context**:
+A named target configuration owned by the Elastic CLI (`elasticrc.yml`), addressed as
+`.service` for the active context or `.context.service` for a named one. ESDiag reads
+it at resolve time and never persists its URL or credentials.
+_Avoid_: profile, saved host (a context is a host source, not ESDiag configuration)
+
+**Host reference**:
+The persisted, user-facing name that selects a host: a saved host name, a URL template
+reference, or an Elastic CLI context. Jobs store only the reference; every source
+resolves to a resolved host, so nothing downstream knows which source supplied it.
+Context references take precedence, so saved host names may not start with `.`.
+_Avoid_: target string, context target
+
 **Data source**:
 A named unit of diagnostic data, and the unit of extensibility — adding one is what
 it takes to collect or process something new. Deliberately transport-neutral: it is

@@ -95,26 +95,9 @@ impl OutputDeployment {
     }
 
     pub fn from_elastic_context(context: &ElasticOutputContext, require_kibana: bool) -> Result<Self> {
-        let target = ElasticContextTarget {
-            context: Some(context.context.clone()),
-            application: Application::Elasticsearch,
-            cloud_deployment: None,
-            config_file: context.config_file.clone(),
-        };
-        let (elasticsearch, elasticsearch_auth, kibana, kibana_auth) = target.resolve_output_hosts(require_kibana)?;
+        let (elasticsearch, elasticsearch_auth, kibana, kibana_auth) = context.resolve_output_hosts(require_kibana)?;
         Ok(Self {
             source: OutputDeploymentSource::ElasticContext,
-            elasticsearch,
-            elasticsearch_auth,
-            kibana,
-            kibana_auth,
-        })
-    }
-
-    pub fn from_elastic_target(target: &ElasticContextTarget, require_kibana: bool) -> Result<Self> {
-        let (elasticsearch, elasticsearch_auth, kibana, kibana_auth) = target.resolve_output_hosts(require_kibana)?;
-        Ok(Self {
-            source: OutputDeploymentSource::Explicit,
             elasticsearch,
             elasticsearch_auth,
             kibana,
@@ -500,12 +483,12 @@ mod tests {
             "current_context: monitoring\ncontexts:\n  monitoring:\n    elasticsearch:\n      url: https://monitoring-es.example:9200\n      auth:\n        api_key: $(env:MONITORING_ES_KEY)\n    kibana:\n      url: https://monitoring-kb.example:5601\n      auth:\n        api_key: $(env:MONITORING_KB_KEY)\n",
         )
         .expect("write elasticrc");
+        env.set_path("ELASTIC_CLI_CONFIG_FILE", elasticrc_path);
         ApplicationConfig {
             version: 1,
             output: crate::data::OutputConfig {
                 elastic_context: Some(ElasticOutputContext {
                     context: "monitoring".to_string(),
-                    config_file: Some(elasticrc_path),
                 }),
                 ..crate::data::OutputConfig::default()
             },
@@ -563,7 +546,6 @@ mod tests {
             output: crate::data::OutputConfig {
                 elastic_context: Some(ElasticOutputContext {
                     context: "monitoring".to_string(),
-                    config_file: None,
                 }),
                 ..crate::data::OutputConfig::default()
             },

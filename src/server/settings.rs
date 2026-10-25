@@ -160,7 +160,7 @@ pub async fn update_settings(
                     let err_msg = format!("Output target '{target}' has an invalid Kibana viewer.");
                     return settings_error_response(&state, &owner, prior_active_target.as_deref(), err_msg).await;
                 }
-                config.output.default = Some(target.clone());
+                config.output.select_saved_host(target.clone());
             }
             Some(_) => {
                 let err_msg = format!("Output target '{}' is not a send-capable host.", target);

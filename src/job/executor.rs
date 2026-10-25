@@ -696,27 +696,21 @@ fn record_blocked_outputs(context: &ExecutionContext, job: &Job, outcome: &mut E
 
 fn collect_diagnostic_type(input: &Input) -> &str {
     match input {
-        Input::Collect { diagnostic_type, .. }
-        | Input::CollectContext { diagnostic_type, .. }
-        | Input::CollectBinding { diagnostic_type, .. } => diagnostic_type,
+        Input::Collect { diagnostic_type, .. } | Input::CollectBinding { diagnostic_type, .. } => diagnostic_type,
         Input::Load { .. } | Input::LoadBinding { .. } => "standard",
     }
 }
 
 fn collect_include(input: &Input) -> Option<&Vec<String>> {
     match input {
-        Input::Collect { include, .. }
-        | Input::CollectContext { include, .. }
-        | Input::CollectBinding { include, .. } => include.as_ref(),
+        Input::Collect { include, .. } | Input::CollectBinding { include, .. } => include.as_ref(),
         Input::Load { .. } | Input::LoadBinding { .. } => None,
     }
 }
 
 fn collect_exclude(input: &Input) -> Option<&Vec<String>> {
     match input {
-        Input::Collect { exclude, .. }
-        | Input::CollectContext { exclude, .. }
-        | Input::CollectBinding { exclude, .. } => exclude.as_ref(),
+        Input::Collect { exclude, .. } | Input::CollectBinding { exclude, .. } => exclude.as_ref(),
         Input::Load { .. } | Input::LoadBinding { .. } => None,
     }
 }

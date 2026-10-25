@@ -2,6 +2,7 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
+use super::HostReference;
 use super::keystore::upsert_secret_auth_batch;
 use crate::data::{
     Application, Auth, Platform, SecretAuth, get_keystore_password, resolve_secret_auth as resolve_secret_by_id,
@@ -1097,6 +1098,10 @@ impl KnownHost {
         )
     }
 
+    pub(crate) fn is_template_reference(reference: &str) -> Result<bool> {
+        Ok(parse_template_reference(reference)?.is_some())
+    }
+
     pub fn resolve_template_reference(reference: &str) -> Result<Option<Self>> {
         let Some(parsed) = parse_template_reference(reference)? else {
             return Ok(None);
@@ -1455,6 +1460,7 @@ impl KnownHost {
 
     pub fn write_hosts_yml(hosts: &BTreeMap<String, KnownHost>) -> Result<String> {
         let path = KnownHost::get_hosts_path();
+        reject_new_reserved_names(hosts)?;
         let mut hosts = hosts.clone();
         for (name, host) in hosts.iter_mut() {
             host.normalize_and_validate_roles(name)?;
@@ -1630,6 +1636,29 @@ pub(crate) fn write_hosts_yml_for_tests(hosts: &BTreeMap<String, KnownHost>) -> 
     let writer = BufWriter::new(file);
     yaml_serde::to_writer(writer, &TestKnownHostsRef(hosts))?;
     Ok(format!("{}", path.display()))
+}
+
+/// Reject host names that a host reference would read as an Elastic CLI
+/// context. Names already in `hosts.yml` are kept so an older file stays
+/// editable; they are unreachable by reference and only warn.
+fn reject_new_reserved_names(hosts: &BTreeMap<String, KnownHost>) -> Result<()> {
+    let reserved: Vec<&String> = hosts
+        .keys()
+        .filter(|name| HostReference::is_reserved_name(name))
+        .collect();
+    if reserved.is_empty() {
+        return Ok(());
+    }
+    let existing = KnownHost::parse_hosts_yml().unwrap_or_default();
+    for name in reserved {
+        if !existing.contains_key(name) {
+            return Err(eyre!(
+                "Host name '{name}' is reserved for Elastic CLI context references. Choose a name that does not start with '.'."
+            ));
+        }
+        tracing::warn!("Saved host '{name}' is shadowed by Elastic CLI context references; rename it to use it");
+    }
+    Ok(())
 }
 
 fn validate_viewer_links(hosts: &BTreeMap<String, KnownHost>) -> Result<()> {
@@ -2756,5 +2785,32 @@ url: https://platform.example
             host.concrete_url().map(|url| url.as_str()),
             Some("https://admin.found.no/api/v1/deployments/deployment-123/elasticsearch/_main/proxy/")
         );
+    }
+
+    #[test]
+    fn every_hosts_writer_rejects_new_context_reference_names() {
+        let (_env, _, _) = setup_env();
+        let host = || {
+            KnownHostBuilder::new(Url::parse("http://localhost:9200").expect("url"))
+                .build()
+                .expect("host")
+        };
+
+        let error =
+            KnownHost::write_hosts_yml(&BTreeMap::from([(".prod.es".to_string(), host())])).expect_err("reserved name");
+        assert!(
+            error
+                .to_string()
+                .contains("reserved for Elastic CLI context references"),
+            "{error}"
+        );
+
+        write_hosts(BTreeMap::from([(".legacy.es".to_string(), host())]));
+        KnownHost::write_hosts_yml(&BTreeMap::from([
+            (".legacy.es".to_string(), host()),
+            ("plain".to_string(), host()),
+        ]))
+        .expect("an existing reserved name does not block other edits");
+        assert!(KnownHost::parse_hosts_yml().expect("hosts").contains_key("plain"));
     }
 }

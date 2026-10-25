@@ -7,7 +7,7 @@ use super::{
     outcome::ExecutionEvent,
 };
 use crate::{
-    data::{Application, HostRole, KnownHost, Platform, Uri},
+    data::{Application, HostReference, HostRole, Platform, Uri},
     elastic_upload_service::{BundleSender, BundleSending},
     exporter::DocumentExporter,
     processor::new_job_id,
@@ -116,25 +116,19 @@ impl ExecutionContext {
                 )
             }),
             ExportTarget::KnownHost { name } => {
-                let hosts = KnownHost::parse_hosts_yml()?;
                 let host_key = name.trim();
-                let host = hosts
-                    .get(host_key)
-                    .cloned()
-                    .ok_or_else(|| eyre!("Export host '{host_key}' not found in hosts.yml"))?;
-                if !host.has_role(HostRole::Send) {
+                let host = HostReference::parse(host_key)?
+                    .ok_or_else(|| eyre!("Export host '{host_key}' is no longer configured"))?
+                    .resolve()?;
+                if !host.as_ref().has_role(HostRole::Send) {
                     return Err(eyre!("Export host '{host_key}' is missing the send role"));
                 }
-                if host.app() != Some(Application::Elasticsearch) {
+                if host.application() != Application::Elasticsearch {
                     return Err(eyre!("Export host '{host_key}' must be an Elasticsearch host"));
                 }
                 DocumentExporter::try_from(Uri::try_from(host)?)
             }
             ExportTarget::Environment => DocumentExporter::try_from(Uri::try_from_output_env()?),
-            ExportTarget::ElasticContext { target } => {
-                let deployment = crate::data::OutputDeployment::from_elastic_target(target, false)?;
-                DocumentExporter::try_from(Uri::try_from(deployment.elasticsearch)?)
-            }
             ExportTarget::File { path } => DocumentExporter::try_from(Uri::File(path.clone())),
             ExportTarget::Directory { output_dir } => DocumentExporter::try_from(Uri::Directory(output_dir.clone())),
             ExportTarget::Stdout => DocumentExporter::try_from(Uri::Stream),
@@ -172,7 +166,7 @@ mod tests {
 
     #[test]
     fn process_output_uses_its_own_viewer_or_omits_the_link() {
-        use crate::data::KnownHostBuilder;
+        use crate::data::{KnownHost, KnownHostBuilder};
         use std::collections::BTreeMap;
         let mut env = crate::TestEnv::new();
         env.set("ESDIAG_OUTPUT_URL", "https://local-es.example");
