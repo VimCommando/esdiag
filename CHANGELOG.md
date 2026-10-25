@@ -15,6 +15,7 @@ published release notes, maintenance branches, and tagged history.
 - Added `esdiag setup completions <shell>` to install bash, zsh, fish, and PowerShell completion scripts for the running binary, or print them with `--print`.
 - Added `esdiag setup env [--env-file <path>]` to install assets into the deployment that `ESDIAG_OUTPUT_*`, `ESDIAG_KIBANA_URL`, and `ESDIAG_KIBANA_SPACE` declare, and `esdiag setup context [name]` to install assets into the services an Elastic CLI `.elasticrc` context defines. Both set up whichever of Elasticsearch and Kibana the source declares (#431).
 - Added `--activate-trial` and `ESDIAG_SETUP_ACTIVATE_TRIAL` to start a 30-day Elasticsearch trial license during setup, a trial checkbox to the web onboarding output setup, and `--activate-trial=true|false` to `esdiag local` and `esdiag-local` (#431).
+- Added an experimental `elastic diag` profile with context-backed collection, named output contexts, saved symbolic context references, and explicit Cloud-admin deployment targets (#339).
 - Added `esdiag-lite.sh` and `esdiag-lite.ps1`, each with a SHA-256 checksum, to every GitHub release.
 - Added pull-request checks for the ESDiag Lite scripts, including the Windows PowerShell tests.
 
@@ -29,11 +30,13 @@ published release notes, maintenance branches, and tagged history.
 - **Breaking:** Setup no longer starts a trial license on its own. `esdiag setup`, `esdiag init` for an existing output, and web onboarding leave an unlicensed cluster's license alone unless you opt in; without the opt-in they install the Elasticsearch assets, skip the Kibana Agent Builder assets, and report a `partial` outcome. `esdiag init` asks before starting a trial. A new `esdiag local` stack still starts a trial on its first setup (#431).
 - Setup failures without an HTTP response now report the `setup_failed` outcome category.
 - Updated workspace dependency requirements and the lockfile for the 0.18 development cycle, and regenerated third-party notices.
+- Standardized raw-bundle transfer terminology on `send`, including `esdiag send` and `collect --send`; `upload` now refers only to the Elastic Upload Service.
 
 ### Fixed
 
 - Fixed `esdiag setup` repeating provenance field warnings for every older data stream backing index on each run. It now warns per index only for indices that can still receive writes, summarizes older backing indices with unlinked provenance fields in one line per data stream, and only asks for a rollover after adding an alias to a writable index.
 - Fixed `.elasticrc.yml` errors exposing secrets. A malformed `$(...)` expression no longer echoes the field's value, and invalid service URL errors show the configured URL with its userinfo redacted instead of the resolved URL.
+- Preserved the legacy `settings.json` bundle filename while keeping `IndicesSettings` as the explicit code and dispatch name.
 
 ## [0.17.0] - 2026-10-13
 
