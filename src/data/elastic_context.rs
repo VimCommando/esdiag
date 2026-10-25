@@ -8,11 +8,12 @@ use super::{CredentialDirection, HostRole, KnownHostBuilder};
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "elasticrc")]
-use std::path::Path;
 use std::{
     env,
+    path::{Path, PathBuf},
+};
+use std::{
     fmt::{Display, Formatter},
-    path::PathBuf,
     str::FromStr,
 };
 #[cfg(feature = "elasticrc")]
@@ -38,12 +39,14 @@ pub(crate) struct ElasticContextTarget {
 }
 
 /// A stable symbolic reference to a named Elastic CLI output deployment.
+///
+/// Like [`ElasticContextTarget`], the configuration file is located when the
+/// output resolves, so the reference follows `ELASTIC_CLI_CONFIG_FILE` and home
+/// discovery at run time.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ElasticOutputContext {
     pub context: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_file: Option<PathBuf>,
 }
 
 impl ElasticOutputContext {
@@ -52,10 +55,7 @@ impl ElasticOutputContext {
         if context.trim().is_empty() {
             return Err(eyre!("Elastic CLI output context name must not be empty"));
         }
-        Ok(Self {
-            context,
-            config_file: env::var_os("ELASTIC_CLI_CONFIG_FILE").map(PathBuf::from),
-        })
+        Ok(Self { context })
     }
 
     /// The host reference that selects this context's Elasticsearch service.
@@ -69,7 +69,7 @@ impl ElasticOutputContext {
     ) -> Result<(KnownHost, Auth, Option<KnownHost>, Option<Auth>)> {
         #[cfg(feature = "elasticrc")]
         {
-            resolve_output_hosts(Some(&self.context), self.config_file.as_deref(), require_kibana)
+            resolve_output_hosts(Some(&self.context), None, require_kibana)
         }
         #[cfg(not(feature = "elasticrc"))]
         {
@@ -98,7 +98,7 @@ impl ElasticContextTarget {
         let Some(reference) = value.strip_prefix('.') else {
             return Ok(None);
         };
-        if reference.is_empty() || reference.contains('\\') {
+        if reference.is_empty() || reference.starts_with(['.', '/']) || reference.contains('\\') {
             return Ok(None);
         }
 
@@ -602,5 +602,8 @@ mod tests {
     fn unknown_leading_dot_value_falls_through() {
         assert_eq!(ElasticContextTarget::parse(".prod.ls").expect("parse"), None);
         assert_eq!(ElasticContextTarget::parse("./.es").expect("parse"), None);
+        for path in ["..", "../out", "../.prod.es", "..hidden"] {
+            assert_eq!(ElasticContextTarget::parse(path).expect("parse"), None, "{path}");
+        }
     }
 }

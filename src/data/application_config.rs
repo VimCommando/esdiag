@@ -74,6 +74,14 @@ pub struct OutputConfig {
 }
 
 impl OutputConfig {
+    /// Make a saved host the default output. A configured Elastic CLI output
+    /// context takes precedence over `default`, so selecting a saved host
+    /// clears it.
+    pub fn select_saved_host(&mut self, name: String) {
+        self.default = Some(name);
+        self.elastic_context = None;
+    }
+
     fn is_empty(&self) -> bool {
         self.default.is_none()
             && self.elastic_context.is_none()
@@ -136,7 +144,7 @@ impl ApplicationConfig {
         if let Some(output_context) = &self.output.elastic_context {
             #[cfg(feature = "elasticrc")]
             {
-                let config = elasticrc::ConfigFile::load_with_options(output_context.config_file.as_deref(), None)?;
+                let config = elasticrc::ConfigFile::load_with_options(None, None)?;
                 let context = config.contexts().get(&output_context.context).ok_or_else(|| {
                     eyre!(
                         "Configured Elastic CLI output context '{}' was not found",
@@ -263,6 +271,21 @@ mod tests {
     }
 
     #[test]
+    fn selecting_a_saved_host_output_replaces_the_elastic_context() {
+        let mut output = OutputConfig {
+            elastic_context: Some(ElasticOutputContext {
+                context: "monitoring".to_string(),
+            }),
+            ..OutputConfig::default()
+        };
+
+        output.select_saved_host("output-elasticsearch".to_string());
+
+        assert_eq!(output.default.as_deref(), Some("output-elasticsearch"));
+        assert_eq!(output.elastic_context, None);
+    }
+
+    #[test]
     fn elastic_output_context_round_trips_without_credentials() {
         let _env = crate::TestEnv::new();
         let config = ApplicationConfig {
@@ -270,7 +293,6 @@ mod tests {
             output: OutputConfig {
                 elastic_context: Some(ElasticOutputContext {
                     context: "monitoring".to_string(),
-                    config_file: Some("elasticrc.yml".into()),
                 }),
                 ..OutputConfig::default()
             },
@@ -283,7 +305,7 @@ mod tests {
 
         assert_eq!(loaded, config);
         assert!(written.contains("context: monitoring"));
-        assert!(written.contains("config_file: elasticrc.yml"));
+        assert!(!written.contains("config_file"));
         assert!(!written.contains("api_key"));
         assert!(!written.contains("password"));
     }

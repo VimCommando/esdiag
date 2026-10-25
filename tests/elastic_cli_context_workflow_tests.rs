@@ -28,7 +28,6 @@ fn contexts_resolve_independently_and_saved_jobs_reresolve_credentials() {
     application.output = OutputConfig {
         elastic_context: Some(ElasticOutputContext {
             context: "monitoring".to_string(),
-            config_file: Some(config_path.clone()),
         }),
         ..OutputConfig::default()
     };

@@ -145,8 +145,6 @@ pub enum CliOutcome {
         operation: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        config_file: Option<String>,
     },
     LocalStack {
         command: String,

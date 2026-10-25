@@ -1915,14 +1915,25 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                     Uri::File(_) | Uri::Directory(_) => esdiag::job::model::Input::Load { uri: input_uri.clone() },
                     _ => {
                         let binding = esdiag::job::model::BindingKey::try_new("cli-process-input")?;
-                        let application = match &input_uri {
+                        let live_application = match &input_uri {
                             Uri::KnownHost(host) | Uri::ElasticCloudAdmin(host) | Uri::ElasticGovCloudAdmin(host) => {
-                                host.app()
+                                Some(host.app())
                             }
                             _ => None,
                         };
-                        context.inputs.bind_receiver(binding.clone(), receiver, application);
-                        esdiag::job::model::Input::LoadBinding { binding }
+                        context
+                            .inputs
+                            .bind_receiver(binding.clone(), receiver, live_application.flatten());
+                        if live_application.is_some() {
+                            esdiag::job::model::Input::CollectBinding {
+                                binding,
+                                diagnostic_type: "standard".to_string(),
+                                include: None,
+                                exclude: None,
+                            }
+                        } else {
+                            esdiag::job::model::Input::LoadBinding { binding }
+                        }
                     }
                 };
                 let export_target = match &output_uri {
@@ -2016,17 +2027,13 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                         Ok(CommandResult::outcome(CliOutcome::OutputContext {
                             operation: "set".to_string(),
                             context: Some(reference.context),
-                            config_file: reference.config_file.map(|path| path.display().to_string()),
                         }))
                     }
                     OutputCommands::Show => {
                         let reference = config.output.elastic_context;
                         Ok(CommandResult::outcome(CliOutcome::OutputContext {
                             operation: "show".to_string(),
-                            context: reference.as_ref().map(|value| value.context.clone()),
-                            config_file: reference
-                                .and_then(|value| value.config_file)
-                                .map(|path| path.display().to_string()),
+                            context: reference.map(|value| value.context),
                         }))
                     }
                     OutputCommands::Clear => {
@@ -2035,7 +2042,6 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                         Ok(CommandResult::outcome(CliOutcome::OutputContext {
                             operation: "clear".to_string(),
                             context: None,
-                            config_file: None,
                         }))
                     }
                 }

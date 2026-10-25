@@ -37,7 +37,7 @@ fn output_context_set_show_and_clear_persist_only_symbolic_state() {
     );
     let saved = fs::read_to_string(home.path().join(".esdiag/esdiag.yml")).expect("read app config");
     assert!(saved.contains("context: monitoring"));
-    assert!(saved.contains("config_file:"));
+    assert!(!saved.contains("config_file:"));
     assert!(!saved.contains("do-not-persist"));
     assert!(!saved.contains("monitoring.example"));
 

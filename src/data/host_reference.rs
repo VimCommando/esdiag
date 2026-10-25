@@ -121,6 +121,7 @@ mod tests {
             "./diagnostic.zip",
             "missing-host",
             "./.es",
+            "../out",
             "-",
         ] {
             assert_eq!(HostReference::parse(value).expect("parse"), None, "{value}");

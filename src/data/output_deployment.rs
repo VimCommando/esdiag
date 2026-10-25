@@ -483,12 +483,12 @@ mod tests {
             "current_context: monitoring\ncontexts:\n  monitoring:\n    elasticsearch:\n      url: https://monitoring-es.example:9200\n      auth:\n        api_key: $(env:MONITORING_ES_KEY)\n    kibana:\n      url: https://monitoring-kb.example:5601\n      auth:\n        api_key: $(env:MONITORING_KB_KEY)\n",
         )
         .expect("write elasticrc");
+        env.set_path("ELASTIC_CLI_CONFIG_FILE", elasticrc_path);
         ApplicationConfig {
             version: 1,
             output: crate::data::OutputConfig {
                 elastic_context: Some(ElasticOutputContext {
                     context: "monitoring".to_string(),
-                    config_file: Some(elasticrc_path),
                 }),
                 ..crate::data::OutputConfig::default()
             },
@@ -546,7 +546,6 @@ mod tests {
             output: crate::data::OutputConfig {
                 elastic_context: Some(ElasticOutputContext {
                     context: "monitoring".to_string(),
-                    config_file: None,
                 }),
                 ..crate::data::OutputConfig::default()
             },
