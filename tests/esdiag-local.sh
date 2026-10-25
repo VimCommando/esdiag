@@ -171,6 +171,11 @@ assert_contains "$tmp/trial.err" '--activate-trial=true'
 [[ "$(FAKE_TRIAL_STATUS=ineligible ESDIAG_SETUP_ACTIVATE_TRIAL=true core_setup_trial)" == true ]] || fail 'env var true'
 [[ "$(ESDIAG_SETUP_ACTIVATE_TRIAL=true core_setup_trial --activate-trial=false)" == false ]] || fail 'option overrides env var'
 if ESDIAG_SETUP_ACTIVATE_TRIAL=maybe core_setup_trial >/dev/null; then fail 'invalid ESDIAG_SETUP_ACTIVATE_TRIAL was accepted'; fi
+for option in --activate-trial --activate-trial= --activate-trial=yes; do
+    if core_setup_trial "$option" >/dev/null; then fail "malformed $option was accepted"; fi
+    assert_contains "$tmp/trial.err" 'Use --activate-trial=true or --activate-trial=false'
+    assert_not_contains "$FAKE_ESDIAG_LOG" 'setup env'
+done
 [[ "$(ESDIAG_SETUP_ACTIVATE_TRIAL='' core_setup_trial)" == false ]] || fail 'empty ESDIAG_SETUP_ACTIVATE_TRIAL must opt out like esdiag local'
 ESDIAG_KIBANA_SPACE=elsewhere core_setup_trial >/dev/null
 assert_contains "$FAKE_ESDIAG_LOG" 'space=esdiag'

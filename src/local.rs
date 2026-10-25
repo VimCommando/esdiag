@@ -1587,6 +1587,8 @@ mod tests {
         assert_eq!(parse("--activate-trial=true").unwrap(), Some(true));
         assert_eq!(parse("--activate-trial=false").unwrap(), Some(false));
         assert!(parse("--activate-trial").is_err());
+        assert!(parse("--activate-trial=").is_err());
+        assert!(parse("--activate-trial=yes").is_err());
     }
 
     #[test]

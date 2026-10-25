@@ -1204,6 +1204,9 @@ while [[ $# -gt 0 ]]; do
         activate_trial=${1#*=}
         shift
         ;;
+    --activate-trial | --activate-trial=*)
+        die "Use --activate-trial=true or --activate-trial=false, not '$1'"
+        ;;
     --mount)
         [[ $# -ge 2 ]] || die "Missing --mount value"
         exec_mounts+=("$2")
