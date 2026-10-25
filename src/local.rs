@@ -1266,7 +1266,8 @@ fn trial_preference(option: Option<bool>, environment: Option<String>) -> Result
 
 /// ESDiag images before 0.18 only accept bare `setup`; later images need `setup env`.
 fn setup_command_for_image(image: &str) -> &'static str {
-    let tag = image
+    let reference = image.split_once('@').map_or(image, |(name, _digest)| name);
+    let tag = reference
         .rsplit_once(':')
         .map(|(_, tag)| tag)
         .filter(|tag| !tag.contains('/'));
@@ -1514,6 +1515,8 @@ mod tests {
     fn setup_command_follows_the_pinned_image_version() {
         for (tag, command) in [
             ("0.17.0", r#"["setup"]"#),
+            ("0.17.0@sha256:0123abcd", r#"["setup"]"#),
+            ("0.18.0@sha256:0123abcd", r#"["setup", "env"]"#),
             ("0.17.9", r#"["setup"]"#),
             ("0.18.0", r#"["setup", "env"]"#),
             ("0.18.0-SNAPSHOT", r#"["setup", "env"]"#),

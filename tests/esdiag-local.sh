@@ -137,6 +137,10 @@ run_local up --runtime podman --state-dir "$tmp/pinned" --pull never --open-brow
 assert_contains "$tmp/pinned/.env" 'esdiag:0.17.2'
 assert_contains "$tmp/pinned/compose.yml" 'command: ["setup"]'
 assert_not_contains "$tmp/pinned/compose.yml" '"setup", "env"'
+ESDIAG_IMAGE_TAG=docker.elastic.co/esdiag/esdiag:0.17.2@sha256:0123abcd \
+    run_local up --runtime podman --state-dir "$tmp/digest" --pull never --open-browser=false >/dev/null 2>&1
+assert_contains "$tmp/digest/.env" 'esdiag:0.17.2@sha256:0123abcd'
+assert_contains "$tmp/digest/compose.yml" 'command: ["setup"]'
 
 # Matching native binaries select core mode, omit ESDiag containers, and own the web service.
 : >"$FAKE_LOG"; : >"$FAKE_ESDIAG_LOG"
