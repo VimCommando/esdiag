@@ -1108,14 +1108,15 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn kibana_child_returns_completed_outcome() {
+    async fn kibana_child_returns_partial_outcome_for_collection_failures() {
         let root = parent_with_children(&[("kibana-child", "kibana-api-diagnostics-9.3.3.zip")]);
 
         let completed = process_parent_bundle(root.path()).await;
 
         assert_eq!(completed.state.included_diagnostics.len(), 1);
         let child = &completed.state.included_diagnostics[0];
-        assert_eq!(child.outcome, DiagnosticOutcome::Complete);
+        // The 9.3.3 fixture records failed Kibana API requests in its manifest.
+        assert_eq!(child.outcome, DiagnosticOutcome::Partial);
         assert_eq!(child.platform, Platform::ECK);
         let report = child.report.as_ref().expect("completed child carries its report");
         assert_eq!(report.diagnostic.application, Some(Application::Kibana));

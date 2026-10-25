@@ -24,7 +24,7 @@ ESDiag currently has placeholders for Kibana diagnostic processing but lacks imp
 - **Data Streams**: Use names following the pattern `<type>-kibana-esdiag` or `metrics-kibana.<type>-esdiag` to maintain consistency with other products.
 - **Source Discovery**: Consume every file emitted for a source, including root files, space-scoped files, paginated files, and legacy numbered filenames. Preserve deterministic path order when combining pages and spaces.
 - **Selection**: Register each implemented source in the shared processing registry and dispatch only the sources selected for processing, while always loading metadata prerequisites.
-- **Outcome Reporting**: Mark decoded sources as parsed and persist non-missing read, parse, and export failures in the diagnostic report. Missing optional sources remain non-fatal.
+- **Outcome Reporting**: Mark decoded sources as parsed and persist non-missing read, parse, and export failures in the diagnostic report. Missing optional sources remain non-fatal, but failed requests recorded in the manifest's `requested_apis` become report warnings, as ADR-0016 requires. An unreadable supported subtree is reported as a failure of that source without discarding files found elsewhere.
 - **Metadata**: Enrich every document with the diagnostic identifier, diagnostic version, collection timestamp, Kibana node identity and version, and data stream identity.
 - **Index Templates**: Add an index template for every emitted metrics stream. Explicit mappings cover only dashboard-critical metadata and stable node fields; dynamic mappings capture product payloads that can vary between Kibana versions.
 

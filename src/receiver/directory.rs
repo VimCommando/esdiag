@@ -213,10 +213,11 @@ impl DirectoryReceiver {
         let candidates = T::candidate_source_file_paths(&ctx)?;
         let root = self.path.join(&self.work_dir);
         let mut filenames = Vec::new();
-        collect_source_files(&root, &root, &candidates, &mut filenames)?;
+        let mut errors = Vec::new();
+        collect_source_files(&root, &root, &candidates, &mut filenames, &mut errors)?;
         filenames.sort();
 
-        if filenames.is_empty() {
+        if filenames.is_empty() && errors.is_empty() {
             return Err(MissingSource::NoCandidates { source: T::name() }.into());
         }
 
@@ -226,6 +227,11 @@ impl DirectoryReceiver {
                 data: read_directory_source(&filename),
                 path,
             })
+            .chain(
+                errors
+                    .into_iter()
+                    .map(|(path, error)| SourceInstance { path, data: Err(error) }),
+            )
             .collect())
     }
 
@@ -304,11 +310,15 @@ where
 }
 
 /// Collects matching source files as `(absolute path, path relative to root)` pairs.
+///
+/// A subtree that cannot be read is recorded in `errors` by its relative path
+/// so the files discovered elsewhere are still processed.
 fn collect_source_files(
     root: &Path,
     directory: &Path,
     candidates: &[String],
     filenames: &mut Vec<(PathBuf, String)>,
+    errors: &mut Vec<(String, eyre::Report)>,
 ) -> Result<()> {
     for entry in std::fs::read_dir(directory)? {
         let entry = entry?;
@@ -320,7 +330,12 @@ fn collect_source_files(
             .to_string_lossy()
             .into_owned();
         if file_type.is_dir() && super::may_contain_source_instance(&relative, candidates) {
-            collect_source_files(root, &path, candidates, filenames)?;
+            if let Err(error) = collect_source_files(root, &path, candidates, filenames, errors) {
+                errors.push((
+                    relative,
+                    error.wrap_err(format!("Failed to read directory {}", path.display())),
+                ));
+            }
         } else if file_type.is_file() && super::is_source_instance_path(&relative, candidates) {
             filenames.push((path, relative));
         }

@@ -11,6 +11,10 @@ The system SHALL process every available file for a selected Kibana source acros
 - **WHEN** a directory bundle contains subdirectories outside the root, `spaces/<space>`, and `pages/page-*` layouts, including unreadable ones
 - **THEN** source discovery skips them and processes the selected sources that exist in the supported layouts
 
+#### Scenario: Unreadable supported subtree
+- **WHEN** a supported subtree such as `spaces/<space>` cannot be read
+- **THEN** the system processes the source files discovered elsewhere and records a processing event naming the unreadable subtree
+
 #### Scenario: Legacy numbered source processing
 - **WHEN** a diagnostic contains a legacy source file such as `kibana_alerts_1.json`
 - **THEN** the system processes the numbered file as an instance of its canonical source
@@ -32,6 +36,10 @@ The system SHALL distinguish missing optional sources from successfully parsed s
 #### Scenario: Source failure outcome
 - **WHEN** a present Kibana source cannot be read, parsed, or exported
 - **THEN** the report records an actionable processing event and derives the diagnostic outcome from that event
+
+#### Scenario: Collection failure outcome
+- **WHEN** the diagnostic manifest records a requested Kibana API without a successful HTTP status
+- **THEN** the report records a warning for that API, even if no source file was saved, and the diagnostic outcome is partial
 
 ### Requirement: Kibana Output Templates
 The system SHALL install an index template matching every emitted Kibana metrics data stream.

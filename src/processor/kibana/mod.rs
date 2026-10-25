@@ -362,8 +362,9 @@ impl DiagnosticProcessor for KibanaDiagnostic {
         process_selection: Option<ProcessSelection>,
     ) -> Result<(Box<Self>, DiagnosticReport)> {
         let kibana_version = receiver.get::<version::Version>().await?;
-        let metadata = KibanaMetadata::try_new(manifest, kibana_version)?;
+        let metadata = KibanaMetadata::try_new(manifest.clone(), kibana_version)?;
         let report = DiagnosticReportBuilder::from(metadata.diagnostic.clone())
+            .collection_events_from(&manifest)
             .application(Application::Kibana)
             .receiver(receiver.to_string())
             .build()?;
@@ -712,6 +713,81 @@ mod tests {
         assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unreadable_space_directories_keep_readable_sources() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let input = tempfile::tempdir().expect("input directory");
+        fs::write(
+            input.path().join(DiagnosticManifest::FILENAME),
+            json!({
+                "product": "kibana",
+                "diagnostic": "kibana-test",
+                "type": "kibana-diagnostics",
+                "runner": "esdiag",
+                "version": "8.19.3",
+                "timestamp": "2026-08-30T12:00:00Z"
+            })
+            .to_string(),
+        )
+        .expect("write manifest");
+        fs::write(input.path().join("kibana_status.json"), STATUS).expect("write status");
+        let marketing = input.path().join("spaces/marketing");
+        fs::create_dir_all(&marketing).expect("create space");
+        fs::set_permissions(&marketing, fs::Permissions::from_mode(0o000)).expect("lock space");
+
+        let receiver = Arc::new(Receiver::try_from(Uri::Directory(input.path().to_path_buf())).expect("receiver"));
+        let (output, report) = run_receiver(receiver, Some(vec!["kibana_status"])).await;
+        fs::set_permissions(&marketing, fs::Permissions::from_mode(0o755)).expect("unlock space");
+
+        assert_eq!(read_stream(output.path(), "metrics-kibana.status-esdiag").len(), 1);
+        assert_eq!(report.outcome(), DiagnosticOutcome::Partial);
+        assert!(
+            report
+                .events()
+                .iter()
+                .any(|event| event.source == "kibana_status" && event.reason.contains("spaces/marketing"))
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_requested_apis_are_reported() {
+        let input = tempfile::tempdir().expect("input directory");
+        fs::write(
+            input.path().join(DiagnosticManifest::FILENAME),
+            json!({
+                "product": "kibana",
+                "diagnostic": "kibana-test",
+                "type": "kibana-diagnostics",
+                "runner": "esdiag",
+                "version": "8.19.3",
+                "timestamp": "2026-08-30T12:00:00Z",
+                "requested_apis": {
+                    "kibana_status": {"status": 200, "response_time_ms": 1, "response_size_bytes": 1},
+                    "kibana_alerts": {"status": 500, "response_time_ms": 1, "response_size_bytes": 0}
+                }
+            })
+            .to_string(),
+        )
+        .expect("write manifest");
+        fs::write(input.path().join("kibana_status.json"), STATUS).expect("write status");
+
+        let receiver = Arc::new(Receiver::try_from(Uri::Directory(input.path().to_path_buf())).expect("receiver"));
+        let (output, report) = run_receiver(receiver, Some(vec!["kibana_status", "kibana_alerts"])).await;
+
+        let status = read_stream(output.path(), "metrics-kibana.status-esdiag");
+        assert_eq!(status.len(), 1);
+        assert_eq!(report.outcome(), DiagnosticOutcome::Partial);
+        assert!(
+            report
+                .events()
+                .iter()
+                .any(|event| { event.source == "kibana_alerts" && event.reason == "collection failed with HTTP 500" })
+        );
+        assert_eq!(status[0]["diagnostic"]["id"], report.diagnostic.metadata.id.as_str());
+    }
+
     #[tokio::test]
     async fn fleet_packages_split_kibana_7_response_wrapper() {
         let (output, report) = run_bundle(
@@ -930,7 +1006,10 @@ mod tests {
             "scoped actions were not processed"
         );
         assert!(output.path().join("metrics-kibana.status-esdiag.ndjson").exists());
-        assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
+        assert!(report.events().iter().any(|event| {
+            event.source == "kibana_task_manager_health" && event.reason == "collection failed with HTTP 500"
+        }));
+        assert_eq!(report.outcome(), DiagnosticOutcome::Partial);
     }
 
     #[tokio::test]

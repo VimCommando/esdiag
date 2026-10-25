@@ -1176,7 +1176,7 @@ mod tests {
 
         assert!(outcome.succeeded());
         let child = outcome.children.first().expect("child outcome");
-        assert_eq!(child.diagnostic_outcome, DiagnosticOutcome::Complete);
+        assert_eq!(child.diagnostic_outcome, DiagnosticOutcome::Partial);
         assert_eq!(child.application(), Some(Application::Kibana));
         assert_eq!(child.execution.stage(Stage::Process), Some(&StageStatus::Succeeded));
         assert_eq!(child.execution.stage(Stage::Export), Some(&StageStatus::Succeeded));
