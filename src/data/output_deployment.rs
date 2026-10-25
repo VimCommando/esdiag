@@ -168,16 +168,27 @@ impl OutputDeployment {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         };
-        let (kibana, kibana_auth) = if let Some(kibana_url) = kibana_url {
-            let kibana = KnownHostBuilder::new(Url::parse(&kibana_url)?)
+        let kibana = kibana_url
+            .map(|kibana_url| -> Result<(KnownHost, Auth)> {
+                let kibana = KnownHostBuilder::new(
+                    Url::parse(&kibana_url).map_err(|err| eyre!("ESDIAG_KIBANA_URL is not a valid URL: {err}"))?,
+                )
                 .application(Application::Kibana)
                 .roles(vec![HostRole::View])
                 .auth(auth)
                 .build()?;
-            let auth = kibana.get_auth_for_direction(CredentialDirection::Output)?;
-            (Some(kibana), Some(auth))
-        } else {
-            (None, None)
+                let auth = kibana.get_auth_for_direction(CredentialDirection::Output)?;
+                Ok((kibana, auth))
+            })
+            .transpose();
+        let (kibana, kibana_auth) = match kibana {
+            Ok(Some((kibana, auth))) => (Some(kibana), Some(auth)),
+            Ok(None) => (None, None),
+            Err(err) if !require_kibana => {
+                tracing::warn!("Ignoring ESDIAG_KIBANA_URL; exports will omit Kibana links: {err}");
+                (None, None)
+            }
+            Err(err) => return Err(err),
         };
 
         Ok(Self::assemble(
@@ -585,6 +596,24 @@ mod tests {
         assert_eq!(
             deployment.elasticsearch.concrete_url().map(Url::as_str),
             Some("https://incident.example:9200/")
+        );
+    }
+
+    #[test]
+    fn invalid_optional_kibana_url_does_not_block_elasticsearch_output() {
+        let mut env = crate::TestEnv::new();
+        clear_output_environment(&mut env);
+        env.set("ESDIAG_OUTPUT_URL", "https://runtime-es.example:9200");
+        env.set("ESDIAG_KIBANA_URL", "not a url");
+
+        let deployment = OutputDeployment::from_environment(false).expect("Elasticsearch-only output");
+        assert!(deployment.kibana.is_none());
+        assert!(deployment.elasticsearch.attached_viewer().is_none());
+
+        let error = OutputDeployment::from_environment(true).expect_err("Kibana is required");
+        assert!(
+            error.to_string().contains("ESDIAG_KIBANA_URL is not a valid URL"),
+            "{error}"
         );
     }
 }

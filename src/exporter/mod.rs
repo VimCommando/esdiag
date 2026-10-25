@@ -459,10 +459,19 @@ fn saved_viewer(host: &KnownHost) -> Option<KnownHost> {
 }
 
 fn kibana_base_url_from_env() -> Option<String> {
-    std::env::var("ESDIAG_KIBANA_URL")
-        .ok()
-        .filter(|url| !url.trim().is_empty())
-        .map(|url| crate::env::append_kibana_space(&url))
+    let url = std::env::var("ESDIAG_KIBANA_URL").ok()?;
+    let url = Url::parse(url.trim()).ok()?;
+    Some(kibana_link_base(&url))
+}
+
+/// The Kibana base for links and outcome URIs. URL userinfo is dropped so a
+/// credential embedded in the viewer URL never reaches reports or CLI results;
+/// requests still authenticate through the viewer host.
+fn kibana_link_base(url: &Url) -> String {
+    let mut url = url.clone();
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    crate::env::append_kibana_space(url.as_str())
 }
 
 /// The Kibana host that views `host`'s data: the one resolution attached, or
@@ -476,9 +485,7 @@ fn output_viewer(host: &KnownHost) -> Option<KnownHost> {
 }
 
 fn kibana_base_url_for_output(viewer: &KnownHost) -> Option<String> {
-    viewer
-        .concrete_url()
-        .map(|url| crate::env::append_kibana_space(url.as_ref()))
+    viewer.concrete_url().map(kibana_link_base)
 }
 
 async fn resolve_kibana_link_ids(viewer: Uri, base: &str) -> Result<(String, String)> {
@@ -814,5 +821,31 @@ mod tests {
         .expect("cluster exporter");
 
         assert!(exporter.kibana_link("diag-123", 1_700_000_000_000).is_none());
+    }
+
+    #[test]
+    fn kibana_links_omit_viewer_url_credentials() {
+        let mut env = crate::TestEnv::new();
+        env.set("ESDIAG_OUTPUT_URL", "https://es.example:9200");
+        env.set("ESDIAG_KIBANA_URL", "https://viewer:hunter2@kb.example:5601");
+        env.set("ESDIAG_KIBANA_SPACE", "");
+
+        let exporter = Exporter::try_from(Uri::try_from_output_env().expect("output env")).expect("cluster exporter");
+        let kibana_link = exporter
+            .kibana_link("diag-123", 1_700_000_000_000)
+            .expect("kibana link");
+
+        assert!(
+            kibana_link.starts_with("https://kb.example:5601/app/dashboards#/view/"),
+            "{kibana_link}"
+        );
+        assert_eq!(exporter.outcome_uri(), "https://kb.example:5601");
+        let Exporter::Elasticsearch(exporter) = exporter else {
+            panic!("expected an Elasticsearch exporter");
+        };
+        let Some(crate::data::Uri::KnownHost(viewer)) = exporter.kibana_viewer.as_deref() else {
+            panic!("expected the environment viewer");
+        };
+        assert_eq!(viewer.concrete_url().map(Url::password), Some(Some("hunter2")));
     }
 }

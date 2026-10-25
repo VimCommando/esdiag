@@ -56,10 +56,11 @@ attempting Kibana installation. A Kibana stage skipped for licensing also makes
 the outcome `partial`. A service the source does not declare is noted in
 `warnings` without making the outcome `partial`.
 
-Process results use the output host's linked Kibana viewer. An output with no
-linked viewer omits `kibana_url` unless its URL matches `ESDIAG_OUTPUT_URL`,
-in which case it uses that environment deployment's `ESDIAG_KIBANA_URL`.
-An unrelated default viewer is never used. See
+Process results use the Kibana viewer that belongs to the output deployment:
+the Elastic CLI context's Kibana service, `ESDIAG_KIBANA_URL` for an
+`ESDIAG_OUTPUT_URL` output, or the saved host's linked viewer. An output with
+no viewer of its own omits `kibana_url`; `ESDIAG_KIBANA_URL` is never attached
+to a different output, and `kibana_url` never includes URL credentials. See
 [Serverless asset compatibility](reference/serverless-assets.md#indexing-failures-and-recovery)
 for rollover and failure-store recovery steps.
 
