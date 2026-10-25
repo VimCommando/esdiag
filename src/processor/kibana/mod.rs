@@ -44,7 +44,7 @@ use super::{
     api::ProcessSelection,
     diagnostic::{
         DataSource, DiagnosticManifest, DiagnosticReport, DiagnosticReportBuilder,
-        data_source::{ProcessableClaim, validate_processable_registry},
+        data_source::{DataSourceError, ProcessableClaim, validate_processable_registry},
     },
 };
 use crate::{
@@ -298,9 +298,15 @@ impl KibanaDiagnostic {
     }
 }
 
+/// Sources absent from the bundle, or not offered by the target Kibana
+/// version, are unavailable rather than failed.
 fn is_missing_source_error(error: &eyre::Report) -> bool {
     error.chain().any(|cause| {
         cause.is::<MissingSource>()
+            || matches!(
+                cause.downcast_ref::<DataSourceError>(),
+                Some(DataSourceError::UnsupportedVersion(_))
+            )
             || cause
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
@@ -786,6 +792,14 @@ mod tests {
                 .any(|event| { event.source == "kibana_alerts" && event.reason == "collection failed with HTTP 500" })
         );
         assert_eq!(status[0]["diagnostic"]["id"], report.diagnostic.metadata.id.as_str());
+    }
+
+    #[test]
+    fn unsupported_version_sources_are_unavailable_not_failed() {
+        let error = eyre::Report::new(DataSourceError::UnsupportedVersion(semver::Version::new(7, 17, 29)))
+            .wrap_err("Failed to request kibana_synthetics_monitors");
+        assert!(is_missing_source_error(&error));
+        assert!(!is_missing_source_error(&eyre!("collection failed")));
     }
 
     #[tokio::test]

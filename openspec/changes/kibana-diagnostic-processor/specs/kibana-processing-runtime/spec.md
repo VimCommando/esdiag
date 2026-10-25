@@ -37,6 +37,10 @@ The system SHALL distinguish missing optional sources from successfully parsed s
 - **WHEN** a present Kibana source cannot be read, parsed, or exported
 - **THEN** the report records an actionable processing event and derives the diagnostic outcome from that event
 
+#### Scenario: Version-inapplicable source
+- **WHEN** a selected Kibana source is not offered by the target Kibana version
+- **THEN** the system treats it as an unavailable optional source and does not make the diagnostic outcome partial
+
 #### Scenario: Collection failure outcome
 - **WHEN** the diagnostic manifest records a requested Kibana API without a successful HTTP status
 - **THEN** the report records a warning for that API, even if no source file was saved, and the diagnostic outcome is partial

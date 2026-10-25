@@ -36,3 +36,11 @@
 - [x] 5.6 Add direct tests for every requirement scenario, including scoped and paginated bundles
 - [x] 5.7 Reconcile the design and runtime documentation with the implemented processor scope
 - [x] 5.8 Pass formatting, Kibana processor, asset-contract, and strict OpenSpec validation checks
+
+## 6. Review Remediation
+
+- [x] 6.1 Report failed requested APIs from the manifest as diagnostic report warnings
+- [x] 6.2 Keep files discovered elsewhere when a supported subtree is unreadable, and skip unrelated subtrees
+- [x] 6.3 Record the Kibana space of space-scoped documents in `space.id`
+- [x] 6.4 Treat sources the target Kibana version does not offer as unavailable
+- [x] 6.5 Stage Kibana `Collect` + `Process` jobs without `Save` through a temporary bundle

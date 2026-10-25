@@ -26,7 +26,7 @@ ESDiag currently lacks support for processing Kibana-specific diagnostic data (l
 - `kibana-processing-runtime`: Discover scoped and paginated inputs, honor processing selections, report processing outcomes, and install compatible output templates.
 
 ### Modified Capabilities
-<!-- None -->
+- `collection-execution`: Stage Kibana `Collect` + `Process` jobs through a temporary bundle, because only the Kibana collector enumerates pages and spaces.
 
 ## Impact
 
