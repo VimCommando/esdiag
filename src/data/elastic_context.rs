@@ -55,12 +55,31 @@ impl ElasticOutputContext {
         if context.trim().is_empty() {
             return Err(eyre!("Elastic CLI output context name must not be empty"));
         }
-        Ok(Self { context })
+        let output = Self { context };
+        output.host_reference()?;
+        Ok(output)
     }
 
     /// The host reference that selects this context's Elasticsearch service.
-    pub fn host_reference(&self) -> String {
-        format!(".{}.es", self.context)
+    ///
+    /// Fails for context names the reference syntax cannot express, such as
+    /// names containing `/`, so a saved reference never selects another target.
+    pub fn host_reference(&self) -> Result<String> {
+        let reference = format!(".{}.es", self.context);
+        let selects_this_context = ElasticContextTarget::parse(&reference).is_ok_and(|target| {
+            target.is_some_and(|target| {
+                target.context.as_deref() == Some(self.context.as_str())
+                    && target.application == Application::Elasticsearch
+                    && target.cloud_deployment.is_none()
+            })
+        });
+        if !selects_this_context {
+            return Err(eyre!(
+                "Elastic CLI context '{}' cannot be used as an ESDiag output because '{reference}' is not a valid host reference. Context names must not start with '.' or contain '/' or '\\'.",
+                self.context
+            ));
+        }
+        Ok(reference)
     }
 
     pub(crate) fn resolve_output_hosts(
@@ -604,6 +623,26 @@ mod tests {
         assert_eq!(ElasticContextTarget::parse("./.es").expect("parse"), None);
         for path in ["..", "../out", "../.prod.es", "..hidden"] {
             assert_eq!(ElasticContextTarget::parse(path).expect("parse"), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn output_context_reference_round_trips_or_is_rejected() {
+        use super::ElasticOutputContext;
+
+        let dotted = ElasticOutputContext::new("team.prod").expect("dotted context");
+        assert_eq!(dotted.host_reference().expect("reference"), ".team.prod.es");
+
+        for name in ["team/prod", ".hidden", "team\\prod"] {
+            let error = ElasticOutputContext::new(name).expect_err(name);
+            assert!(
+                error.to_string().contains("cannot be used as an ESDiag output"),
+                "{error}"
+            );
+            let configured = ElasticOutputContext {
+                context: name.to_string(),
+            };
+            assert!(configured.host_reference().is_err(), "{name}");
         }
     }
 }

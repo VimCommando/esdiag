@@ -165,7 +165,12 @@ mod tests {
     #[test]
     fn context_reference_takes_precedence_over_a_saved_host_of_the_same_name() {
         let mut env = crate::TestEnv::new();
-        save_host(".prod.es", "https://saved.example:9200");
+        std::fs::write(
+            &env.hosts_path,
+            ".prod.es:\n  app: elasticsearch\n  url: https://saved.example:9200\n  roles: [collect, send]\n",
+        )
+        .expect("write pre-existing hosts.yml");
+        assert!(KnownHost::get_known(&".prod.es".to_string()).is_some());
         write_config(
             &mut env,
             "current_context: prod\ncontexts:\n  prod:\n    elasticsearch:\n      url: https://context.example:9200\n",

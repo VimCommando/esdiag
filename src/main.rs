@@ -2200,7 +2200,7 @@ fn derive_process_job(input: &str, output: Option<&str>, identifiers: Identifier
             let config = esdiag::data::ApplicationConfig::load()?;
             if let Some(context) = config.output.elastic_context {
                 esdiag::data::JobOutput::KnownHost {
-                    name: context.host_reference(),
+                    name: context.host_reference()?,
                 }
             } else if let Some(name) = config.output.default {
                 esdiag::data::JobOutput::KnownHost { name }
