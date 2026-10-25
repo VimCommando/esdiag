@@ -137,6 +137,10 @@ run_local up --runtime podman --state-dir "$tmp/pinned" --pull never --open-brow
 assert_contains "$tmp/pinned/.env" 'esdiag:0.17.2'
 assert_contains "$tmp/pinned/compose.yml" 'command: ["setup"]'
 assert_not_contains "$tmp/pinned/compose.yml" '"setup", "env"'
+run_local setup --runtime podman --state-dir "$tmp/pinned" --activate-trial=false >/dev/null 2>"$tmp/pinned.err"
+assert_contains "$tmp/pinned.err" 'esdiag:0.17.2 predates the trial opt-in'
+run_local setup --runtime podman --state-dir "$tmp/pinned" --activate-trial=true >/dev/null 2>"$tmp/pinned.err"
+assert_not_contains "$tmp/pinned.err" 'predates the trial opt-in'
 ESDIAG_IMAGE_TAG=docker.elastic.co/esdiag/esdiag:0.17.2@sha256:0123abcd \
     run_local up --runtime podman --state-dir "$tmp/digest" --pull never --open-browser=false >/dev/null 2>&1
 assert_contains "$tmp/digest/.env" 'esdiag:0.17.2@sha256:0123abcd'

@@ -617,6 +617,11 @@ run_setup() {
     local trial
     trial=$(resolve_activate_trial)
     if [[ "$resolved_stack_mode" == full ]]; then
+        local image
+        image=$(env_get ESDIAG_IMAGE 2>/dev/null || true)
+        if [[ "$trial" == false && "$(setup_command_args "$image")" == '["setup"]' ]]; then
+            warn "${image} predates the trial opt-in and starts a trial license on an unlicensed cluster, even with --activate-trial=false. Run '${command_name} upgrade' to keep the license unchanged."
+        fi
         if ! "${compose[@]}" --profile setup run --rm --no-deps -e "ESDIAG_SETUP_ACTIVATE_TRIAL=${trial}" setup; then
             capture_logs
             die "ESDiag setup failed"

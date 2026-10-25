@@ -669,6 +669,10 @@ impl LocalState {
                 None => self.trial_eligible().await,
             };
         if mode == StackMode::Full {
+            let image = self.values.get("ESDIAG_IMAGE").map(String::as_str).unwrap_or_default();
+            if !activate_trial && setup_command_for_image(image) == r#"["setup"]"# {
+                eprintln!("Warning: {}", legacy_trial_warning(image, "esdiag local"));
+            }
             let trial = format!("ESDIAG_SETUP_ACTIVATE_TRIAL={activate_trial}");
             self.compose_logged(
                 "Installing ESDiag assets",
@@ -1265,6 +1269,13 @@ fn trial_preference(option: Option<bool>, environment: Option<String>) -> Result
 }
 
 /// ESDiag images before 0.18 only accept bare `setup`; later images need `setup env`.
+/// Pre-0.18 images ignore `ESDIAG_SETUP_ACTIVATE_TRIAL` and start a trial on an unlicensed cluster.
+fn legacy_trial_warning(image: &str, command: &str) -> String {
+    format!(
+        "{image} predates the trial opt-in and starts a trial license on an unlicensed cluster, even with --activate-trial=false. Run `{command} upgrade` to keep the license unchanged."
+    )
+}
+
 fn setup_command_for_image(image: &str) -> &'static str {
     let reference = image.split_once('@').map_or(image, |(name, _digest)| name);
     let tag = reference
