@@ -278,6 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_upload_job_missing_upload_emits_failure_and_terminal_signal() {
+        let _env = crate::TestEnv::new();
         let state = test_server_state();
         let signals = UploadProcessSignals::default();
         let (tx, mut rx) = mpsc::channel(8);
@@ -326,6 +327,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_job_cannot_be_claimed_by_different_owner() {
+        let _env = crate::TestEnv::new();
         let state = test_server_state();
         state
             .push_upload(
@@ -357,6 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_upload_job_completes_when_client_disconnected() {
+        let _env = crate::TestEnv::new();
         let state = test_server_state();
         let signals = UploadProcessSignals::default();
         let (tx, rx) = mpsc::channel(1);
