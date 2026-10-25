@@ -55,6 +55,13 @@ The extension SHALL consume resolved Elasticsearch and Kibana service values pas
 - **THEN** it does not implicitly export processed documents back to the active input context
 - **AND** output resolution uses the explicit or configured output deployment rules
 
+#### Scenario: ESDiag environment output ignores Elastic CLI variables
+- **GIVEN** `ELASTIC_ES_URL`, `ELASTIC_ES_API_KEY`, and `ELASTIC_KIBANA_URL` are set
+- **AND** `ESDIAG_OUTPUT_URL` and `ESDIAG_KIBANA_URL` are unset
+- **WHEN** ESDiag resolves an environment output deployment or Kibana viewer
+- **THEN** it does not read the `ELASTIC_*` variables
+- **AND** `ESDIAG_OUTPUT_URL` never inherits `ELASTIC_*` credentials
+
 ### Requirement: Active Elastic Context Target References
 The system SHALL support active-context leading-dot Elastic target references for command arguments that can resolve remote targets. A reference of `.service` SHALL resolve the service from the active Elastic CLI context passed through the extension environment. The service segment MUST identify a known service name or alias.
 

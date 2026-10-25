@@ -192,7 +192,20 @@ impl ElasticContextTarget {
                 _ => vec![HostRole::Collect, HostRole::Send],
             };
             let service = resolve_service(self, service_kind(self.application)?)?;
-            known_host_from_service(service, self.application, roles)
+            let host = known_host_from_service(service, self.application, roles)?;
+            if self.application != Application::Elasticsearch {
+                return Ok(host);
+            }
+            Ok(match resolve_viewer(self) {
+                Ok(Some(viewer)) => host.with_attached_viewer(viewer),
+                Ok(None) => host,
+                Err(err) => {
+                    tracing::warn!(
+                        "Kibana service for Elastic CLI context target '{self}' could not be resolved; exports will omit Kibana links: {err}"
+                    );
+                    host
+                }
+            })
         }
         #[cfg(not(feature = "elasticrc"))]
         {
@@ -308,6 +321,30 @@ fn resolve_service(target: &ElasticContextTarget, kind: ServiceKind) -> Result<C
     let config = load_config_cached(None)?
         .ok_or_else(|| eyre!("Elastic CLI config was not found for context target '{target}'"))?;
     resolve_config_service(&config, target.context.as_deref(), kind).map_err(Into::into)
+}
+
+/// The Kibana service from the same source [`resolve_service`] selects for
+/// `target`'s Elasticsearch service, or `None` when that source has no Kibana.
+#[cfg(feature = "elasticrc")]
+fn resolve_viewer(target: &ElasticContextTarget) -> Result<Option<KnownHost>> {
+    let service = if target.context.is_none()
+        && crate::env::is_elastic_cli_invocation()
+        && service_from_active_environment(ServiceKind::Elasticsearch)?.is_some()
+    {
+        service_from_active_environment(ServiceKind::Kibana)?
+    } else {
+        let Some(config) = load_config_cached(None)? else {
+            return Ok(None);
+        };
+        match resolve_config_service(&config, target.context.as_deref(), ServiceKind::Kibana) {
+            Ok(service) => Some(service),
+            Err(elasticrc::Error::MissingService { .. }) => None,
+            Err(err) => return Err(err.into()),
+        }
+    };
+    service
+        .map(|service| known_host_from_service(service, Application::Kibana, vec![HostRole::View]))
+        .transpose()
 }
 
 /// Resolves one service from a named context, or the current context when unnamed.

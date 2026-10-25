@@ -60,6 +60,7 @@ impl OutputDeployment {
             return Ok(deployment);
         }
         if let Some((viewer, auth)) = linked_viewer(&deployment.elasticsearch)? {
+            deployment.elasticsearch = deployment.elasticsearch.with_attached_viewer(viewer.clone());
             deployment.kibana = Some(viewer);
             deployment.kibana_auth = Some(auth);
         }
@@ -70,13 +71,13 @@ impl OutputDeployment {
         if let Some(target) = ElasticContextTarget::parse(target)? {
             let (elasticsearch, elasticsearch_auth, kibana, kibana_auth) =
                 target.resolve_output_hosts(require_kibana)?;
-            return Ok(Self {
-                source: OutputDeploymentSource::Explicit,
+            return Ok(Self::assemble(
+                OutputDeploymentSource::Explicit,
                 elasticsearch,
                 elasticsearch_auth,
                 kibana,
                 kibana_auth,
-            });
+            ));
         }
         let output = KnownHost::get_known(&target.to_string())
             .ok_or_else(|| eyre!("Explicit output deployment target '{target}' must be a saved Elasticsearch host"))?;
@@ -96,13 +97,33 @@ impl OutputDeployment {
 
     pub fn from_elastic_context(context: &ElasticOutputContext, require_kibana: bool) -> Result<Self> {
         let (elasticsearch, elasticsearch_auth, kibana, kibana_auth) = context.resolve_output_hosts(require_kibana)?;
-        Ok(Self {
-            source: OutputDeploymentSource::ElasticContext,
+        Ok(Self::assemble(
+            OutputDeploymentSource::ElasticContext,
             elasticsearch,
             elasticsearch_auth,
             kibana,
             kibana_auth,
-        })
+        ))
+    }
+
+    fn assemble(
+        source: OutputDeploymentSource,
+        elasticsearch: KnownHost,
+        elasticsearch_auth: Auth,
+        kibana: Option<KnownHost>,
+        kibana_auth: Option<Auth>,
+    ) -> Self {
+        let elasticsearch = match &kibana {
+            Some(kibana) => elasticsearch.with_attached_viewer(kibana.clone()),
+            None => elasticsearch,
+        };
+        Self {
+            source,
+            elasticsearch,
+            elasticsearch_auth,
+            kibana,
+            kibana_auth,
+        }
     }
 
     fn from_saved(source: OutputDeploymentSource, elasticsearch: KnownHost, require_kibana: bool) -> Result<Self> {
@@ -119,16 +140,18 @@ impl OutputDeployment {
             (None, None)
         };
 
-        Ok(Self {
+        Ok(Self::assemble(
             source,
             elasticsearch,
             elasticsearch_auth,
             kibana,
             kibana_auth,
-        })
+        ))
     }
 
-    fn from_environment(require_kibana: bool) -> Result<Self> {
+    /// Resolve the output declared by `ESDIAG_OUTPUT_*`. `ESDIAG_KIBANA_URL`
+    /// supplies its viewer when set, and is mandatory when `require_kibana`.
+    pub(crate) fn from_environment(require_kibana: bool) -> Result<Self> {
         let output_url = required_environment("ESDIAG_OUTPUT_URL")?;
         let auth = environment_auth()?;
         let elasticsearch = KnownHostBuilder::new(Url::parse(&output_url)?)
@@ -138,8 +161,14 @@ impl OutputDeployment {
             .build()?;
         let elasticsearch_auth = elasticsearch.get_auth_for_direction(CredentialDirection::Output)?;
 
-        let (kibana, kibana_auth) = if require_kibana {
-            let kibana_url = required_environment("ESDIAG_KIBANA_URL")?;
+        let kibana_url = if require_kibana {
+            Some(required_environment("ESDIAG_KIBANA_URL")?)
+        } else {
+            env::var("ESDIAG_KIBANA_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        };
+        let (kibana, kibana_auth) = if let Some(kibana_url) = kibana_url {
             let kibana = KnownHostBuilder::new(Url::parse(&kibana_url)?)
                 .application(Application::Kibana)
                 .roles(vec![HostRole::View])
@@ -151,13 +180,13 @@ impl OutputDeployment {
             (None, None)
         };
 
-        Ok(Self {
-            source: OutputDeploymentSource::Environment,
+        Ok(Self::assemble(
+            OutputDeploymentSource::Environment,
             elasticsearch,
             elasticsearch_auth,
             kibana,
             kibana_auth,
-        })
+        ))
     }
 }
 
@@ -173,7 +202,7 @@ fn required_environment(name: &str) -> Result<String> {
     Ok(value)
 }
 
-fn environment_auth() -> Result<Auth> {
+pub(crate) fn environment_auth() -> Result<Auth> {
     output_auth_from(|name| env::var(name).ok())
 }
 
