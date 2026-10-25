@@ -23,6 +23,7 @@ published release notes, maintenance branches, and tagged history.
 - **Breaking:** `esdiag setup` now requires a subcommand (#431):
   - `esdiag setup <output>` becomes `esdiag setup output <output>`, which installs Elasticsearch assets and the assets of the output's linked Kibana viewer.
   - `esdiag setup <elasticsearch-host>` and `esdiag setup <kibana-host>` become `esdiag setup elasticsearch <host>` and `esdiag setup kibana <host>`. Each installs only that service's assets and rejects a saved host of the other app.
+  - A saved host named `elasticsearch` or `kibana` no longer works the old way: `esdiag setup kibana` now targets the default output's Kibana viewer, not the host named `kibana`. Repeat the name, as in `esdiag setup kibana kibana`.
   - `esdiag setup` without a host becomes `esdiag setup env` for `ESDIAG_OUTPUT_*` deployments, or `esdiag setup output` for the saved default output. `setup output`, `setup elasticsearch`, and `setup kibana` no longer read `ESDIAG_OUTPUT_*`.
   - `esdiag agent skills --target <agent>` becomes `esdiag setup skills [agent]...`.
 - **Breaking:** Setup no longer starts a trial license on its own. `esdiag setup`, `esdiag init` for an existing output, and web onboarding leave an unlicensed cluster's license alone unless you opt in; without the opt-in they install the Elasticsearch assets, skip the Kibana Agent Builder assets, and report a `partial` outcome. `esdiag init` asks before starting a trial. A new `esdiag local` stack still starts a trial on its first setup (#431).

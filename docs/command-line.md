@@ -300,8 +300,9 @@ esdiag setup output diagnostics-output
 `setup elasticsearch` and `setup kibana` install one service's assets into a
 saved host whose `app` matches the subcommand. Without `HOST`, they use the
 persisted default output or its viewer. A saved host may share the subcommand's
-name, as in `esdiag setup kibana kibana`. Kibana assets go to the space in a
-`/s/<space>` URL path, otherwise `ESDIAG_KIBANA_SPACE`.
+name, as in `esdiag setup kibana kibana`. Kibana assets go to the space
+`ESDIAG_KIBANA_SPACE` selects (default `esdiag`), even when the saved Kibana URL
+contains a `/s/<space>` path.
 
 None of these saved-host commands read `ESDIAG_OUTPUT_*`. Use `setup env` for
 an environment-declared deployment, such as a container or CI job:

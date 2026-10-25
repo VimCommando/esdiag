@@ -53,7 +53,7 @@ The CLI SHALL provide `esdiag setup` as the single command family for configurin
 - **THEN** no `_license/start_trial` request is sent
 
 ### Requirement: Setup Kibana Installs Only Kibana Assets
-`esdiag setup kibana [HOST]` SHALL install Kibana assets into `HOST`, or into the persisted default output's linked Kibana viewer when `HOST` is omitted. `HOST` MUST be a saved host whose `app` is Kibana. The command SHALL install into the space `ESDIAG_KIBANA_SPACE` selects (default `esdiag`), the same space `process`, `serve`, and `agent ask` link to; an explicit selection overrides a `/s/<space>` path in the Kibana URL. It MUST NOT send Elasticsearch asset requests.
+`esdiag setup kibana [HOST]` SHALL install Kibana assets into `HOST`, or into the persisted default output's linked Kibana viewer when `HOST` is omitted. `HOST` MUST be a saved host whose `app` is Kibana. The command SHALL install into the space `ESDIAG_KIBANA_SPACE` selects (default `esdiag`), the same space `process`, `serve`, and `agent ask` link to; a `/s/<space>` path in the Kibana URL MUST NOT select the space. It MUST NOT send Elasticsearch asset requests.
 
 #### Scenario: Saved Kibana host in a space
 - **GIVEN** a saved Kibana host `diagnostics-kb`
