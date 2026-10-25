@@ -373,7 +373,7 @@ YAML
 setup_command_args() {
     local image=$1 tag="" major minor
     [[ "${image##*/}" == *:* ]] && tag=${image##*:}
-    if [[ "$tag" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+ ]]; then
+    if [[ "$tag" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)([-+][0-9A-Za-z.+-]+)?$ ]]; then
         major=${BASH_REMATCH[1]}
         minor=${BASH_REMATCH[2]}
         if ((major == 0 && minor < 18)); then
@@ -584,7 +584,13 @@ configure_security() {
 # Prints true or false: the option, then ESDIAG_SETUP_ACTIVATE_TRIAL, then whether the
 # cluster has never started a trial. The value is passed to setup and never persisted.
 resolve_activate_trial() {
-    local value=${activate_trial:-${ESDIAG_SETUP_ACTIVATE_TRIAL:-}} response eligible
+    local value="" response eligible
+    if [[ -n "$activate_trial" ]]; then
+        value=$activate_trial
+    elif [[ -n "${ESDIAG_SETUP_ACTIVATE_TRIAL+set}" ]]; then
+        # A set but empty variable opts out, matching `esdiag local`.
+        value=${ESDIAG_SETUP_ACTIVATE_TRIAL:-false}
+    fi
     if [[ -n "$value" ]]; then
         case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
         1 | true | yes | y | on) printf true ;;
@@ -621,6 +627,7 @@ run_setup() {
         ESDIAG_OUTPUT_URL="http://127.0.0.1:$(env_get ESDIAG_ELASTICSEARCH_PORT)" \
         ESDIAG_OUTPUT_APIKEY="$(env_get ESDIAG_OUTPUT_APIKEY)" \
         ESDIAG_KIBANA_URL="http://127.0.0.1:$(env_get ESDIAG_KIBANA_PORT)/s/$(env_get ESDIAG_KIBANA_SPACE)" \
+        ESDIAG_KIBANA_SPACE="$(env_get ESDIAG_KIBANA_SPACE)" \
         ESDIAG_SETUP_ACTIVATE_TRIAL="$trial" \
         LOG_LEVEL="$(env_get LOG_LEVEL)" "$binary" setup env || die "ESDiag setup failed"
     fi

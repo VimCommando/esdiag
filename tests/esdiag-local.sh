@@ -47,7 +47,7 @@ cat >"$fake_bin/esdiag" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
   --version) printf 'esdiag %s\n' "${FAKE_ESDIAG_VERSION:-0.18.0-SNAPSHOT}" ;;
-  setup) printf '%s trial=%s\n' "$*" "${ESDIAG_SETUP_ACTIVATE_TRIAL:-unset}" >>"${FAKE_ESDIAG_LOG}" ;;
+  setup) printf '%s trial=%s space=%s\n' "$*" "${ESDIAG_SETUP_ACTIVATE_TRIAL:-unset}" "${ESDIAG_KIBANA_SPACE:-unset}" >>"${FAKE_ESDIAG_LOG}" ;;
   serve) printf 'serve %s\n' "$*" >>"${FAKE_ESDIAG_LOG}"; while :; do sleep 60; done ;;
 esac
 EOF
@@ -167,6 +167,10 @@ assert_contains "$tmp/trial.err" '--activate-trial=true'
 [[ "$(FAKE_TRIAL_STATUS=ineligible ESDIAG_SETUP_ACTIVATE_TRIAL=true core_setup_trial)" == true ]] || fail 'env var true'
 [[ "$(ESDIAG_SETUP_ACTIVATE_TRIAL=true core_setup_trial --activate-trial=false)" == false ]] || fail 'option overrides env var'
 if ESDIAG_SETUP_ACTIVATE_TRIAL=maybe core_setup_trial >/dev/null; then fail 'invalid ESDIAG_SETUP_ACTIVATE_TRIAL was accepted'; fi
+[[ "$(ESDIAG_SETUP_ACTIVATE_TRIAL='' core_setup_trial)" == false ]] || fail 'empty ESDIAG_SETUP_ACTIVATE_TRIAL must opt out like esdiag local'
+ESDIAG_KIBANA_SPACE=elsewhere core_setup_trial >/dev/null
+assert_contains "$FAKE_ESDIAG_LOG" 'space=esdiag'
+assert_not_contains "$FAKE_ESDIAG_LOG" 'space=elsewhere'
 assert_not_contains "$tmp/core/.env" 'ESDIAG_SETUP_ACTIVATE_TRIAL'
 assert_not_contains "$tmp/core/compose.yml" 'ESDIAG_SETUP_ACTIVATE_TRIAL'
 PATH="$fake_bin:$PATH" ESDIAG_LOCAL_BINARY="$fake_bin/esdiag" "$script" restart esdiag --runtime podman --state-dir "$tmp/core"
