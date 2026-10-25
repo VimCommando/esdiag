@@ -1282,7 +1282,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn cloud_admin_receiver_implies_elastic_cloud_hosted_platform() {
         let host = KnownHostBuilder::new(Url::parse("https://admin.found.no").expect("url"))
-            .apikey(Some("test-api-key".to_string()))
+            .auth(crate::data::Auth::apikey("test-api-key"))
             .build()
             .expect("host");
         let receiver = Receiver::try_from(host).expect("cloud admin receiver");

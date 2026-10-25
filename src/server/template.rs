@@ -524,6 +524,7 @@ fn output_target_label(target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{JobCompleted, JobSkipped, Jobs, build_footer_output_context};
+    use crate::data::Credential;
     use crate::{
         data::{Application, HostRole, KnownHost, Uri},
         exporter::Exporter,
@@ -548,14 +549,13 @@ mod tests {
         );
         hosts.insert(
             "secure-prod".to_string(),
-            KnownHost::new_legacy_apikey(
+            KnownHost::new(
                 Application::Elasticsearch,
                 Url::parse("https://secure.example.com:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
                 false,
-                Some("secure-prod".to_string()),
-                None,
+                Credential::Keystore("secure-prod".to_string()),
             ),
         );
         KnownHost::write_hosts_yml(&hosts).expect("write hosts");

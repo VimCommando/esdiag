@@ -5,9 +5,10 @@
 use crate::env;
 
 use super::{
-    Application, ElasticCloud, HostReference, KnownHost, KnownHostBuilder, OutputDeployment, ResolvedKnownHost,
+    Application, Auth, ElasticCloud, HostReference, KnownHost, KnownHostBuilder, OutputDeployment, ResolvedKnownHost,
 };
 use eyre::{OptionExt, Report, Result, eyre};
+use redact::Secret;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     path::{Path, PathBuf},
@@ -86,9 +87,10 @@ impl Uri {
         let (apikey, username, password) =
             try_get_auth_env("ELASTIC_ES_API_KEY", "ELASTIC_ES_USERNAME", "ELASTIC_ES_PASSWORD")?;
         let host = KnownHostBuilder::new(Url::parse(&url)?)
-            .apikey(apikey)
-            .username(username)
-            .password(password)
+            .auth(
+                Auth::from_parts(apikey.map(Secret::new), username, password.map(Secret::new))
+                    .map_err(|err| eyre!("Invalid KnownHost configuration: {err}"))?,
+            )
             .build()?;
         host.try_into()
     }
@@ -117,9 +119,10 @@ impl Uri {
         )?;
         let host = KnownHostBuilder::new(Url::parse(&url)?)
             .application(Application::Kibana)
-            .apikey(apikey)
-            .username(username)
-            .password(password)
+            .auth(
+                Auth::from_parts(apikey.map(Secret::new), username, password.map(Secret::new))
+                    .map_err(|err| eyre!("Invalid KnownHost configuration: {err}"))?,
+            )
             .build()?;
         host.try_into()
     }
@@ -130,7 +133,9 @@ impl Uri {
         let url = env::get_optional_string_with_fallback("ESDIAG_CLOUD_URL", "ELASTIC_CLOUD_URL")
             .ok_or_else(|| eyre!("ESDIAG_CLOUD_URL and ELASTIC_CLOUD_URL are not defined"))?;
         let apikey = env::get_optional_string_with_fallback("ESDIAG_CLOUD_APIKEY", "ELASTIC_CLOUD_API_KEY");
-        let host = KnownHostBuilder::new(Url::parse(&url)?).apikey(apikey).build()?;
+        let host = KnownHostBuilder::new(Url::parse(&url)?)
+            .auth(apikey.map_or(Auth::None, Auth::apikey))
+            .build()?;
         host.try_into()
     }
 }

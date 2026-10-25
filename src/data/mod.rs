@@ -8,6 +8,8 @@ mod application;
 mod application_config;
 /// Authentication methods
 mod auth;
+/// Where a saved host's credential comes from
+mod credential;
 /// Symbolic Elastic CLI context targets and resolution
 mod elastic_context;
 /// Names that select a saved host, template host, or Elastic CLI context
@@ -30,6 +32,7 @@ mod uri;
 pub use application::Application;
 pub use application_config::{ApplicationConfig, JobConfig, OnboardingWorkflow, OutputConfig};
 pub use auth::{Auth, AuthType};
+pub use credential::Credential;
 pub(crate) use elastic_context::ElasticContextTarget;
 pub use elastic_context::ElasticOutputContext;
 pub use host_reference::HostReference;

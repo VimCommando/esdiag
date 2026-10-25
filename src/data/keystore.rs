@@ -63,7 +63,7 @@ static PROMPTED_KEYSTORE_PASSWORD: Mutex<Option<Secret<String>>> = Mutex::new(No
 /// `Debug` renders a redaction marker (ADR-0011). Serialization is opt-in per
 /// field via `expose_secret`, which is what makes the write path to the
 /// encrypted envelope below the only place these values leave the wrapper.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SecretAuth {
     ApiKey {
         #[serde(serialize_with = "expose_secret")]

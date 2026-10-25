@@ -17,7 +17,7 @@ use esdiag::{
 #[cfg(feature = "setup")]
 use esdiag::{
     client::Client,
-    data::{Application, KnownHostBuilder, Uri},
+    data::{Application, Auth, KnownHostBuilder, Uri},
     setup,
 };
 use url::Url;
@@ -744,11 +744,11 @@ impl LocalState {
         let apikey = self.required("ESDIAG_OUTPUT_APIKEY")?.to_string();
         let elasticsearch = KnownHostBuilder::new(Url::parse(&self.elasticsearch_url())?)
             .application(Application::Elasticsearch)
-            .apikey(Some(apikey.clone()))
+            .auth(Auth::apikey(apikey.clone()))
             .build()?;
         let kibana = KnownHostBuilder::new(Url::parse(&self.kibana_url())?)
             .application(Application::Kibana)
-            .apikey(Some(apikey))
+            .auth(Auth::apikey(apikey))
             .build()?;
         let targets = StackTargets {
             elasticsearch: Some(Client::try_from(Uri::KnownHost(elasticsearch))?),

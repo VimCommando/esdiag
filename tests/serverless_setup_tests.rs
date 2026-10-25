@@ -680,7 +680,7 @@ async fn recording_kibana() -> (esdiag::setup::pipeline::KibanaTarget, Arc<Mutex
     let host = esdiag::data::KnownHostBuilder::new(url)
         .application(esdiag::data::Application::Kibana)
         .roles(vec![esdiag::data::HostRole::View])
-        .apikey(Some("test-key".to_string()))
+        .auth(esdiag::data::Auth::apikey("test-key".to_string()))
         .build()
         .unwrap();
     (

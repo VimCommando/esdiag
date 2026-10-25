@@ -767,7 +767,7 @@ fn host_row_from_known_host(name: String, host: KnownHost) -> template::HostsTab
         .as_ref()
         .map(std::string::ToString::to_string)
         .unwrap_or_default();
-    row.secret = host.secret.clone().unwrap_or_default();
+    row.secret = host_secret_value(&host);
     row
 }
 
@@ -792,8 +792,8 @@ fn diagnostic_cluster_row(
     if host_auth_value(host) != host_auth_value(kibana_host)
         || host_secret_value(host) != host_secret_value(kibana_host)
         || host.accept_invalid_certs() != kibana_host.accept_invalid_certs()
-        || host_has_plaintext_auth(host)
-        || host_has_plaintext_auth(kibana_host)
+        || host.has_legacy_credential()
+        || kibana_host.has_legacy_credential()
     {
         return None;
     }
@@ -809,23 +809,11 @@ fn diagnostic_cluster_row(
 }
 
 fn host_auth_value(host: &KnownHost) -> &'static str {
-    if host.secret.is_some() {
-        "secret"
-    } else if host.legacy_apikey.is_some() {
-        "apikey"
-    } else if host.legacy_username.is_some() || host.legacy_password.is_some() {
-        "basic"
-    } else {
-        "none"
-    }
+    host.credential().label()
 }
 
 fn host_secret_value(host: &KnownHost) -> String {
-    host.secret.clone().unwrap_or_default()
-}
-
-fn host_has_plaintext_auth(host: &KnownHost) -> bool {
-    host.legacy_apikey.is_some() || host.legacy_username.is_some() || host.legacy_password.is_some()
+    host.secret_reference().unwrap_or_default().to_string()
 }
 
 fn read_secret_rows(keystore_password: &str) -> Result<(Vec<template::SecretTableRow>, Vec<String>), String> {
@@ -1766,6 +1754,7 @@ mod tests {
         apply_upsert_host, delete_secret_by_id, host_draft, read_host_and_cluster_rows, read_secret_rows,
         render_host_row, render_secret_row, render_secrets_panel, secret_action,
     };
+    use crate::data::Credential;
     use crate::{
         data::{
             Application, HostRole, KnownHost, KnownHostBuilder, SecretAuth, Settings, authenticate, upsert_secret_auth,
@@ -1862,8 +1851,8 @@ mod tests {
 
         let saved_hosts = KnownHost::parse_hosts_yml().expect("reload hosts");
         let saved = saved_hosts.get("with-secret").expect("saved host");
-        assert_eq!(saved.secret.as_deref(), Some("api-secret"));
-        assert!(saved.legacy_apikey.is_none());
+        assert_eq!(saved.secret_reference(), Some("api-secret"));
+        assert!(!saved.has_legacy_credential());
     }
 
     #[tokio::test]
@@ -2160,26 +2149,24 @@ mod tests {
         );
         hosts.insert(
             "prod".to_string(),
-            KnownHost::new_legacy_apikey(
+            KnownHost::new(
                 Application::Elasticsearch,
                 Url::parse("https://prod-es:9200").expect("url"),
                 vec![HostRole::Send],
                 Some("prod-kb".to_string()),
                 true,
-                Some("diag-secret".to_string()),
-                None,
+                Credential::Keystore("diag-secret".to_string()),
             ),
         );
         hosts.insert(
             "prod-kb".to_string(),
-            KnownHost::new_legacy_apikey(
+            KnownHost::new(
                 Application::Kibana,
                 Url::parse("https://prod-kb:5601").expect("url"),
                 vec![HostRole::View],
                 None,
                 true,
-                Some("diag-secret".to_string()),
-                None,
+                Credential::Keystore("diag-secret".to_string()),
             ),
         );
         KnownHost::write_hosts_yml(&hosts).expect("write hosts");

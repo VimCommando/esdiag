@@ -49,14 +49,12 @@ impl EnvSetup {
                 "Neither ESDIAG_OUTPUT_URL nor ESDIAG_KIBANA_URL is declared. Set them in the environment or pass --env-file <PATH>."
             ));
         }
-        let (apikey, username, password) = output_auth_from(&lookup)?;
+        let auth = output_auth_from(&lookup)?;
         let host = |url: &str, application, role| {
             KnownHostBuilder::new(Url::parse(url).wrap_err_with(|| format!("Invalid {application} URL"))?)
                 .application(application)
                 .roles(vec![role])
-                .apikey(apikey.clone())
-                .username(username.clone())
-                .password(password.clone())
+                .auth(auth.clone())
                 .build()
         };
 

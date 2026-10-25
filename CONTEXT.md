@@ -117,7 +117,12 @@ persists nothing at the app layer: output credentials are injected from a
 vault/secrets service into env vars at container runtime, user identity is handled by
 the IAP (see `Authentication`), and input keys are runtime-only. Hence the keystore
 is a `User`-mode-only fixture.
-_Avoid_: secret (acceptable internally; "credentials" is the concept)
+A host's **credential source** is one of: a *keystore* reference (the only one saved
+to `hosts.yml`), a *runtime* credential (environment, Elastic CLI context, ad-hoc key;
+never saved), or *legacy* plaintext read from a pre-migration `hosts.yml`, which
+exists only to be migrated into the keystore.
+_Avoid_: secret (acceptable internally; "credentials" is the concept); calling runtime
+credentials "legacy"
 
 **Keystore unlock**:
 A time-limited grant of *use* of the keystore's credentials, without *disclosure* of
