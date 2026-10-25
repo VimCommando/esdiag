@@ -262,9 +262,11 @@ impl KibanaDiagnostic {
         for instance in instances {
             match instance {
                 Ok(data) => {
-                    let next = data
+                    let mut next = data
                         .documents_export(&self.exporter, &self.lookups, &self.metadata)
                         .await;
+                    // Sources can share a data stream, and the report keys summaries by processor.
+                    next.processor = T::name();
                     match &mut summary {
                         Some(summary) => summary.merge(Ok(next)),
                         None => summary = Some(next),
@@ -507,6 +509,8 @@ mod tests {
                 .is_some_and(|identifier| !identifier.is_empty())
         );
         assert_eq!(document["diagnostic"]["version"], "kibana-test");
+        assert_eq!(document["diagnostic"]["application"], "kibana");
+        assert!(document["diagnostic"]["platform"].is_string());
         assert_eq!(document["@timestamp"], 1788091200000_u64);
         assert_eq!(document["node"]["name"], "kibana-node");
         assert_eq!(document["node"]["id"], "kibana-node-id");
@@ -520,8 +524,13 @@ mod tests {
                 "kibana_stats.json",
                 json!({
                     "process": {"memory": {"heap": 42}},
+                    "processes": [{"pid": 7, "event_loop_delay": 1.5}],
                     "os": {"load": {"1m": 0.5}},
-                    "response_times": {"average": 12}
+                    "response_times": {"average": 12},
+                    "concurrent_connections": 3,
+                    "collection_interval_ms": 5000,
+                    "last_updated": "2026-08-30T12:00:00Z",
+                    "name": "stats-node-name"
                 })
                 .to_string(),
             )],
@@ -536,6 +545,10 @@ mod tests {
         assert_eq!(node[0]["node"]["process"]["memory"]["heap"], 42);
         assert_eq!(node[0]["node"]["os"]["load"]["1m"], 0.5);
         assert_eq!(node[0]["node"]["response_times"]["average"], 12);
+        assert_eq!(node[0]["node"]["processes"][0]["event_loop_delay"], 1.5);
+        assert_eq!(node[0]["node"]["concurrent_connections"], 3);
+        assert_eq!(node[0]["node"]["collection_interval_ms"], 5000);
+        assert_eq!(node[0]["node"]["last_updated"], "2026-08-30T12:00:00Z");
         assert_eq!(status[0]["status"]["overall"]["level"], "available");
         assert_eq!(status[0]["status"]["plugins"]["taskManager"]["level"], "available");
         assert_shared_metadata(&node[0]);
@@ -599,6 +612,36 @@ mod tests {
 
         assert_eq!(read_stream(output.path(), "settings-kibana.fleet-esdiag").len(), 5);
         assert_eq!(read_stream(output.path(), "metrics-kibana.fleet-esdiag").len(), 1);
+        assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
+    }
+
+    #[tokio::test]
+    async fn sources_sharing_a_data_stream_report_separate_outcomes() {
+        let (output, report) = run_bundle(
+            vec![
+                ("kibana_fleet_settings.json", json!({"fleet_setting": true}).to_string()),
+                (
+                    "kibana_fleet_agents.json",
+                    json!({"list": [{"agent": 1}, {"agent": 2}]}).to_string(),
+                ),
+            ],
+            Some(vec!["kibana_status", "kibana_fleet_settings", "kibana_fleet_agents"]),
+        )
+        .await;
+
+        assert_eq!(read_stream(output.path(), "settings-kibana.fleet-esdiag").len(), 3);
+        for (source, reason) in [
+            ("kibana_fleet_settings", "1 documents exported"),
+            ("kibana_fleet_agents", "2 documents exported"),
+        ] {
+            assert!(
+                report
+                    .events()
+                    .iter()
+                    .any(|event| event.source == source && event.reason == reason),
+                "{source} outcome was not recorded"
+            );
+        }
         assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
     }
 
@@ -811,17 +854,11 @@ mod tests {
         let (output, report) = run_receiver(receiver, None).await;
 
         assert!(
-            report
-                .events()
-                .iter()
-                .any(|event| event.source == "settings-kibana.alerts-esdiag"),
+            report.events().iter().any(|event| event.source == "kibana_alerts"),
             "scoped alerts were not processed"
         );
         assert!(
-            report
-                .events()
-                .iter()
-                .any(|event| event.source == "settings-kibana.security-esdiag"),
+            report.events().iter().any(|event| event.source == "kibana_actions"),
             "scoped actions were not processed"
         );
         assert!(output.path().join("metrics-kibana.status-esdiag.ndjson").exists());

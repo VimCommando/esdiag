@@ -4,17 +4,16 @@
 
 use super::super::super::diagnostic::DataSource;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(Deserialize, Serialize)]
 pub struct NodeStats {
     pub process: Value,
     pub os: Value,
-    pub kibana: Option<Value>,
-    pub concurrent_sessions: Option<Value>,
-    pub elasticsearch_client: Option<Value>,
-    pub response_times: Option<Value>,
-    pub requests: Option<Value>,
+    /// Version-dependent stats such as `processes`, `concurrent_connections`, `requests`,
+    /// and `elasticsearch_client`.
+    #[serde(flatten)]
+    pub stats: Map<String, Value>,
 }
 
 impl DataSource for NodeStats {
