@@ -401,19 +401,16 @@ fn known_host_from_service(
 ) -> Result<KnownHost> {
     let cloud_admin = service.kind == ServiceKind::Cloud;
     let gov_cloud = service.url.domain() == Some("admin.us-gov-east-1.aws.elastic-cloud.com");
-    let mut builder = KnownHostBuilder::new(service.url).application(application).roles(roles);
-    match service.auth {
-        elasticrc::Auth::ApiKey(api_key) => {
-            builder = builder.apikey(Some(api_key.expose_secret().clone()));
-        }
-        elasticrc::Auth::Basic { username, password } => {
-            builder = builder
-                .username(Some(username))
-                .password(Some(password.expose_secret().clone()));
-        }
-        elasticrc::Auth::None => {}
-    }
-    let mut host = builder.build()?;
+    let auth = match service.auth {
+        elasticrc::Auth::ApiKey(api_key) => Auth::apikey(api_key.expose_secret().clone()),
+        elasticrc::Auth::Basic { username, password } => Auth::basic(username, password.expose_secret().clone()),
+        elasticrc::Auth::None => Auth::None,
+    };
+    let mut host = KnownHostBuilder::new(service.url)
+        .application(application)
+        .roles(roles)
+        .auth(auth)
+        .build()?;
     if cloud_admin {
         host.cloud_id = Some(if gov_cloud {
             super::ElasticCloud::ElasticGovCloudAdmin

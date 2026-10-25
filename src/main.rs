@@ -30,10 +30,10 @@ use esdiag::{
 use esdiag::{
     client::Client,
     data::{
-        Application, HostReference, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate, OnboardingWorkflow,
-        OutputDeployment, SecretAuth, Settings, Uri, add_secret, clear_unlock_lease, collect_application,
-        create_keystore, default_unlock_ttl, get_keystore_path, get_password_for_secret_commands, get_unlock_status,
-        keystore_exists, list_secret_names, parse_unlock_ttl, remove_secret, resolve_secret_auth,
+        Application, Auth, HostReference, HostRole, KnownHost, KnownHostBuilder, KnownHostCliUpdate,
+        OnboardingWorkflow, OutputDeployment, SecretAuth, Settings, Uri, add_secret, clear_unlock_lease,
+        collect_application, create_keystore, default_unlock_ttl, get_keystore_path, get_password_for_secret_commands,
+        get_unlock_status, keystore_exists, list_secret_names, parse_unlock_ttl, remove_secret, resolve_secret_auth,
         rotate_keystore_password, update_secret, validate_existing_keystore_password, write_unlock_lease,
     },
     elastic_upload_service,
@@ -1646,7 +1646,7 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<CommandResult> {
                         ));
                     }
                     let existing = KnownHost::get_known(&name).ok_or_else(|| eyre!("Host '{name}' not found"))?;
-                    let secret_auth = if update.secret.is_some() {
+                    let secret_auth = if update.secret.as_deref().is_some() {
                         resolve_host_secret_auth(update.secret.as_deref())?
                     } else {
                         None
@@ -2324,7 +2324,10 @@ fn build_host_from_definition(
         KnownHostBuilder::new(url).application(app)
     }
     .accept_invalid_certs(update.accept_invalid_certs.unwrap_or(false))
-    .legacy_credentials(update.apikey.clone(), update.username.clone(), update.password.clone())
+    .auth(
+        Auth::from_parts(update.apikey.clone(), update.username.clone(), update.password.clone())
+            .map_err(|err| eyre!("Invalid KnownHost configuration: {err}"))?,
+    )
     .secret(update.secret.clone());
     if let Some(app) = app {
         builder = builder.application(app);
@@ -2881,7 +2884,7 @@ async fn run_init_wizard() -> Result<CommandResult> {
                     .output
                     .default
                     .and_then(|output| KnownHost::get_known(&output))
-                    .and_then(|host| host.secret)
+                    .and_then(|host| host.secret_reference().map(str::to_string))
             } else {
                 Some(prompt_with_default("Collection credential name", &name)?)
             };
@@ -3928,7 +3931,7 @@ fn resolve_host_secret_auth(secret_id: Option<&str>) -> Result<Option<SecretAuth
 }
 
 fn resolve_add_host_secret_auth(host_name: &str, update: &mut KnownHostCliUpdate) -> Result<Option<SecretAuth>> {
-    if update.secret.is_some() {
+    if update.secret.as_deref().is_some() {
         return resolve_host_secret_auth(update.secret.as_deref());
     }
     if update.apikey.is_some() || update.username.is_some() || update.password.is_some() {
@@ -5991,15 +5994,14 @@ mod tests {
 
     #[test]
     fn elastic_cloud_admin_hosts_validate_via_receiver() {
-        let uri = Uri::ElasticCloudAdmin(KnownHost::new_legacy_apikey(
+        let uri = Uri::ElasticCloudAdmin(KnownHost::new(
             Application::Elasticsearch,
             Url::parse("https://admin.found.no/api/v1/deployments/test/elasticsearch/main-elasticsearch/proxy/")
                 .expect("valid url"),
             vec![HostRole::Collect],
             None,
             false,
-            Some("ada-admin".to_string()),
-            None,
+            esdiag::data::Credential::Keystore("ada-admin".to_string()),
         ));
 
         assert!(host_connection_uses_receiver(&uri));
@@ -6070,7 +6072,7 @@ mod tests {
         let resolved = resolve_add_host_secret_auth("prod-es", &mut update).expect("resolve auth");
 
         assert!(resolved.is_none());
-        assert!(update.secret.is_none());
+        assert!(update.secret.as_deref().is_none());
     }
 
     #[test]
@@ -6081,7 +6083,7 @@ mod tests {
         let resolved = resolve_add_host_secret_auth("prod-es", &mut update).expect("resolve auth");
 
         assert!(resolved.is_none());
-        assert!(update.secret.is_none());
+        assert!(update.secret.as_deref().is_none());
     }
 
     #[cfg(feature = "server")]

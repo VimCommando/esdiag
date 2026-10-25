@@ -130,13 +130,11 @@ impl OutputDeployment {
 
     fn from_environment(require_kibana: bool) -> Result<Self> {
         let output_url = required_environment("ESDIAG_OUTPUT_URL")?;
-        let (apikey, username, password) = environment_auth()?;
+        let auth = environment_auth()?;
         let elasticsearch = KnownHostBuilder::new(Url::parse(&output_url)?)
             .application(Application::Elasticsearch)
             .roles(vec![HostRole::Send])
-            .apikey(apikey.clone())
-            .username(username.clone())
-            .password(password.clone())
+            .auth(auth.clone())
             .build()?;
         let elasticsearch_auth = elasticsearch.get_auth_for_direction(CredentialDirection::Output)?;
 
@@ -145,9 +143,7 @@ impl OutputDeployment {
             let kibana = KnownHostBuilder::new(Url::parse(&kibana_url)?)
                 .application(Application::Kibana)
                 .roles(vec![HostRole::View])
-                .apikey(apikey)
-                .username(username)
-                .password(password)
+                .auth(auth)
                 .build()?;
             let auth = kibana.get_auth_for_direction(CredentialDirection::Output)?;
             (Some(kibana), Some(auth))
@@ -177,21 +173,21 @@ fn required_environment(name: &str) -> Result<String> {
     Ok(value)
 }
 
-fn environment_auth() -> Result<(Option<String>, Option<String>, Option<String>)> {
+fn environment_auth() -> Result<Auth> {
     output_auth_from(|name| env::var(name).ok())
 }
 
 /// Read `ESDIAG_OUTPUT_APIKEY`, `_USERNAME`, and `_PASSWORD` through `lookup` and validate the combination.
-pub fn output_auth_from(
-    lookup: impl Fn(&str) -> Option<String>,
-) -> Result<(Option<String>, Option<String>, Option<String>)> {
+pub fn output_auth_from(lookup: impl Fn(&str) -> Option<String>) -> Result<Auth> {
     let read = |name| lookup(name).filter(|value: &String| !value.trim().is_empty());
     let apikey = read("ESDIAG_OUTPUT_APIKEY");
     let username = read("ESDIAG_OUTPUT_USERNAME");
     let password = read("ESDIAG_OUTPUT_PASSWORD");
 
-    match (&apikey, &username, &password) {
-        (Some(_), None, None) | (None, None, None) | (None, Some(_), Some(_)) => Ok((apikey, username, password)),
+    match (apikey, username, password) {
+        (Some(apikey), None, None) => Ok(Auth::apikey(apikey)),
+        (None, Some(username), Some(password)) => Ok(Auth::basic(username, password)),
+        (None, None, None) => Ok(Auth::None),
         (Some(_), _, _) => Err(eyre!(
             "ESDIAG_OUTPUT_APIKEY cannot be combined with ESDIAG_OUTPUT_USERNAME or ESDIAG_OUTPUT_PASSWORD"
         )),

@@ -69,15 +69,16 @@ impl ContextSetup {
 }
 
 fn known_host(url: url::Url, auth: Auth, application: Application, role: HostRole) -> Result<KnownHost> {
-    let builder = KnownHostBuilder::new(url).application(application).roles(vec![role]);
-    match auth {
-        Auth::ApiKey(key) => builder.apikey(Some(key.expose_secret().to_string())),
-        Auth::Basic { username, password } => builder
-            .username(Some(username))
-            .password(Some(password.expose_secret().to_string())),
-        Auth::None => builder,
-    }
-    .build()
+    let auth = match auth {
+        Auth::ApiKey(key) => crate::data::Auth::apikey(key.expose_secret().to_string()),
+        Auth::Basic { username, password } => crate::data::Auth::basic(username, password.expose_secret().to_string()),
+        Auth::None => crate::data::Auth::None,
+    };
+    KnownHostBuilder::new(url)
+        .application(application)
+        .roles(vec![role])
+        .auth(auth)
+        .build()
 }
 
 #[cfg(test)]

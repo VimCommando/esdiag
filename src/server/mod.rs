@@ -2035,7 +2035,7 @@ mod tests {
         let state = test_state(RuntimeMode::User);
         let ad_hoc_key = "one-time-ad-hoc-api-key";
         let host = KnownHostBuilder::new(url::Url::parse("http://cluster.example:9200").expect("url"))
-            .apikey(Some(ad_hoc_key.to_string()))
+            .auth(crate::data::Auth::apikey(ad_hoc_key))
             .build()
             .expect("ad-hoc host");
         let identifiers = Identifiers {

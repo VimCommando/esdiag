@@ -372,6 +372,7 @@ fn render_settings_error_script(err_msg: &str) -> String {
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::{get_modal, update_settings};
+    use crate::data::Credential;
     use crate::{
         data::{Application, HostRole, KnownHost, Settings, Uri, authenticate},
         exporter::Exporter,
@@ -450,14 +451,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "secure-es".to_string(),
-            KnownHost::new_legacy_apikey(
+            KnownHost::new(
                 Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 Some("secure-kb".to_string()),
                 false,
-                Some("secure-es".to_string()),
-                None,
+                Credential::Keystore("secure-es".to_string()),
             ),
         );
         hosts.insert(
@@ -734,14 +734,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "secure-es".to_string(),
-            KnownHost::new_legacy_apikey(
+            KnownHost::new(
                 Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![HostRole::Send],
                 None,
                 false,
-                Some("secure-es".to_string()),
-                None,
+                Credential::Keystore("secure-es".to_string()),
             ),
         );
         write_hosts(hosts);

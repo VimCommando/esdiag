@@ -278,7 +278,7 @@ pub(crate) fn migration_needed() -> bool {
     }
 
     match KnownHost::parse_hosts_yml() {
-        Ok(hosts) => hosts.values().any(KnownHost::has_legacy_secret),
+        Ok(hosts) => hosts.values().any(KnownHost::has_legacy_credential),
         Err(err) => {
             tracing::warn!("Unable to inspect hosts.yml for plaintext secret migration: {}", err);
             false
@@ -512,6 +512,7 @@ mod tests {
         KeystoreForm, bootstrap, ensure_unlocked_for_active_output, get_process_unlock_modal, get_unlock_modal, lock,
         status, unlock,
     };
+    use crate::data::{Auth, Credential};
     use crate::{
         data::{Application, KnownHost, Settings, authenticate},
         exporter::Exporter,
@@ -655,14 +656,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "legacy".to_string(),
-            KnownHost::new_legacy_apikey(
+            KnownHost::new(
                 Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![crate::data::HostRole::Send],
                 None,
                 false,
-                None,
-                Some("plaintext-api-key".to_string()),
+                Credential::from_hosts_yml(None, Auth::apikey("plaintext-api-key".to_string())),
             ),
         );
         write_hosts(hosts);
@@ -775,14 +775,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "legacy".to_string(),
-            KnownHost::new_legacy_apikey(
+            KnownHost::new(
                 Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![crate::data::HostRole::Send],
                 None,
                 false,
-                None,
-                Some("plaintext-api-key".to_string()),
+                Credential::from_hosts_yml(None, Auth::apikey("plaintext-api-key".to_string())),
             ),
         );
         write_hosts(hosts);
@@ -811,14 +810,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "legacy-es".to_string(),
-            KnownHost::new_legacy_apikey(
+            KnownHost::new(
                 Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![crate::data::HostRole::Send],
                 None,
                 false,
-                None,
-                Some("plaintext-api-key".to_string()),
+                Credential::from_hosts_yml(None, Auth::apikey("plaintext-api-key".to_string())),
             ),
         );
         write_hosts(hosts);
@@ -840,8 +838,8 @@ mod tests {
 
         let migrated_hosts = KnownHost::parse_hosts_yml().expect("reload migrated hosts");
         let migrated = migrated_hosts.get("legacy-es").expect("migrated host");
-        assert!(migrated.legacy_apikey.is_none(), "plaintext apikey should be scrubbed");
-        assert_eq!(migrated.secret.as_deref(), Some("legacy-es"));
+        assert!(!migrated.has_legacy_credential(), "plaintext apikey should be scrubbed");
+        assert_eq!(migrated.secret_reference(), Some("legacy-es"));
     }
 
     #[tokio::test]
@@ -938,14 +936,13 @@ mod tests {
             None,
             false,
         );
-        let secure_host = KnownHost::new_legacy_basic(
+        let secure_host = KnownHost::new(
             Application::Elasticsearch,
             Url::parse("https://secure.example.com:9200").expect("url"),
             vec![crate::data::HostRole::Send],
             None,
             false,
-            Some("secure".to_string()),
-            None,
+            Credential::Keystore("secure".to_string()),
         );
 
         let mut hosts = BTreeMap::new();
@@ -994,14 +991,13 @@ mod tests {
         let mut hosts = BTreeMap::new();
         hosts.insert(
             "secure".to_string(),
-            KnownHost::new_legacy_apikey(
+            KnownHost::new(
                 Application::Elasticsearch,
                 Url::parse("http://localhost:9200").expect("url"),
                 vec![crate::data::HostRole::Send],
                 None,
                 false,
-                Some("secure".to_string()),
-                None,
+                Credential::Keystore("secure".to_string()),
             ),
         );
         write_hosts(hosts);
@@ -1009,14 +1005,13 @@ mod tests {
             .save()
             .expect("save settings without an explicit output");
 
-        let runtime_exporter = crate::exporter::Exporter::try_from(KnownHost::new_legacy_apikey(
+        let runtime_exporter = crate::exporter::Exporter::try_from(KnownHost::new(
             Application::Elasticsearch,
             Url::parse("http://localhost:9200").expect("url"),
             vec![crate::data::HostRole::Send],
             None,
             false,
-            None,
-            Some("runtime-secret".to_string()),
+            Credential::runtime(Auth::apikey("runtime-secret")),
         ))
         .expect("runtime exporter");
         let state = test_server_state();
@@ -1053,14 +1048,13 @@ mod tests {
         let settings_path = env.settings_path.clone();
 
         let state = test_service_state();
-        *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::new_legacy_apikey(
+        *state.exporter.write().await = crate::exporter::Exporter::try_from(KnownHost::new(
             Application::Elasticsearch,
             Url::parse("https://secure.example.com:9200").expect("url"),
             vec![crate::data::HostRole::Send],
             None,
             false,
-            None,
-            Some("secret".to_string()),
+            Credential::runtime(Auth::apikey("secret")),
         ))
         .expect("secure exporter");
 
