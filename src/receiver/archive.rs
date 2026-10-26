@@ -41,16 +41,18 @@ where
     let root = root.to_string_lossy().replace('\\', "/");
     let root = root.trim_matches('/');
 
+    // `(relative path, entry name)`: entries are read by their stored name,
+    // which may use `\` separators.
     let mut filenames: Vec<(String, String)> = archive
         .file_names()
         .filter_map(|filename| {
             let normalized = filename.replace('\\', "/");
             let relative = strip_archive_root(&normalized, root)?.to_string();
-            is_source_instance_path(&relative, &candidates).then_some((normalized, relative))
+            is_source_instance_path(&relative, &candidates).then(|| (relative, filename.to_string()))
         })
         .collect();
     filenames.sort();
-    filenames.dedup();
+    filenames.dedup_by(|a, b| a.0 == b.0);
 
     if filenames.is_empty() {
         return Err(MissingSource::NoCandidates { source: T::name() }.into());
@@ -58,7 +60,7 @@ where
 
     Ok(filenames
         .into_iter()
-        .map(|(filename, path)| SourceInstance {
+        .map(|(path, filename)| SourceInstance {
             data: read_archive_source(archive, filename),
             path,
         })

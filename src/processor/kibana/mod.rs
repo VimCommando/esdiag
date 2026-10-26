@@ -1077,6 +1077,45 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn archive_reads_backslash_separated_scoped_entries() {
+        let directory = tempfile::tempdir().expect("archive directory");
+        let archive = directory.path().join("kibana-windows.zip");
+        let mut writer = ZipWriter::new(File::create(&archive).expect("archive file"));
+        let options = SimpleFileOptions::default();
+        for (path, contents) in [
+            (
+                DiagnosticManifest::FILENAME,
+                json!({
+                    "product": "kibana",
+                    "diagnostic": "kibana-test",
+                    "type": "kibana-diagnostics",
+                    "runner": "esdiag",
+                    "version": "8.19.3",
+                    "timestamp": "2026-08-30T12:00:00Z"
+                })
+                .to_string(),
+            ),
+            ("kibana_status.json", STATUS.to_string()),
+            (
+                r"spaces\marketing\kibana_alerts.json",
+                json!({"data": [{"alert": 1}]}).to_string(),
+            ),
+        ] {
+            writer.start_file(path, options).expect("archive entry");
+            writer.write_all(contents.as_bytes()).expect("archive contents");
+        }
+        writer.finish().expect("finish archive");
+
+        let receiver = Arc::new(Receiver::try_from(Uri::File(archive)).expect("archive receiver"));
+        let (output, report) = run_receiver(receiver, Some(vec!["kibana_status", "kibana_alerts"])).await;
+
+        let alerts = read_stream(output.path(), "settings-kibana.alerts-esdiag");
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0]["space"]["id"], "marketing");
+        assert_eq!(report.outcome(), DiagnosticOutcome::Complete);
+    }
+
     #[test]
     fn registry_and_dispatch_table_agree() {
         validate_kibana_dispatch_registry().expect("Kibana registry");
