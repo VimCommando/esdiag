@@ -27,6 +27,7 @@ ESDiag currently lacks support for processing Kibana-specific diagnostic data (l
 
 ### Modified Capabilities
 - `collection-execution`: Stage Kibana `Collect` + `Process` jobs through a temporary bundle, because only the Kibana collector enumerates pages and spaces.
+- `kibana-diagnostic-collection`: Collect internal routes and the replacement routes for APIs removed in newer Kibana versions, and treat missing exception lists as absent data.
 
 ## Impact
 

@@ -25,8 +25,11 @@ kibana_actions:
   required: false
   dependencies: [kibana_status]
   versions:
-    ">= 7.0.0":
+    ">= 7.0.0, < 9.0.0":
       url: "/api/actions"
+      spaceaware: true
+    ">= 9.0.0":
+      url: "/api/actions/connectors"
       spaceaware: true
 
 kibana_alerts:
@@ -35,8 +38,12 @@ kibana_alerts:
   required: false
   dependencies: [kibana_status]
   versions:
-    ">= 7.9.0":
+    ">= 7.9.0, < 9.0.0":
       url: "/api/alerts/_find"
+      spaceaware: true
+      paginate: per_page
+    ">= 9.0.0":
+      url: "/api/alerting/rules/_find"
       spaceaware: true
       paginate: per_page
 
@@ -127,7 +134,8 @@ kibana_fleet_packages:
   required: false
   dependencies: [kibana_status]
   versions:
-    ">= 7.11.0": "/api/fleet/epm/packages?experimental=true"
+    ">= 7.11.0, < 9.0.0": "/api/fleet/epm/packages?experimental=true"
+    ">= 9.0.0": "/api/fleet/epm/packages?withPackagePoliciesCount=true"
 
 kibana_fleet_agent_status:
   tags: standard,light,support
@@ -141,7 +149,8 @@ kibana_fleet_agent_status:
 kibana_fleet_agents_current_upgrades:
   tags: standard,light,support
   versions:
-    ">= 8.3.0": "/api/fleet/agents/current_upgrades"
+    ">= 8.3.0, < 8.5.0": "/api/fleet/agents/current_upgrades"
+    ">= 8.5.0": "/api/fleet/agents/action_status"
 
 kibana_lists_privileges:
   tags: standard,light,support
@@ -216,7 +225,8 @@ kibana_security_exception_list:
 kibana_security_packages:
   tags: standard,light,support
   versions:
-    ">= 7.10.0": "/api/fleet/epm/packages?experimental=true&category=security"
+    ">= 7.10.0, < 9.0.0": "/api/fleet/epm/packages?experimental=true&category=security"
+    ">= 9.0.0": "/api/fleet/epm/packages?withPackagePoliciesCount=true&category=security"
 
 kibana_settings:
   tags: standard,light,support
