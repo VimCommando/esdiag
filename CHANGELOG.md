@@ -61,7 +61,7 @@ published release notes, maintenance branches, and tagged history.
 - Fixed `esdiag setup` failing on Elasticsearch Serverless Kibana projects with "Failed to search Kibana space 'default' for ESDiag assets (400 Bad Request)". The check that keeps ESDiag assets in one Kibana space now works on Serverless.
 - Fixed Kibana 9 collection failing for internal APIs, connectors, alerting rules, Fleet and security packages, and agent upgrade status, and stopped reporting missing endpoint exception lists as collection failures.
 - Fixed `esdiag host add` and `esdiag host update` asking for the keystore password twice when a host uses a keystore secret and the keystore is locked. They now ask once.
-- Fixed commands that read saved hosts while another command saves them seeing an empty or partial `hosts.yml`. The file is now replaced atomically, and on Unix it is readable only by its owner.
+- Fixed commands that read saved hosts while another command saves them seeing an empty or partial `hosts.yml`. The file is now replaced atomically, and on Unix it is readable only by its owner. On Windows, saving `hosts.yml` or the keystore no longer briefly removes the file before writing the new one.
 
 ### Security
 
